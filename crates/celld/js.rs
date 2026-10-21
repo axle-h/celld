@@ -67,6 +67,7 @@ pub use crate::engine_api::RequestBody;
 pub use crate::engine_api::RequestId;
 pub use crate::engine_api::RpcData;
 pub use crate::engine_api::RpcOutcome;
+pub use crate::engine_api::ServiceBinding;
 pub use crate::engine_api::WorkerConfigOptions;
 pub use crate::engine_api::WorkflowBinding;
 pub use crate::engine_api::WsTarget;
@@ -1912,9 +1913,9 @@ pub struct WorkerConfig {
     /// The worker's non-main modules, so the main module can import siblings.
     modules: Vec<(String, ModuleSource)>,
     compat: Compat,
-    /// `[[services]]`: (binding name, target script, optional entrypoint).
-    /// The target runs in this process; see [[service-bindings]].
-    services: Vec<(String, String, Option<String>)>,
+    /// `[[services]]`, each with its env name, target script, entrypoint and
+    /// props.
+    services: Vec<ServiceBinding>,
     asset_binding: Option<String>,
     /// `env` names of the Worker Loader bindings, if this Worker can spawn
     /// dynamic isolates. A config can declare more than one loader, and each
@@ -2163,7 +2164,7 @@ impl WorkerConfig {
     }
 
     /// Declare the service bindings this Worker may call.
-    pub fn with_services(mut self, services: Vec<(String, String, Option<String>)>) -> Self {
+    pub fn with_services(mut self, services: Vec<ServiceBinding>) -> Self {
         self.services = services;
         self
     }
@@ -6076,7 +6077,7 @@ impl Worker {
                         if proto_scheduled.is_some_and(|handler| handler.is_function()) {
                             let shim = compile_fn(
                                 scope,
-                                "(ctrl) => __celld.__dispatchEntrypointScheduled('default', ctrl)",
+                                "(ctrl, env, ctx) => __celld.__dispatchEntrypointScheduled('default', ctrl, ctx.props)",
                             )?;
                             cell.set(scope, key_.into(), shim.into());
                         }
@@ -7105,7 +7106,10 @@ fn op_svc_rpc(
             args: view_bytes(call_args).unwrap_or_default(),
         }
     };
-    let props = view_bytes(args.get(4)).unwrap_or_default();
+    let props = match service_props_bytes(args.get(4)) {
+        Ok(props) => props,
+        Err(error) => return loader_throw(scope, &error),
+    };
     let (tx, rx) = tokio::sync::oneshot::channel();
     let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Service);
     let request = SvcRpcReq {
@@ -7161,13 +7165,26 @@ fn op_svc_call_impl(
     let method = args.get(2).to_rust_string_lossy(scope);
     let stream_arg = args.get(5);
     let entrypoint_arg = args.get(6);
-    let props = view_bytes(args.get(7)).unwrap_or_default();
-    let entrypoint = entrypoint_arg
-        .is_string()
-        .then(|| crate::WorkerFetchEntrypoint {
+    let props = match service_props_bytes(args.get(7)) {
+        Ok(props) => props,
+        Err(error) => return loader_throw(scope, &error),
+    };
+    // The default export with props is dispatched by name, because only an
+    // entrypoint dispatch delivers props; without props it keeps the
+    // default fetch path.
+    let entrypoint = if entrypoint_arg.is_string() {
+        Some(crate::WorkerFetchEntrypoint {
             name: entrypoint_arg.to_rust_string_lossy(scope),
             props,
-        });
+        })
+    } else if !props.is_empty() {
+        Some(crate::WorkerFetchEntrypoint {
+            name: "default".to_string(),
+            props,
+        })
+    } else {
+        None
+    };
     let body = if stream_arg.is_number() {
         RequestBody::Stream(stream_arg.number_value(scope).unwrap_or(0.0) as u64)
     } else {
@@ -7274,12 +7291,26 @@ fn dynamic_worker_code_limit() -> usize {
     })
 }
 
-/// The largest `props` value one loaded entrypoint or Durable Object class can
-/// carry, as structured-clone bytes. Workerd does not impose this bound, but
-/// celld holds the value on a host job for the whole call. The harness shares
-/// the caller's isolate and cannot prevent that unbounded host allocation, so
-/// every op that accepts call props must enforce the limit.
-const MAX_DYNAMIC_WORKER_PROPS_SIZE: usize = 1024 * 1024;
+/// The largest `props` value one call can carry, as structured-clone bytes:
+/// a loaded entrypoint's or Durable Object class's, a service binding's, and
+/// a `ctx.exports.X({props})` stub's when its call leaves the isolate.
+/// Workerd does not impose this bound, but celld holds the value on a host job
+/// for the whole call. The harness shares the caller's isolate and cannot
+/// prevent that unbounded host allocation, so every op that accepts call props
+/// must enforce the limit.
+const MAX_PROPS_SIZE: usize = 1024 * 1024;
+
+/// `props`, refused with `kind`'s name when it is over [`MAX_PROPS_SIZE`].
+fn props_within_limit(kind: &str, props: Vec<u8>) -> Result<Vec<u8>, String> {
+    if props.len() > MAX_PROPS_SIZE {
+        return Err(format!(
+            "{kind} props size ({} bytes) exceeds the maximum \
+             allowed size of {MAX_PROPS_SIZE} bytes.",
+            props.len()
+        ));
+    }
+    Ok(props)
+}
 
 fn loader_props_bytes(value: v8::Local<v8::Value>) -> Result<Vec<u8>, String> {
     // RPC and facet calls use undefined for absent props. A different
@@ -7290,14 +7321,19 @@ fn loader_props_bytes(value: v8::Local<v8::Value>) -> Result<Vec<u8>, String> {
         view_bytes(value)
             .ok_or_else(|| "worker loader: the props are not a typed array".to_string())?
     };
-    if props.len() > MAX_DYNAMIC_WORKER_PROPS_SIZE {
-        return Err(format!(
-            "Dynamic Worker props size ({} bytes) exceeds the maximum \
-             allowed size of {MAX_DYNAMIC_WORKER_PROPS_SIZE} bytes.",
-            props.len()
-        ));
-    }
-    Ok(props)
+    props_within_limit("Dynamic Worker", props)
+}
+
+/// A service call's props: a binding's declared props, or a `ctx.exports`
+/// stub's. Absent props are `undefined` (or `null` from a loader route).
+fn service_props_bytes(value: v8::Local<v8::Value>) -> Result<Vec<u8>, String> {
+    let props = if value.is_null_or_undefined() {
+        Vec::new()
+    } else {
+        view_bytes(value)
+            .ok_or_else(|| "service binding: the props are not a typed array".to_string())?
+    };
+    props_within_limit("Service binding", props)
 }
 
 #[derive(Clone)]
@@ -7644,6 +7680,12 @@ fn op_loader_load(
                     "worker loader: globalOutbound props are not a typed array",
                 )
             }
+        };
+        // A `ctx.exports.X({props})` stub's props, held by the broker for
+        // every outbound request of the loaded Worker.
+        let props = match props_within_limit("Service binding", props) {
+            Ok(props) => props,
+            Err(error) => return loader_throw(scope, &error),
         };
         let entrypoint = match route.entrypoint {
             Some(name) => Some(crate::WorkerFetchEntrypoint { name, props }),

@@ -106,7 +106,8 @@ compiles the code again.
 - `getEntrypoint()` supports `props` and `limits` options, while
   `getDurableObjectClass()` supports only `props`. A structured-clone encoded
   `props` value can be at most 1 MiB.
-- A `globalOutbound` Fetcher cannot use `connect()` or a WebSocket.
+- A `globalOutbound` Fetcher cannot use `connect()` or a WebSocket. Its
+  props, from `ctx.exports.Name({ props })`, can be at most 1 MiB encoded.
 - A `WorkerCode.tails` array accepts Service Binding Fetchers. Each Fetcher
   receives one event after a Dynamic Worker fetch invocation finishes.
 - The event contains the request metadata, the response status, the console

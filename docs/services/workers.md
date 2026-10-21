@@ -40,9 +40,36 @@ workerd, so a main module that exports a string or a number fails to start.
 celld runs many requests in one isolate and retires isolates at any time, so
 a Worker must keep its state in a binding, not in module scope.
 
+## Service bindings
+
+A `services` entry binds another Worker of the deployment, or this one, as
+`env.NAME`. `entrypoint` selects a named `WorkerEntrypoint` export, and
+without it the binding reaches the default export. Calls go over `fetch()` or
+RPC, and the target runs on the same node.
+
+`props` is a JSON object that the target reads as `this.ctx.props`, or as
+`ctx.props` in a handler, on every call through the binding, as on Cloudflare.
+A binding without `props` delivers `{}`. One binding's `props` can encode to
+at most 1 MiB as a structured clone. `celld deploy` refuses props that could
+exceed it, counting text with a character past U+00FF at two bytes a
+character, and a node checks the encoding when an isolate starts.
+
+The entry accepts `binding`, `service`, `entrypoint`, `props`, `remote`, and
+`dev`. `remote` and `dev` only affect `wrangler dev`, so celld checks that they
+have the shape Wrangler requires and otherwise ignores them. `environment` and
+any other key stop the deployment: celld has one deployment of each script,
+and no Wrangler environments.
+
+`ctx.exports.Name({ props })` carries props too. When such a stub leaves the
+isolate, as a Dynamic Worker's `globalOutbound` or in its `env`, its
+structured-clone props are limited to 1 MiB, as Worker Loader props are; a
+call within the isolate has no limit, as on Cloudflare.
+
 ## Differences from Cloudflare
 
 - celld does not manage a custom domain or terminate TLS.
+- The keys of a service binding's `props` reach the target in sorted order,
+  not in the order the config gives them.
 - `ctx.passThroughOnException()` has no effect, because celld has no CDN.
 - celld does not supply a Workers AI binding. The process rejects
   `CELLD_AI_BINDING` and `CELLD_AI_URL`, and a deployment rejects an `ai`

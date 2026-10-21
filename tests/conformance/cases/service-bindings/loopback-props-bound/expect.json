@@ -1,0 +1,39 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "length": 1000
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "length": 1048000
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "ok": false,
+        "error": "Error: Service binding props size (2000012 bytes) exceeds the maximum allowed size of 1048576 bytes."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "ok": false,
+        "error": "Error: Dynamic Worker env size (2000047 bytes) exceeds the maximum allowed size of 1048576 bytes."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "fetch": 2000000,
+        "rpc": 2000000
+      }
+    }
+  ]
+}

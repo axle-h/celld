@@ -294,6 +294,19 @@ pub struct WorkflowBinding {
     pub class: String,
 }
 
+/// One `services` binding in a Worker environment: the target runs in this
+/// process; see [[service-bindings]].
+#[derive(Clone, Debug)]
+pub struct ServiceBinding {
+    pub environment: String,
+    pub script: String,
+    /// The named entrypoint, or `None` for the default export.
+    pub entrypoint: Option<String>,
+    /// The binding's `props`, a JSON object, which become the target's
+    /// `ctx.props`. `None` when the binding declares none.
+    pub props: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
 /// One Queue producer binding in a Worker environment.
 #[derive(Clone)]
 pub struct QueueBinding {

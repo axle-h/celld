@@ -1,0 +1,11 @@
+{
+  "workers": ["front", "back", "plain"],
+  "steps": [
+    {"path": "/mutation"},
+    {"path": "/cross"},
+    {"path": "/local"},
+    {"path": "/self-binding"},
+    {"path": "/object-default"},
+    {"path": "/scheduled"}
+  ]
+}

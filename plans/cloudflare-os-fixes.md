@@ -346,8 +346,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 6 | Phase 0 gate evidence | recorded; awaiting Alex | |
 | 7 | 1.1 `cloudflare:workers` exports, `restore` | done | `3ef548c` |
 | 8 | 1.2 `tracing` with OTLP export | done | `6e8b960` |
-| 9 | 1.3 `ctx.exports` for migrated classes (W4 removed) | done | see log |
-| 10+ | Phase 1 in plan order (1.4-1.19), then 0.5 after 1.7 | queued | |
+| 9 | 1.3 `ctx.exports` for migrated classes (W4 removed) | done | `9d443f5` |
+| 10 | 1.4 service-binding `props`, refused keys | done | see log |
+| 11+ | Phase 1 in plan order (1.5-1.19), then 0.5 after 1.7 | queued | |
 
 ## Phase overview
 
@@ -973,6 +974,27 @@ delivery in `__beginEvent`.
   than `bindings` at the `durable_objects` top level.
 - **Accept:** `remote`, which only affects `wrangler dev`, with a code comment.
 
+**As built.**
+- Bootstrap emits props as a JSON string literal that the harness
+  `JSON.parse`s (so `__proto__` stays an own key), then encodes it.
+- Deploy refuses props whose **encoded** size could exceed 1 MiB, using a
+  conservative estimate. The isolate-start check stays for foreign
+  manifests. `op_svc_call`, `op_svc_rpc` and the loader's `globalOutbound`
+  props are bounded too. Same-isolate calls are unbounded, as in workerd.
+- Same-script calls keep props in the isolate. Each invocation gets its own
+  props object, `{}` when there are none, as in workerd. Default-entrypoint
+  props also reach `scheduled()`.
+- `ctx.exports.X({props})` copies props when the stub is made, and builds a
+  fresh instance per call. Values that can't be cloned are refused, as in
+  workerd.
+- Accepted with a comment: `remote` on services and DO bindings, and `dev`
+  on services, checked against Wrangler's shape.
+- A manifest with non-object props or a non-string entrypoint fails the
+  load.
+- **Remaining difference:** `ctx.props` keys arrive sorted, because
+  serde_json has no `preserve_order` (a build-wide feature). Follow-up:
+  decide whether to enable it.
+
 **Prior art.** Rework IlyaGulya `2172ce1` (it applies cleanly). It carries
 props through to `__makeServiceBinding`, but has no validation, no
 default-entrypoint props and no refusals.
@@ -1437,6 +1459,9 @@ showed.
   - **refused at deploy:** unimplemented behaviour a Worker would silently
     lose
 - Unknown flags are refused at deploy, as workerd refuses them.
+- Known gap (found by 1.4): celld always exposes Fetcher `scheduled()`.
+  Without `service_binding_extra_handlers`, workerd treats
+  `env.X.scheduled(...)` as an RPC call to a method named `scheduled`.
 - Replace the blanket sentence in the docs with the three lists.
 - New flags from later items (`rpc_params_dup_stubs` in 1.13, the
   `streamingTails` refusal in Phase 6) are added to the lists as they land.

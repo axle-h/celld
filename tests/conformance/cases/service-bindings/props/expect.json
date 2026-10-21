@@ -1,0 +1,885 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "named": {
+          "rpc": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "service": "workshop",
+              "environment": "production",
+              "nested": {
+                "list": [
+                  1,
+                  "two",
+                  {
+                    "three": 3
+                  }
+                ],
+                "empty": {},
+                "nil": null,
+                "flag": true,
+                "n": -1.5,
+                "mutated": true
+              },
+              "text": "line para end </script> \"quoted\" \\ é 😀",
+              "mutated": true
+            }
+          },
+          "rpcAfter": {
+            "type": "object",
+            "props": {
+              "service": "workshop",
+              "environment": "production",
+              "nested": {
+                "list": [
+                  1,
+                  "two",
+                  {
+                    "three": 3
+                  }
+                ],
+                "empty": {},
+                "nil": null,
+                "flag": true,
+                "n": -1.5
+              },
+              "text": "line para end </script> \"quoted\" \\ é 😀"
+            }
+          },
+          "fetch": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "service": "workshop",
+              "environment": "production",
+              "nested": {
+                "list": [
+                  1,
+                  "two",
+                  {
+                    "three": 3
+                  }
+                ],
+                "empty": {},
+                "nil": null,
+                "flag": true,
+                "n": -1.5,
+                "mutated": true
+              },
+              "text": "line para end </script> \"quoted\" \\ é 😀",
+              "mutated": true
+            }
+          },
+          "fetchAfter": {
+            "type": "object",
+            "props": {
+              "service": "workshop",
+              "environment": "production",
+              "nested": {
+                "list": [
+                  1,
+                  "two",
+                  {
+                    "three": 3
+                  }
+                ],
+                "empty": {},
+                "nil": null,
+                "flag": true,
+                "n": -1.5
+              },
+              "text": "line para end </script> \"quoted\" \\ é 😀"
+            }
+          }
+        },
+        "default": {
+          "rpc": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "who": "default",
+              "nested": {
+                "depth": [
+                  [
+                    []
+                  ]
+                ],
+                "mutated": true
+              },
+              "mutated": true
+            }
+          },
+          "rpcAfter": {
+            "type": "object",
+            "props": {
+              "who": "default",
+              "nested": {
+                "depth": [
+                  [
+                    []
+                  ]
+                ]
+              }
+            }
+          },
+          "fetch": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "who": "default",
+              "nested": {
+                "depth": [
+                  [
+                    []
+                  ]
+                ],
+                "mutated": true
+              },
+              "mutated": true
+            }
+          },
+          "fetchAfter": {
+            "type": "object",
+            "props": {
+              "who": "default",
+              "nested": {
+                "depth": [
+                  [
+                    []
+                  ]
+                ]
+              }
+            }
+          }
+        },
+        "namedNone": {
+          "rpc": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "mutated": true
+            }
+          },
+          "rpcAfter": {
+            "type": "object",
+            "props": {}
+          },
+          "fetch": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "mutated": true
+            }
+          },
+          "fetchAfter": {
+            "type": "object",
+            "props": {}
+          }
+        },
+        "defaultNone": {
+          "rpc": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "mutated": true
+            }
+          },
+          "rpcAfter": {
+            "type": "object",
+            "props": {}
+          },
+          "fetch": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "mutated": true
+            }
+          },
+          "fetchAfter": {
+            "type": "object",
+            "props": {}
+          }
+        },
+        "selfNamed": {
+          "rpc": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "who": "self",
+              "nested": {
+                "a": [
+                  1
+                ],
+                "mutated": true
+              },
+              "mutated": true
+            }
+          },
+          "rpcAfter": {
+            "type": "object",
+            "props": {
+              "who": "self",
+              "nested": {
+                "a": [
+                  1
+                ]
+              }
+            }
+          },
+          "fetch": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "who": "self",
+              "nested": {
+                "a": [
+                  1
+                ],
+                "mutated": true
+              },
+              "mutated": true
+            }
+          },
+          "fetchAfter": {
+            "type": "object",
+            "props": {
+              "who": "self",
+              "nested": {
+                "a": [
+                  1
+                ]
+              }
+            }
+          }
+        },
+        "selfDefault": {
+          "rpc": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "who": "self-default",
+              "mutated": true
+            }
+          },
+          "rpcAfter": {
+            "type": "object",
+            "props": {
+              "who": "self-default"
+            }
+          },
+          "fetch": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "who": "self-default",
+              "mutated": true
+            }
+          },
+          "fetchAfter": {
+            "type": "object",
+            "props": {
+              "who": "self-default"
+            }
+          }
+        },
+        "selfNone": {
+          "rpc": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "mutated": true
+            }
+          },
+          "rpcAfter": {
+            "type": "object",
+            "props": {}
+          },
+          "fetch": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "mutated": true
+            }
+          },
+          "fetchAfter": {
+            "type": "object",
+            "props": {}
+          }
+        },
+        "loopbackNamed": {
+          "rpc": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "who": "loopback",
+              "nested": {
+                "list": [
+                  1,
+                  {
+                    "two": [
+                      2
+                    ]
+                  }
+                ],
+                "nil": null,
+                "mutated": true
+              },
+              "mutated": true
+            }
+          },
+          "rpcAfter": {
+            "type": "object",
+            "props": {
+              "who": "loopback",
+              "nested": {
+                "list": [
+                  1,
+                  {
+                    "two": [
+                      2
+                    ]
+                  }
+                ],
+                "nil": null
+              }
+            }
+          },
+          "fetch": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "who": "loopback",
+              "nested": {
+                "list": [
+                  1,
+                  {
+                    "two": [
+                      2
+                    ]
+                  }
+                ],
+                "nil": null,
+                "mutated": true
+              },
+              "mutated": true
+            }
+          },
+          "fetchAfter": {
+            "type": "object",
+            "props": {
+              "who": "loopback",
+              "nested": {
+                "list": [
+                  1,
+                  {
+                    "two": [
+                      2
+                    ]
+                  }
+                ],
+                "nil": null
+              }
+            }
+          }
+        },
+        "loopbackDefault": {
+          "rpc": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "who": "loopback",
+              "nested": {
+                "list": [
+                  1,
+                  {
+                    "two": [
+                      2
+                    ]
+                  }
+                ],
+                "nil": null,
+                "mutated": true
+              },
+              "mutated": true
+            }
+          },
+          "rpcAfter": {
+            "type": "object",
+            "props": {
+              "who": "loopback",
+              "nested": {
+                "list": [
+                  1,
+                  {
+                    "two": [
+                      2
+                    ]
+                  }
+                ],
+                "nil": null
+              }
+            }
+          },
+          "fetch": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "who": "loopback",
+              "nested": {
+                "list": [
+                  1,
+                  {
+                    "two": [
+                      2
+                    ]
+                  }
+                ],
+                "nil": null,
+                "mutated": true
+              },
+              "mutated": true
+            }
+          },
+          "fetchAfter": {
+            "type": "object",
+            "props": {
+              "who": "loopback",
+              "nested": {
+                "list": [
+                  1,
+                  {
+                    "two": [
+                      2
+                    ]
+                  }
+                ],
+                "nil": null
+              }
+            }
+          }
+        },
+        "loopbackNone": {
+          "rpc": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "mutated": true
+            }
+          },
+          "rpcAfter": {
+            "type": "object",
+            "props": {}
+          },
+          "fetch": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "mutated": true
+            }
+          },
+          "fetchAfter": {
+            "type": "object",
+            "props": {}
+          }
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "named": {
+          "fetch": {
+            "type": "object",
+            "props": {
+              "service": "workshop",
+              "environment": "production",
+              "nested": {
+                "list": [
+                  1,
+                  "two",
+                  {
+                    "three": 3
+                  }
+                ],
+                "empty": {},
+                "nil": null,
+                "flag": true,
+                "n": -1.5
+              },
+              "text": "line para end </script> \"quoted\" \\ é 😀"
+            }
+          },
+          "rpc": {
+            "type": "object",
+            "props": {
+              "service": "workshop",
+              "environment": "production",
+              "nested": {
+                "list": [
+                  1,
+                  "two",
+                  {
+                    "three": 3
+                  }
+                ],
+                "empty": {},
+                "nil": null,
+                "flag": true,
+                "n": -1.5
+              },
+              "text": "line para end </script> \"quoted\" \\ é 😀"
+            }
+          }
+        },
+        "default": {
+          "fetch": {
+            "type": "object",
+            "props": {
+              "who": "default",
+              "nested": {
+                "depth": [
+                  [
+                    []
+                  ]
+                ]
+              }
+            }
+          },
+          "rpc": {
+            "type": "object",
+            "props": {
+              "who": "default",
+              "nested": {
+                "depth": [
+                  [
+                    []
+                  ]
+                ]
+              }
+            }
+          }
+        },
+        "namedNone": {
+          "fetch": {
+            "type": "object",
+            "props": {}
+          },
+          "rpc": {
+            "type": "object",
+            "props": {}
+          }
+        },
+        "defaultNone": {
+          "fetch": {
+            "type": "object",
+            "props": {}
+          },
+          "rpc": {
+            "type": "object",
+            "props": {}
+          }
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "named": {
+          "fetch": {
+            "type": "object",
+            "props": {
+              "who": "loopback",
+              "nested": {
+                "list": [
+                  1,
+                  {
+                    "two": [
+                      2
+                    ]
+                  }
+                ],
+                "nil": null
+              }
+            }
+          },
+          "rpc": {
+            "type": "object",
+            "props": {
+              "who": "loopback",
+              "nested": {
+                "list": [
+                  1,
+                  {
+                    "two": [
+                      2
+                    ]
+                  }
+                ],
+                "nil": null
+              }
+            }
+          }
+        },
+        "default": {
+          "fetch": {
+            "type": "object",
+            "props": {
+              "who": "loopback",
+              "nested": {
+                "list": [
+                  1,
+                  {
+                    "two": [
+                      2
+                    ]
+                  }
+                ],
+                "nil": null
+              }
+            }
+          },
+          "rpc": {
+            "type": "object",
+            "props": {
+              "who": "loopback",
+              "nested": {
+                "list": [
+                  1,
+                  {
+                    "two": [
+                      2
+                    ]
+                  }
+                ],
+                "nil": null
+              }
+            }
+          }
+        },
+        "namedNone": {
+          "fetch": {
+            "type": "object",
+            "props": {}
+          },
+          "rpc": {
+            "type": "object",
+            "props": {}
+          }
+        },
+        "defaultNone": {
+          "fetch": {
+            "type": "object",
+            "props": {}
+          },
+          "rpc": {
+            "type": "object",
+            "props": {}
+          }
+        },
+        "snapshot": "loopback",
+        "instances": [
+          1,
+          1,
+          1
+        ],
+        "uncloneable": "DataCloneError: () => 1 could not be cloned."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "named": {
+          "fetch": {
+            "type": "object",
+            "props": {
+              "who": "self",
+              "nested": {
+                "a": [
+                  1
+                ]
+              }
+            }
+          },
+          "rpc": {
+            "type": "object",
+            "props": {
+              "who": "self",
+              "nested": {
+                "a": [
+                  1
+                ]
+              }
+            }
+          }
+        },
+        "default": {
+          "fetch": {
+            "type": "object",
+            "props": {
+              "who": "self-default"
+            }
+          },
+          "rpc": {
+            "type": "object",
+            "props": {
+              "who": "self-default"
+            }
+          }
+        },
+        "namedNone": {
+          "fetch": {
+            "type": "object",
+            "props": {}
+          },
+          "rpc": {
+            "type": "object",
+            "props": {}
+          }
+        },
+        "defaultNone": {
+          "fetch": {
+            "type": "object",
+            "props": {}
+          },
+          "rpc": {
+            "type": "object",
+            "props": {}
+          }
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "cross": {
+          "type": "object",
+          "props": {
+            "who": "plain",
+            "nested": {
+              "list": [
+                true
+              ]
+            }
+          }
+        },
+        "crossNone": {
+          "type": "object",
+          "props": {}
+        },
+        "crossMutate": {
+          "ok": true,
+          "type": "object",
+          "props": {
+            "who": "plain",
+            "nested": {
+              "list": [
+                true
+              ]
+            },
+            "mutated": true
+          }
+        },
+        "crossAfter": {
+          "type": "object",
+          "props": {
+            "who": "plain",
+            "nested": {
+              "list": [
+                true
+              ]
+            }
+          }
+        },
+        "self": {
+          "caller": {
+            "type": "object",
+            "props": {
+              "who": "plain",
+              "nested": {
+                "list": [
+                  true
+                ]
+              }
+            }
+          },
+          "binding": {
+            "type": "object",
+            "props": {
+              "who": "plain-self"
+            }
+          },
+          "bindingNone": {
+            "type": "object",
+            "props": {}
+          },
+          "bindingMutate": {
+            "ok": true,
+            "type": "object",
+            "props": {
+              "who": "plain-self",
+              "mutated": true
+            }
+          },
+          "bindingAfter": {
+            "type": "object",
+            "props": {
+              "who": "plain-self"
+            }
+          },
+          "loopback": {
+            "type": "object",
+            "props": {
+              "who": "plain-loopback"
+            }
+          },
+          "loopbackNone": {
+            "type": "object",
+            "props": {}
+          },
+          "scheduled": {
+            "outcome": "ok",
+            "props": {
+              "type": "object",
+              "props": {
+                "who": "plain-self"
+              }
+            }
+          },
+          "scheduledNone": {
+            "outcome": "ok",
+            "props": {
+              "type": "object",
+              "props": {}
+            }
+          }
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "default": {
+          "outcome": "ok",
+          "props": {
+            "type": "object",
+            "props": {
+              "who": "self-default"
+            }
+          }
+        },
+        "defaultNone": {
+          "outcome": "ok",
+          "props": {
+            "type": "object",
+            "props": {}
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+// Service bindings with and without `props`, to other scripts (`back`, whose
+// default export is a class, and `plain`, whose default export is an object)
+// and to this one. The props carry nested values, and a string with U+2028
+// and U+2029, which end a line in JavaScript source but not in JSON.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  // Fetcher.scheduled(), for the `scheduled()` steps.
+  "compatibility_flags": ["service_binding_extra_handlers"],
+  "services": [
+    {
+      "binding": "NAMED",
+      "service": "back",
+      "entrypoint": "Named",
+      "props": {
+        "service": "workshop",
+        "environment": "production",
+        "nested": { "list": [1, "two", { "three": 3 }], "empty": {}, "nil": null, "flag": true, "n": -1.5 },
+        "text": "line para end </script> \"quoted\" \\ é 😀"
+      }
+    },
+    { "binding": "DEFAULT", "service": "back", "props": { "who": "default", "nested": { "depth": [[[]]] } } },
+    { "binding": "NAMED_NONE", "service": "back", "entrypoint": "Named" },
+    { "binding": "DEFAULT_NONE", "service": "back" },
+    { "binding": "PLAIN", "service": "plain", "props": { "who": "plain", "nested": { "list": [true] } } },
+    { "binding": "PLAIN_NONE", "service": "plain" },
+    { "binding": "SELF_NAMED", "service": "front", "entrypoint": "Local", "props": { "who": "self", "nested": { "a": [1] } } },
+    { "binding": "SELF_DEFAULT", "service": "front", "props": { "who": "self-default" } },
+    { "binding": "SELF_NONE", "service": "front", "entrypoint": "Local" },
+    { "binding": "SELF_DEFAULT_NONE", "service": "front" }
+  ]
+}

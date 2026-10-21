@@ -113,6 +113,11 @@ stopped.
   changes every id that `idFromName()` derives.
 - A `migrations` entry accepts `tag` and `new_sqlite_classes` only. A class
   rename, a class delete, and a class transfer stop the deployment.
+- A `durable_objects` binding accepts `name`, `class_name`, and `remote`,
+  which only affects `wrangler dev`, and binds a class of the same script.
+  `script_name`, which binds another Worker's class, `environment`, and any
+  other key stop the deployment, as does a `durable_objects` key other than
+  `bindings`.
 - The main module must export each class that a binding or a migration
   declares, as a class. Otherwise the Worker does not load, with workerd's
   message for this case, and neither does any script deployed with it: the

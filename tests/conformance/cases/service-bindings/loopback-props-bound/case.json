@@ -1,0 +1,12 @@
+{
+  "kind": "celld-only",
+  "reason": "celld bounds the props a ctx.exports stub carries out of its isolate at 1 MiB, encoded, as it bounds Worker Loader props; workerd has no such bound",
+  "workers": ["bound"],
+  "steps": [
+    {"path": "/outbound?size=1000"},
+    {"path": "/outbound?size=1048000"},
+    {"path": "/outbound?size=2000000"},
+    {"path": "/env?size=2000000"},
+    {"path": "/local?size=2000000"}
+  ]
+}

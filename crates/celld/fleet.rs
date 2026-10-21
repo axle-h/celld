@@ -896,7 +896,7 @@ async fn load_worker_at_pointer(
     let loader_bindings = bindings(&manifest, "worker_loader")
         .filter_map(|binding| binding.get("name")?.as_str().map(str::to_string))
         .collect();
-    let services = service_bindings(&manifest);
+    let services = service_bindings(&manifest)?;
     let vars = worker_vars(&manifest);
     let compat = crate::worker_compat(&manifest.raw_metadata);
     let assets = match &manifest.assets {
@@ -971,7 +971,7 @@ pub struct LoadedDeployment {
     /// declare, and each loader keeps a cache of its own loaded Workers.
     pub loader_bindings: Vec<String>,
     pub assets: Option<crate::assets::AssetResolver>,
-    pub services: Vec<(String, String, Option<String>)>,
+    pub services: Vec<crate::js::ServiceBinding>,
     /// `triggers.crons` from the manifest, driving the reserved cron cell.
     pub crons: Vec<String>,
     /// `containers` from the manifest: the classes whose cells supervise a
@@ -996,17 +996,37 @@ fn bindings<'a>(
         })
 }
 
-fn service_bindings(manifest: &Manifest) -> Vec<(String, String, Option<String>)> {
+fn service_bindings(manifest: &Manifest) -> anyhow::Result<Vec<crate::js::ServiceBinding>> {
     bindings(manifest, "service")
         .filter_map(|binding| {
-            Some((
-                binding.get("name")?.as_str()?.to_string(),
-                binding.get("service")?.as_str()?.to_string(),
-                binding
-                    .get("entrypoint")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string),
-            ))
+            let environment = binding.get("name")?.as_str()?.to_string();
+            let script = binding.get("service")?.as_str()?.to_string();
+            // A control plane other than `celld deploy` can write the
+            // manifest, so a malformed entrypoint or props fails the load
+            // rather than reach the default export, or reach `ctx.props` as
+            // something Cloudflare never delivers.
+            let entrypoint = match binding.get("entrypoint") {
+                None => Ok(None),
+                Some(serde_json::Value::String(entrypoint)) => Ok(Some(entrypoint.clone())),
+                Some(_) => Err(anyhow::anyhow!(
+                    "service binding {environment} has an `entrypoint` that is not a string"
+                )),
+            };
+            let props = match binding.get("props") {
+                None => Ok(None),
+                Some(serde_json::Value::Object(props)) => Ok(Some(props.clone())),
+                Some(_) => Err(anyhow::anyhow!(
+                    "service binding {environment} has `props` that are not a JSON object"
+                )),
+            };
+            Some(entrypoint.and_then(|entrypoint| {
+                Ok(crate::js::ServiceBinding {
+                    environment,
+                    script,
+                    entrypoint,
+                    props: props?,
+                })
+            }))
         })
         .collect()
 }
@@ -1020,4 +1040,55 @@ fn worker_vars(manifest: &Manifest) -> Vec<(String, String)> {
             ))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn manifest(binding: serde_json::Value) -> Manifest {
+        serde_json::from_value(json!({
+            "version": "v",
+            "script_name": "app",
+            "main_module": "index.js",
+            "do_classes": [],
+            "sqlite_classes": [],
+            "modules": [],
+            "raw_metadata": { "bindings": [binding] },
+        }))
+        .unwrap()
+    }
+
+    fn refusal(binding: serde_json::Value) -> String {
+        service_bindings(&manifest(binding))
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn a_service_binding_carries_its_entrypoint_and_props() {
+        let services = service_bindings(&manifest(json!({
+            "type": "service", "name": "S", "service": "t",
+            "entrypoint": "Named", "props": { "a": [1] },
+        })))
+        .unwrap();
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].environment, "S");
+        assert_eq!(services[0].script, "t");
+        assert_eq!(services[0].entrypoint.as_deref(), Some("Named"));
+        assert_eq!(services[0].props.as_ref().unwrap()["a"], json!([1]));
+    }
+
+    #[test]
+    fn a_malformed_service_binding_fails_the_load() {
+        assert_eq!(
+            refusal(json!({ "type": "service", "name": "S", "service": "t", "entrypoint": 1 })),
+            "service binding S has an `entrypoint` that is not a string"
+        );
+        assert_eq!(
+            refusal(json!({ "type": "service", "name": "S", "service": "t", "props": [1] })),
+            "service binding S has `props` that are not a JSON object"
+        );
+    }
 }

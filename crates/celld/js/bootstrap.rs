@@ -680,14 +680,25 @@ pub(super) fn build_env(scope: &mut v8::PinScope, config: &WorkerConfig) -> Resu
                 binding.environment, binding.workflow
             ));
         }
-        for (binding, script, entrypoint) in services {
-            let entrypoint = match entrypoint {
+        for service in services {
+            let entrypoint = match &service.entrypoint {
                 Some(name) => format!("{name:?}"),
                 None => "null".to_string(),
             };
+            // Encoded once, here, into the bytes every call on the binding
+            // carries. No props stays `undefined`, not encoded `{}`, so a
+            // same-script call to the default export keeps its direct path.
+            let props = match &service.props {
+                Some(props) => format!(
+                    "__celld.__propsBytes({:?}, {})",
+                    service.environment,
+                    json_text_literal(props)?
+                ),
+                None => "undefined".to_string(),
+            };
             lines.push_str(&format!(
-                "e[{:?}] = __celld.__makeServiceBinding({:?}, {});\n",
-                binding, script, entrypoint
+                "e[{:?}] = __celld.__makeServiceBinding({:?}, {}, {});\n",
+                service.environment, service.script, entrypoint, props
             ));
         }
         for (name, value) in vars {
@@ -708,7 +719,12 @@ pub(super) fn build_env(scope: &mut v8::PinScope, config: &WorkerConfig) -> Resu
         }
         lines
     };
-    run_internal_snippet(scope, &src).ok_or_else(|| anyhow!("env install failed"))?;
+    {
+        let tc = std::pin::pin!(v8::TryCatch::new(scope));
+        let tc = &mut tc.init();
+        run_internal_snippet(tc, &src)
+            .ok_or_else(|| anyhow!("env install failed: {}", exc!(tc)))?;
+    }
     if let Some(env) = &config.loader_env {
         let installer = internal_function(scope, "__installLoaderEnv")?;
         // A flat [script, entrypoint, props, ...] array avoids one V8 array
@@ -735,6 +751,18 @@ pub(super) fn build_env(scope: &mut v8::PinScope, config: &WorkerConfig) -> Resu
             .ok_or_else(|| anyhow!("loader env install: {}", exc!(tc)))?;
     }
     Ok(())
+}
+
+/// `value` as JSON text inside a JavaScript string literal, for the harness to
+/// `JSON.parse`. Not an object literal: in one, a `"__proto__"` key sets the
+/// prototype, where the manifest's JSON, parsed, has it as an own property.
+/// U+2028 and U+2029 are escaped as well, though ES2019 allows them in string
+/// literals, so the snippet never depends on that.
+fn json_text_literal(value: &serde_json::Map<String, serde_json::Value>) -> Result<String> {
+    let text = serde_json::to_string(value)?;
+    Ok(serde_json::to_string(&text)?
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029"))
 }
 
 /// Install the deployment-wide Queue consumer catalog and lease budget.
@@ -1120,23 +1148,34 @@ mod tests {
     /// Loads `src` as a deployment's main module with `do_classes`, on a
     /// thread started after V8 is, as `runtime::init_v8` requires.
     fn load(src: &str, do_classes: &[&str]) -> Result<(), String> {
+        load_with_services(src, do_classes, Vec::new())
+    }
+
+    fn load_with_services(
+        src: &str,
+        do_classes: &[&str],
+        services: Vec<crate::js::ServiceBinding>,
+    ) -> Result<(), String> {
         Engine::init();
-        let config = Arc::new(WorkerConfig::new(WorkerConfigOptions {
-            src: src.to_string(),
-            script_name: "test".to_string(),
-            do_classes: do_classes.iter().map(|class| class.to_string()).collect(),
-            bindings: Vec::new(),
-            r2_bindings: Vec::new(),
-            d1_bindings: Vec::new(),
-            kv_bindings: Vec::new(),
-            queue_bindings: Vec::new(),
-            queue_consumers: Vec::new(),
-            workflow_bindings: Vec::new(),
-            vars: Vec::new(),
-            node: String::new(),
-            modules: Vec::new(),
-            compat: Compat::default(),
-        }));
+        let config = Arc::new(
+            WorkerConfig::new(WorkerConfigOptions {
+                src: src.to_string(),
+                script_name: "test".to_string(),
+                do_classes: do_classes.iter().map(|class| class.to_string()).collect(),
+                bindings: Vec::new(),
+                r2_bindings: Vec::new(),
+                d1_bindings: Vec::new(),
+                kv_bindings: Vec::new(),
+                queue_bindings: Vec::new(),
+                queue_consumers: Vec::new(),
+                workflow_bindings: Vec::new(),
+                vars: Vec::new(),
+                node: String::new(),
+                modules: Vec::new(),
+                compat: Compat::default(),
+            })
+            .with_services(services),
+        );
         std::thread::spawn(move || {
             Worker::load_config(config)
                 .map(drop)
@@ -1160,5 +1199,88 @@ mod tests {
         assert_eq!(load(&not_a_class, &["Room"]), Err(refused));
         let exported = format!("{HANDLER}export class Room {{}}\n");
         assert_eq!(load(&exported, &["Room"]), Ok(()));
+    }
+
+    fn service(props: serde_json::Value) -> crate::js::ServiceBinding {
+        let serde_json::Value::Object(props) = props else {
+            panic!("props must be an object");
+        };
+        crate::js::ServiceBinding {
+            environment: "REPORTER".to_string(),
+            script: "errors".to_string(),
+            entrypoint: None,
+            props: Some(props),
+        }
+    }
+
+    #[test]
+    fn props_reach_the_snippet_as_json_text_with_line_separators_escaped() {
+        let serde_json::Value::Object(props) = serde_json::json!({
+            "__proto__": { "a": "\"\\\u{2028}\u{2029}" },
+        }) else {
+            unreachable!()
+        };
+        assert_eq!(
+            json_text_literal(&props).unwrap(),
+            r#""{\"__proto__\":{\"a\":\"\\\"\\\\\u2028\u2029\"}}""#
+        );
+    }
+
+    /// Props at the deploy's bound encode within the limit, whatever their
+    /// shape: anything `celld deploy` accepts starts.
+    #[test]
+    fn service_binding_props_the_deploy_accepts_load() {
+        let limit = 1024 * 1024;
+        let record = serde_json::json!({
+            "n": -1.5, "i": 12, "big": 1u64 << 40, "b": true, "z": null,
+            "l": [1, "x", { "é": "\u{2028}" }], "key😀": "text",
+        });
+        let records = |count: usize| serde_json::json!({ "r": vec![record.clone(); count] });
+        let per_record = crate::deploy::encoded_props_bound(&records(1))
+            - crate::deploy::encoded_props_bound(&records(0));
+        let fill = records((limit - crate::deploy::encoded_props_bound(&records(0))) / per_record);
+        let body = |unit: usize| limit - 24 - (limit - 24) % unit;
+        for props in [
+            serde_json::json!({ "s": "a".repeat(body(1)) }),
+            serde_json::json!({ "s": "é".repeat(body(1)) }),
+            serde_json::json!({ "s": "\u{2028}".repeat(body(2) / 2) }),
+            serde_json::json!({ "s": "😀".repeat(body(4) / 4) }),
+            fill,
+        ] {
+            let bound = crate::deploy::encoded_props_bound(&props);
+            assert!(bound <= limit && bound > limit - 1024, "{bound}");
+            assert_eq!(
+                load_with_services(HANDLER, &[], vec![service(props)]),
+                Ok(())
+            );
+        }
+    }
+
+    /// A manifest from another control plane skips the deploy's check, so
+    /// the isolate checks the encoding too.
+    #[test]
+    fn service_binding_props_over_one_mebibyte_encoded_fail_the_load() {
+        let fits = format!("{}\u{2028}", "a".repeat(500_000));
+        assert_eq!(
+            load_with_services(
+                HANDLER,
+                &[],
+                vec![service(serde_json::json!({ "s": fits }))]
+            ),
+            Ok(())
+        );
+        let over = format!("{}\u{2028}", "a".repeat(600_000));
+        assert_eq!(
+            load_with_services(
+                HANDLER,
+                &[],
+                vec![service(serde_json::json!({ "s": over }))]
+            ),
+            Err(
+                "env install failed: RangeError: Service binding REPORTER props size \
+                 (1200014 bytes) exceeds the maximum allowed size of 1048576 bytes."
+                    .to_string()
+            )
+        );
     }
 }

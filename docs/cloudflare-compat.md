@@ -274,6 +274,14 @@ The accepted top-level keys:
 
 Any other top-level key, including `routes`, stops the deployment.
 
+A `services` entry accepts `binding`, `service`, `entrypoint`, `props` (a
+JSON object that encodes to at most 1 MiB), and `remote` and `dev`, which only affect
+`wrangler dev`. A `durable_objects` binding accepts `name`, `class_name`, and
+`remote`. Any other key in either, including `environment` and a Durable
+Object's `script_name`, stops the deployment. See
+[service bindings](services/workers.md#service-bindings) and
+[Durable Objects](services/durable-objects.md#differences-from-cloudflare).
+
 `define` and `rules` go to the esbuild run. Each `define` value is a
 JavaScript expression, as in Wrangler. A rule `type` must be `Text`, `Data`,
 or `CompiledWasm`, and each glob must have the form `**/*.ext` or `*.ext`,

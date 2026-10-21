@@ -1411,13 +1411,7 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
     // `ctx.exports`, and Cloudflare OS reaches all of its classes that way.
     // Reserved classes were refused above, so this adds only user classes.
     let mut do_classes = sqlite_classes.clone();
-    for binding in object
-        .get("durable_objects")
-        .and_then(|value| value.get("bindings"))
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default()
-    {
+    for binding in read_durable_object_bindings(object)? {
         let name = binding
             .get("name")
             .and_then(Value::as_str)
@@ -1426,6 +1420,36 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
             .get("class_name")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("durable object binding {name} has no `class_name`"))?;
+        // A binding reaches a class this script exports. `script_name` (and
+        // `environment`, which only qualifies it) would bind another
+        // script's class, which celld cannot do, so binding this script's
+        // class of the same name instead would be the wrong objects.
+        for key in ["script_name", "environment"] {
+            if binding.get(key).is_some() {
+                bail!(
+                    "durable object binding {name} sets `{key}`, which celld does not support: \
+                     a binding reaches only a class that this script exports"
+                );
+            }
+        }
+        // `remote` only chooses whether `wrangler dev` reaches the deployed
+        // namespace; a deployment always does, so it is accepted.
+        if let Some(key) = binding.as_object().and_then(|binding| {
+            binding
+                .keys()
+                .find(|key| !matches!(key.as_str(), "name" | "class_name" | "remote"))
+        }) {
+            bail!(
+                "durable object binding {name} declares `{key}`, which celld does not model; \
+                 celld models `name`, `class_name`, and `remote`"
+            );
+        }
+        if binding
+            .get("remote")
+            .is_some_and(|remote| !remote.is_boolean())
+        {
+            bail!("durable object binding {name} `remote` must be a boolean");
+        }
         if !do_classes.iter().any(|class| class == class_name) {
             do_classes.push(class_name.to_string());
         }
@@ -1442,34 +1466,7 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
     };
     let mut service_count = 0_usize;
     for service in services {
-        let binding = service
-            .get("binding")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("service binding has no `binding`"))?;
-        if !valid_binding(binding) {
-            bail!("invalid service binding name: {binding:?}");
-        }
-        let target = service
-            .get("service")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("service binding {binding} has no `service`"))?;
-        let entrypoint = service
-            .get("entrypoint")
-            .map(|value| {
-                value.as_str().ok_or_else(|| {
-                    anyhow!("service binding {binding} `entrypoint` must be a string")
-                })
-            })
-            .transpose()?;
-        let mut encoded = json!({
-            "type": "service",
-            "name": binding,
-            "service": target,
-        });
-        if let Some(entrypoint) = entrypoint {
-            encoded["entrypoint"] = json!(entrypoint);
-        }
-        bindings.push(encoded);
+        bindings.push(read_service_binding(service)?);
         service_count += 1;
     }
     let d1_databases = match object.get("d1_databases") {
@@ -2320,6 +2317,192 @@ pub(crate) fn valid_resource_name(name: &str) -> bool {
             .chars()
             .skip(1)
             .all(|value| value == '_' || value == '-' || value.is_ascii_alphanumeric())
+}
+
+/// `durable_objects.bindings`, refusing any other `durable_objects` key.
+fn read_durable_object_bindings(object: &Map<String, Value>) -> anyhow::Result<&[Value]> {
+    let Some(durable_objects) = object.get("durable_objects") else {
+        return Ok(&[]);
+    };
+    let durable_objects = durable_objects
+        .as_object()
+        .ok_or_else(|| anyhow!("config `durable_objects` must be an object"))?;
+    if let Some(key) = durable_objects
+        .keys()
+        .find(|key| key.as_str() != "bindings")
+    {
+        bail!(
+            "config `durable_objects` declares `{key}`, which celld does not model; \
+             celld models `bindings`"
+        );
+    }
+    match durable_objects.get("bindings") {
+        None => Ok(&[]),
+        Some(Value::Array(bindings)) => Ok(bindings),
+        Some(_) => bail!("config `durable_objects.bindings` must be an array"),
+    }
+}
+
+/// The largest structured-clone encoding of one service binding's `props`,
+/// as for Worker Loader props. The node checks the actual encoding when an
+/// isolate starts; the deploy refuses anything that could exceed it there.
+const MAX_SERVICE_PROPS_BYTES: usize = 1024 * 1024;
+
+/// An upper bound on the size of `value`'s V8 structured-clone encoding, the
+/// form `ctx.props` travels in. JSON size is no bound: V8 stores a string
+/// with any character past U+00FF as UTF-16, so such text can take twice its
+/// JSON bytes. Each term is V8's largest form for that value: a tag, varint
+/// lengths and counts of at most 5 bytes, a padding byte before a two-byte
+/// string, and 8 bytes for a number that is not a small integer.
+pub(crate) fn encoded_props_bound(value: &Value) -> usize {
+    const HEADER: usize = 2;
+    fn string(text: &str) -> usize {
+        let body = if text.chars().all(|c| u32::from(c) <= 0xff) {
+            text.chars().count()
+        } else {
+            2 * text.encode_utf16().count()
+        };
+        7 + body
+    }
+    fn value_bound(value: &Value) -> usize {
+        match value {
+            Value::Null | Value::Bool(_) => 1,
+            Value::Number(number) => match number.as_i64() {
+                Some(n) if i32::try_from(n).is_ok() => 6,
+                _ => 9,
+            },
+            Value::String(text) => string(text),
+            Value::Array(items) => 17 + items.iter().map(value_bound).sum::<usize>(),
+            Value::Object(fields) => {
+                7 + fields
+                    .iter()
+                    .map(|(key, value)| string(key) + value_bound(value))
+                    .sum::<usize>()
+            }
+        }
+    }
+    HEADER + value_bound(value)
+}
+
+/// One `services` entry as upload metadata: `{"type": "service", "name",
+/// "service", "entrypoint"?, "props"?}`, Cloudflare's shape.
+fn read_service_binding(service: &Value) -> anyhow::Result<Value> {
+    let binding = service
+        .get("binding")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("service binding has no `binding`"))?;
+    if !valid_binding(binding) {
+        bail!("invalid service binding name: {binding:?}");
+    }
+    // `environment` names a Wrangler environment of the target. celld has one
+    // deployment for each script, so honoring it would mean ignoring it.
+    if service.get("environment").is_some() {
+        bail!(
+            "service binding {binding} sets `environment`, which celld does not support: \
+             a script has one deployment, so remove it"
+        );
+    }
+    // `remote` only chooses whether `wrangler dev` calls the deployed Worker,
+    // and `dev` routes the binding to a Miniflare plugin under `wrangler dev`.
+    // A deployment always calls the deployed Worker, so both are accepted,
+    // once they have the shape Wrangler requires.
+    if let Some(key) = service.as_object().and_then(|service| {
+        service.keys().find(|key| {
+            !matches!(
+                key.as_str(),
+                "binding" | "service" | "entrypoint" | "props" | "remote" | "dev"
+            )
+        })
+    }) {
+        bail!(
+            "service binding {binding} declares `{key}`, which celld does not model; \
+             celld models `binding`, `service`, `entrypoint`, `props`, `remote`, and `dev`"
+        );
+    }
+    if service
+        .get("remote")
+        .is_some_and(|remote| !remote.is_boolean())
+    {
+        bail!("service binding {binding} `remote` must be a boolean");
+    }
+    if let Some(dev) = service.get("dev") {
+        check_service_dev(binding, dev)?;
+    }
+    let target = service
+        .get("service")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("service binding {binding} has no `service`"))?;
+    let entrypoint = service
+        .get("entrypoint")
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| anyhow!("service binding {binding} `entrypoint` must be a string"))
+        })
+        .transpose()?;
+    let mut encoded = json!({
+        "type": "service",
+        "name": binding,
+        "service": target,
+    });
+    if let Some(entrypoint) = entrypoint {
+        encoded["entrypoint"] = json!(entrypoint);
+    }
+    // The target entrypoint's `ctx.props`, verbatim. Cloudflare delivers an
+    // object, and an entrypoint reads its fields, so nothing else is props.
+    if let Some(props) = service.get("props") {
+        if !props.is_object() {
+            bail!("service binding {binding} `props` must be a JSON object");
+        }
+        let size = encoded_props_bound(props);
+        if size > MAX_SERVICE_PROPS_BYTES {
+            bail!(
+                "service binding {binding} `props` can encode to {size} bytes, more than the \
+                 {MAX_SERVICE_PROPS_BYTES}-byte limit"
+            );
+        }
+        encoded["props"] = props.clone();
+    }
+    Ok(encoded)
+}
+
+/// Wrangler's checks on a service binding's `dev`, in its words:
+/// `{"plugin": {"package": string, "name": string}, "options"?: object}`.
+fn check_service_dev(binding: &str, dev: &Value) -> anyhow::Result<()> {
+    // `JSON.stringify` as Wrangler prints it: `undefined` for a missing value.
+    let got =
+        |value: Option<&Value>| value.map_or_else(|| "undefined".to_string(), Value::to_string);
+    if !dev.is_object() {
+        bail!(
+            "service binding {binding} should have an object \"dev\" field but got {}.",
+            got(Some(dev))
+        );
+    }
+    let plugin = dev.get("plugin");
+    if !plugin.is_some_and(Value::is_object) {
+        bail!(
+            "service binding {binding} \"dev\" should have an object \"plugin\" field but got {}.",
+            got(plugin)
+        );
+    }
+    for key in ["package", "name"] {
+        let value = plugin.and_then(|plugin| plugin.get(key));
+        if !value.is_some_and(Value::is_string) {
+            bail!(
+                "service binding {binding} \"dev.plugin\" should have a string \"{key}\" field \
+                 but got {}.",
+                got(value)
+            );
+        }
+    }
+    if let Some(options) = dev.get("options") {
+        if !options.is_object() {
+            bail!(
+                "service binding {binding} \"dev.options\" should be an object but got {options}."
+            );
+        }
+    }
+    Ok(())
 }
 
 /// The Wrangler-compatible Worker name that is safe in every place where
@@ -3240,6 +3423,228 @@ mod tests {
             .filter(|binding| binding["type"] == "durable_object_namespace")
             .map(|binding| binding["name"].as_str().unwrap())
             .collect()
+    }
+
+    fn service_metadata(project: &Project) -> Vec<&Value> {
+        project.metadata["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|binding| binding["type"] == "service")
+            .collect()
+    }
+
+    fn services(services: Value) -> anyhow::Result<Project> {
+        project(json!({ "services": services }))
+    }
+
+    #[test]
+    fn service_binding_props_are_kept_verbatim_in_the_metadata() {
+        let props = json!({
+            "service": "workshop",
+            "nested": { "list": [1, "two", { "three": null }], "flag": true },
+            "text": "line\u{2028}para",
+        });
+        let deployed = services(json!([
+            { "binding": "REPORTER", "service": "errors", "entrypoint": "Reporter", "props": props },
+            { "binding": "DEFAULT", "service": "errors", "props": {} },
+            { "binding": "PLAIN", "service": "errors", "remote": true },
+        ]))
+        .unwrap();
+        assert_eq!(
+            service_metadata(&deployed),
+            [
+                &json!({
+                    "type": "service",
+                    "name": "REPORTER",
+                    "service": "errors",
+                    "entrypoint": "Reporter",
+                    "props": props,
+                }),
+                &json!({ "type": "service", "name": "DEFAULT", "service": "errors", "props": {} }),
+                &json!({ "type": "service", "name": "PLAIN", "service": "errors" }),
+            ]
+        );
+    }
+
+    #[test]
+    fn service_binding_props_must_be_an_object() {
+        for props in [
+            json!(null),
+            json!("x"),
+            json!(1),
+            json!([{ "a": 1 }]),
+            json!(true),
+        ] {
+            assert_eq!(
+                refusal(services(
+                    json!([{ "binding": "S", "service": "t", "props": props }])
+                )),
+                "service binding S `props` must be a JSON object"
+            );
+        }
+    }
+
+    #[test]
+    fn service_binding_props_are_bounded_by_their_encoded_size() {
+        // `{"s": text}` bounds at 24 bytes around the string's body: the
+        // header, the object, the key and the string's own tag and length.
+        let deploy = |text: String| {
+            services(json!([{ "binding": "S", "service": "t", "props": { "s": text } }]))
+        };
+        let limit = MAX_SERVICE_PROPS_BYTES - 24;
+        deploy("a".repeat(limit)).unwrap();
+        deploy("é".repeat(limit)).unwrap();
+        assert_eq!(
+            refusal(deploy("a".repeat(limit + 1))),
+            "service binding S `props` can encode to 1048577 bytes, more than the \
+             1048576-byte limit"
+        );
+        // Past U+00FF a string is stored as UTF-16, so half as many fit.
+        deploy("\u{2028}".repeat(limit / 2)).unwrap();
+        assert_eq!(
+            refusal(deploy("\u{2028}".repeat(limit / 2 + 1))),
+            "service binding S `props` can encode to 1048578 bytes, more than the \
+             1048576-byte limit"
+        );
+        assert_eq!(
+            refusal(deploy("😀".repeat(limit / 4 + 1))),
+            "service binding S `props` can encode to 1048580 bytes, more than the \
+             1048576-byte limit"
+        );
+    }
+
+    #[test]
+    fn service_binding_keys_celld_does_not_model_are_refused() {
+        assert_eq!(
+            refusal(services(
+                json!([{ "binding": "S", "service": "t", "local": true }])
+            )),
+            "service binding S declares `local`, which celld does not model; \
+             celld models `binding`, `service`, `entrypoint`, `props`, `remote`, and `dev`"
+        );
+        assert_eq!(
+            refusal(services(
+                json!([{ "binding": "S", "service": "t", "environment": "staging" }])
+            )),
+            "service binding S sets `environment`, which celld does not support: \
+             a script has one deployment, so remove it"
+        );
+        assert_eq!(
+            refusal(services(
+                json!([{ "binding": "S", "service": "t", "remote": "yes" }])
+            )),
+            "service binding S `remote` must be a boolean"
+        );
+        assert_eq!(
+            refusal(services(
+                json!([{ "binding": "S", "service": "t", "entrypoint": 1 }])
+            )),
+            "service binding S `entrypoint` must be a string"
+        );
+    }
+
+    /// `dev` only affects `wrangler dev`: accepted when Wrangler would
+    /// accept it, kept out of the metadata, and refused in Wrangler's words
+    /// when malformed.
+    #[test]
+    fn service_binding_dev_is_accepted_in_wranglers_shape() {
+        let dev = |dev: Value| services(json!([{ "binding": "S", "service": "t", "dev": dev }]));
+        let plugin = json!({ "plugin": { "package": "p", "name": "n" }, "options": { "a": 1 } });
+        assert_eq!(
+            service_metadata(&dev(plugin).unwrap()),
+            [&json!({ "type": "service", "name": "S", "service": "t" })]
+        );
+        dev(json!({ "plugin": { "package": "p", "name": "n" } })).unwrap();
+        for (value, refused) in [
+            (
+                json!(null),
+                "service binding S should have an object \"dev\" field but got null.",
+            ),
+            (
+                json!([]),
+                "service binding S should have an object \"dev\" field but got [].",
+            ),
+            (
+                json!({}),
+                "service binding S \"dev\" should have an object \"plugin\" field but got \
+                 undefined.",
+            ),
+            (
+                json!({ "plugin": "p" }),
+                "service binding S \"dev\" should have an object \"plugin\" field but got \"p\".",
+            ),
+            (
+                json!({ "plugin": { "name": "n" } }),
+                "service binding S \"dev.plugin\" should have a string \"package\" field but \
+                 got undefined.",
+            ),
+            (
+                json!({ "plugin": { "package": "p", "name": 1 } }),
+                "service binding S \"dev.plugin\" should have a string \"name\" field but got 1.",
+            ),
+            (
+                json!({ "plugin": { "package": "p", "name": "n" }, "options": [] }),
+                "service binding S \"dev.options\" should be an object but got [].",
+            ),
+        ] {
+            assert_eq!(refusal(dev(value)), refused);
+        }
+    }
+
+    #[test]
+    fn durable_object_keys_celld_does_not_model_are_refused() {
+        let binding = |extra: Value| {
+            let mut binding = json!({ "name": "ROOM", "class_name": "Room" });
+            binding.as_object_mut().unwrap().extend(object(extra));
+            project(json!({ "durable_objects": { "bindings": [binding] } }))
+        };
+        assert_eq!(do_bindings(&binding(json!({})).unwrap()), ["ROOM"]);
+        assert_eq!(
+            refusal(binding(json!({ "script_name": "other" }))),
+            "durable object binding ROOM sets `script_name`, which celld does not support: \
+             a binding reaches only a class that this script exports"
+        );
+        assert_eq!(
+            refusal(binding(
+                json!({ "script_name": "other", "environment": "staging" })
+            )),
+            "durable object binding ROOM sets `script_name`, which celld does not support: \
+             a binding reaches only a class that this script exports"
+        );
+        assert_eq!(
+            refusal(binding(json!({ "environment": "staging" }))),
+            "durable object binding ROOM sets `environment`, which celld does not support: \
+             a binding reaches only a class that this script exports"
+        );
+        assert_eq!(
+            do_bindings(&binding(json!({ "remote": false })).unwrap()),
+            ["ROOM"]
+        );
+        assert_eq!(
+            refusal(binding(json!({ "remote": "yes" }))),
+            "durable object binding ROOM `remote` must be a boolean"
+        );
+        assert_eq!(
+            refusal(binding(json!({ "local": true }))),
+            "durable object binding ROOM declares `local`, which celld does not model; \
+             celld models `name`, `class_name`, and `remote`"
+        );
+        assert_eq!(
+            refusal(project(
+                json!({ "durable_objects": { "bindings": [], "classes": [] } })
+            )),
+            "config `durable_objects` declares `classes`, which celld does not model; \
+             celld models `bindings`"
+        );
+        assert_eq!(
+            refusal(project(json!({ "durable_objects": [] }))),
+            "config `durable_objects` must be an object"
+        );
+        assert_eq!(
+            refusal(project(json!({ "durable_objects": { "bindings": {} } }))),
+            "config `durable_objects.bindings` must be an array"
+        );
     }
 
     #[test]

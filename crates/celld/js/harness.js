@@ -3524,6 +3524,23 @@ __celld.__makeLoader = () => {
   };
 };
 
+// A `services` binding's declared `props`, as the structured-clone bytes
+// every call on the binding carries. The node passes the JSON text; parsing
+// it here, rather than evaluating an object literal, keeps a "__proto__" key
+// an own property, as it is in the manifest. The bound matches loader props:
+// the bytes ride on a host job for each call. The deploy already refuses
+// props that could encode past it; this covers a manifest that another
+// control plane wrote.
+const __SERVICE_PROPS_MAX = 1 << 20;
+__celld.__propsBytes = (binding, json) => {
+  const bytes = __rpcOut(JSON.parse(json), false);
+  if (bytes.length > __SERVICE_PROPS_MAX)
+    throw new RangeError(
+      `Service binding ${binding} props size (${bytes.length} bytes) ` +
+      `exceeds the maximum allowed size of ${__SERVICE_PROPS_MAX} bytes.`);
+  return bytes;
+};
+
 const __makeServiceBinding = __celld.__makeServiceBinding =
   (script, entrypoint = null, propsSc = undefined) => {
   const target = {
@@ -3546,8 +3563,10 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
     // this isolate. Skip the op + pool-thread hop and call it directly,
     // inside its own event so the target's waitUntil does not attach to
     // the caller's. Cross-script targets still need their own isolate.
-    if (script === __cell.script && entrypoint !== null &&
-        propsSc === undefined) {
+    // The default export with props goes this way too: only an entrypoint
+    // dispatch delivers props.
+    if (script === __cell.script &&
+        (entrypoint !== null || propsSc !== undefined)) {
       // Mirror __dispatchTo: the target sees a fresh incoming signal,
       // aborted with "The client has disconnected" when the caller
       // abandons the call or cancels the response body; the caller's
@@ -3555,11 +3574,12 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
       // immediately instead of pinning on a hung target.
       const requestController = new AbortController();
       const dispatch = __dispatchEntrypointFetch(
-        entrypoint,
+        entrypoint ?? "default",
         new Request(req, {
           signal: requestController.signal,
           __celldIncomingSignal: true,
-        }));
+        }),
+        propsSc ?? null);
       const response = signal
         ? await __raceCallerAbort(dispatch, signal, () =>
             requestController.abort(
@@ -3628,7 +3648,9 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
       cron: options.cron === undefined ? "" : String(options.cron),
       noRetry() { noRetry = true; },
     };
-    const ctx = __beginEvent();
+    // The binding's props, decoded for this call; a class default export
+    // reads them from this ctx too (see the selfScheduled shim).
+    const ctx = __beginEvent(__localProps(propsSc));
     try {
       await __cell.selfScheduled(ctrl, __cell.env, ctx);
       return { outcome: "ok", noRetry };
@@ -3653,7 +3675,7 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
   // starts a fresh session, as in Workerd.
   const rpcEntrypoint = entrypoint === null ? "default" : entrypoint;
   const session = __entrypointSession(
-    rpcEntrypoint, script === __cell.script, script, undefined, propsSc);
+    rpcEntrypoint, script === __cell.script, script, propsSc);
   const binding = new Proxy(target, {
     getPrototypeOf: () => __cf.ServiceStub.prototype,
     get: (base, prop) => {
@@ -4719,10 +4741,15 @@ const __stubSession = (meta) => ({
   get: (path) => __stubOp(meta, path, null),
   call: (path, args) => __stubOp(meta, path, args),
 });
-const __entrypointSession = (name, local, script, makeInst, propsSc) => ({
+// A same-script binding decodes its props for each call, as the target
+// isolate of a cross-script call does, so no call sees another's changes.
+const __localProps = (propsSc) =>
+  propsSc === undefined ? undefined : __sc_decode(propsSc);
+const __entrypointSession = (name, local, script, propsSc) => ({
   get: (path) => local
     ? (async () => __rpcDes(
-        await __entrypointOp(name, path, null, true, makeInst)))()
+        await __entrypointOp(
+          name, path, null, true, __localProps(propsSc))))()
     : (async () => __rpcDes(
         await __svc_rpc(
           script, name, JSON.stringify(path), null, propsSc)))(),
@@ -4730,7 +4757,7 @@ const __entrypointSession = (name, local, script, makeInst, propsSc) => ({
     const argsSc = __rpcOut(args, local);
     if (local)
       return __rpcDes(await __entrypointOp(
-        name, path, argsSc, true, makeInst));
+        name, path, argsSc, true, __localProps(propsSc)));
     return __rpcDes(
       await __svc_rpc(
         script, name, JSON.stringify(path), argsSc, propsSc));
@@ -4808,26 +4835,16 @@ const __makeStub = (entry, callable) => {
 };
 // A loopback service stub for one of this worker's own
 // entrypoints -- the ctx.exports surface. Calling the stub itself
-// returns a new stub carrying per-instance props, delivered to
-// the class constructor as ctx.props (Workerd's
-// ctx.exports.Name({ props })).
+// returns a new stub carrying props (Workerd's
+// ctx.exports.Name({ props })). As in Workerd, the props are cloned when
+// the stub is made, so a value that cannot be cloned is refused there and a
+// later change to the caller's object does not reach the stub; each call
+// then constructs a fresh instance with its own copy, as a service binding's
+// does.
 const __svcMeta = new WeakMap();
 const __entrypointStub = (name, props) => {
-  let inst;
-  const makeInst = props === undefined ? undefined : () => {
-    if (inst !== undefined) return inst;
-    const cls = __cell.entrypoints[name];
-    if (typeof cls !== "function")
-      throw new TypeError(
-        "The entrypoint " + name + " cannot carry props.");
-    // Construction gets its own event, like a top-level invocation, and hands
-    // that event's drain to the enclosing one. This runs inside the event of
-    // the first method call on the stub, so a ctx.waitUntil() call in the
-    // constructor drains before that call replies.
-    inst = __constructEntrypoint(cls, props);
-    return inst;
-  };
-  const session = __entrypointSession(name, true, null, makeInst);
+  const propsSc = props === undefined ? undefined : __rpcOut(props, false);
+  const session = __entrypointSession(name, true, null, propsSc);
   const stub = new Proxy(function () {}, {
     getPrototypeOf: () => __cf.ServiceStub.prototype,
     get: (_b, prop) => {
@@ -4838,19 +4855,18 @@ const __entrypointStub = (name, props) => {
       // A Fetcher's fetch() is an HTTP request, as a service binding's is.
       if (prop === "fetch")
         return (input, init) => __makeServiceBinding(
-          __cell.script, name === "default" ? null : name,
-          props === undefined ? undefined : __rpcOut(props, false),
+          __cell.script, name === "default" ? null : name, propsSc,
         ).fetch(input, init);
       return __makeNode(session, [prop], null);
     },
     apply: (_b, _this, args) =>
       __entrypointStub(name, args[0]?.props),
   });
-  __svcMeta.set(stub, { name, props });
+  __svcMeta.set(stub, { name, props: __localProps(propsSc) });
   __outboundMeta.set(stub, {
     script: __cell.script,
     entrypoint: name,
-    props,
+    propsSc,
   });
   return stub;
 };
@@ -5544,8 +5560,8 @@ const __dispatchEntrypointFetch = __celld.__dispatchEntrypointFetch =
     name, "fetch", request,
     propsSc === null || propsSc.length === 0
       ? undefined : __sc_decode(propsSc));
-__celld.__dispatchEntrypointScheduled = (name, ctrl) =>
-  __dispatchEntrypointMethod(name, "scheduled", ctrl);
+__celld.__dispatchEntrypointScheduled = (name, ctrl, props) =>
+  __dispatchEntrypointMethod(name, "scheduled", ctrl, props);
 // A queue batch owns mutable settlement state only while its handler runs.
 // Keeping a batch alive after dispatch must not keep authority to settle its
 // lease, because that lease can have expired and been handed out again.
@@ -5691,7 +5707,7 @@ __celld.__cancelPendingEvents = (ids) => {
 // `props` is the caller's per-stub props (Workerd's
 // getEntrypoint(name, { props })); undefined leaves the entrypoint's
 // default empty props.
-const __entrypointOp = (name, path, argsSc, local, makeInst, props) => {
+const __entrypointOp = (name, path, argsSc, local, props) => {
   const id = __nextCtxId++;
   return __ctxRun(id, () => {
   const pendingId = __nextPendingEventId++;
@@ -5714,7 +5730,7 @@ const __entrypointOp = (name, path, argsSc, local, makeInst, props) => {
       let result;
       try {
         const handler = __cell.objectEntrypoints[name];
-        if (handler !== undefined && makeInst === undefined) {
+        if (handler !== undefined) {
           // Simple-handler entrypoints expose single-method calls
           // only; property GETs and deeper paths are refused.
           if (argsSc === null || path.length !== 1)
@@ -5722,12 +5738,9 @@ const __entrypointOp = (name, path, argsSc, local, makeInst, props) => {
           result = __callObjectEntrypoint(
             handler, path[0], decoded.args, props);
         } else {
-          // A loopback stub with props retains one instance for that RPC
-          // session. Each ordinary top-level operation constructs once here,
-          // so neither its fields nor its constructor context reach the next
-          // invocation.
-          const inst = makeInst !== undefined ? makeInst()
-            : __newEntrypointInstance(name, props);
+          // Each top-level operation constructs once here, so neither its
+          // fields nor its constructor context reach the next invocation.
+          const inst = __newEntrypointInstance(name, props);
           result = __rpcWalk(inst, path,
             decoded === null ? null : decoded.args, true);
         }
@@ -5774,7 +5787,6 @@ const __entrypointOp = (name, path, argsSc, local, makeInst, props) => {
 __celld.__dispatchEntrypointRpc =
   (name, path, argsSc, local = false, propsSc = null) => __entrypointOp(
     name, typeof path === "string" ? [path] : path, argsSc, local,
-    undefined,
     propsSc === null || propsSc.length === 0
       ? undefined : __sc_decode(propsSc));
 // WebSocket: the host holds the socket; these deliver events into the DO.
@@ -11068,8 +11080,9 @@ const __registerWaitUntil = __celld.__registerWaitUntil = (promise) => {
 };
 // `props` are the per-stub props a loopback service stub carries
 // (ctx.props); `exports` is built once, on first access.
-const __defaultProps = {};
-const __entrypointContext = (props = __defaultProps) => {
+// An invocation without props gets its own empty object: `ctx.props` is
+// writable, so one shared object would carry one call's changes to the next.
+const __entrypointContext = (props = {}) => {
   const ctx = __withCtxRestore({
     waitUntil: __registerWaitUntil,
     passThroughOnException() {},
@@ -11080,7 +11093,7 @@ const __entrypointContext = (props = __defaultProps) => {
   __celld.__defineContextTracing(ctx);
   return ctx;
 };
-const __beginEvent = __celld.__beginEvent = (props = __defaultProps) => {
+const __beginEvent = __celld.__beginEvent = (props = {}) => {
   __rpcSignalRefresh();
   __event_begin();
   return __entrypointContext(props);
