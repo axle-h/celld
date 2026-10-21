@@ -691,9 +691,11 @@ Work lands as direct commits to `main` (see [Review and commits](#review-and-com
 so CI runs on **push to `main`** and nightly. There are no pull requests to
 gate.
 
-**`.github/workflows/test.yml`, on push:**
-- `cargo test --profile lab -p celld`
-- `cargo clippy --all-targets -- -D warnings`
+**`.github/workflows/test.yml`, on push** (one job on ubuntu-24.04, Rust
+1.98.1 as in `release.yml`, Node 26, pnpm 11.17; pushes touching only
+`plans/**` or `**/*.md` are skipped):
+- `cargo test --profile lab --locked` (the whole workspace)
+- `cargo clippy --profile lab --all-targets --locked -- -D warnings`
 - `pnpm --dir tests/conformance install --frozen-lockfile`, then
   `node tests/conformance/run.mjs --runtime=celld`. This runs the
   single-node cases against the committed expectations.
@@ -706,13 +708,17 @@ gate.
 - If warm runs exceed about 30 minutes, revisit: a larger runner, or splitting
   build and test.
 
-**Nightly (`schedule`):**
+**Nightly (`schedule`, and `workflow_dispatch`):**
 - `--runtime=both`, with workerd from the pinned wrangler in
   `tests/conformance`
 - the `nodes > 1` cases, with Azurite as a service container
 - the `tests/fleet/` scripts once they're imported (Phase 8)
 
-A failing nightly run opens an issue, or is reported at the next phase gate.
+A failing nightly run opens an issue titled "Nightly test run failed", or
+comments on the open one. **This needs issues enabled on the fork**
+(`gh repo edit axle-h/celld --enable-issues`). They are off by default for
+forks, and Alex has not yet decided. Until then, a nightly failure is
+reported at the next phase gate.
 
 The existing `release.yml` is unchanged.
 

@@ -1,0 +1,130 @@
+name: Test
+
+# Work lands as direct commits to main, so this runs on every push there
+# instead of gating pull requests. A push runs the Rust suites and the
+# conformance corpus against its committed expectations; the nightly run
+# also diffs celld against workerd live.
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "plans/**"
+      - "**/*.md"
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push supersedes an older one; a nightly or manual run is never
+# cancelled by a push.
+concurrency:
+  group: test-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+env:
+  RUST_VERSION: 1.98.1
+  # The lab profile turns incremental on for local loops; in CI it only
+  # bloats the cache.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # One job: the tests, clippy and the conformance run share one lab
+  # target directory, so nothing V8-linked is built twice.
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy
+          rustup default "$RUST_VERSION"
+
+      # Keyed on the toolchain and every Cargo.toml and Cargo.lock; caches
+      # target/, so the lab profile with it.
+      - uses: Swatinem/rust-cache@v2
+
+      # The ltx fault-injection oracle diffs databases with the sqlite3 CLI.
+      - name: Install sqlite3
+        run: |
+          set -euo pipefail
+          if ! command -v sqlite3 >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends sqlite3
+          fi
+
+      - name: Build celld
+        run: cargo build --profile lab --locked -p celld
+
+      - name: Test
+        run: cargo test --profile lab --locked
+
+      - name: Clippy
+        run: cargo clippy --profile lab --all-targets --locked -- -D warnings
+
+      # pnpm comes first so setup-node can find its store to cache. The
+      # version is the packageManager pin in tests/conformance/package.json.
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: tests/conformance/package.json
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: tests/conformance/pnpm-lock.yaml
+
+      - name: Install the conformance runner
+        run: pnpm --dir tests/conformance install --frozen-lockfile
+
+      - name: Conformance (celld against expect.json)
+        if: github.event_name == 'push'
+        run: node tests/conformance/run.mjs --runtime=celld
+
+      - name: Conformance (celld and workerd)
+        if: github.event_name != 'push'
+        run: node tests/conformance/run.mjs --runtime=both
+
+      # Multi-node cases (nodes > 1, with Azurite as a service container)
+      # and the tests/fleet scripts join the nightly run when they land.
+
+      # The runner keeps each failed case's working copy under .run/.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: conformance-run
+          path: tests/conformance/.run/
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+  report-nightly-failure:
+    name: Report nightly failure
+    needs: test
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: Nightly test run failed
+        run: |
+          set -euo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="The nightly run failed on $GITHUB_SHA: $run_url"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$TITLE\" in:title" --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$body"
+          fi
