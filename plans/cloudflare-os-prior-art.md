@@ -22,8 +22,17 @@ f mohamedalichelbi main
 git for-each-ref refs/forks
 ```
 
-To bring a commit in, run `git cherry-pick -x <sha>`, which keeps the source
-reference in the message.
+Bringing a commit in follows the **adoption policy** in
+[cloudflare-os-fixes.md](cloudflare-os-fixes.md#adoption-policy-for-code-from-other-forks):
+- a line-by-line review of the whole diff;
+- a failing test first;
+- a security checklist;
+- a provenance check;
+- no unrelated hunks.
+
+The dispositions below come from reviewers' readings of the diffs (2026-10-21).
+They are where to start, not approval. Only royalcala `celld-os/rpc` was
+compiled; nothing else was built or tested on our base.
 
 - Drop any `Cargo.toml`/`Cargo.lock` version bump. patcon's commits set
   `0.6.1-rpc-targets.N`.
@@ -87,9 +96,8 @@ design exists to close it: random 128-bit CapIds, destination-bound
 redemption, refusal of reserved `__celld$` keys at lift time, and a dedicated
 `CellJob::CapCall`.
 
-**No fork's capability routing may be merged as-is**, even temporarily on
-`main`. A throwaway local build with the spike is acceptable for developing the
-e2e harness (see Phase 0 in the plan), but it must never be deployed.
+**No fork's capability routing may be merged, in any form**, and no build
+containing it is used, even locally for tooling.
 
 ## Learnings the plan did not have
 
@@ -123,8 +131,8 @@ Confirmations (the plan already had these, and a fork independently hit them):
 
 ## Commit disposition
 
-"Take" means cherry-pick (dropping version bumps) and then add the plan's
-tests. "Rework" means cherry-pick as a starting point and change it as noted.
+"Adopt" means the commit is a sound starting point: cherry-pick it, then
+bring it up to the adoption policy before it lands. "Rework" means cherry-pick as a starting point and change it as noted.
 "Reference" means don't cherry-pick.
 
 ### Phase 0: test infrastructure
@@ -145,7 +153,7 @@ tests. "Rework" means cherry-pick as a starting point and change it as noted.
 
 | Commit | Action | Plan item | Notes |
 | --- | --- | --- | --- |
-| IlyaGulya `30f2a48` hunk `deploy.rs:1299` | **Take** that hunk only | 1.3 | Seeds `do_classes` from `new_sqlite_classes` |
+| IlyaGulya `30f2a48` hunk `deploy.rs:1299` | **Adopt** that hunk only | 1.3 | Seeds `do_classes` from `new_sqlite_classes` |
 | IlyaGulya `2172ce1` | **Rework** | 1.4 | Applies cleanly. Add object/size validation, default-entrypoint and fetch props, and unknown-key and DO `script_name` refusals. |
 | IlyaGulya `8376ebc` | Reference | 1.7 | `WorkerWebSocket::repark` is our `park_worker_handoff`. It keeps the id on the Response, not the socket (lost on rebuild), and has no adopt, sweep, loader or broker paths, or refusals. |
 | mohamedalichelbi `47b889d` | Reference | 1.7 | Keep one idea: register the target's socket pump as `waitUntil` of the target event. |
@@ -154,11 +162,11 @@ tests. "Rework" means cherry-pick as a starting point and change it as noted.
 | royalcala `22b3352` / cnicolov `tracing.js` | Rework (seed) | 1.2 | Both lack `ctx.tracing` on DO state, active-span tracking through ALS, and ending a span when `enterSpan`'s promise settles. |
 | royalcala `ef5e87c` (byte-stream half only) | **Rework** | 1.8 | `CelldHttpBodyStream` and `Blob.stream()` as native `type:"bytes"` streams. A smaller route than the `_chunked` helper; still covers compression, KV, tee and RPC-revived streams. Gate on the `streams/byob-*` cases and a fetch-body throughput check. |
 | royalcala `60209d3` | Skip | 1.8 | Subsumed by the line above |
-| royalcala `ffd1011` or `da57cca` (from patcon) | **Take one** after a workerd differential test | 1.11 (N2) | Pick the resolution rule the differential test supports |
-| royalcala `38082b4` (from patcon) | **Take** | 1.12 (N6) | |
+| royalcala `ffd1011` or `da57cca` (from patcon) | **Adopt one** after a workerd differential test | 1.11 (N2) | Pick the resolution rule the differential test supports |
+| royalcala `38082b4` (from patcon) | **Adopt** | 1.12 (N6) | |
 | mohamedalichelbi `7221aa7` | **Port** (one `harness.js` conflict) | 1.14 (N8) | Check the depth isn't shared across two events' interleaved async `transaction()` calls. |
 | mertdogar `6d8e461` | **Rework** | 1.15 (N9) | Build the literal with JSON, not Rust `{:?}`. Decide how JSON vars appear in `process.env` with a differential test. |
-| mertdogar `cde80c7` | **Take** | 1.15 | Drop the FORK.md hunk. |
+| mertdogar `cde80c7` | **Adopt** | 1.15 | Drop the FORK.md hunk. |
 | mertdogar `79fa97e` (`alias`), `df3c705` (`celld restore` offline reader) | Optional | after Phase 1 | `celld restore` is handy for inspecting trial DOs. |
 | mertdogar `fd4f14d`, `74924d6`, FORK.md commits | Skip | | `fd4f14d` adds a SQL gate on the public listener (attack surface). |
 
@@ -167,7 +175,7 @@ tests. "Rework" means cherry-pick as a starting point and change it as noted.
 | Commit | Action | Notes |
 | --- | --- | --- |
 | royalcala `d534083` | **Rework** | Use the HMAC codec and its 9 inline tests for D7 storage tokens. Delete the unused `CapabilityRegistry`. Drop or populate `generation`/`node`. |
-| royalcala `2bd84cd`: `init_capability_key` (`js.rs:9069`, `main.rs:4142`) | **Take that part** | Key = HMAC(peer_secret, "celld-capability-key-v1"): fleet-wide, survives restarts. This is the D7 key source. |
+| royalcala `2bd84cd`: `init_capability_key` (`js.rs:9069`, `main.rs:4142`) | **Adopt that part** | Key = HMAC(peer_secret, "celld-capability-key-v1"): fleet-wide, survives restarts. This is the D7 key source. |
 | IlyaGulya `141db35` | Reference | `svc{script}` by value. Its script field is trusted from the payload, which our HMAC'd token fixes. Port its proxy tests. |
 | IlyaGulya `30f2a48` | Reference | Callable `ctx.exports` namespaces (2.3) and DurableObjectClass lift/revive/store (2.1 `cls`). Drop `__loader_self` (superseded by `FacetHost::Own`). |
 | cnicolov `fcb1977` | Do **not** take its loopback hunk | It turns `ctx.exports` stubs into transient routes, which can never be stored. That is the opposite of Phase 2. |
@@ -177,13 +185,13 @@ tests. "Rework" means cherry-pick as a starting point and change it as noted.
 | Commit | Action | Notes |
 | --- | --- | --- |
 | royalcala `674a9c4` | Reference (lift pieces) | Lift `WorkerJob::StubRpc`/`begin_stub_rpc` and the reserved `__celld$` key refusal (`harness.js:4436`) into 3.0. Its refcounts (no importer key), regex-based breakage and retiring refusal must not be kept. |
-| royalcala `713f1a5` (patcon `90a37b3` + `d8d7c6f`) | **Take** | 3.0 (N5): affiliate, then `is_live()`; retiring isolates allowed |
+| royalcala `713f1a5` (patcon `90a37b3` + `d8d7c6f`) | **Adopt** | 3.0 (N5): affiliate, then `is_live()`; retiring isolates allowed |
 | royalcala `64f8785`, `fd49be1`, `c6123d0`; patcon `8a1acd2`, `c6df64b`; IlyaGulya `8d6b0a0`; mohamedalichelbi `2498103` | Reference only | Plumbing shape. The dedicated `CellJob::StubRpc` (`64f8785`) is the right pattern; method-name multiplexing (`c6123d0`) is not. |
 | cnicolov `fcb1977` | Reference (reuse code) | Transactional lift (rolls back transfers, routes and locks on failure), revive-once for aliased markers, disposer snapshot, `CallOrder` + egress gate wiring, `runtime::drive(slot, …)` with `Slot::affiliate()` |
 | royalcala `b02d30e` (patcon `1f7076f`) | Reference | N1: apply workerd's `dup()` rule properly (params only, validate the result, workerd's errors) |
-| royalcala `280897e` (patcon `fdc49fb`) | **Take** once capabilities are sound | 3.1 rows E/F (N3) |
-| royalcala `874a2f2` (patcon `a34d8b5`) | Take local `dup()` only | Reject the native `onRpcBroken` (D3) |
-| IlyaGulya `4594b6c` | **Take** (applies cleanly) | 3.2: RpcPromise `Symbol.dispose`, refused after dispose |
+| royalcala `280897e` (patcon `fdc49fb`) | **Adopt** once capabilities are sound | 3.1 rows E/F (N3) |
+| royalcala `874a2f2` (patcon `a34d8b5`) | Adopt local `dup()` only | Reject the native `onRpcBroken` (D3) |
+| IlyaGulya `4594b6c` | **Adopt** (applies cleanly) | 3.2: RpcPromise `Symbol.dispose`, refused after dispose |
 | IlyaGulya `779b7c9` | Reference | Importer request-context adoption with implicit release, and a `/state` live-capability counter. Adopt both. |
 | royalcala `2bd84cd`: `__facetStubs`, Proxy-RpcTarget wildcard resolution | Reference | 3.1 callable proxies, after differential tests |
 
@@ -195,11 +203,11 @@ tests. "Rework" means cherry-pick as a starting point and change it as noted.
 | royalcala `2bd84cd` restore part | **Skip** | 5 | Restored stubs are not storable (no `__storedLift` case), `_cf_RESTORE` rows leak, handles alias after `deleteAll`, and there is no self-token for facets or Dynamic Workers. Our `rst` tokens follow workerd. Reuse only its `__ctxInstance` plumbing and synchronous stateless `[restore]`. |
 | IlyaGulya `c79ef09` | Reference | 5 | Restore recipes replay in the current isolate only. The nested-recipe envelope for loaded workers (`__celld$loaderCall`) is a useful idea for 5.1. |
 | royalcala `c6a3e55`, `ef0d54d` (patcon `13eb098`, `d72a49c`) | Skip | 5 | Async, live-only. `c6a3e55` references `__tracing` before it exists. |
-| royalcala `2f10749` (patcon `d35faa8`) | **Take** | 6 | Base for RPC tails. Then add facet fetch/RPC/alarm events and the `streamingTails` refusal. |
+| royalcala `2f10749` (patcon `d35faa8`) | **Adopt** | 6 | Base for RPC tails. Then add facet fetch/RPC/alarm events and the `streamingTails` refusal. |
 | IlyaGulya `f62bf29` | Reference | 6 | Delivers tails before the call answers, unlike workerd. |
 | royalcala `ef5e87c` stream-capability path | Reference | 7.1 | A per-chunk baseline; our single-claim `register_body_stream` is the target. |
 | IlyaGulya `b22c115`, `2a4a1d6` | Reference | 8 | Adopt: the identity triple (node, process generation from the **signed lease**, id), resolving origins through the lease, `GONE` semantics. Don't adopt: HTTP-per-op transport, sequential ids, the `PROTOCOL_VERSION` bump. |
-| IlyaGulya `6e6af49` | **Take** (applies cleanly) | 8 / N11 | Independent fleet fix; also worth sending upstream |
+| IlyaGulya `6e6af49` | **Adopt** (applies cleanly) | 8 / N11 | Independent fleet fix; also worth sending upstream |
 | IlyaGulya `876a472`, `914bb60` (upgrade drill) | Reference | 8 | Needs old refs we don't have. |
 | patcon `ead1d36` (app `web-fetch.ts` without AI) | **Do not copy** | 9.2 | An app-side shortcut that hides N7. The AI shim must provide `toMarkdown`. |
 

@@ -16,21 +16,21 @@ Related documents:
 
 ### Using prior art
 
-Each item below has a **Prior art** line where another fork did related work.
+This is a production effort. Code from other forks is **input to our own
+work**, never a shortcut past review. Each item below may carry a **Prior art**
+line, and the [adoption policy](#adoption-policy-for-code-from-other-forks)
+applies to all of them. The words mean:
 
-- **Take:** cherry-pick with `git cherry-pick -x`. Drop any Cargo version-bump
-  hunks, add a `Co-authored-by:` trailer, then add the item's tests.
-- **Rework:** cherry-pick as a starting point, then change it as noted.
-- **Reference:** read it for mechanism, but **do not cherry-pick**.
+- **Adopt:** the commit is a sound starting point. Cherry-pick it with
+  `git cherry-pick -x` into the item's branch, then bring it up to the policy
+  bar before it lands on `main`.
+- **Rework:** start from the commit, but change it substantially as noted.
+- **Reference:** read it for mechanism and reimplement. **Do not
+  cherry-pick.**
 
-No fork's cross-isolate capability routing may be merged: they all let code
-forge capabilities. The full disposition table is in the prior-art page.
-
-Status: planned 2026-10-21. Revised the same day with prior art from other
-forks ([cloudflare-os-prior-art.md](cloudflare-os-prior-art.md)). Nothing in
-this plan is implemented yet.
-
-## Orientation
+No fork's cross-isolate capability routing may be merged, in any form: they
+all let code forge capabilities. The full disposition table is in the
+prior-art page.
 
 ### The two repositories
 
@@ -148,6 +148,57 @@ agreed up front. Phases refer to them as D1-D15.
 | D13 | `tracing`: a correct no-op first (`isTraced=false`), or OTLP export straight away? | No-op first (Phase 1), OTLP later (Phase 9). |
 | D14 | Dynamic Worker tails: legacy `tail()` for RPC and facet invocations, or `tailStream`? | Legacy only. Cloudflare OS doesn't use `tailStream` yet; refuse `streamingTails`. |
 | D15 | Existing cells when cell scopes become script-qualified (2.4): a fallback lookup or a one-time migration? | Fallback lookup for one release, then migrate. Never orphan data. |
+
+## Adoption policy for code from other forks
+
+Every commit brought in from another fork must meet the same bar as code we
+write ourselves, before it lands on `main`.
+
+1. **Read the whole diff line by line.** A reviewer's summary is not enough.
+   Run `git show --stat` first, then reject or strip any hunk outside the
+   item's scope, such as:
+   - version bumps;
+   - `Cargo.toml`/`Cargo.lock` dependency changes;
+   - CI workflows;
+   - build scripts;
+   - new binaries or scripts.
+
+   A dependency change needs its own justification and review: licence,
+   maintenance, and `cargo deny`/advisory status.
+2. **Write the test first.** Add the item's conformance case or unit test on
+   `main`. It must fail for the stated reason. Then apply the change and show
+   that it passes. Behaviour is pinned against workerd, not against the fork.
+3. **Security checklist.** For each change, answer in the commit message or
+   PR:
+   - Can untrusted code (a Dynamic Worker, or model-written code mode) reach
+     the new surface?
+   - Does any value from user data, storage, or the wire gain authority, such
+     as ids, markers, or script names?
+   - Are inputs bounded (sizes, depths, counts)?
+   - Do failures fail loudly?
+   - Can it leak resources or pin isolates or cells?
+4. **Quality.**
+   - `cargo clippy --all-targets -- -D warnings` is clean.
+   - Code reads like the surrounding code.
+   - No dead code.
+   - Errors match workerd's text where workerd has one.
+   - Docs (`docs/cloudflare-compat.md`, `docs/services/*`) are updated in the
+     same change.
+5. **Provenance.** celld is Apache-2.0 (`LICENSE`, `NOTICE`, copyright Deno
+   Land Inc.). Before adopting from a fork:
+   - Confirm the fork still carries the Apache-2.0 `LICENSE` and adds no
+     conflicting terms.
+   - Keep the author's authorship with `cherry-pick -x` and a
+     `Co-authored-by:` trailer.
+   - When reworking, credit the source commit in the message.
+   - If in doubt, ask the author to confirm Apache-2.0 for their change.
+6. **Scripts from forks** (for example IlyaGulya's fleet and soak scripts) are
+   read in full before they are first run. They run only against local
+   throwaway buckets and processes, never with real credentials. Once
+   reviewed, they are committed under `tests/` and owned like our own code.
+7. **No spike builds.** Never build, deploy or develop against a branch that
+   contains unadopted fork capability code, not even locally for tooling.
+   The harness is developed against `main` and fails where `main` fails.
 
 ## Phase overview
 
@@ -404,18 +455,6 @@ and add a `/call` capability load, since their soak never exercises
 capabilities. They become Phase 8's gates. The fork's CI commits
 (`bdf5eac`…`5191eca`) show a moto S3 stand and port offsets.
 
-### 0.7 Optional: a spike build for harness development
-
-The smoke steps S3-S13 and the browser script are easier to write against a
-runtime that already gets past chat.
-
-- Build a **local, unmerged** branch of `main` plus royalcala's
-  `spike/rpc-062`, which merges cleanly.
-- Use it only to develop and debug the harness. Each later phase gate must
-  then reproduce those results on `main`.
-- **Never deploy or push this build.** Its capabilities can be forged; see the
-  prior-art page.
-
 ### Phase 0 gate
 
 - The seed conformance cases pass on both runtimes.
@@ -500,7 +539,7 @@ migration-only classes:
   `undefined`, not `None`, so the check never fires; make it a clear load
   error.
 
-**Prior art.** Take the `deploy.rs:1299` hunk of IlyaGulya `30f2a48`.
+**Prior art.** Adopt the `deploy.rs:1299` hunk of IlyaGulya `30f2a48`.
 
 **Tests.**
 - Unit: a migration-only class lands in `do_classes`; no duplicates when it
@@ -777,7 +816,7 @@ This is a same-isolate bug, independent of Phase 3.
 **Design.** Fall back to `target[prop] !== undefined`, keeping workerd's
 visibility rules for reserved names and own properties.
 
-**Prior art.** Take royalcala `ffd1011` (RpcTarget) and `da57cca` (entrypoint
+**Prior art.** Adopt royalcala `ffd1011` (RpcTarget) and `da57cca` (entrypoint
 instance), from patcon. royalcala `2bd84cd` has a different variant. Choose
 the one the differential case supports.
 
@@ -799,7 +838,7 @@ get-only Proxy over an un-awaited `startGatekeeperSession()`.
 `__makeNode(__valueSession(invoke(...)), [], __ctxNow())`, as entrypoint stubs
 already do.
 
-**Prior art.** Take royalcala `38082b4` (patcon `333a2c7`). For
+**Prior art.** Adopt royalcala `38082b4` (patcon `333a2c7`). For
 `Symbol.dispose` on RpcPromises, also take IlyaGulya `4594b6c`, which applies
 cleanly.
 
@@ -960,7 +999,7 @@ stored records must never throw.
 - **Rework** royalcala `d534083`: the HMAC-SHA256 token codec, with bounds,
   domain separation and 9 inline tests. Delete its unused
   `CapabilityRegistry`.
-- **Take** `init_capability_key` from royalcala `2bd84cd` (`js.rs:9069`,
+- **Adopt** `init_capability_key` from royalcala `2bd84cd` (`js.rs:9069`,
   `main.rs:4142`). The key is HMAC(peer_secret, "celld-capability-key-v1").
   The peer secret is already persisted, so the key is fleet-wide and survives
   restarts. **This is D7's key source.**
@@ -1167,11 +1206,11 @@ capability wherever it is passed or returned, not only through `ctx.restore`.
 **Prior art.** Every fork solved part of this. **None can be merged**: see the
 prior-art security warning.
 
-| Milestone | Take / rework | Reference / reuse code |
+| Milestone | Adopt / rework | Reference / reuse code |
 | --- | --- | --- |
-| 3.0 | Take royalcala `713f1a5` (affiliate then `is_live`, retiring allowed) | Lift `WorkerJob::StubRpc`/`begin_stub_rpc` and the reserved `__celld$` key refusal (`harness.js:4436` in the fork) from royalcala `674a9c4`. Use the dedicated `CellJob::StubRpc` shape of `64f8785`, **never** method-name multiplexing (`c6123d0`). |
-| 3.1 | Take royalcala `280897e` (facet and loader args lift) once capabilities are sound | From cnicolov `fcb1977`: the transactional lift (roll back transfers, routes and stream locks on failure), revive-once for aliased markers, the disposer snapshot through cloning, and the `CallOrder` + egress-gate wiring. From royalcala `2bd84cd`: the `__facetStubs`/Proxy-RpcTarget resolution. |
-| 3.2 | Take only the local `dup()` part of royalcala `874a2f2` | Reject its native `onRpcBroken` (D3). From IlyaGulya `779b7c9`: importer request-context adoption with implicit release, and a `/state` live-capability counter (expose this from `CapRegistry` as a metric). |
+| 3.0 | Adopt royalcala `713f1a5` (affiliate then `is_live`, retiring allowed) | Lift `WorkerJob::StubRpc`/`begin_stub_rpc` and the reserved `__celld$` key refusal (`harness.js:4436` in the fork) from royalcala `674a9c4`. Use the dedicated `CellJob::StubRpc` shape of `64f8785`, **never** method-name multiplexing (`c6123d0`). |
+| 3.1 | Adopt royalcala `280897e` (facet and loader args lift) once capabilities are sound | From cnicolov `fcb1977`: the transactional lift (roll back transfers, routes and stream locks on failure), revive-once for aliased markers, the disposer snapshot through cloning, and the `CallOrder` + egress-gate wiring. From royalcala `2bd84cd`: the `__facetStubs`/Proxy-RpcTarget resolution. |
+| 3.2 | Adopt only the local `dup()` part of royalcala `874a2f2` | Reject its native `onRpcBroken` (D3). From IlyaGulya `779b7c9`: importer request-context adoption with implicit release, and a `/state` live-capability counter (expose this from `CapRegistry` as a metric). |
 | 3.3 | | 1.12 already covers DO-stub RpcPromises. |
 
 **Risks:**
@@ -1476,7 +1515,7 @@ Deliver one `tail([event])` per invocation, with:
 Refuse `streamingTails`.
 
 **Prior art.**
-- **Take royalcala `2f10749`** (patcon `d35faa8`, adapted to v0.6.2): it adds
+- **Adopt royalcala `2f10749`** (patcon `d35faa8`, adapted to v0.6.2): it adds
   `TailReportState.rpc_method`, `WorkerJob::Rpc.tail_report` and
   `__deliverTails`. Then add facet fetch, RPC and alarm events, and the
   `streamingTails` refusal.
@@ -1571,7 +1610,7 @@ with "RPC capabilities cannot cross nodes yet" (D2).
 | `GONE` semantics for a restarted origin | Bumping `PROTOCOL_VERSION` |
 | Implicit remote release when the importing request context drops | |
 
-**Take IlyaGulya `6e6af49` at any time (N11).** It is an independent fleet
+**Adopt IlyaGulya `6e6af49` at any time (N11).** It is an independent fleet
 fix that applies cleanly: `RemoteRouteRetry::failed` sets `blocked` for
 `NeverConnected` + redispatch. Also offer it upstream.
 
@@ -1635,6 +1674,42 @@ E and F hops never cross nodes.
 
 ---
 
+## Production readiness
+
+Beyond "it works", these must hold before the work is called done. Each
+phase's gate includes the parts that apply to it.
+
+- **Threat model.** Write `docs/security.md` sections, reviewed before
+  Phase 3 code lands, covering:
+  - capability identity and authority
+  - who can mint, redeem, store and replay a capability
+  - Dynamic Worker and code-mode isolation
+  - the SSRF guard (1.9)
+  - stored-token authentication (D7)
+- **Fuzzing.** Add cargo-fuzz or property tests for every decoder that takes
+  untrusted bytes: the capability envelope, stored tokens, the props and vars
+  encodings, and the `rst` chains. A malformed input must be refused, never
+  panic or alias.
+- **Resource limits.** Every new table and queue has a documented, enforced
+  bound, and a `/state` metric. That covers exports, imports, parked
+  WebSocket handoffs, restore chains and tails.
+- **Upgrade safety.**
+  - Every manifest or wire change is behind a feature flag (`protocol.rs`).
+  - A rolling upgrade from v0.6.2 is tested.
+  - Cell data written before an upgrade stays reachable (2.4 / D15).
+- **Performance.** Before/after benchmarks for the request hot path (fetch
+  bodies after 1.8, RPC calls after Phase 3) and the memory per isolate.
+  Regressions are justified or fixed.
+- **Observability.** New failure modes log with stable event names (as
+  celld's `event=` logs do) and have metrics: capability breaks, refused
+  forgeries, SSRF refusals, tails dropped.
+- **Docs.** `docs/cloudflare-compat.md` lists every remaining difference from
+  workerd. The trial workarounds are gone from the starter. Upstream-quality
+  changelog entries are written per phase.
+- **Review.** Each phase lands as reviewed PRs: no direct pushes of
+  unreviewed work for Phase 2 and later. Phase 3 gets a dedicated security
+  review.
+
 ## Definition of done: "Cloudflare OS works on celld"
 
 1. `e2e.sh all --router --fresh` passes twice in a row on a single node.
@@ -1660,6 +1735,7 @@ E and F hops never cross nodes.
 5. The conformance corpus passes on celld and matches workerd, with every
    `normalize` entry justified.
 6. For multi-node fleets, Phase 8's two-node checks also pass.
+7. Every item in **Production readiness** holds.
 
 When a phase lands, append its date and commit range to the phase heading and
 update [cloudflare-os-trial.md](cloudflare-os-trial.md)'s "How far it got"
