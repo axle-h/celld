@@ -126,12 +126,13 @@ The services the trial used:
 
 MinIO images can no longer be pulled anonymously, so use Azurite.
 
-## Decisions to settle before starting
+## Decisions
 
-Each decision has a recommendation. They are listed here so they can be
-agreed up front. Phases refer to them as D1-D15.
+Alex settled all of these on 2026-10-21. The **Decision** column is binding.
+Phases refer to them as D1-D15. Three went against the original
+recommendation: D12, D13 and D15.
 
-| # | Decision | Recommendation |
+| # | Question | Decision |
 | --- | --- | --- |
 | D1 | Where new tests live. The repo has **no test bodies**: Rust tests are `include!`d from out-of-tree files (`CELLD_INTERNAL_*_TESTS`, `CELLD_CONFORMANCE_*`, see `crates/celld/lib.rs:15-180`), and the workerd conformance corpus and simulator in `docs/testing.md` are not in the tree. | Add in-repo tests: inline `#[cfg(test)]` modules for Rust, and a new `tests/conformance/` workerd-differential corpus. Don't depend on the private suites. Ask upstream whether those suites can be shared. |
 | D2 | Same-node capabilities first, and a loud error for anything that would cross nodes until Phase 8. | Yes. Document that Cloudflare OS needs a single-node fleet until then. |
@@ -144,10 +145,10 @@ agreed up front. Phases refer to them as D1-D15.
 | D9 | `ai` and `browser` bindings. | Keep them refused in celld. The starter maps `WORKERS_AI`/`AI` to a service binding on an operator shim Worker (Phase 9). A first-class celld binding is deferred. |
 | D10 | Should `celld deploy` run Wrangler's `build.command`? | Yes, with `--no-build` to skip it. That removes `starter:celld/build.sh`'s capnweb step. |
 | D11 | `global_fetch_strictly_public` escape hatch, and always blocking the node's own listeners. | Add `CELLD_FETCH_PRIVATE_ALLOW` with host:port entries. Always block `--internal-listen` and the advertise addresses, even without the flag. |
-| D12 | `accept()` on a WebSocket that a stateless Worker returned through a service binding. | Refuse loudly for now; only passthrough is needed. |
-| D13 | `tracing`: a correct no-op first (`isTraced=false`), or OTLP export straight away? | No-op first (Phase 1), OTLP later (Phase 9). |
+| D12 | `accept()` on a WebSocket that a stateless Worker returned through a service binding. | **Implement the host-side frame bridge in 1.7**, so passthrough and `accept()` both work (about 2 more days). The recommendation had been to refuse it for now. |
+| D13 | `tracing`: a correct no-op first (`isTraced=false`), or OTLP export straight away? | **OTLP export in Phase 1 (1.2).** With `CELLD_OTEL` on, spans are traced and exported; with it off, `isTraced=false`. The recommendation had been a no-op first. |
 | D14 | Dynamic Worker tails: legacy `tail()` for RPC and facet invocations, or `tailStream`? | Legacy only. Cloudflare OS doesn't use `tailStream` yet; refuse `streamingTails`. |
-| D15 | Existing cells when cell scopes become script-qualified (2.4): a fallback lookup or a one-time migration? | Fallback lookup for one release, then migrate. Never orphan data. |
+| D15 | Existing cells when cell scopes become script-qualified (2.4): a fallback lookup or a one-time migration? | **New deployments only.** Script-qualified scopes apply to fleets created with the feature. Existing fleets keep today's naming, and still refuse colliding class names, loudly. Both naming paths are permanent and both are tested. The recommendation had been a fallback, then a migration. |
 
 ## Adoption policy for code from other forks
 
@@ -205,7 +206,7 @@ write ourselves, before it lands on `main`.
 | Phase | Theme | Unblocks | Effort (engineer time) |
 | --- | --- | --- | --- |
 | 0 | Test infrastructure | Every later gate | 1.5-2 weeks |
-| 1 | Loud gaps and small fixes, including N1/N2/N6/N8/N9 | Router mode; the trial workarounds go away; BYOB; chat critical path (tracing, Proxy lookup, RpcPromise) | 3-3.5 weeks (several items are cherry-picks) |
+| 1 | Loud gaps and small fixes, including N1/N2/N6/N8/N9, the WebSocket `accept()` bridge (D12) and OTLP spans (D13) | Router mode; the trial workarounds go away; BYOB; chat critical path (tracing, Proxy lookup, RpcPromise) | 4-4.5 weeks |
 | 2 | Address-like capability tokens and storage; script-qualified cell scopes | J2 ("turn on" gatekeepers); more than one OAuth gatekeeper | 2.5-3 weeks |
 | 3 | Cross-isolate RPC on one node, including facet and loader args | J1, J3 chat | 4.5-6.5 weeks |
 | 4 | Facets from another script's class | J3 gatekeepers, J5 | 1.5-2 weeks |
@@ -496,16 +497,27 @@ come through as `undefined`.
 - Integration: a `modules/cloudflare-workers-exports` case that imports each
   name and reports `typeof`, compared with workerd.
 
-### 1.2 `tracing` phase 1
+### 1.2 `tracing`, with OTLP export (D13)
 
 **Design.**
 - Implement `tracing` and `ctx.tracing` (the same object) per Cloudflare's
   custom-spans API: `enterSpan`, `startActiveSpan`, `startSpan`,
   `getActiveSpan`, and the `Span` methods.
-- `isTraced` is `false`, as for an unsampled request on Cloudflare.
 - The active span is tracked with the existing CPED/AsyncLocalStorage frame
   (`harness.js:3813`). `enterSpan` ends the span when its promise settles.
-- Spans are dropped, and the compat doc says so.
+- **With `CELLD_OTEL` off:** `isTraced` is `false`, as for an unsampled request
+  on Cloudflare, and spans are dropped.
+- **With `CELLD_OTEL` on:** `isTraced` is `true`, and spans are exported as
+  children of the invocation's span. Changes:
+  - `telemetry::Span` gets owned names and attributes (`telemetry.rs:322`)
+  - `otlp.rs:107` emits attributes
+  - the Parquet schema gains an attributes column (already `v0-unstable`)
+  - one host op: `__span_end(traceId, parentId, name, startUs, endUs, attrsJson, exception)`
+- Parent ids come from the same CPED that tags console logs.
+- Follow workerd's limits: names cut to 64 bytes, about 64 KB of attributes
+  per span, `undefined` attributes ignored.
+- Honour the Wrangler `observability.traces` sampling settings if 1.6 keeps
+  them; otherwise document that sampling is operator-controlled.
 
 **Prior art.** Rework royalcala `22b3352` (patcon `e5878e3`) or cnicolov's
 `tracing.js` as a seed. Neither has `ctx.tracing` on DO state, active-span
@@ -519,7 +531,14 @@ tracking or settle-ending.
   - `getActiveSpan()` outside a request
   - chaining of `setAttributes`
   - `ctx.tracing === tracing`
-- E2E/manual: becomes testable after Phase 3; a chat turn completes.
+- Unit:
+  - OTLP encoding of attributes and exceptions
+  - parent/child ids
+  - the name and attribute limits
+- Integration: with `CELLD_OTEL` pointing at a local collector, the spans
+  from a case arrive with the right parent and attributes.
+- E2E/manual: becomes testable after Phase 3. A chat turn completes, and the
+  collector shows `invoke_agent`, `chat` and `execute_tool` spans.
 
 ### 1.3 `ctx.exports` namespaces for classes declared only in migrations (trial failure 4)
 
@@ -663,7 +682,15 @@ requests, DO `__dispatchTo`, service-binding targets and entrypoint targets.
   - `__wrapServiceResponse` keeps the socket.
   - `__readResponse` passes `workerSocketId` through without a new pump.
 - **Refusals:**
-  - `accept()` on a `_workerHandoff` socket throws a clear `TypeError` (D12).
+  - A DO returning a `_workerHandoff` socket still throws.
+- **The `accept()` bridge (D12).** When the intermediate Worker calls
+  `accept()` on a `_workerHandoff` socket, it proxies frames itself.
+  - The host adopts the target's handoff and bridges its pull queue to a new
+    Worker-side socket owned by the caller's context.
+  - Frames, close codes and errors pass in both directions.
+  - Backpressure follows the 1 MiB queue budget per direction.
+  - Closing either side closes the other with the same code.
+  - The bridge is released when the caller's context retires.
   - A DO returning such a socket throws.
   - A 101 response with no socket becomes a 500 that names the cause.
 - **Risks:**
@@ -694,7 +721,8 @@ requests, DO `__dispatchTo`, service-binding targets and entrypoint targets.
   - a double hop
   - a `new Response(r.body, r)` rebuild
   - a Dynamic Worker entrypoint returning a pair
-  - the `accept()` refusal
+  - `accept()` in the front: the front sees each frame and echoes it on, close
+    codes propagate both ways, and a large message respects the 1 MiB budget
 - E2E/manual:
   - `deploy.sh` **without** `--no-router`: the UI loads past "Can't reach
     the server", and DevTools shows the `/api` 101 with `Upgrade`.
@@ -1039,25 +1067,33 @@ fork). Use it as a reference.
   The remaining work is the class-keyed tables: `cell_configs`,
   `register_cell_class`, and the cell-scope routing in `generation.rs` and
   `runtime.rs`.
-- Put it behind a deployment feature flag.
-- **Migration:** existing scopes of the primary keep resolving, either through
-  a fallback lookup or a one-time rename. An upgrade must never make a DO's
-  data unreachable.
+- **New deployments only (D15).**
+  - A fleet created with the feature (a fleet-level setting recorded in the
+    bucket at first deploy, with a feature flag in `protocol.rs`) uses
+    script-qualified scopes for every class.
+  - A fleet without it keeps today's naming and its collision refusal. Make
+    the refusal message point at the feature, and say that it needs a new
+    fleet.
+  - There is no in-place migration, so existing data is never at risk. Both
+    naming paths are permanent, so both are covered by every test that touches
+    cell scopes.
 - **Do not** copy IlyaGulya's approach of hashing only **non-primary** scripts'
   classes (`.svc.<hash>`, `30f2a48`). Which script is primary changes with
   deploy order (for example, the trial's `--no-router` mode), and that would
   orphan data.
 
-**Decision D15.** Use a fallback lookup or a one-time scope migration for
-existing cells. Recommendation: fallback lookup for one release, then
-migrate.
 
 **Tests.**
-- Unit: scope derivation does not depend on which script is primary; the
-  fallback resolves old scopes.
+- Unit:
+  - Scope derivation for qualified fleets does not depend on which script is
+    primary.
+  - Legacy fleets derive exactly today's scopes.
+  - The feature setting cannot change after a fleet is created.
 - Integration: port IlyaGulya's `same-class` case (router + A + B, both
-  exporting `UserAccount`; `/a` → `a:1`,`a:2`; `/b` → `b:110`,`b:120`). Then
-  swap which script is primary and check that the data is still there.
+  exporting `UserAccount`; `/a` → `a:1`,`a:2`; `/b` → `b:110`,`b:120`) on a
+  qualified fleet. Then swap which script is primary and check that the data
+  is still there. On a legacy fleet, the same deployment is refused with the
+  new message.
 - E2E/manual: deploy with two OAuth gatekeepers (for example GitHub and
   Linear, without credentials); the node starts and both appear on the
   Gatekeepers page.
@@ -1647,15 +1683,6 @@ E and F hops never cross nodes.
 
 ## Phase 9: follow-ups
 
-- **Tracing phase 2.** With `CELLD_OTEL` on, set `isTraced=true` and export
-  spans. Changes:
-  - `telemetry::Span` gets owned names and attributes (`telemetry.rs:322`)
-  - `otlp.rs:107` emits attributes
-  - the Parquet schema gains an attributes column
-  - one host op, `__span_end`
-
-  Unit: OTLP encoding. E2E/manual: the collector shows `invoke_agent`, `chat`
-  and `execute_tool` spans.
 - **AI shim in the starter** (D9). `starter:celld/ai-shim/` is a
   `WorkerEntrypoint` with:
   - `toMarkdown`: HTML → Markdown through `HTMLRewriter`; other formats
@@ -1696,7 +1723,8 @@ phase's gate includes the parts that apply to it.
 - **Upgrade safety.**
   - Every manifest or wire change is behind a feature flag (`protocol.rs`).
   - A rolling upgrade from v0.6.2 is tested.
-  - Cell data written before an upgrade stays reachable (2.4 / D15).
+  - Cell data written before an upgrade stays reachable. Legacy fleets keep
+    their naming (2.4 / D15).
 - **Performance.** Before/after benchmarks for the request hot path (fetch
   bodies after 1.8, RPC calls after Phase 3) and the memory per isolate.
   Regressions are justified or fixed.
