@@ -179,7 +179,7 @@ are always fresh, so there is nothing to keep compatible.
 | D13 | `tracing`: a correct no-op first (`isTraced=false`), or OTLP export straight away? | **OTLP export in Phase 1 (1.2).** With `CELLD_OTEL` on, spans are traced and exported; with it off, `isTraced=false`. The recommendation had been a no-op first. |
 | D14 | Dynamic Worker tails: legacy `tail()` for RPC and facet invocations, or `tailStream`? | Legacy only. Cloudflare OS doesn't use `tailStream` yet; refuse `streamingTails`. |
 | D15 | How cell scopes become script-qualified (2.4). | **Always script-qualified, one code path.** Every deployment names cells by (script, class). There is no fleet setting, legacy naming or migration, because there are only fresh deployments. |
-| D16 | Is the egress policy (1.9) on by default? | **Open.** See 1.9. |
+| D16 | Is the egress policy (1.9) on by default? | **Block by default**, matching Cloudflare's network and Cloudflare OS's assumptions. Operators allow specific internal `host:port` entries with `CELLD_FETCH_PRIVATE_ALLOW`. The node's own listeners are always blocked. |
 
 ## Review and commits
 
@@ -1111,7 +1111,7 @@ not only ones that set the flag.
 - **`nodejs_als`:** AsyncLocalStorage already works without gating. Classify
   it as honoured in 1.16 and pin it with a case.
 
-**Decision needed (D16): default on or off.** See the decisions table.
+**On by default (D16).** Every Worker gets the policy with no flag. Local development (a mock LLM, Ollama, the integration adapter's mock upstream) adds `CELLD_FETCH_PRIVATE_ALLOW` entries.
 
 **Tests.**
 - Unit:
