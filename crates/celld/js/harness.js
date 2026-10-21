@@ -2600,6 +2600,7 @@ class DurableObjectState {
     // A class outside `containers` has no `ctx.container`, which is what
     // the `@cloudflare/containers` constructor checks.
     if (__cell.containers[className]) this.container = new Container(scope);
+    __withCtxRestore(this);
   }
   // Workerd's DurableObjectState.exports (actor-state.h): the same
   // loopback surface as ctx.exports on stateless entrypoints.
@@ -5991,7 +5992,10 @@ const __cell = __celld.__cell = {
   namespaceKeys: {},
   node: "",
   deleteAllDeletesAlarm: false,
-  compat: { jsRpc: false, fetcherGetPutDelete: false, queueJsonMessages: false },
+  compat: {
+    jsRpc: false, fetcherGetPutDelete: false, queueJsonMessages: false,
+    allowIrrevocableStubStorage: false,
+  },
   makeNamespace,
   release: __cellRelease,
 };
@@ -9217,10 +9221,10 @@ const __WorkflowCell = (() => {
     };
     // ExecutionContext-shaped, as the WorkflowEntrypoint constructor
     // documents upstream.
-    const ctx = {
+    const ctx = __withCtxRestore({
       waitUntil: __registerWaitUntil,
       passThroughOnException() {},
-    };
+    });
     (async () => new cls(ctx, __cell.env).run(event, step))().then(
       (value) => driver.finish({ kind: "complete", value }),
       (error) => driver.finish({ kind: "error", error }),
@@ -9516,8 +9520,43 @@ class Workflow {
 
 const __makeWorkflow = __celld.__makeWorkflow =
   (workflowName) => new Workflow(workflowName);
-// `cloudflare:workers` module surface. The DO base class sets ctx/env the
-// way `class X extends DurableObject` expects; env aliases the cell env.
+// A `cloudflare:workers` export celld does not implement yet. It throws on
+// first use and names itself, rather than reading as `undefined` and failing
+// far from the cause. A function stub throws when called or constructed (and
+// so when a subclass is constructed). An object stub throws when one of its
+// API names is read, written, defined, deleted or tested with `in`. It acts as
+// an empty plain object for the names generic code probes: symbols, `then`,
+// `toJSON` and the Object.prototype members. So `await`, a return from an
+// async function, `JSON.stringify` and console logging don't trip it.
+const __cfUnimplementedError = (name) =>
+  new Error(`cloudflare:workers export '${name}' is not implemented in celld`);
+const __cfUnimplementedFunction = (name) => {
+  const stub = function () { throw __cfUnimplementedError(name); };
+  Object.defineProperty(stub, "name", { value: name });
+  return stub;
+};
+const __cfInertKey = (key) =>
+  typeof key !== "string" || key === "then" || key === "toJSON" ||
+  key in Object.prototype;
+const __cfUnimplementedObject = (name) => {
+  const fail = () => { throw __cfUnimplementedError(name); };
+  return new Proxy({}, {
+    get(target, key) {
+      if (__cfInertKey(key)) return Reflect.get(target, key);
+      fail();
+    },
+    has(target, key) {
+      if (__cfInertKey(key)) return Reflect.has(target, key);
+      fail();
+    },
+    set: fail,
+    defineProperty: fail,
+    deleteProperty: fail,
+  });
+};
+// `cloudflare:workers` module surface: exactly the names in modules.rs
+// CLOUDFLARE_WORKERS_EXPORTS. The DO base class sets ctx/env the way
+// `class X extends DurableObject` expects; env aliases the cell env.
 const __cf = __celld.__cf = {
   DurableObject: class DurableObject {
     constructor(ctx, env) { this.ctx = ctx; this.env = env; }
@@ -9571,6 +9610,31 @@ const __cf = __celld.__cf = {
   },
   exports: {},
   get env() { return __cell.env; },
+  // The key of a `[restore]()` method. Like workerd's (an API symbol,
+  // workers-module.c++ getRestoreSymbol) it is described as
+  // "cloudflare:workers:restore" and is absent from the Symbol.for registry.
+  restore: Symbol("cloudflare:workers:restore"),
+  abortIsolate: __cfUnimplementedFunction("abortIsolate"),
+  cache: __cfUnimplementedObject("cache"),
+  tracing: __cfUnimplementedObject("tracing"),
+  withEnv: __cfUnimplementedFunction("withEnv"),
+  withEnvAndExports: __cfUnimplementedFunction("withEnvAndExports"),
+  withExports: __cfUnimplementedFunction("withExports"),
+};
+// workerd adds ctx.restore() to ExecutionContext and DurableObjectState
+// under allow_irrevocable_stub_storage. celld can't restore yet, so the
+// method rejects: a Worker that relies on it fails at first use. The method
+// is promise-returning on workerd, hence a rejection, not a throw.
+function __ctxRestore() {
+  return Promise.reject(new Error("ctx.restore() is not implemented in celld"));
+}
+const __withCtxRestore = (ctx) => {
+  if (__cell.compat.allowIrrevocableStubStorage) {
+    Object.defineProperty(ctx, "restore", {
+      value: __ctxRestore, writable: true, configurable: true,
+    });
+  }
+  return ctx;
 };
 // Proxy standing in for unsupported node:*/cloudflare:* builtins. Property
 // walks stay inert -- real bundles reference these at module scope, and
@@ -10992,7 +11056,7 @@ const __registerWaitUntil = __celld.__registerWaitUntil = (promise) => {
 // `props` are the per-stub props a loopback service stub carries
 // (ctx.props); `exports` is built once, on first access.
 const __defaultProps = {};
-const __entrypointContext = (props = __defaultProps) => ({
+const __entrypointContext = (props = __defaultProps) => __withCtxRestore({
   waitUntil: __registerWaitUntil,
   passThroughOnException() {},
   abort: __ctxAbortCurrent,

@@ -1,0 +1,151 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "DurableObject": "function",
+        "RpcPromise": "function",
+        "RpcProperty": "function",
+        "RpcStub": "function",
+        "RpcTarget": "function",
+        "ServiceStub": "function",
+        "WorkerEntrypoint": "function",
+        "WorkflowEntrypoint": "function",
+        "abortIsolate": "function",
+        "cache": "object",
+        "env": "object",
+        "exports": "object",
+        "restore": "symbol",
+        "tracing": "object",
+        "waitUntil": "function",
+        "withEnv": "function",
+        "withEnvAndExports": "function",
+        "withExports": "function"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "keys": [
+          "DurableObject",
+          "RpcPromise",
+          "RpcProperty",
+          "RpcStub",
+          "RpcTarget",
+          "ServiceStub",
+          "WorkerEntrypoint",
+          "WorkflowEntrypoint",
+          "abortIsolate",
+          "cache",
+          "env",
+          "exports",
+          "restore",
+          "tracing",
+          "waitUntil",
+          "withEnv",
+          "withEnvAndExports",
+          "withExports"
+        ],
+        "types": {
+          "DurableObject": "function",
+          "RpcPromise": "function",
+          "RpcProperty": "function",
+          "RpcStub": "function",
+          "RpcTarget": "function",
+          "ServiceStub": "function",
+          "WorkerEntrypoint": "function",
+          "WorkflowEntrypoint": "function",
+          "abortIsolate": "function",
+          "cache": "object",
+          "env": "object",
+          "exports": "object",
+          "restore": "symbol",
+          "tracing": "object",
+          "waitUntil": "function",
+          "withEnv": "function",
+          "withEnvAndExports": "function",
+          "withExports": "function"
+        },
+        "sameBindings": true,
+        "toStringTag": "Module"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "keys": [
+          "DurableObject",
+          "RpcPromise",
+          "RpcProperty",
+          "RpcStub",
+          "RpcTarget",
+          "ServiceStub",
+          "WorkerEntrypoint",
+          "WorkflowEntrypoint",
+          "abortIsolate",
+          "cache",
+          "env",
+          "exports",
+          "restore",
+          "tracing",
+          "waitUntil",
+          "withEnv",
+          "withEnvAndExports",
+          "withExports"
+        ],
+        "sameModule": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "type": "symbol",
+        "description": "cloudflare:workers:restore",
+        "keyFor": "undefined",
+        "registered": false,
+        "string": "Symbol(cloudflare:workers:restore)",
+        "stable": true,
+        "methodKey": 1
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "flag": false,
+        "execution": "undefined",
+        "durableObject": "undefined"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "flag": true,
+        "execution": "function",
+        "durableObject": "function"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "ok": false,
+        "error": "SyntaxError: The requested module 'cloudflare:workers' does not provide an export named 'NotAnExport'"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "ok": false,
+        "error": "SyntaxError: The requested module 'cloudflare:workers' does not provide an export named 'default'"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "body": "symbol"
+      }
+    }
+  ]
+}

@@ -41,6 +41,7 @@ An unsupported feature that does not cause an error is a defect.
 | [Fetch, Request, Response, and Headers](#fetch-request-response-and-headers) | **Yes** |
 | [Bindings](#bindings) | **Yes** |
 | [Context](#context) | **Yes** |
+| [`cloudflare:workers`](#cloudflareworkers) | **Partial** |
 | [Handlers](#handlers) | **Yes** |
 | [RPC](#rpc) | **Yes** |
 | [Streams](#streams) | **Yes** |
@@ -79,6 +80,24 @@ Only the binding types in the [services table](#services) are available.
 
 - `passThroughOnException()` has no effect because celld has no CDN fallback.
 - `ctx.facets` is available only inside a Durable Object.
+- With the `allow_irrevocable_stub_storage` flag, `ctx.restore()` exists, as
+  on Cloudflare, but it rejects because celld cannot restore a stub. Without
+  the flag, `ctx.restore` is undefined.
+
+### `cloudflare:workers`
+
+- The module exports the same names as workerd 1.20261001.1. An import of any
+  other name, or a default import, stops the Worker from loading, as on
+  Cloudflare.
+- `tracing`, `cache`, `withEnv`, `withExports`, `withEnvAndExports`, and
+  `abortIsolate` are not implemented. They import, but a call, a construction,
+  or a property access throws an error that names the export. Logging or
+  serializing `tracing` or `cache` does not throw.
+- `cache` throws on use everywhere, including at module scope, where
+  Cloudflare's `cache` reads every property as `undefined` outside a
+  request.
+- `restore` is the symbol that names a `[restore]()` method, as on Cloudflare,
+  but celld never calls that method.
 
 ### [Handlers](https://developers.cloudflare.com/workers/runtime-apis/handlers/)
 
@@ -193,6 +212,8 @@ celld honors these compatibility flags:
 - `sqlite_vec`
 - `websocket_standard_binary_type`
 - The static-assets navigation flags
+- `allow_irrevocable_stub_storage`, which adds only a `ctx.restore()` that
+  rejects (see [Context](#context)). Stubs still cannot be stored.
 
 celld accepts every other flag without effect.
 `Cloudflare.compatibilityFlags` reports only the honored flags.

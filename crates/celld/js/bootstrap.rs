@@ -582,6 +582,12 @@ pub(super) fn inject_compatibility_flags(scope: &mut v8::PinScope, compat: Compa
     );
     set_flag(scope, "js_rpc", compat.js_rpc);
     set_flag(scope, "sqlite_vec", compat.sqlite_vec);
+    // Honoured as far as celld goes: it adds the ctx.restore() that rejects.
+    set_flag(
+        scope,
+        "allow_irrevocable_stub_storage",
+        compat.allow_irrevocable_stub_storage,
+    );
     set_flag(
         scope,
         "fetcher_no_get_put_delete",
@@ -1032,12 +1038,14 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
          c.compat.jsRpc = {};\n\
          c.compat.fetcherGetPutDelete = {};\n\
          c.compat.websocketStandardBinaryType = {};\n\
-         c.compat.queueJsonMessages = {};",
+         c.compat.queueJsonMessages = {};\n\
+         c.compat.allowIrrevocableStubStorage = {};",
         compat.delete_all_deletes_alarm,
         compat.js_rpc,
         compat.fetcher_get_put_delete,
         compat.websocket_standard_binary_type,
         compat.queue_json_messages,
+        compat.allow_irrevocable_stub_storage,
     );
     run_internal_snippet(scope, &source).ok_or_else(|| anyhow!("compatibility install failed"))?;
     Ok(())

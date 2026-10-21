@@ -1,0 +1,60 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "calls": {
+          "abortIsolate": "Error: cloudflare:workers export 'abortIsolate' is not implemented in celld",
+          "withEnv": "Error: cloudflare:workers export 'withEnv' is not implemented in celld",
+          "withExports": "Error: cloudflare:workers export 'withExports' is not implemented in celld",
+          "withEnvAndExports": "Error: cloudflare:workers export 'withEnvAndExports' is not implemented in celld",
+          "construct": "Error: cloudflare:workers export 'withEnv' is not implemented in celld",
+          "subclass": "Error: cloudflare:workers export 'withEnv' is not implemented in celld"
+        },
+        "objects": {
+          "read": "Error: cloudflare:workers export 'tracing' is not implemented in celld",
+          "readCache": "Error: cloudflare:workers export 'cache' is not implemented in celld",
+          "write": "Error: cloudflare:workers export 'tracing' is not implemented in celld",
+          "has": "Error: cloudflare:workers export 'tracing' is not implemented in celld",
+          "delete": "Error: cloudflare:workers export 'cache' is not implemented in celld"
+        },
+        "inert": {
+          "names": [
+            "abortIsolate",
+            "withEnv",
+            "withExports",
+            "withEnvAndExports"
+          ],
+          "types": [
+            "object",
+            "object"
+          ],
+          "then": "undefined",
+          "awaited": true,
+          "keys": [],
+          "has": [
+            false,
+            true
+          ]
+        },
+        "logging": {
+          "console": "ok",
+          "consoleNamespace": "ok",
+          "json": [
+            "{}",
+            "{\"cache\":{}}"
+          ],
+          "string": "[object Object]",
+          "inspect": "Proxy({})"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "execution": "Error: ctx.restore() is not implemented in celld",
+        "durableObject": "Error: ctx.restore() is not implemented in celld"
+      }
+    }
+  ]
+}

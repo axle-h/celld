@@ -1,0 +1,9 @@
+{
+  "name": "flagged",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  // Adds ctx.restore to ExecutionContext and DurableObjectState.
+  "compatibility_flags": ["allow_irrevocable_stub_storage"],
+  "durable_objects": { "bindings": [{ "name": "PROBE", "class_name": "FlaggedProbe" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["FlaggedProbe"] }]
+}

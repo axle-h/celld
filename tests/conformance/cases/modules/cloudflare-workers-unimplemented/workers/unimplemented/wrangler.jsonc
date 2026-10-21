@@ -1,0 +1,8 @@
+{
+  "name": "unimplemented",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["allow_irrevocable_stub_storage", "nodejs_compat"],
+  "durable_objects": { "bindings": [{ "name": "PROBE", "class_name": "Probe" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Probe"] }]
+}

@@ -224,7 +224,7 @@ fn register_internal_stub(scope: &mut v8::PinScope, spec: &str, source: &str) {
         tracing::warn!(%spec, "module stub failed to compile");
         return;
     };
-    modreg(scope).register(scope, [spec.to_string()], module, true, None);
+    modreg(scope).register(scope, builtin_stub_keys(spec), module, true, None);
 }
 
 fn modreg(scope: &mut v8::PinScope) -> Arc<ModuleRegistry> {
@@ -328,9 +328,6 @@ pub(super) fn scan_external_imports(src: &str) -> ExternalImports {
     map
 }
 
-/// A stub ES module for `spec`. `cloudflare:workers` binds the real DO base
-/// class from the harness; every other builtin routes to a pass-through proxy
-/// so evaluation never crashes on an unsupported node/cf API.
 /// A module Cells really implements in JS. Its source is injected into the
 /// generated stub module, and `register_stubs` only builds stubs for
 /// specifiers a bundle actually imports — so an isolate that never imports it
@@ -564,8 +561,65 @@ fn install_lazy_module(scope: &mut v8::PinScope, spec: &str) -> Option<&'static 
     Some(module)
 }
 
+const CLOUDFLARE_WORKERS: &str = "cloudflare:workers";
+
+/// Every export of `cloudflare:workers`, as declared by workerd's
+/// `src/cloudflare/workers.ts` at tag v1.20261001.1 (the workerd that
+/// `tests/conformance` pins; its `modules/cloudflare-workers-exports` case
+/// fails on drift). `__celld.__cf` defines each one; a name celld does not
+/// implement is a stub there that throws on use. Any other name, `default`
+/// included, is absent, so importing it fails to link, as on workerd.
+const CLOUDFLARE_WORKERS_EXPORTS: &[&str] = &[
+    "DurableObject",
+    "RpcPromise",
+    "RpcProperty",
+    "RpcStub",
+    "RpcTarget",
+    "ServiceStub",
+    "WorkerEntrypoint",
+    "WorkflowEntrypoint",
+    "abortIsolate",
+    "cache",
+    "env",
+    "exports",
+    "restore",
+    "tracing",
+    "waitUntil",
+    "withEnv",
+    "withEnvAndExports",
+    "withExports",
+];
+
+/// The `cloudflare:workers` module. Its surface is fixed, so one source
+/// serves named, namespace and dynamic imports alike, whatever names the
+/// importer scanned.
+fn cloudflare_workers_source() -> String {
+    let mut out = internals_import();
+    for name in CLOUDFLARE_WORKERS_EXPORTS {
+        out.push_str(&format!("export const {name} = __celld.__cf.{name};\n"));
+    }
+    out
+}
+
+/// Registry keys for a builtin stub. `cloudflare:workers` exports its full
+/// surface statically, so `import()` shares the static module, as it does on
+/// workerd; other static stubs carry only the scanned names.
+fn builtin_stub_keys(spec: &str) -> Vec<String> {
+    if spec == CLOUDFLARE_WORKERS {
+        vec![spec.to_string(), format!("dyn:{spec}")]
+    } else {
+        vec![spec.to_string()]
+    }
+}
+
+/// A stub ES module for `spec` that binds each scanned name from the
+/// builtin's backing object in `__celld`. `cloudflare:workers` always gets its
+/// fixed surface. An unsupported builtin binds a stub that throws on first
+/// call.
 fn stub_source(spec: &str, names: &std::collections::BTreeSet<String>) -> String {
-    let cf = spec == "cloudflare:workers";
+    if spec == CLOUDFLARE_WORKERS {
+        return cloudflare_workers_source();
+    }
     let cf_sockets = spec == "cloudflare:sockets";
     // `cloudflare:workflows` is real, not a pass-through proxy: its one
     // export is `NonRetryableError`, and a proxy standing in for an Error
@@ -575,9 +629,7 @@ fn stub_source(spec: &str, names: &std::collections::BTreeSet<String>) -> String
     let python_host = spec == PYTHON_HOST_SPECIFIER;
     let lazy = LAZY_MODULES.iter().find(|m| m.specs.contains(&spec));
     let eager = eager_module_global(spec);
-    let base = if cf {
-        "__celld.__cf".to_string()
-    } else if cf_sockets {
+    let base = if cf_sockets {
         "__celld.__cfSockets".to_string()
     } else if cf_workflows {
         "__celld.__cfWorkflows".to_string()
@@ -912,9 +964,6 @@ fn resolve_relative_specifier(referrer: &str, spec: &str) -> Option<String> {
 /// The backing-object expression for a builtin specifier, or `None` if `spec`
 /// is not one. A lazy module is materialized from its external source first.
 fn builtin_source(scope: &mut v8::PinScope, spec: &str) -> Option<String> {
-    if spec == "cloudflare:workers" {
-        return Some("__celld.__cf".into());
-    }
     if spec == "cloudflare:sockets" {
         return Some("__celld.__cfSockets".into());
     }
@@ -948,6 +997,9 @@ fn full_surface_source(
     spec: &str,
     extra: &std::collections::BTreeSet<String>,
 ) -> Option<String> {
+    if spec == CLOUDFLARE_WORKERS {
+        return Some(cloudflare_workers_source());
+    }
     let expr = builtin_source(scope, spec)?;
     let probe = format!("return JSON.stringify(Object.keys(Object({expr})));");
     let keys = run_internal_snippet(scope, &probe)?.to_rust_string_lossy(scope);
@@ -1086,4 +1138,56 @@ pub(super) fn host_import_module_dynamically<'s>(
         }
     }
     Some(promise)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn names(list: &[&str]) -> BTreeSet<String> {
+        list.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn cloudflare_workers_list_is_sorted_and_unique() {
+        let mut sorted = CLOUDFLARE_WORKERS_EXPORTS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted, CLOUDFLARE_WORKERS_EXPORTS);
+    }
+
+    /// Known and unimplemented names alike bind to `__celld.__cf`; scanned
+    /// names off the list, `default` included, are not exported, so they
+    /// fail to link.
+    #[test]
+    fn cloudflare_workers_stub_is_the_full_surface_whatever_was_scanned() {
+        let mut expected = internals_import();
+        for name in CLOUDFLARE_WORKERS_EXPORTS {
+            expected.push_str(&format!("export const {name} = __celld.__cf.{name};\n"));
+        }
+        for scanned in [
+            names(&[]),
+            names(&["*"]),
+            names(&["DurableObject", "tracing", "NotAnExport", "default"]),
+        ] {
+            assert_eq!(stub_source(CLOUDFLARE_WORKERS, &scanned), expected);
+        }
+    }
+
+    #[test]
+    fn only_cloudflare_workers_shares_its_static_stub_with_import() {
+        assert_eq!(
+            builtin_stub_keys(CLOUDFLARE_WORKERS),
+            ["cloudflare:workers", "dyn:cloudflare:workers"]
+        );
+        assert_eq!(builtin_stub_keys("node:fs"), ["node:fs"]);
+    }
+
+    #[test]
+    fn other_builtins_export_only_the_scanned_names() {
+        let source = stub_source("cloudflare:sockets", &names(&["connect", "default"]));
+        assert!(source.contains("export const connect = __celld.__cfSockets.connect;\n"));
+        assert!(source.contains("export default __celld.__cfSockets;\n"));
+    }
 }

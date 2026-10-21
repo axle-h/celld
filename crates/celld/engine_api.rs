@@ -263,6 +263,11 @@ pub struct Compat {
     /// Queue bodies default to JSON on compatibility dates after 2024-03-18;
     /// older deployments retain the V8 structured-clone default.
     pub queue_json_messages: bool,
+    /// `allow_irrevocable_stub_storage`: workerd adds `ctx.restore()` to
+    /// `ExecutionContext` and `DurableObjectState` (global-scope.h,
+    /// actor-state.h). celld defines the method, which rejects as not
+    /// implemented, so a Worker that sets the flag fails at first use.
+    pub allow_irrevocable_stub_storage: bool,
 }
 
 /// A non-main module the worker's main module may import, tagged by how the

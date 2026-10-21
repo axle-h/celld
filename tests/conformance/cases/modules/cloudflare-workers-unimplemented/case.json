@@ -1,0 +1,9 @@
+{
+  "kind": "celld-only",
+  "reason": "workerd implements every export and ctx.restore(); this pins how celld refuses the ones it doesn't implement yet",
+  "workers": ["unimplemented"],
+  "steps": [
+    {"path": "/exports"},
+    {"path": "/ctx-restore"}
+  ]
+}

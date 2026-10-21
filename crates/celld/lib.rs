@@ -309,5 +309,6 @@ pub fn worker_compat(metadata: &serde_json::Value) -> js::Compat {
         sqlite_vec: has_flag("sqlite_vec"),
         websocket_standard_binary_type: has_flag("websocket_standard_binary_type"),
         queue_json_messages: switch("queue_json_messages", "queue_v8_messages", "2024-03-18"),
+        allow_irrevocable_stub_storage: has_flag("allow_irrevocable_stub_storage"),
     }
 }

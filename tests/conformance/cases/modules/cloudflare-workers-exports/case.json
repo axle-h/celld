@@ -1,0 +1,14 @@
+{
+  "workers": ["exports", "flagged"],
+  "steps": [
+    {"path": "/named"},
+    {"path": "/namespace"},
+    {"path": "/dynamic-import"},
+    {"path": "/restore"},
+    {"path": "/ctx"},
+    {"path": "/flagged/ctx"},
+    {"path": "/link?import=NotAnExport"},
+    {"path": "/link?import=default"},
+    {"path": "/link?import=restore"}
+  ]
+}

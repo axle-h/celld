@@ -343,8 +343,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 4 | 0.6 CI | done | `370d7df` |
 | 5 | 0.4 part 1: e2e bring-up, mock LLM | done | starter `46ea5ad` |
 | 5b | 0.4 part 2: smoke, browser, checklist, baseline | done | starter `c17f99a` |
-| 6 | Phase 0 gate evidence | next | |
-| 7+ | Phase 1 in plan order (1.1-1.17), then 0.5 after 1.7 | queued | |
+| 6 | Phase 0 gate evidence | recorded; awaiting Alex | |
+| 7 | 1.1 `cloudflare:workers` exports, `restore` | done | see log |
+| 8+ | Phase 1 in plan order (1.2-1.18), then 0.5 after 1.7 | queued | |
 
 ## Phase overview
 
@@ -775,6 +776,19 @@ capabilities. They become Phase 8's gates. The fork's CI commits
     PASS, and no step goes from PASS to FAIL.
 - CI runs on push to `main` and nightly.
 
+**Gate evidence (2026-10-21), awaiting Alex's review.**
+- Conformance: `node run.mjs --runtime=both` gives 6 PASS and 3 XFAIL
+  (1.14 x2, 1.17), locally and in CI run 39645990594 on GitHub.
+- `e2e.sh all --fresh` (no router) runs end to end on `main`, ending in
+  smoke and browser, with the expected failures.
+- Baseline: [cloudflare-os-trial.md](cloudflare-os-trial.md#baseline). No
+  router: S0, S1, S2, S9 and S11 PASS; S3, S4, S6 and S7 FAIL (trials 6, 8
+  and 9); the rest SKIP. Router: S0 PASS; S1, S10 and S11 FAIL (trial 5).
+  Browser: B0 PASS; B1-B5 FAIL (trials 5-9). No unexplained failure.
+- CI: green on push (cold 9m44s) and with `--runtime=both` (warm 6m04s).
+  Nightly failure issues need issues enabled on the fork (see 0.6).
+- Not done: 0.5 (the integration adapter) waits for 1.7.
+
 ---
 
 ## Phase 1: loud gaps and small fixes
@@ -807,7 +821,15 @@ come through as `undefined`.
   `modules.rs:601`, exposes exactly the canonical list. Unimplemented names
   appear there as the throwing stubs.
 - `restore` becomes a real well-known symbol now, ahead of Phase 5.
-  `ctx.restore` throws "not implemented" until Phase 5.
+  `ctx.restore` exists only under `allow_irrevocable_stub_storage`, as in
+  workerd, and returns a rejected promise until Phase 5.
+- **As built (1.1):** `default` is not exported, so a default import fails
+  to link, as on workerd. `import()` returns the same module as the static
+  import. `cache` and `tracing` are Proxies that throw on use but stay inert
+  for logging and serialisation. The celld-only case
+  `modules/cloudflare-workers-unimplemented` pins every stub; 1.2 updates it
+  when `tracing` becomes real. Recheck the list (including the absent
+  `retryable`) whenever the workerd pin moves.
 - **N4:** pin `Symbol.keyFor(restore)` and the symbol's description against
   workerd with a differential case. workerd's symbol is native
   (`src/cloudflare/workers.ts:21`), while every fork used `Symbol.for(...)`.
@@ -1390,9 +1412,11 @@ showed.
     lose
 - Unknown flags are refused at deploy, as workerd refuses them.
 - Replace the blanket sentence in the docs with the three lists.
-- New flags from later items (`rpc_params_dup_stubs` in 1.13,
-  `allow_irrevocable_stub_storage` in Phase 2, the `streamingTails` refusal in
-  Phase 6) are added to the lists as they land.
+- New flags from later items (`rpc_params_dup_stubs` in 1.13, the
+  `streamingTails` refusal in Phase 6) are added to the lists as they land.
+  `allow_irrevocable_stub_storage` is already honoured and reported in
+  `Cloudflare.compatibilityFlags` (1.1); Phase 2 adds its storage
+  enforcement.
 
 **Tests.**
 - Unit: the classification table covers every flag in workerd's
@@ -1419,6 +1443,18 @@ honoured.
 **Tests.** `websocket/close-without-handler` (compat date 2026-01-01) loses
 its `xfail`. Add the same case at a date after 2026-04-07 for the accepted
 socket.
+
+### 1.18 Worker Loader startup error text
+
+**Problem (found by 1.1).** A Dynamic Worker that fails to start reports
+`instantiate: SyntaxError: …` on celld. workerd reports
+`Failed to start Worker:\nUncaught SyntaxError: …\n  at <file>:<line>:<col>`.
+
+**Design.** Match workerd's text for every startup failure through the
+Loader.
+
+**Tests.** Widen the link steps in `modules/cloudflare-workers-exports`
+back to the full message.
 
 ### Phase 1 gate
 
@@ -1533,7 +1569,8 @@ fork). Use it as a reference.
 
 ### 2.4 DO class names that collide across co-hosted scripts (N10)
 
-**Problem.**
+**Problem.** (Until this lands, conformance cases give each co-hosted
+script's DO classes distinct names; see `modules/cloudflare-workers-exports`.)
 - v0.6.2 refuses two co-hosted scripts that export the same DO class name
   (`generation.rs:587-596`, "exported by more than one co-hosted script").
 - About 14 Cloudflare OS OAuth gatekeepers (github, gitlab, slack, notion,
