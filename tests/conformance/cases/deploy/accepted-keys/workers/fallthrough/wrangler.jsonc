@@ -1,0 +1,13 @@
+// Wrangler's rule order: `fallthrough: true` keeps the next Text rule, which
+// overlaps it; the Data rule without `fallthrough` drops the Data rule after it.
+{
+  "name": "fallthrough",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "rules": [
+    { "type": "Text", "globs": ["**/*.txt"], "fallthrough": true },
+    { "type": "Text", "globs": ["*.txt", "**/*.md"] },
+    { "type": "Data", "globs": ["**/*.bin"] },
+    { "type": "Data", "globs": ["**/*.dat"] }
+  ]
+}

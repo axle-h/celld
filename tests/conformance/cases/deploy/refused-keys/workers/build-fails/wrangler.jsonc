@@ -1,0 +1,7 @@
+// A build command that fails stops the deploy.
+{
+  "name": "build-fails",
+  "main": "dist/index.js",
+  "compatibility_date": "2026-09-04",
+  "build": { "command": "echo compiling; echo broken >&2; exit 2" }
+}

@@ -113,7 +113,8 @@ throw workerd's "Cannot perform I/O on behalf of a different request" error.
   the request sampled. celld exports a traced span as a child of the active
   span, or of the invocation's span, with its attributes, status and
   exceptions. See [Telemetry](telemetry.md#custom-spans). The Wrangler
-  `observability` settings do not turn tracing on or off.
+  `observability` settings do not turn tracing on or off; `celld deploy`
+  accepts them with a note and does not read them.
 - With telemetry off, or for an unsampled request, `isTraced` is `false` and
   nothing is recorded, as for an unsampled request on Cloudflare.
 - Names are cut to 64 bytes, at a character boundary; workerd cuts at the
@@ -270,9 +271,63 @@ The accepted top-level keys:
 - `d1_databases`, `kv_namespaces`, `queues`, `workflows`, and
   `r2_buckets`
 - `worker_loaders` and `containers`
-- `define` and `rules`
+- `define`, `rules`, and `build`
+- `secrets`
 
-Any other top-level key, including `routes`, stops the deployment.
+These keys configure Cloudflare's platform rather than the Worker, so the
+Worker runs the same with or without them. `celld deploy` checks each against
+Wrangler 4.147's config schema, so an unknown nested key or a wrong type
+stops the deployment, and then ignores it, with one line on stderr when the
+value asks for something celld does not do:
+
+| Key | Line on stderr |
+| --- | --- |
+| `observability` | Always. Telemetry is operator-controlled with `CELLD_OTEL`; see [Telemetry](telemetry.md) |
+| `workers_dev`, `preview_urls` | A warning when `true`: celld has no workers.dev or preview URLs. Nothing when `false` |
+| `account_id`, `keep_vars` | Never |
+| `upload_source_maps`, `minify` | When `true`: celld deploys no source maps, and does not minify |
+| `placement` | Unless `mode` is `"off"`: celld runs a Worker on the node that receives its request |
+| `dev` | Always: it configures `wrangler dev`, and `celld dev` takes its options on the command line |
+
+Any other top-level key stops the deployment. `routes` and `route` stop it
+with an explanation: celld does not route Cloudflare zones or custom
+domains. A node serves the Worker deployed last for every hostname, and
+other Workers through service bindings, so a proxy in front of the nodes
+chooses hostnames.
+
+`vars` values can be strings or any other JSON value, as in Wrangler. A
+string becomes a `plain_text` binding, and any other value a `json` binding,
+which each isolate parses with `JSON.parse`, as workerd does: `env.NAME` is
+an ordinary, mutable value of that isolate, with the config's key order. A
+JSON var can be at most 5 KiB (5,120 bytes) as compact JSON, Cloudflare's
+5 KB variable size limit; celld does not apply that limit to string vars.
+A `celld dev` dotenv entry is always a string, also when it replaces a JSON
+var, as in `wrangler dev`.
+
+celld has no secret store, so a secret is a var: it is stored in plaintext
+with the deployment, and anyone who can read the fleet bucket can read it.
+Each name in `secrets.required` must be set by `vars`, or, under `celld dev`,
+by `.dev.vars`, the `.env` files or the environment; otherwise the deployment
+stops. `wrangler dev` only warns about a missing secret. As in `wrangler dev`,
+a config that declares `secrets` takes from `.dev.vars` or the `.env` files
+only its vars and its required secrets, and ignores their other entries; the
+environment is read only without a `.dev.vars`, and wins over the `.env`
+files. `secrets` accepts only `required`.
+
+`build.command` runs with `sh -c` before celld reads `main`, in
+`build.cwd`, which defaults to the config's directory, with
+`WRANGLER_COMMAND` set to `deploy` or `dev`, as Wrangler sets it. Wrangler resolves
+`build.cwd` against the directory it runs in instead, which is the same when
+you run it beside the config. The command's stdout and stderr go to stderr,
+so the JSON that `celld deploy --json` and `celld dev` print on stdout stays
+clean, and it gets no stdin. A command that fails, or that a signal stops,
+stops the deployment, and the shell is killed if celld dies. `--no-build`, on
+`celld deploy` and `celld dev`, skips the command, for a project built already.
+`celld dev` also watches `build.watch_dir` (default `src`); see
+[Develop an application locally](README.md#develop-an-application-locally).
+The command comes from the deployer's own config and runs as the deployer,
+with the deployer's environment, as `wrangler deploy` and the project's
+`package.json` scripts do. Do not deploy a config you do not trust.
 
 A `services` entry accepts `binding`, `service`, `entrypoint`, `props` (a
 JSON object that encodes to at most 1 MiB), and `remote` and `dev`, which only affect
@@ -286,8 +341,14 @@ Object's `script_name`, stops the deployment. See
 JavaScript expression, as in Wrangler. A rule `type` must be `Text`, `Data`,
 or `CompiledWasm`, and each glob must have the form `**/*.ext` or `*.ext`,
 because esbuild selects a loader by extension. Two rules that give one
-extension different types stop the deployment. celld already applies
-`CompiledWasm` to `**/*.wasm`, so only that type is valid for `.wasm`.
+extension different types stop the deployment. `fallthrough` works as in
+Wrangler: the first rule of a type without `fallthrough: true` drops every
+later rule of that type, with a warning unless it sets `fallthrough: false`.
+celld applies `CompiledWasm` to `**/*.wasm` after the configured rules, as
+Wrangler's default rule, so only that type is valid for `.wasm`, and a
+`CompiledWasm` rule without `fallthrough: true` drops it. celld has no other
+default rule: Wrangler's `Text` rule for `.html` and `.sql` and `Data` rule
+for `.bin` need a configured rule.
 `no_bundle` skips esbuild, so `no_bundle` with `define` or `rules` stops the
 deployment.
 

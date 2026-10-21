@@ -7,7 +7,7 @@ import { dirname, join, matchesGlob, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { CaseError, findCases, loadCase } from "./lib/case.mjs";
-import { startCelld } from "./lib/celld.mjs";
+import { startCelld, startDeploySession } from "./lib/celld.mjs";
 import { describeStep, runSteps } from "./lib/steps.mjs";
 import { startWorkerd } from "./lib/workerd.mjs";
 
@@ -179,7 +179,9 @@ async function execute(runtime, testCase, tools) {
   let session;
   try {
     session =
-      runtime === "celld"
+      runtime === "celld" && testCase.deployOnly
+        ? startDeploySession({ binary: tools.celld, esbuild: tools.esbuild, dir, env: testCase.env })
+        : runtime === "celld"
         ? await startCelld({
             binary: tools.celld,
             esbuild: tools.esbuild,

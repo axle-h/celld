@@ -1,0 +1,7 @@
+// A required secret that nothing provides.
+{
+  "name": "secret-missing",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "secrets": { "required": ["API_TOKEN"] }
+}

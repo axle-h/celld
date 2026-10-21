@@ -1,0 +1,10 @@
+{
+  "kind": "celld-only",
+  "reason": "wrangler's test harness runs build.command in the runner's working directory, not beside the config, and the case checks celld dev's own stdout",
+  "workers": ["front"],
+  "steps": [
+    {"path": "/"},
+    {"restart": true},
+    {"path": "/"}
+  ]
+}

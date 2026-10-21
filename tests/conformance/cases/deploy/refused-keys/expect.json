@@ -1,0 +1,58 @@
+{
+  "steps": [
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Running the build command `echo compiling; echo broken >&2; exit 2` in workers/build-fails",
+        "compiling",
+        "broken",
+        "Error: the build command `echo compiling; echo broken >&2; exit 2` failed (exit status: 2); its output is above"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: inspect entry point workers/no-build-unbuilt/dist/index.js",
+        "Caused by:",
+        "    No such file or directory (os error 2)"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: two module rules claim \".txt\": Text and Data"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: `celld deploy` does not support `routes`: celld does not route Cloudflare zones or custom domains to a Worker. A node serves the Worker that was deployed last on its listener, for every hostname, and other Workers through service bindings; put a proxy in front of the nodes to choose hostnames. Remove `routes` to deploy with celld, or deploy this project with Wrangler."
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: secret API_TOKEN is listed in `secrets.required`, but `vars` does not set it. celld has no secret store: set it in `vars`, where it is stored in plaintext with the deployment"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: var binding BIG is 5121 bytes of JSON, more than the 5120-byte limit for a variable"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: config `observability.logs` declares `sampling`, which Wrangler does not have"
+      ]
+    }
+  ]
+}

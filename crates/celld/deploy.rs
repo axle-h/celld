@@ -9,8 +9,12 @@
 //!
 //! Bundling is esbuild's job; this module does config, identity, and durable
 //! bucket publication. Nothing here shells out to wrangler or speaks a
-//! Cloudflare-shaped API. Config keys are an allowlist: anything we do not
-//! model is refused, never silently dropped.
+//! Cloudflare-shaped API; the one command it runs is the config's own
+//! `build.command`. Config keys are an allowlist: anything we do not model is
+//! refused, never silently dropped. The exceptions are the keys in
+//! [`PLATFORM_KEYS`], which configure Cloudflare's platform rather than the
+//! Worker, so celld runs the Worker the same with or without them; each is
+//! named on stderr when it asks for something celld does not do.
 use crate::bucket::Bucket;
 use crate::container::ContainerSpec;
 use crate::note;
@@ -61,7 +65,35 @@ const SUPPORTED_KEYS: &[&str] = &[
     "no_bundle",
     "define",
     "rules",
+    "build",
+    "secrets",
 ];
+
+/// Keys that configure Cloudflare's platform, not the Worker: where Cloudflare
+/// runs it, which Cloudflare hostnames serve it, what Cloudflare does with its
+/// logs and source maps, and which account owns it. celld has none of these
+/// things, so a Worker behaves identically with the key present or absent, and
+/// the deploy accepts it. [`platform_key_note`] validates each one's shape and
+/// says when it asks for something celld does not do.
+///
+/// The bar for this list is that identity. A key that changes what a Worker
+/// can do (a binding, a trigger, a route celld could serve) stays refused.
+/// After mertdogar `da1ef43`.
+const PLATFORM_KEYS: &[&str] = &[
+    "account_id",
+    "dev",
+    "keep_vars",
+    "minify",
+    "observability",
+    "placement",
+    "preview_urls",
+    "upload_source_maps",
+    "workers_dev",
+];
+
+/// The size of one JSON var, as compact JSON text. Cloudflare limits a
+/// variable to 5 KB ("Environment variable size" in the Workers limits).
+const MAX_JSON_VAR_BYTES: usize = 5 * 1024;
 
 /// The Durable Object class every D1 database runs as. It is supplied by the
 /// runtime, not by the worker, so a config naming it in `durable_objects` or
@@ -205,6 +237,12 @@ pub struct Options {
     /// reads them from `.dev.vars` or the dotenv files; `celld deploy`
     /// supplies none, so a local credential cannot reach a fleet.
     pub vars: VarOverrides,
+    /// Skip the config's `build.command` (`--no-build`), for a project whose
+    /// build has already run.
+    pub no_build: bool,
+    /// `celld dev` builds this: `WRANGLER_COMMAND` is `dev`, and the build
+    /// runs in a process group that [`stop_builds`] can stop.
+    pub dev: bool,
     /// Keep container images in the local engine instead of saving them to
     /// the bucket. `celld dev` runs its node on the same engine that built
     /// them; a fleet needs the tar.
@@ -226,7 +264,14 @@ pub enum VarOverrides {
     /// another binding of the config uses, is skipped with a warning. Failing
     /// instead stops a `celld dev` that `wrangler dev` runs, and the only
     /// workaround is an empty `.dev.vars`.
-    DotEnv(BTreeMap<String, String>),
+    DotEnv {
+        files: BTreeMap<String, String>,
+        /// `celld dev`'s environment. As in `wrangler dev`, it is read only
+        /// without a `.dev.vars`, and only when the config declares
+        /// `secrets`: then it supplies the vars and required secrets, and
+        /// wins over the files.
+        process: BTreeMap<String, String>,
+    },
 }
 
 pub fn print_help() {
@@ -234,13 +279,16 @@ pub fn print_help() {
 USAGE:\n  celld deploy [PROJECT] --bucket [s3://|gs://|az://]NAME[/PREFIX] [OPTIONS]\n\n\
 PROJECT is a directory or a Wrangler config; it defaults to the working\n\
 directory, where celld looks for wrangler.jsonc or wrangler.json.\n\n\
-OPTIONS:\n  --config PATH          Same as passing PROJECT positionally\n  --bucket [s3://|gs://|az://]NAME[/PREFIX]\n                         Fleet bucket and prefix; defaults to CELLD_BUCKET.\n                         gs:// selects a Google Cloud Storage bucket, az://\n                         an Azure Blob Storage container with its account in\n                         AZURE_STORAGE_ACCOUNT_NAME; celld then rejects\n                         --endpoint and ignores --region\n  --endpoint URL         S3-compatible endpoint; defaults to S3_ENDPOINT\n  --region REGION        Storage region; defaults to AWS_REGION\n  --dry-run              Bundle and print the version without writing\n  --json                 Print the deployment as one JSON object\n  -h, --help             Show this help\n\n\
+OPTIONS:\n  --config PATH          Same as passing PROJECT positionally\n  --no-build             Do not run the config's build.command\n  --bucket [s3://|gs://|az://]NAME[/PREFIX]\n                         Fleet bucket and prefix; defaults to CELLD_BUCKET.\n                         gs:// selects a Google Cloud Storage bucket, az://\n                         an Azure Blob Storage container with its account in\n                         AZURE_STORAGE_ACCOUNT_NAME; celld then rejects\n                         --endpoint and ignores --region\n  --endpoint URL         S3-compatible endpoint; defaults to S3_ENDPOINT\n  --region REGION        Storage region; defaults to AWS_REGION\n  --dry-run              Bundle and print the version without writing\n  --json                 Print the deployment as one JSON object\n  -h, --help             Show this help\n\n\
 Credentials come from the standard AWS credential chain, from Google\n\
 Application Default Credentials for a gs:// bucket, or from an Azure storage\n\
 account key, managed identity, or workload identity for an az:// bucket.\n\n\
 Worker projects require `esbuild` on PATH; asset-only projects do not. Static\n\
-assets, service bindings, and string vars are supported. Routes are not; use\n\
+assets, service bindings, and vars are supported. Routes are not; use\n\
 Wrangler for route configuration.\n\
+A config's build.command runs with `sh -c` in build.cwd (default: the\n\
+config's directory) before celld bundles `main`, with the deployer's\n\
+privileges; its output goes to stderr. A failed build stops the deploy.\n\
 A running node polls the deployment pointer and adopts the new version in\n\
 place; nothing restarts."
     ;
@@ -263,12 +311,15 @@ pub fn options_from_arguments(
         local_images: false,
         json: false,
         vars: VarOverrides::None,
+        no_build: false,
+        dev: false,
     };
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--help" | "-h" => return Ok(None),
             "--dry-run" => options.dry_run = true,
+            "--no-build" => options.no_build = true,
             "--json" => options.json = true,
             "--config" => {
                 options.config = Some(PathBuf::from(
@@ -366,23 +417,6 @@ impl Loader {
             Loader::Text => "Text",
             Loader::Binary => "Data",
             Loader::Copy => "CompiledWasm",
-        }
-    }
-}
-
-impl Default for BundleConfig {
-    fn default() -> Self {
-        // Wasm is a sibling module (Wrangler's built-in `CompiledWasm` rule).
-        // The `copy` loader makes esbuild resolve each wasm import like any
-        // other import (importer-relative, node_modules, deduplicated) and
-        // rewrite the specifier to the copied file, so the bundle and the
-        // emitted files agree on names. It lives in the same map as the
-        // configured rules, so a config that gives `.wasm` a conflicting rule
-        // is refused by the same check that catches two conflicting rules,
-        // rather than emitting two `--loader` arguments for one extension.
-        Self {
-            define: BTreeMap::new(),
-            loaders: BTreeMap::from([(".wasm".to_string(), Loader::Copy)]),
         }
     }
 }
@@ -551,6 +585,10 @@ impl Built {
                         format!("env.{name} (Text)"),
                         "Environment Variable".to_string(),
                     )),
+                    Some("json") => Some((
+                        format!("env.{name} (JSON)"),
+                        "Environment Variable".to_string(),
+                    )),
                     _ => None,
                 }
             })
@@ -581,7 +619,14 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
         .filter(|path| !path.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let mut project = read_project(&config_path, &root, &options.vars)?;
+    let build = if options.no_build {
+        BuildCommand::Skip
+    } else if options.dev {
+        BuildCommand::Dev
+    } else {
+        BuildCommand::Deploy
+    };
+    let mut project = read_project(&config_path, &root, &options.vars, build)?;
     // Resolve every image before the version is computed: the id is part of
     // the deployment's identity, so a rebuilt image is a new deployment.
     // A fleet deploy builds for the platform the nodes run, which Wrangler
@@ -617,6 +662,11 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
     let fence_image = (!container_specs.is_empty())
         .then(|| resolve_fence_image(platform.as_deref()))
         .transpose()?;
+    // In the version, as `containers` is: a new fence image is a new
+    // deployment, which nodes adopt.
+    if let Some(image) = &fence_image {
+        project.metadata["fence_image"] = json!(image);
+    }
     let started = Instant::now();
     let built_assets = project.assets.as_ref().map(build_assets).transpose()?;
     let bundle = project
@@ -1292,18 +1342,102 @@ pub(crate) fn resolve_config(given: Option<PathBuf>) -> anyhow::Result<PathBuf> 
     )
 }
 
-fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::Result<Project> {
+/// Whether reading a project runs its `build.command`, and for which command.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BuildCommand {
+    /// `celld deploy`: the build stays in the terminal's process group, so
+    /// Ctrl-C stops it with `celld deploy`.
+    Deploy,
+    /// `celld dev`: the build runs in its own process group, which
+    /// [`stop_builds`] stops when `celld dev` shuts down.
+    Dev,
+    /// `--no-build`: the build has already run.
+    Skip,
+}
+
+/// A config as JSON, and its source with the JSONC comments stripped.
+fn read_config(path: &Path) -> anyhow::Result<(Map<String, Value>, String)> {
     let source =
         std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let config: Value = serde_json::from_str(&strip_jsonc(&source))
-        .with_context(|| format!("parse {}", path.display()))?;
-    let object = config
-        .as_object()
-        .ok_or_else(|| anyhow!("{} is not a JSON object", path.display()))?;
+    let source = strip_jsonc(&source);
+    let config: Value =
+        serde_json::from_str(&source).with_context(|| format!("parse {}", path.display()))?;
+    match config {
+        Value::Object(object) => Ok((object, source)),
+        _ => bail!("{} is not a JSON object", path.display()),
+    }
+}
 
+/// Each `vars` entry's JSON text as the config writes it, without the
+/// whitespace. A JSON var deploys as this text rather than as a parsed
+/// `Value`, because `serde_json` sorts object keys and `env.NAME` must keep
+/// the config's order, as it does on workerd.
+fn var_texts(source: &str) -> anyhow::Result<BTreeMap<String, String>> {
+    #[derive(serde::Deserialize)]
+    struct Config {
+        #[serde(default)]
+        vars: BTreeMap<String, Box<serde_json::value::RawValue>>,
+    }
+    let config: Config = serde_json::from_str(source).context("read config `vars`")?;
+    Ok(config
+        .vars
+        .into_iter()
+        .map(|(name, value)| (name, compact_json(value.get())))
+        .collect())
+}
+
+/// `text`, valid JSON, without whitespace outside strings.
+fn compact_json(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for c in text.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+        } else if c == '"' {
+            in_string = true;
+        } else if c.is_ascii_whitespace() {
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn read_project(
+    path: &Path,
+    root: &Path,
+    overrides: &VarOverrides,
+    build_command: BuildCommand,
+) -> anyhow::Result<Project> {
+    let (config, source) = read_config(path)?;
+    let object = &config;
+
+    // `routes` would be refused below as well. It gets its own message
+    // because the config means something celld does differently.
+    if let Some(key) = ["routes", "route"]
+        .into_iter()
+        .find(|key| object.contains_key(*key))
+    {
+        bail!(
+            "`celld deploy` does not support `{key}`: celld does not route Cloudflare zones or \
+             custom domains to a Worker. A node serves the Worker that was deployed last on \
+             its listener, for every hostname, and other Workers through service bindings; put a \
+             proxy in front of the nodes to choose hostnames. Remove `{key}` to deploy with \
+             celld, or deploy this project with Wrangler."
+        );
+    }
     let unsupported = object
         .keys()
-        .filter(|key| !SUPPORTED_KEYS.contains(&key.as_str()))
+        .filter(|key| {
+            !SUPPORTED_KEYS.contains(&key.as_str()) && !PLATFORM_KEYS.contains(&key.as_str())
+        })
         .cloned()
         .collect::<Vec<_>>();
     if !unsupported.is_empty() {
@@ -1312,6 +1446,20 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
              Deploy this project with Wrangler instead, or remove them.",
             unsupported.join(", ")
         );
+    }
+    for (key, value) in object {
+        if PLATFORM_KEYS.contains(&key.as_str()) {
+            if let Some(note) = platform_key_note(key, value)? {
+                note!("{note}");
+            }
+        }
+    }
+    // Wrangler runs the build before it resolves `main`, which is usually
+    // the build's output.
+    if let Some(build) = read_build_config(object, root)? {
+        if build_command != BuildCommand::Skip {
+            run_build_command(&build, build_command)?;
+        }
     }
 
     let script_name = object
@@ -1886,14 +2034,32 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
             "name": binding,
         }));
     }
-    let mut vars = BTreeMap::new();
+    let mut vars: BTreeMap<&str, VarValue> = BTreeMap::new();
+    let mut json_texts = BTreeMap::new();
     match object.get("vars") {
         None => {}
         Some(Value::Object(object)) => {
+            if object.values().any(|value| !value.is_string()) {
+                json_texts = var_texts(&source)?;
+            }
             for (name, value) in object {
-                let value = value
-                    .as_str()
-                    .ok_or_else(|| anyhow!("var binding {name} must be a string"))?;
+                let value = match value {
+                    Value::String(text) => VarValue::Text(text),
+                    // Wrangler's JSON var.
+                    _ => {
+                        let text = json_texts
+                            .get(name)
+                            .with_context(|| format!("read var binding {name}"))?;
+                        if text.len() > MAX_JSON_VAR_BYTES {
+                            bail!(
+                                "var binding {name} is {} bytes of JSON, more than the \
+                                 {MAX_JSON_VAR_BYTES}-byte limit for a variable",
+                                text.len()
+                            );
+                        }
+                        VarValue::Json(text)
+                    }
+                };
                 vars.insert(name.as_str(), value);
             }
         }
@@ -1903,15 +2069,26 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
     // `.dev.vars` or `.env` beside it is residue, not a binding the guard below
     // should refuse in the config's name.
     let declared_vars = !vars.is_empty();
+    // With `secrets` declared, `wrangler dev` takes from the dotenv files (and
+    // the environment) only the config's vars and the required secrets, and
+    // ignores the rest without a word.
+    let required = read_required_secrets(object)?;
+    let declares_secrets = object.contains_key("secrets");
+    let config_vars: BTreeSet<&str> = vars.keys().copied().collect();
+    let wanted =
+        |name: &str| !declares_secrets || config_vars.contains(name) || required.contains(&name);
+    // A dotenv entry is a string, as in Wrangler, also when it replaces a
+    // JSON var.
     if main.is_some() {
         match overrides {
             VarOverrides::None => {}
             VarOverrides::DevVars(entries) => vars.extend(
                 entries
                     .iter()
-                    .map(|(name, value)| (name.as_str(), value.as_str())),
+                    .filter(|(name, _)| wanted(name))
+                    .map(|(name, value)| (name.as_str(), VarValue::Text(value))),
             ),
-            VarOverrides::DotEnv(entries) => {
+            VarOverrides::DotEnv { files, process } => {
                 // A config var of the same name is the override the entry
                 // exists for; every other binding owns its name.
                 let taken = bindings
@@ -1923,15 +2100,44 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
                             .and_then(|assets| assets.config.binding.as_deref()),
                     )
                     .collect::<BTreeSet<_>>();
-                for (name, value) in entries {
+                for (name, value) in files.iter().filter(|(name, _)| wanted(name)) {
                     if !valid_binding(name) {
                         note!("warning: skipped the dotenv entry {name:?}, which is not a valid binding name");
                     } else if taken.contains(name.as_str()) {
                         note!("warning: skipped the dotenv entry {name:?}, whose name another binding uses");
                     } else {
-                        vars.insert(name, value);
+                        vars.insert(name, VarValue::Text(value));
                     }
                 }
+                if declares_secrets {
+                    for (name, value) in process.iter().filter(|(name, _)| {
+                        config_vars.contains(name.as_str()) || required.contains(&name.as_str())
+                    }) {
+                        vars.insert(name, VarValue::Text(value));
+                    }
+                }
+            }
+        }
+    }
+    // `wrangler dev` only warns about a missing secret. celld fails, as it
+    // does for every config it cannot honour.
+    for name in &required {
+        if !vars.contains_key(name) {
+            match overrides {
+                VarOverrides::None => bail!(
+                    "secret {name} is listed in `secrets.required`, but `vars` does not set it. \
+                     celld has no secret store: set it in `vars`, where it is stored in \
+                     plaintext with the deployment"
+                ),
+                VarOverrides::DevVars(_) => bail!(
+                    "secret {name} is listed in `secrets.required`, but neither `vars` nor \
+                     .dev.vars sets it"
+                ),
+                VarOverrides::DotEnv { .. } => bail!(
+                    "secret {name} is listed in `secrets.required`, but neither `vars`, .env, \
+                     .env.local nor the environment sets it; add it to .dev.vars or .env beside \
+                     the config, or set it in the environment"
+                ),
             }
         }
     }
@@ -1939,11 +2145,20 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         if !valid_binding(name) {
             bail!("invalid var binding name: {name:?}");
         }
-        bindings.push(json!({
-            "type": "plain_text",
-            "name": name,
-            "text": value,
-        }));
+        bindings.push(match value {
+            VarValue::Text(text) => json!({
+                "type": "plain_text",
+                "name": name,
+                "text": text,
+            }),
+            // Wrangler's metadata has the value under `json`. The text keeps
+            // the config's key order; see `var_texts`.
+            VarValue::Json(text) => json!({
+                "type": "json",
+                "name": name,
+                "text": text,
+            }),
+        });
     }
     if main.is_none()
         && (!do_classes.is_empty()
@@ -1998,6 +2213,13 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
         // deploy from reusing the previous code-and-bindings version.
         metadata.insert("queue_consumers".into(), json!(queue_consumers));
     }
+    if !crons.is_empty() {
+        // The same for cron triggers, which reach the node only through
+        // `Manifest::crons`. Without this copy a schedule-only change kept
+        // the version, so nodes, which reload only on a new version, kept
+        // the old schedule, and `celld dev` saw no change at all.
+        metadata.insert("crons".into(), json!(crons));
+    }
     if !sqlite_classes.is_empty() {
         metadata.insert(
             "migrations".into(),
@@ -2026,13 +2248,510 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
     })
 }
 
+/// A Worker variable as the config and the dotenv files give it.
+enum VarValue<'a> {
+    Text(&'a str),
+    /// A non-string Wrangler `vars` value as compact JSON text, deployed as
+    /// a `json` binding.
+    Json(&'a str),
+}
+
+/// The names in `secrets.required`. celld has no secret store, so each must
+/// be a var; the caller checks that.
+fn read_required_secrets(object: &Map<String, Value>) -> anyhow::Result<Vec<&str>> {
+    let Some(secrets) = object.get("secrets") else {
+        return Ok(Vec::new());
+    };
+    let Value::Object(secrets) = secrets else {
+        bail!("config `secrets` must be an object");
+    };
+    if let Some(key) = secrets.keys().find(|key| *key != "required") {
+        bail!("config `secrets` declares `{key}`, which celld does not model; celld models `required`");
+    }
+    let Some(required) = secrets.get("required") else {
+        return Ok(Vec::new());
+    };
+    let Value::Array(required) = required else {
+        bail!("config `secrets.required` must be an array of names");
+    };
+    let mut names = Vec::with_capacity(required.len());
+    for name in required {
+        let Some(name) = name.as_str().filter(|name| valid_binding(name)) else {
+            bail!("config `secrets.required` has an invalid secret name: {name}");
+        };
+        if names.contains(&name) {
+            bail!("config `secrets.required` lists {name} twice");
+        }
+        names.push(name);
+    }
+    Ok(names)
+}
+
+/// What a [`PLATFORM_KEYS`] entry asks of Cloudflare that celld does not do,
+/// as one line for stderr, or `None` when the value asks for nothing. Each
+/// value is checked against Wrangler 4.147's config schema for the key, so a
+/// typo still fails.
+fn platform_key_note(key: &str, value: &Value) -> anyhow::Result<Option<String>> {
+    let boolean = || check_shape(key, value, &Shape::Bool).map(|()| value.as_bool() == Some(true));
+    Ok(match key {
+        "account_id" => {
+            check_shape(key, value, &Shape::String)?;
+            None
+        }
+        // There are no dashboard vars to keep: the config is the whole story.
+        "keep_vars" => {
+            boolean()?;
+            None
+        }
+        "dev" => {
+            check_shape(key, value, &DEV_SHAPE)?;
+            Some(
+                "note: `dev` configures `wrangler dev` and is not read; `celld dev` takes its \
+                 options on the command line"
+                    .to_string(),
+            )
+        }
+        "minify" => boolean()?.then(|| {
+            "note: `minify` is not applied; celld deploys the bundle unminified".to_string()
+        }),
+        "observability" => {
+            check_shape(key, value, &OBSERVABILITY_SHAPE)?;
+            Some(
+                "note: `observability` is not read; telemetry is operator-controlled \
+                 (CELLD_OTEL), see docs/telemetry.md"
+                    .to_string(),
+            )
+        }
+        "placement" => check_placement(value)?.then(|| {
+            "note: `placement` is not read; celld places a Worker on the node that receives \
+             its request"
+                .to_string()
+        }),
+        "preview_urls" => boolean()?
+            .then(|| "warning: `preview_urls` is true, but celld has no preview URLs".to_string()),
+        "upload_source_maps" => boolean()?.then(|| {
+            "note: `upload_source_maps` is not applied; celld deploys no source maps".to_string()
+        }),
+        "workers_dev" => boolean()?.then(|| {
+            "warning: `workers_dev` is true, but celld has no workers.dev URLs; a node serves \
+             the Worker on its own listener"
+                .to_string()
+        }),
+        _ => unreachable!("{key} is not a platform key"),
+    })
+}
+
+/// A value's shape in Wrangler's config schema, for the keys celld accepts
+/// without reading them.
+enum Shape {
+    Bool,
+    Number,
+    String,
+    /// One of these strings.
+    Enum(&'static [&'static str]),
+    Strings,
+    /// An object with only these optional keys.
+    Object(&'static [(&'static str, Shape)]),
+    /// `dev.container_engine`: a string, or `{ localDocker: { socketPath, … } }`.
+    ContainerEngine,
+}
+
+/// Wrangler's `Observability`.
+const OBSERVABILITY_SHAPE: Shape = Shape::Object(&[
+    ("enabled", Shape::Bool),
+    ("head_sampling_rate", Shape::Number),
+    ("redact_query_string", Shape::Bool),
+    ("issues", Shape::Object(&[("enabled", Shape::Bool)])),
+    (
+        "logs",
+        Shape::Object(&[
+            ("enabled", Shape::Bool),
+            ("head_sampling_rate", Shape::Number),
+            ("invocation_logs", Shape::Bool),
+            ("persist", Shape::Bool),
+            ("destinations", Shape::Strings),
+        ]),
+    ),
+    (
+        "traces",
+        Shape::Object(&[
+            ("enabled", Shape::Bool),
+            ("head_sampling_rate", Shape::Number),
+            ("persist", Shape::Bool),
+            ("destinations", Shape::Strings),
+        ]),
+    ),
+]);
+
+/// Wrangler's `RawDevConfig`.
+const DEV_SHAPE: Shape = Shape::Object(&[
+    ("ip", Shape::String),
+    ("port", Shape::Number),
+    ("inspector_port", Shape::Number),
+    ("inspector_ip", Shape::String),
+    ("local_protocol", Shape::Enum(&["http", "https"])),
+    ("upstream_protocol", Shape::Enum(&["https", "http"])),
+    ("host", Shape::String),
+    ("enable_containers", Shape::Bool),
+    ("container_engine", Shape::ContainerEngine),
+    ("generate_types", Shape::Bool),
+]);
+
+fn check_shape(path: &str, value: &Value, shape: &Shape) -> anyhow::Result<()> {
+    let ok = match shape {
+        Shape::Bool => value.is_boolean(),
+        Shape::Number => value.is_number(),
+        Shape::String => value.is_string(),
+        Shape::Enum(allowed) => value.as_str().is_some_and(|value| allowed.contains(&value)),
+        Shape::Strings => value
+            .as_array()
+            .is_some_and(|items| items.iter().all(Value::is_string)),
+        Shape::Object(fields) => {
+            let Value::Object(object) = value else {
+                bail!("config `{path}` must be an object");
+            };
+            for (key, value) in object {
+                let Some((_, shape)) = fields.iter().find(|(name, _)| name == key) else {
+                    bail!("config `{path}` declares `{key}`, which Wrangler does not have");
+                };
+                check_shape(&format!("{path}.{key}"), value, shape)?;
+            }
+            true
+        }
+        Shape::ContainerEngine => match value {
+            Value::String(_) => true,
+            Value::Object(object) if object.len() == 1 => {
+                let docker = object.get("localDocker").with_context(|| {
+                    format!("config `{path}` must be a string or `{{ localDocker }}`")
+                })?;
+                check_shape(
+                    &format!("{path}.localDocker"),
+                    docker,
+                    &Shape::Object(&[
+                        ("socketPath", Shape::String),
+                        ("containerEgressInterceptorImage", Shape::String),
+                    ]),
+                )?;
+                docker.get("socketPath").is_some()
+            }
+            _ => false,
+        },
+    };
+    if !ok {
+        let expected = match shape {
+            Shape::Bool => "a boolean".to_string(),
+            Shape::Number => "a number".to_string(),
+            Shape::String => "a string".to_string(),
+            Shape::Enum(allowed) => format!("one of {allowed:?}"),
+            Shape::Strings => "an array of strings".to_string(),
+            Shape::Object(_) => "an object".to_string(),
+            Shape::ContainerEngine => "a string or `{ localDocker: { socketPath } }`".to_string(),
+        };
+        bail!("config `{path}` must be {expected}");
+    }
+    Ok(())
+}
+
+/// Checks `placement` against Wrangler's four shapes, and answers whether it
+/// asks for a placement at all: `{"mode": "off"}` does not.
+fn check_placement(value: &Value) -> anyhow::Result<bool> {
+    let invalid = || {
+        anyhow!(
+            "config `placement` must be `{{ mode: \"off\" | \"smart\", hint? }}` or \
+             `{{ mode?: \"targeted\", region | host | hostname }}`"
+        )
+    };
+    let Value::Object(placement) = value else {
+        return Err(invalid());
+    };
+    let target = ["region", "host", "hostname"]
+        .into_iter()
+        .find(|key| placement.contains_key(*key));
+    let (allowed, mode): (&[&str], &[&str]) = match target {
+        Some("region") => (&["mode", "region"], &["targeted"]),
+        Some("host") => (&["mode", "host"], &["targeted"]),
+        Some(_) => (&["mode", "hostname"], &["targeted"]),
+        None => (&["mode", "hint"], &["off", "smart"]),
+    };
+    let valid = placement.keys().all(|key| allowed.contains(&key.as_str()))
+        && placement
+            .iter()
+            .filter(|(key, _)| *key != "mode")
+            .all(|(_, value)| value.is_string())
+        && match placement.get("mode") {
+            Some(value) => value.as_str().is_some_and(|value| mode.contains(&value)),
+            None => target.is_some(),
+        };
+    if !valid {
+        return Err(invalid());
+    }
+    Ok(placement.get("mode").and_then(Value::as_str) != Some("off"))
+}
+
+/// A config's `build` section with a `command`, resolved against the
+/// config's directory.
+#[derive(Debug, PartialEq, Eq)]
+struct BuildConfig {
+    command: String,
+    cwd: PathBuf,
+    /// What `celld dev` watches to rebuild. Wrangler's default is `src`.
+    watch_dirs: Vec<PathBuf>,
+}
+
+/// The config's `build`, or `None` when it has no `command`, which Wrangler
+/// also treats as no build. `cwd` and `watch_dir` resolve against the
+/// config's directory (Wrangler resolves `cwd` against its working
+/// directory, which is usually the same).
+fn read_build_config(
+    object: &Map<String, Value>,
+    root: &Path,
+) -> anyhow::Result<Option<BuildConfig>> {
+    let Some(build) = object.get("build") else {
+        return Ok(None);
+    };
+    let Value::Object(build) = build else {
+        bail!("config `build` must be an object");
+    };
+    if let Some(key) = build
+        .keys()
+        .find(|key| !matches!(key.as_str(), "command" | "cwd" | "watch_dir"))
+    {
+        bail!(
+            "config `build` declares `{key}`, which celld does not model; celld models \
+             `command`, `cwd`, and `watch_dir`"
+        );
+    }
+    let path = |key: &str, value: &Value| match value.as_str() {
+        Some(path) if !path.is_empty() => Ok(root.join(path)),
+        _ => Err(anyhow!("config `build.{key}` must be a non-empty string")),
+    };
+    let cwd = build
+        .get("cwd")
+        .map(|cwd| path("cwd", cwd))
+        .transpose()?
+        .unwrap_or_else(|| root.to_path_buf());
+    let watch_dirs = match build.get("watch_dir") {
+        None => vec![root.join("src")],
+        Some(Value::Array(dirs)) => dirs
+            .iter()
+            .map(|dir| {
+                path("watch_dir", dir).map_err(|_| {
+                    anyhow!("config `build.watch_dir` must be a path or an array of paths")
+                })
+            })
+            .collect::<anyhow::Result<_>>()?,
+        Some(dir) => vec![path("watch_dir", dir).map_err(|_| {
+            anyhow!("config `build.watch_dir` must be a path or an array of paths")
+        })?],
+    };
+    let command = match build.get("command") {
+        None => return Ok(None),
+        Some(Value::String(command)) if !command.trim().is_empty() => command.clone(),
+        Some(_) => bail!("config `build.command` must be a non-empty string"),
+    };
+    Ok(Some(BuildConfig {
+        command,
+        cwd,
+        watch_dirs,
+    }))
+}
+
+/// The `celld dev` builds that are running, and whether `celld dev` is
+/// stopping them.
+struct DevBuilds {
+    /// The builds' process groups.
+    groups: Vec<i32>,
+    /// Set by [`stop_builds`]: no build starts after it, and one that started
+    /// meanwhile kills its own group.
+    stopping: bool,
+}
+
+static DEV_BUILDS: std::sync::Mutex<DevBuilds> = std::sync::Mutex::new(DevBuilds {
+    groups: Vec::new(),
+    stopping: false,
+});
+
+fn dev_builds() -> std::sync::MutexGuard<'static, DevBuilds> {
+    DEV_BUILDS.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// Whether `celld dev` is stopping, so no further build may start.
+pub(crate) fn builds_stopping() -> bool {
+    dev_builds().stopping
+}
+
+/// Run `build.command` with `sh -c`, as Wrangler does on Linux and macOS,
+/// with `WRANGLER_COMMAND` set to `deploy` or `dev` as Wrangler sets it.
+///
+/// The command comes from the deployer's own config and runs with the
+/// deployer's privileges, like the rest of a build: it is as trusted as
+/// `package.json` scripts. Its stdout goes to stderr, because stdout carries
+/// `celld deploy --json` and `celld dev`'s ready line. It gets no stdin, so a
+/// prompt fails instead of waiting. The shell dies with celld
+/// (`PR_SET_PDEATHSIG`); under `celld dev` it also leads its own process
+/// group, so [`stop_builds`] reaches everything it started.
+fn run_build_command(build: &BuildConfig, mode: BuildCommand) -> anyhow::Result<()> {
+    note!(
+        "Running the build command `{}` in {}",
+        build.command,
+        build.cwd.display()
+    );
+    let mut command = Command::new("sh");
+    command
+        .arg("-c")
+        .arg(&build.command)
+        .current_dir(&build.cwd)
+        .env(
+            "WRANGLER_COMMAND",
+            if mode == BuildCommand::Dev {
+                "dev"
+            } else {
+                "deploy"
+            },
+        )
+        .stdin(std::process::Stdio::null())
+        .stdout(std::io::stderr())
+        .stderr(std::process::Stdio::inherit());
+    #[cfg(unix)]
+    if mode == BuildCommand::Dev {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt as _;
+        let parent = unsafe { libc::getpid() };
+        // The kernel kills the shell when celld dies, even by SIGKILL. The
+        // parent check closes the race in which celld exits between `fork`
+        // and `prctl`.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() != parent {
+                    return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+                }
+                Ok(())
+            });
+        }
+    }
+    let context = || {
+        format!(
+            "run the build command `{}` in {}",
+            build.command,
+            build.cwd.display()
+        )
+    };
+    if mode == BuildCommand::Dev && builds_stopping() {
+        bail!(
+            "celld dev is stopping, so the build command `{}` did not start",
+            build.command
+        );
+    }
+    let mut child = command.spawn().with_context(context)?;
+    let group = i32::try_from(child.id()).context("build process id")?;
+    if mode == BuildCommand::Dev {
+        let mut builds = dev_builds();
+        // `stop_builds` ran between the check above and the spawn, and did
+        // not see this group.
+        #[cfg(unix)]
+        if builds.stopping {
+            unsafe {
+                libc::kill(-group, libc::SIGKILL);
+            }
+        }
+        builds.groups.push(group);
+    }
+    let status = child.wait().with_context(context);
+    if mode == BuildCommand::Dev {
+        dev_builds().groups.retain(|running| *running != group);
+    }
+    let status = status?;
+    if !status.success() {
+        bail!(
+            "the build command `{}` failed ({status}); its output is above",
+            build.command
+        );
+    }
+    Ok(())
+}
+
+/// Stop every running `celld dev` build, and every later one: SIGTERM to
+/// each build's process group, then, after `grace` or once the builds'
+/// shells have exited, SIGKILL to the same groups, for whatever ignored the
+/// first signal.
+#[cfg(unix)]
+pub(crate) fn stop_builds(grace: Duration) {
+    let groups = {
+        let mut builds = dev_builds();
+        builds.stopping = true;
+        builds.groups.clone()
+    };
+    signal_groups(&groups, libc::SIGTERM);
+    let deadline = Instant::now() + grace;
+    while Instant::now() < deadline
+        && dev_builds()
+            .groups
+            .iter()
+            .any(|running| groups.contains(running))
+    {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // A group that still has members keeps its id, so this reaches only the
+    // builds' own processes.
+    signal_groups(&groups, libc::SIGKILL);
+}
+
+/// SIGKILL every running `celld dev` build now, and stop later ones: a
+/// second SIGINT or SIGTERM does not wait out [`stop_builds`]'s grace.
+#[cfg(unix)]
+pub(crate) fn kill_builds() {
+    let groups = {
+        let mut builds = dev_builds();
+        builds.stopping = true;
+        builds.groups.clone()
+    };
+    signal_groups(&groups, libc::SIGKILL);
+}
+
+#[cfg(unix)]
+fn signal_groups(groups: &[i32], signal: i32) {
+    for group in groups {
+        unsafe {
+            libc::kill(-group, signal);
+        }
+    }
+}
+
+/// Let `celld dev` builds start again, for tests that stop one.
+#[cfg(test)]
+pub(crate) fn reset_builds() {
+    dev_builds().stopping = false;
+}
+
+/// The `build.watch_dir` directories of `config`, which `celld dev` watches
+/// besides the config's directory; none when it has no build command.
+pub(crate) fn build_watch_dirs(config: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let root = config
+        .parent()
+        .context("the Wrangler config has no project directory")?;
+    let (object, _) = read_config(config)?;
+    Ok(read_build_config(&object, root)?
+        .map(|build| build.watch_dirs)
+        .unwrap_or_default())
+}
+
 /// The config's `define` and `rules`, as esbuild arguments.
 ///
 /// Wrangler owns the spelling of both keys, so celld reads them as written
 /// rather than inventing a celld-only escape hatch: a project keeps one
 /// config, and a later move back to Wrangler bundles the same way.
 fn read_bundle_config(object: &Map<String, Value>) -> anyhow::Result<BundleConfig> {
-    let mut bundle = BundleConfig::default();
+    let mut bundle = BundleConfig {
+        define: BTreeMap::new(),
+        loaders: BTreeMap::new(),
+    };
     match object.get("define") {
         None => {}
         Some(Value::Object(entries)) => {
@@ -2061,12 +2780,18 @@ fn read_bundle_config(object: &Map<String, Value>) -> anyhow::Result<BundleConfi
         Some(Value::Array(rules)) => rules.as_slice(),
         Some(_) => bail!("config `rules` must be an array"),
     };
+    // Wrangler's parseRules: the first rule of a type without
+    // `fallthrough: true` completes the type, and every later rule of that
+    // type, Wrangler's defaults included, is dropped. The value is the
+    // completing rule's `fallthrough`, `None` when it has none: Wrangler then
+    // warns about the rules it drops, and `false` silences that.
+    let mut completed: BTreeMap<&str, Option<bool>> = BTreeMap::new();
     for rule in rules {
         let Value::Object(rule) = rule else {
             bail!("module rule must be an object with a `type` and `globs`");
         };
         for key in rule.keys() {
-            if !matches!(key.as_str(), "type" | "globs") {
+            if !matches!(key.as_str(), "type" | "globs" | "fallthrough") {
                 bail!("module rule sets `{key}`, which celld does not have");
             }
         }
@@ -2082,17 +2807,38 @@ fn read_bundle_config(object: &Map<String, Value>) -> anyhow::Result<BundleConfi
                  Text, Data, and CompiledWasm"
             ),
         };
+        let fallthrough = match rule.get("fallthrough") {
+            None => None,
+            Some(Value::Bool(value)) => Some(*value),
+            Some(_) => bail!("module rule {rule_type} `fallthrough` must be a boolean"),
+        };
         let Some(Value::Array(globs)) = rule.get("globs") else {
             bail!("module rule {rule_type} must have a `globs` array");
         };
         if globs.is_empty() {
             bail!("module rule {rule_type} has no globs");
         }
+        let mut extensions = Vec::with_capacity(globs.len());
         for glob in globs {
             let Some(glob) = glob.as_str() else {
                 bail!("module rule glob must be a string");
             };
-            let extension = rule_extension(glob)?;
+            extensions.push(rule_extension(glob)?);
+        }
+        if let Some(completing) = completed.get(rule_type) {
+            if completing.is_none() {
+                note!(
+                    "warning: module rule {rule_type} {} is ignored: an earlier {rule_type} \
+                     rule has no `fallthrough: true`",
+                    Value::Array(globs.clone())
+                );
+            }
+            continue;
+        }
+        if fallthrough != Some(true) {
+            completed.insert(rule_type, fallthrough);
+        }
+        for extension in extensions {
             // Two rules that claim one extension have no single answer, and
             // picking either silently loads half the files the config lists
             // the wrong way.
@@ -2106,6 +2852,27 @@ fn read_bundle_config(object: &Map<String, Value>) -> anyhow::Result<BundleConfi
                 }
             }
         }
+    }
+    // celld's own CompiledWasm rule for `.wasm`, Wrangler's default, comes
+    // last, so a CompiledWasm rule without `fallthrough: true` drops it.
+    // Wasm is a sibling module: the `copy` loader makes esbuild resolve each
+    // wasm import like any other import (importer-relative, node_modules,
+    // deduplicated) and rewrite the specifier to the copied file, so the
+    // bundle and the emitted files agree on names. A configured rule that
+    // gives `.wasm` another loader is refused, rather than emitting two
+    // `--loader` arguments for one extension.
+    if !completed.contains_key("CompiledWasm") {
+        if let Some(previous) = bundle
+            .loaders
+            .get(".wasm")
+            .filter(|loader| **loader != Loader::Copy)
+        {
+            bail!(
+                "two module rules claim \".wasm\": CompiledWasm and {}",
+                previous.rule_type()
+            );
+        }
+        bundle.loaders.insert(".wasm".to_string(), Loader::Copy);
     }
     Ok(bundle)
 }
@@ -3306,15 +4073,68 @@ mod tests {
         );
         assert_eq!(
             refusal(bundle(json!({ "rules": [
-                { "type": "Text", "globs": ["**/*.txt"], "fallthrough": true }
+                { "type": "Text", "globs": ["**/*.txt"], "fallback": true }
             ] }))),
-            "module rule sets `fallthrough`, which celld does not have"
+            "module rule sets `fallback`, which celld does not have"
         );
         assert_eq!(
             refusal(bundle(
                 json!({ "rules": [{ "type": "Text", "globs": [] }] })
             )),
             "module rule Text has no globs"
+        );
+    }
+
+    /// Wrangler's parseRules: a rule without `fallthrough: true` completes
+    /// its type, and later rules of the type, defaults included, are dropped.
+    #[test]
+    fn fallthrough_follows_wranglers_rule_order() {
+        // Without `fallthrough: true`, the later Text rule is dropped.
+        for fallthrough in [json!({}), json!({ "fallthrough": false })] {
+            let mut first = json!({ "type": "Text", "globs": ["**/*.txt"] });
+            first.as_object_mut().unwrap().extend(object(fallthrough));
+            let config = bundle(json!({ "rules": [
+                first,
+                { "type": "Text", "globs": ["**/*.md"] },
+            ] }))
+            .unwrap();
+            assert_eq!(
+                config.loaders,
+                BTreeMap::from([
+                    (".txt".to_string(), Loader::Text),
+                    (".wasm".to_string(), Loader::Copy),
+                ])
+            );
+        }
+        // With it, the later rule applies too, also to the same extension,
+        // as Wrangler's own default rules overlap.
+        let config = bundle(json!({ "rules": [
+            { "type": "Text", "globs": ["**/*.txt"], "fallthrough": true },
+            { "type": "Text", "globs": ["*.txt", "**/*.md"] },
+        ] }))
+        .unwrap();
+        assert_eq!(config.loaders[".txt"], Loader::Text);
+        assert_eq!(config.loaders[".md"], Loader::Text);
+        // A CompiledWasm rule without it drops celld's default `.wasm` rule,
+        // as it drops Wrangler's.
+        let config = bundle(json!({ "rules": [
+            { "type": "CompiledWasm", "globs": ["**/*.mod"] },
+        ] }))
+        .unwrap();
+        assert_eq!(
+            config.loaders,
+            BTreeMap::from([(".mod".to_string(), Loader::Copy)])
+        );
+        let config = bundle(json!({ "rules": [
+            { "type": "CompiledWasm", "globs": ["**/*.mod"], "fallthrough": true },
+        ] }))
+        .unwrap();
+        assert_eq!(config.loaders[".wasm"], Loader::Copy);
+        assert_eq!(
+            refusal(bundle(json!({ "rules": [
+                { "type": "Text", "globs": ["**/*.txt"], "fallthrough": "no" },
+            ] }))),
+            "module rule Text `fallthrough` must be a boolean"
         );
     }
 
@@ -3412,7 +4232,570 @@ mod tests {
         let path = root.path().join("wrangler.json");
         std::fs::write(&path, Value::Object(config).to_string()).unwrap();
         std::fs::write(root.path().join("index.js"), "").unwrap();
-        read_project(&path, root.path(), &VarOverrides::None)
+        read_project(
+            &path,
+            root.path(),
+            &VarOverrides::None,
+            BuildCommand::Deploy,
+        )
+    }
+
+    /// `read_project` over `config`, written as JSONC text, in `root`.
+    fn project_source(
+        root: &Path,
+        source: &str,
+        overrides: &VarOverrides,
+        build: BuildCommand,
+    ) -> anyhow::Result<Project> {
+        let path = root.join("wrangler.jsonc");
+        std::fs::write(&path, source).unwrap();
+        read_project(&path, root, overrides, build)
+    }
+
+    fn var_metadata(project: &Project) -> Vec<&Value> {
+        project.metadata["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|binding| matches!(binding["type"].as_str(), Some("plain_text" | "json")))
+            .collect()
+    }
+
+    fn entries(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
+    }
+
+    fn dotenv(files: &[(&str, &str)], process: &[(&str, &str)]) -> VarOverrides {
+        VarOverrides::DotEnv {
+            files: entries(files),
+            process: entries(process),
+        }
+    }
+
+    /// Nodes and `celld dev` adopt a deployment only when its version moves,
+    /// so every input of the manifest must reach the version.
+    #[test]
+    fn a_cron_only_change_changes_the_version() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("index.js"),
+            "export default { scheduled() {} };",
+        )
+        .unwrap();
+        let config = root.path().join("wrangler.jsonc");
+        let version = |crons: Value| {
+            std::fs::write(
+                &config,
+                json!({
+                    "name": "app",
+                    "main": "index.js",
+                    "no_bundle": true,
+                    "triggers": { "crons": crons },
+                })
+                .to_string(),
+            )
+            .unwrap();
+            build(&Options {
+                config: Some(config.clone()),
+                bucket: None,
+                endpoint: None,
+                region: None,
+                dry_run: true,
+                json: false,
+                vars: VarOverrides::None,
+                no_build: false,
+                dev: false,
+                local_images: true,
+            })
+            .unwrap()
+            .version
+        };
+        let hourly = version(json!(["0 * * * *"]));
+        assert_eq!(version(json!(["0 * * * *"])), hourly);
+        assert_ne!(version(json!(["30 * * * *"])), hourly);
+        assert_ne!(version(json!([])), hourly);
+    }
+
+    #[test]
+    fn json_vars_deploy_as_json_text_in_config_order() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("index.js"), "").unwrap();
+        let deployed = project_source(
+            root.path(),
+            r#"{
+              "name": "app",
+              "main": "index.js",
+              // Nested values, keys out of sorted order, and whitespace.
+              "vars": {
+                "ADMINS": ["admin", "ops"],
+                "CONFIG": { "z": { "list": [1, "two", { "three": null }] }, "a": true, "s": "x y" },
+                "LIMIT": 42,
+                "MODE": "[1]",
+              },
+            }"#,
+            &VarOverrides::None,
+            BuildCommand::Deploy,
+        )
+        .unwrap();
+        assert_eq!(
+            var_metadata(&deployed),
+            [
+                &json!({ "type": "json", "name": "ADMINS", "text": r#"["admin","ops"]"# }),
+                &json!({
+                    "type": "json",
+                    "name": "CONFIG",
+                    "text": r#"{"z":{"list":[1,"two",{"three":null}]},"a":true,"s":"x y"}"#,
+                }),
+                &json!({ "type": "json", "name": "LIMIT", "text": "42" }),
+                &json!({ "type": "plain_text", "name": "MODE", "text": "[1]" }),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_dotenv_override_of_a_json_var_is_a_string() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("index.js"), "").unwrap();
+        let source = r#"{ "name": "app", "main": "index.js", "vars": { "ADMINS": ["admin"] } }"#;
+        for overrides in [
+            VarOverrides::DevVars(entries(&[("ADMINS", r#"["dev"]"#)])),
+            dotenv(&[("ADMINS", r#"["dev"]"#)], &[]),
+        ] {
+            let deployed =
+                project_source(root.path(), source, &overrides, BuildCommand::Deploy).unwrap();
+            assert_eq!(
+                var_metadata(&deployed),
+                [&json!({ "type": "plain_text", "name": "ADMINS", "text": r#"["dev"]"# })]
+            );
+        }
+    }
+
+    #[test]
+    fn a_json_var_is_at_most_5_kib() {
+        // `["…"]` is the string's length plus four bytes.
+        let deploy = |length: usize| project(json!({ "vars": { "BIG": ["a".repeat(length)] } }));
+        deploy(MAX_JSON_VAR_BYTES - 4).unwrap();
+        assert_eq!(
+            refusal(deploy(MAX_JSON_VAR_BYTES - 3)),
+            "var binding BIG is 5121 bytes of JSON, more than the 5120-byte limit for a variable"
+        );
+        // A string var is not a JSON var.
+        project(json!({ "vars": { "BIG": "a".repeat(MAX_JSON_VAR_BYTES + 1) } })).unwrap();
+    }
+
+    #[test]
+    fn compact_json_keeps_strings_and_order() {
+        assert_eq!(
+            compact_json("{ \"b\" : [ 1 ,\n 2 ], \"a\": \"x \\\" y\" }"),
+            r#"{"b":[1,2],"a":"x \" y"}"#
+        );
+    }
+
+    #[test]
+    fn platform_keys_are_accepted_with_a_note_when_celld_ignores_them() {
+        let note = |key: &str, value: Value| platform_key_note(key, &value).unwrap();
+        assert_eq!(
+            note(
+                "observability",
+                json!({ "enabled": true, "head_sampling_rate": 1 })
+            )
+            .as_deref(),
+            Some(
+                "note: `observability` is not read; telemetry is operator-controlled \
+                 (CELLD_OTEL), see docs/telemetry.md"
+            )
+        );
+        assert_eq!(
+            refusal(platform_key_note("observability", &json!(true))),
+            "config `observability` must be an object"
+        );
+        for key in ["workers_dev", "preview_urls"] {
+            assert_eq!(note(key, json!(false)), None);
+            assert!(refusal(platform_key_note(key, &json!("yes"))).ends_with("must be a boolean"));
+        }
+        assert_eq!(
+            note("workers_dev", json!(true)).as_deref(),
+            Some(
+                "warning: `workers_dev` is true, but celld has no workers.dev URLs; a node \
+                 serves the Worker on its own listener"
+            )
+        );
+        assert_eq!(
+            note("preview_urls", json!(true)).as_deref(),
+            Some("warning: `preview_urls` is true, but celld has no preview URLs")
+        );
+        assert_eq!(note("account_id", json!("0123abcd")), None);
+        assert_eq!(
+            refusal(platform_key_note("account_id", &json!(1))),
+            "config `account_id` must be a string"
+        );
+        assert_eq!(note("keep_vars", json!(true)), None);
+        assert_eq!(note("minify", json!(false)), None);
+        assert!(note("minify", json!(true)).is_some());
+        assert!(note("placement", json!({ "mode": "smart", "hint": "us-east" })).is_some());
+        assert!(note("placement", json!({ "region": "aws:us-east-1" })).is_some());
+        assert!(note(
+            "placement",
+            json!({ "mode": "targeted", "host": "db:5432" })
+        )
+        .is_some());
+        assert_eq!(note("placement", json!({ "mode": "off" })), None);
+        for placement in [
+            json!({}),
+            json!({ "mode": "targeted" }),
+            json!({ "mode": "smart", "region": "x" }),
+            json!({ "region": "x", "host": "y" }),
+            json!({ "mode": "off", "hint": 1 }),
+            json!("smart"),
+        ] {
+            assert!(
+                refusal(platform_key_note("placement", &placement))
+                    .starts_with("config `placement` must be"),
+                "{placement}"
+            );
+        }
+        // Wrangler 4.147's `Observability` and `RawDevConfig`.
+        note(
+            "observability",
+            json!({ "logs": { "invocation_logs": false, "destinations": ["x"] },
+                    "traces": { "enabled": true, "head_sampling_rate": 0.5 } }),
+        );
+        assert_eq!(
+            refusal(platform_key_note(
+                "observability",
+                &json!({ "traces": { "head_sampling_rate": "all" } })
+            )),
+            "config `observability.traces.head_sampling_rate` must be a number"
+        );
+        assert_eq!(
+            refusal(platform_key_note(
+                "observability",
+                &json!({ "sampling": 1 })
+            )),
+            "config `observability` declares `sampling`, which Wrangler does not have"
+        );
+        note(
+            "dev",
+            json!({ "port": 8787, "local_protocol": "https",
+                    "container_engine": { "localDocker": { "socketPath": "/run/docker.sock" } } }),
+        );
+        note(
+            "dev",
+            json!({ "container_engine": "unix:///run/docker.sock" }),
+        );
+        assert_eq!(
+            refusal(platform_key_note(
+                "dev",
+                &json!({ "local_protocol": "ftp" })
+            )),
+            "config `dev.local_protocol` must be one of [\"http\", \"https\"]"
+        );
+        assert_eq!(
+            refusal(platform_key_note(
+                "dev",
+                &json!({ "container_engine": { "localDocker": {} } })
+            )),
+            "config `dev.container_engine` must be a string or `{ localDocker: { socketPath } }`"
+        );
+        // Every platform key is handled, and none is also modelled.
+        for key in PLATFORM_KEYS {
+            assert!(!SUPPORTED_KEYS.contains(key), "{key}");
+        }
+        project(json!({
+            "account_id": "0123abcd",
+            "observability": { "enabled": true },
+            "workers_dev": false,
+            "preview_urls": true,
+            "upload_source_maps": true,
+            "placement": { "mode": "smart" },
+            "keep_vars": true,
+            "minify": true,
+            "dev": { "port": 8787 },
+        }))
+        .unwrap();
+    }
+
+    #[test]
+    fn routes_are_refused_with_what_celld_does_instead() {
+        for key in ["routes", "route"] {
+            assert_eq!(
+                refusal(project(json!({ key: [{ "pattern": "example.com/*" }] }))),
+                format!(
+                    "`celld deploy` does not support `{key}`: celld does not route Cloudflare \
+                     zones or custom domains to a Worker. A node serves the Worker that was \
+                     deployed last on its listener, for every hostname, and other Workers \
+                     through service bindings; put a proxy in front of the nodes to choose \
+                     hostnames. Remove `{key}` to deploy with celld, or deploy this project \
+                     with Wrangler."
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn required_secrets_must_be_vars() {
+        project(json!({
+            "vars": { "TOKEN": "t", "LIST": ["x"] },
+            "secrets": { "required": ["TOKEN", "LIST"] },
+        }))
+        .unwrap();
+        project(json!({ "secrets": {} })).unwrap();
+        assert_eq!(
+            refusal(project(json!({ "secrets": { "required": ["TOKEN"] } }))),
+            "secret TOKEN is listed in `secrets.required`, but `vars` does not set it. celld \
+             has no secret store: set it in `vars`, where it is stored in plaintext with the \
+             deployment"
+        );
+        assert_eq!(
+            refusal(project(
+                json!({ "secrets": { "required": ["A", "A"] }, "vars": { "A": "" } })
+            )),
+            "config `secrets.required` lists A twice"
+        );
+        assert_eq!(
+            refusal(project(
+                json!({ "secrets": { "required": ["not-a-name"] } })
+            )),
+            "config `secrets.required` has an invalid secret name: \"not-a-name\""
+        );
+        assert_eq!(
+            refusal(project(json!({ "secrets": { "optional": [] } }))),
+            "config `secrets` declares `optional`, which celld does not model; celld models \
+             `required`"
+        );
+    }
+
+    #[test]
+    fn required_secrets_can_come_from_dotenv_files_under_celld_dev() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("index.js"), "").unwrap();
+        let source =
+            r#"{ "name": "app", "main": "index.js", "secrets": { "required": ["TOKEN"] } }"#;
+        let deploy = |overrides: &VarOverrides| {
+            project_source(root.path(), source, overrides, BuildCommand::Deploy)
+        };
+        for overrides in [
+            VarOverrides::DevVars(entries(&[("TOKEN", "t")])),
+            dotenv(&[("TOKEN", "t")], &[]),
+            dotenv(&[], &[("TOKEN", "t")]),
+        ] {
+            assert_eq!(
+                var_metadata(&deploy(&overrides).unwrap()),
+                [&json!({ "type": "plain_text", "name": "TOKEN", "text": "t" })]
+            );
+        }
+        assert_eq!(
+            refusal(deploy(&VarOverrides::DevVars(entries(&[("OTHER", "t")])))),
+            "secret TOKEN is listed in `secrets.required`, but neither `vars` nor .dev.vars \
+             sets it"
+        );
+        assert_eq!(
+            refusal(deploy(&dotenv(&[], &[("OTHER", "t")]))),
+            "secret TOKEN is listed in `secrets.required`, but neither `vars`, .env, \
+             .env.local nor the environment sets it; add it to .dev.vars or .env beside the \
+             config, or set it in the environment"
+        );
+    }
+
+    /// With `secrets` declared, `wrangler dev` takes only vars and required
+    /// secrets from the dotenv files, and from the environment, which wins.
+    #[test]
+    fn declared_secrets_filter_the_dotenv_entries_as_wrangler_dev_does() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("index.js"), "").unwrap();
+        let deploy = |source: &str, overrides: &VarOverrides| {
+            var_metadata(
+                &project_source(root.path(), source, overrides, BuildCommand::Deploy).unwrap(),
+            )
+            .into_iter()
+            .map(|binding| {
+                (
+                    binding["name"].as_str().unwrap().to_string(),
+                    binding["text"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect::<Vec<_>>()
+        };
+        let pair = |name: &str, value: &str| (name.to_string(), value.to_string());
+        let with_secrets = r#"{ "name": "app", "main": "index.js", "vars": { "MODE": "prod" },
+            "secrets": { "required": ["TOKEN"] } }"#;
+        let files = &[
+            ("MODE", "file"),
+            ("TOKEN", "file"),
+            ("DATABASE_URL", "file"),
+        ];
+        assert_eq!(
+            deploy(
+                with_secrets,
+                &dotenv(files, &[("TOKEN", "env"), ("HOME", "/root")])
+            ),
+            [pair("MODE", "file"), pair("TOKEN", "env")]
+        );
+        assert_eq!(
+            deploy(with_secrets, &VarOverrides::DevVars(entries(files))),
+            [pair("MODE", "file"), pair("TOKEN", "file")]
+        );
+        // Without `secrets`, every entry is a var and the environment is not read.
+        let without = r#"{ "name": "app", "main": "index.js", "vars": { "MODE": "prod" } }"#;
+        assert_eq!(
+            deploy(without, &dotenv(files, &[("MODE", "env")])),
+            [
+                pair("DATABASE_URL", "file"),
+                pair("MODE", "file"),
+                pair("TOKEN", "file")
+            ]
+        );
+    }
+
+    /// A project whose `main` only the build creates, so it reads only after
+    /// the build ran.
+    fn built_project(root: &Path, build: Value, mode: BuildCommand) -> anyhow::Result<Project> {
+        let config = json!({ "name": "app", "main": "dist/index.js", "build": build });
+        project_source(root, &config.to_string(), &VarOverrides::None, mode)
+    }
+
+    #[test]
+    fn the_build_command_runs_in_the_config_directory_before_main_resolves() {
+        let root = tempfile::tempdir().unwrap();
+        built_project(
+            root.path(),
+            json!({ "command": "mkdir -p dist && pwd > dist/index.js" }),
+            BuildCommand::Deploy,
+        )
+        .unwrap();
+        let ran_in = std::fs::read_to_string(root.path().join("dist/index.js")).unwrap();
+        assert_eq!(
+            std::fs::canonicalize(ran_in.trim()).unwrap(),
+            std::fs::canonicalize(root.path()).unwrap()
+        );
+    }
+
+    #[test]
+    fn the_build_command_runs_in_build_cwd() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("web")).unwrap();
+        built_project(
+            root.path(),
+            json!({ "command": "mkdir -p ../dist && pwd > ../dist/index.js", "cwd": "web" }),
+            BuildCommand::Deploy,
+        )
+        .unwrap();
+        let ran_in = std::fs::read_to_string(root.path().join("dist/index.js")).unwrap();
+        assert_eq!(
+            std::fs::canonicalize(ran_in.trim()).unwrap(),
+            std::fs::canonicalize(root.path().join("web")).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_failed_build_command_stops_the_deploy() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            refusal(built_project(
+                root.path(),
+                json!({ "command": "echo building; exit 3" }),
+                BuildCommand::Deploy,
+            )),
+            "the build command `echo building; exit 3` failed (exit status: 3); its output is \
+             above"
+        );
+        let error = refusal(built_project(
+            root.path(),
+            json!({ "command": "true", "cwd": "missing" }),
+            BuildCommand::Deploy,
+        ));
+        assert!(
+            error.starts_with("run the build command `true` in "),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn no_build_skips_the_build_command() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("dist")).unwrap();
+        std::fs::write(root.path().join("dist/index.js"), "").unwrap();
+        built_project(
+            root.path(),
+            json!({ "command": "touch built" }),
+            BuildCommand::Skip,
+        )
+        .unwrap();
+        assert!(!root.path().join("built").exists());
+        built_project(
+            root.path(),
+            json!({ "command": "touch built" }),
+            BuildCommand::Deploy,
+        )
+        .unwrap();
+        assert!(root.path().join("built").exists());
+        let options = options_from_arguments(["--no-build".to_string()])
+            .unwrap()
+            .unwrap();
+        assert!(options.no_build);
+    }
+
+    #[test]
+    fn the_build_section_has_wranglers_shape() {
+        let root = Path::new("/work/app");
+        let read = |build: Value| read_build_config(&object(json!({ "build": build })), root);
+        assert_eq!(
+            read(json!({ "command": "make" })).unwrap(),
+            Some(BuildConfig {
+                command: "make".to_string(),
+                cwd: root.to_path_buf(),
+                watch_dirs: vec![root.join("src")],
+            })
+        );
+        assert_eq!(
+            read(json!({ "command": "make", "cwd": "web", "watch_dir": ["a", "../shared"] }))
+                .unwrap(),
+            Some(BuildConfig {
+                command: "make".to_string(),
+                cwd: root.join("web"),
+                watch_dirs: vec![root.join("a"), root.join("../shared")],
+            })
+        );
+        // Without a command there is nothing to run, as in Wrangler.
+        assert_eq!(read(json!({ "watch_dir": "src" })).unwrap(), None);
+        assert_eq!(
+            refusal(read(json!({ "command": " " }))),
+            "config `build.command` must be a non-empty string"
+        );
+        assert_eq!(
+            refusal(read(json!({ "command": "make", "watch_dir": [1] }))),
+            "config `build.watch_dir` must be a path or an array of paths"
+        );
+        assert_eq!(
+            refusal(read(json!({ "command": "make", "upload": {} }))),
+            "config `build` declares `upload`, which celld does not model; celld models \
+             `command`, `cwd`, and `watch_dir`"
+        );
+        assert_eq!(
+            refusal(read(json!("make"))),
+            "config `build` must be an object"
+        );
+    }
+
+    #[test]
+    fn build_watch_dirs_resolve_against_the_config() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("wrangler.jsonc");
+        std::fs::write(
+            &config,
+            r#"{ "name": "app", "main": "src/index.ts",
+                 "build": { "command": "make", "watch_dir": ["lib", "../shared"] } }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            build_watch_dirs(&config).unwrap(),
+            [root.path().join("lib"), root.path().join("../shared")]
+        );
+        std::fs::write(&config, r#"{ "name": "app", "main": "index.js" }"#).unwrap();
+        assert!(build_watch_dirs(&config).unwrap().is_empty());
     }
 
     fn do_bindings(project: &Project) -> Vec<&str> {

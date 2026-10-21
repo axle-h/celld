@@ -1,0 +1,7 @@
+// A platform key that Wrangler's schema does not allow still fails.
+{
+  "name": "platform-shape",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "observability": { "enabled": true, "logs": { "sampling": 1 } }
+}

@@ -294,6 +294,17 @@ pub struct WorkflowBinding {
     pub class: String,
 }
 
+/// The value of one Worker variable, as the manifest declares it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WorkerVar {
+    /// A `plain_text` binding: `env.NAME` is this string.
+    Text(String),
+    /// A `json` binding, from a non-string Wrangler `vars` value, as its JSON
+    /// text. Each isolate installs it with `JSON.parse`, as workerd does, so
+    /// `env.NAME` is a value of that isolate, with the config's key order.
+    Json(String),
+}
+
 /// One `services` binding in a Worker environment: the target runs in this
 /// process; see [[service-bindings]].
 #[derive(Clone, Debug)]
@@ -326,7 +337,7 @@ pub struct WorkerConfigOptions {
     pub queue_bindings: Vec<QueueBinding>,
     pub queue_consumers: Vec<crate::protocol::QueueConsumerConfig>,
     pub workflow_bindings: Vec<WorkflowBinding>,
-    pub vars: Vec<(String, String)>,
+    pub vars: Vec<(String, WorkerVar)>,
     pub node: String,
     pub modules: Vec<(String, ModuleSource)>,
     pub compat: Compat,

@@ -1,0 +1,7 @@
+// JSON vars beside a string var: the bindings table names their kinds.
+{
+  "name": "json-vars",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "vars": { "ADMINS": ["admin"], "LIMITS": { "max": 3, "nested": { "on": true } }, "MODE": "dev" }
+}

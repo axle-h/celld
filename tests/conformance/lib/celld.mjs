@@ -89,6 +89,9 @@ async function launch({ binary, dir, env, args, stderr }) {
   exited.then(() => running.delete(child));
 
   const lines = createInterface({ input: child.stdout });
+  // stdout carries only ready records (plan 0.1); a build's output or a log
+  // line there breaks every tool that reads it.
+  const stray = [];
   const ready = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
@@ -99,8 +102,10 @@ async function launch({ binary, dir, env, args, stderr }) {
       try {
         record = JSON.parse(line);
       } catch {
+        stray.push(line);
         return;
       }
+      if (record?.event !== "ready") stray.push(line);
       if (record?.event === "ready") {
         clearTimeout(timer);
         resolve(record);
@@ -115,12 +120,12 @@ async function launch({ binary, dir, env, args, stderr }) {
     child.kill("SIGKILL");
     throw new Error(`celld dev printed a malformed ready line: ${JSON.stringify(ready)}`);
   }
-  return { child, ready, exited };
+  return { child, ready, exited, stray };
 }
 
 // The same request `celld dev` sends its own node on a reload: the node
 // stops, its state stays, and the supervisor exits once the node has.
-async function stop({ child, ready, exited }) {
+async function stop({ child, ready, exited, stray }) {
   if (child.exitCode !== null || child.signalCode !== null) {
     throw new Error(`celld dev had already exited (${child.signalCode ?? `code ${child.exitCode}`})`);
   }
@@ -147,4 +152,78 @@ async function stop({ child, ready, exited }) {
   if (result.code !== 0) {
     throw new Error(`celld dev exited with ${result.signal ?? `code ${result.code}`} after POST /shutdown`);
   }
+  if (stray.length > 0) {
+    throw new Error(`celld dev printed lines on stdout that are not ready records: ${JSON.stringify(stray.slice(0, 5))}`);
+  }
+}
+
+/**
+ * A session for a case of "deploy" steps: no node, and each step runs
+ * `celld deploy --dry-run --json` on one worker from `dir`.
+ *
+ * The step's transcript is the exit code, the worker the JSON row names, and
+ * stderr's lines, with what changes between builds of celld or runs
+ * normalized: the case directory, the celld version, sizes and times.
+ */
+export function startDeploySession({ binary, esbuild, dir, env }) {
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(CELLD_OTEL|OTEL_)/.test(name)));
+  const environment = { ...inherited, ...env, CELLD_ESBUILD: esbuild };
+  const log = [];
+  return {
+    origin: undefined,
+    async deploy(step, timeoutMs) {
+      const args = ["deploy", "--dry-run", "--json", ...step.args, `workers/${step.worker}/wrangler.jsonc`];
+      const { code, stdout, stderr } = await run(binary, args, { cwd: dir, env: environment, timeoutMs });
+      log.push(`$ celld ${args.join(" ")}\n${stderr}`);
+      let worker = null;
+      if (code === 0) {
+        try {
+          worker = JSON.parse(stdout).worker ?? null;
+        } catch {
+          throw new Error(`celld deploy printed stdout that is not one JSON row: ${JSON.stringify(stdout)}`);
+        }
+      }
+      const output = stderr
+        .split("\n")
+        .map((line) => line.trimEnd())
+        .filter((line) => line !== "")
+        .map((line) =>
+          line
+            .replaceAll(dir, "<case>")
+            .replace(/^ celld \S+$/, " celld <version>")
+            .replace(/\d+\.\d+ KiB/g, "<size>")
+            .replace(/\(\d+\.\d+ sec\)/g, "(<time>)"),
+        );
+      return { exit: code, worker, output };
+    },
+    async stop() {},
+    kill() {},
+    logs: () => log.join("\n"),
+  };
+}
+
+function run(binary, args, { cwd, env, timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(binary, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    running.add(child);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`celld deploy did not finish within ${timeoutMs / 1000}s`));
+    }, timeoutMs);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      running.delete(child);
+      reject(error);
+    });
+    child.once("close", (code, signal) => {
+      clearTimeout(timer);
+      running.delete(child);
+      if (signal) reject(new Error(`celld deploy was killed by ${signal}`));
+      else resolve({ code, stdout, stderr });
+    });
+  });
 }

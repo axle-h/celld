@@ -1,0 +1,14 @@
+{
+  "kind": "celld-only",
+  "reason": "celld deploy --dry-run output and refusals; workerd has no deploy step",
+  "workers": ["json-vars", "fallthrough", "platform", "urls-on", "build", "no-build", "secrets"],
+  "steps": [
+    {"deploy": "json-vars"},
+    {"deploy": "fallthrough"},
+    {"deploy": "platform"},
+    {"deploy": "urls-on"},
+    {"deploy": "build"},
+    {"deploy": "no-build", "args": ["--no-build"]},
+    {"deploy": "secrets"}
+  ]
+}

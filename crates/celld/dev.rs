@@ -13,7 +13,7 @@ use glob::{MatchOptions, Pattern};
 use notify::{RecursiveMode, Watcher as _};
 use nu_ansi_term::{Color, Style};
 use sha2::{Digest as _, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal as _;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -101,6 +101,8 @@ struct StackOptions {
     logs: bool,
     watch: bool,
     watch_ignores: Vec<Pattern>,
+    /// `--no-build`: skip every config's `build.command`.
+    no_build: bool,
 }
 
 struct Store {
@@ -162,41 +164,158 @@ impl Console {
         crate::note!("{}", self.paint(style, line));
     }
 
+    fn warning(&self, message: &str) {
+        crate::note!(
+            "  {} {message}",
+            self.paint(Color::Yellow.bold(), "warning")
+        );
+    }
+
     fn failure(&self, message: &str) {
         crate::note!("  {} {message}", self.paint(Color::Red.bold(), "error"));
     }
 }
 
+/// One directory `celld dev` watches recursively.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WatchRoot {
+    path: PathBuf,
+    /// What `--watch-ignore` globs and the ignored directory names are
+    /// relative to: the config's directory, or the root itself when it is a
+    /// `build.watch_dir` outside that directory.
+    base: PathBuf,
+}
+
+/// Everything `celld dev` watches: each config's directory, and each
+/// `build.watch_dir` outside it, for a config whose build command runs.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct WatchPlan {
+    roots: Vec<WatchRoot>,
+}
+
+impl WatchPlan {
+    #[allow(clippy::disallowed_methods)] // Project resolution uses the operator's host filesystem.
+    fn for_configs(
+        configs: &[PathBuf],
+        run_build: bool,
+        console: &Console,
+    ) -> anyhow::Result<Self> {
+        let mut plan = Self::default();
+        for config in configs {
+            let project = project_directory(config)?.to_path_buf();
+            plan.roots.push(WatchRoot {
+                path: project.clone(),
+                base: project.clone(),
+            });
+            if !run_build {
+                continue;
+            }
+            for dir in deploy::build_watch_dirs(config)? {
+                // The project's watch covers a directory inside it, also one
+                // the first build creates.
+                if lexical(&dir).starts_with(&project) {
+                    continue;
+                }
+                match std::fs::canonicalize(&dir) {
+                    Ok(dir) if dir.starts_with(&project) => {}
+                    Ok(dir) if dir.is_dir() => plan.roots.push(WatchRoot {
+                        base: dir.clone(),
+                        path: dir,
+                    }),
+                    _ => console.warning(&format!(
+                        "{} sets build.watch_dir {}, which is not a directory; a change there \
+                         does not rebuild",
+                        config.display(),
+                        dir.display()
+                    )),
+                }
+            }
+        }
+        Ok(plan)
+    }
+
+    /// Every project directory, as when no config has a build command.
+    #[cfg(test)]
+    fn projects(projects: &[PathBuf]) -> Self {
+        Self {
+            roots: projects
+                .iter()
+                .map(|project| WatchRoot {
+                    path: project.clone(),
+                    base: project.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The SHA-256 of a file's content, or `None` when it cannot be read, such
+/// as a directory or a removed file.
+#[allow(clippy::disallowed_methods)] // Project files on the operator's host filesystem.
+fn content_digest(path: &Path) -> Option<[u8; 32]> {
+    std::fs::read(path)
+        .ok()
+        .map(|content| Sha256::digest(content).into())
+}
+
+/// `path` with its `.` and `..` components resolved, without the filesystem.
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            component => out.push(component),
+        }
+    }
+    out
+}
+
 struct ProjectWatcher {
-    projects: Vec<PathBuf>,
+    plan: WatchPlan,
     ignored: Vec<Pattern>,
     _watcher: notify::RecommendedWatcher,
     changes: mpsc::UnboundedReceiver<notify::Result<notify::Event>>,
+    /// Every path a relevant change named, so far.
+    touched: BTreeSet<PathBuf>,
+    /// The content of each touched path when the current rebuild started.
+    baseline: BTreeMap<PathBuf, Option<[u8; 32]>>,
+    /// A change that [`Self::discard_unchanged`] kept: the next
+    /// [`Self::changed`] reports it at once.
+    kept: bool,
 }
 
 impl ProjectWatcher {
-    fn new(projects: &[PathBuf], ignored: Vec<Pattern>) -> anyhow::Result<Self> {
+    fn new(plan: WatchPlan, ignored: Vec<Pattern>) -> anyhow::Result<Self> {
         let (sender, changes) = mpsc::unbounded_channel();
         let mut watcher = notify::recommended_watcher(move |event| {
             let _ = sender.send(event);
         })
         .context("create the project watcher")?;
-        for project in watch_roots(projects) {
+        let paths: Vec<PathBuf> = plan.roots.iter().map(|root| root.path.clone()).collect();
+        for root in watch_roots(&paths) {
             watcher
-                .watch(project, RecursiveMode::Recursive)
-                .with_context(|| format!("watch the project directory {}", project.display()))?;
+                .watch(root, RecursiveMode::Recursive)
+                .with_context(|| format!("watch the project directory {}", root.display()))?;
         }
         Ok(Self {
-            projects: projects.to_vec(),
+            plan,
             ignored,
             _watcher: watcher,
             changes,
+            touched: BTreeSet::new(),
+            baseline: BTreeMap::new(),
+            kept: false,
         })
     }
 
     #[allow(clippy::disallowed_methods)] // Host-side debounce time is outside the Actor domain.
     async fn changed(&mut self) -> anyhow::Result<()> {
-        self.next_relevant_change().await?;
+        if !std::mem::take(&mut self.kept) {
+            self.next_relevant_change().await?;
+        }
         loop {
             // An editor can replace one save through several writes and a
             // rename. Wait for one quiet interval so esbuild never reads the
@@ -218,11 +337,46 @@ impl ProjectWatcher {
                 .await
                 .context("the project watcher stopped")?
             {
-                Ok(event) if relevant_project_event(&self.projects, &event, &self.ignored) => {
-                    return Ok(())
+                Ok(event) if relevant_project_event(&self.plan, &event, &self.ignored) => {
+                    self.touched.extend(event.paths);
+                    return Ok(());
                 }
                 Ok(_) => {}
                 Err(error) => return Err(error).context("watch the project directory"),
+            }
+        }
+    }
+
+    /// Record the content of every path a change has named, as a rebuild
+    /// starts.
+    fn snapshot(&mut self) {
+        self.baseline = self
+            .touched
+            .iter()
+            .map(|path| (path.clone(), content_digest(path)))
+            .collect();
+    }
+
+    /// After a rebuild that deployed what already runs: drop the changes that
+    /// arrived meanwhile to paths whose content is what it was when the
+    /// rebuild started, which are the build's own rewrites. Any other change,
+    /// such as a save during the build, stays, and the next
+    /// [`Self::changed`] reports it.
+    fn discard_unchanged(&mut self) {
+        while let Ok(event) = self.changes.try_recv() {
+            let Ok(event) = event else {
+                continue;
+            };
+            if !relevant_project_event(&self.plan, &event, &self.ignored) {
+                continue;
+            }
+            for path in event.paths {
+                let unchanged = self
+                    .baseline
+                    .get(&path)
+                    .is_some_and(|before| *before == content_digest(&path));
+                self.kept |= !unchanged;
+                self.touched.insert(path);
             }
         }
     }
@@ -244,11 +398,7 @@ fn watch_roots(projects: &[PathBuf]) -> Vec<&PathBuf> {
         .collect()
 }
 
-fn relevant_project_event(
-    projects: &[PathBuf],
-    event: &notify::Event,
-    ignored: &[Pattern],
-) -> bool {
+fn relevant_project_event(plan: &WatchPlan, event: &notify::Event, ignored: &[Pattern]) -> bool {
     // A read is not a change. The inotify backend reports `Access(Open(Any))`
     // for every file that the bundler and the deploy step read, so a rebuild
     // produces the events that request the next rebuild and the supervisor
@@ -262,12 +412,12 @@ fn relevant_project_event(
     event.paths.iter().any(|path| {
         // The ignore rules are relative to the project that owns the path,
         // which is the innermost one when one project contains another. A
-        // path outside every project cannot be judged, so it rebuilds.
-        projects
+        // path outside every root cannot be judged, so it rebuilds.
+        plan.roots
             .iter()
-            .filter(|project| path.starts_with(project))
-            .max_by_key(|project| project.components().count())
-            .is_none_or(|project| !ignored_project_path(project, path, ignored))
+            .filter(|root| path.starts_with(&root.path))
+            .max_by_key(|root| root.path.components().count())
+            .is_none_or(|root| !ignored_project_path(&root.base, path, ignored))
     })
 }
 
@@ -363,7 +513,7 @@ impl ShutdownSignals {
 pub fn print_help() -> anyhow::Result<()> {
     crate::cli_output::Output::new(crate::cli_output::Format::Text).help(
         &format!("celld dev — run an application with persistent local storage\n\n\
-USAGE:\n  celld dev [PROJECT] [-c CONFIG]... [--host IP] [--port PORT] [--logs] [--no-watch] [--clean]\n\n\
+USAGE:\n  celld dev [PROJECT] [-c CONFIG]... [--host IP] [--port PORT] [--logs] [--no-watch] [--no-build] [--clean]\n\n\
 PROJECT and each -c CONFIG are a directory or a Wrangler config. Without\n\
 either, celld uses the current directory. Several run together, as with\n\
 wrangler dev -c. The first one named is the primary: it serves the Worker\n\
@@ -376,9 +526,14 @@ A .dev.vars file beside each config supplies its Worker variables in dotenv\n\
 form, as for wrangler dev. Without one, .env and then .env.local supply\n\
 them, and an entry of these files that cannot be a binding is skipped with\n\
 a warning. The entries override the vars of that config only.\n\n\
-When the node is ready, and again after each rebuild, celld prints one JSON\n\
-line to stdout with the Worker and operator origins.\n\n\
-OPTIONS:\n  -c, --config PATH      A config or project directory; repeat as needed\n  --host IP              Worker listener host (default: 127.0.0.1)\n  --port PORT            Worker listener port (default: {DEFAULT_PORT}; 0 picks a free one)\n  --clean                Delete the primary's .celld/dev before the server starts\n  --logs                 Show the node warning and information logs\n  --no-watch             Do not rebuild when a project file changes\n  --watch-ignore PATTERN Ignore a project-relative glob; repeat as needed\n  -h, --help             Show this help"
+When the node is ready, and again after each rebuild that changed the\n\
+application, celld prints one JSON line to stdout with the Worker and\n\
+operator origins.\n\n\
+A config's build.command runs before each build, as for wrangler dev, with\n\
+its output on stderr. celld watches each config's directory, and also its\n\
+build.watch_dir (default: src) when that is outside the directory. A\n\
+rebuild that deploys what already runs keeps the node running.\n\n\
+OPTIONS:\n  -c, --config PATH      A config or project directory; repeat as needed\n  --host IP              Worker listener host (default: 127.0.0.1)\n  --port PORT            Worker listener port (default: {DEFAULT_PORT}; 0 picks a free one)\n  --clean                Delete the primary's .celld/dev before the server starts\n  --logs                 Show the node warning and information logs\n  --no-watch             Do not rebuild when a project file changes\n  --no-build             Do not run the configs' build.command\n  --watch-ignore PATTERN Ignore a project-relative glob; repeat as needed\n  -h, --help             Show this help"
         ),
     )
 }
@@ -392,6 +547,7 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
     let mut logs = false;
     let mut watch = true;
     let mut watch_ignores = Vec::new();
+    let mut no_build = false;
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -399,6 +555,7 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
             "--clean" => clean = true,
             "--logs" => logs = true,
             "--no-watch" => watch = false,
+            "--no-build" => no_build = true,
             "--config" | "-c" => {
                 let value = arguments.next().context("--config requires a value")?;
                 configs.push(PathBuf::from(value));
@@ -443,6 +600,7 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
             logs,
             watch,
             watch_ignores,
+            no_build,
         },
     }))
 }
@@ -487,6 +645,9 @@ pub async fn run(arguments: Vec<String>) -> anyhow::Result<()> {
     }
     if !options.stack.watch {
         console.detail("Watch", "disabled");
+    }
+    if options.stack.no_build {
+        console.detail("Build", "build.command skipped (--no-build)");
     }
 
     let project_hash = format!(
@@ -577,7 +738,14 @@ fn read_dev_vars(config: &Path) -> anyhow::Result<deploy::VarOverrides> {
             vars.extend(parse_dotenv(&contents));
         }
     }
-    Ok(deploy::VarOverrides::DotEnv(vars))
+    // Only a config that declares `secrets` reads it, as in `wrangler dev`.
+    let process = std::env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+        .collect();
+    Ok(deploy::VarOverrides::DotEnv {
+        files: vars,
+        process,
+    })
 }
 
 /// The contents of `path`, or `None` when it does not exist. One read, not an
@@ -657,40 +825,85 @@ fn quoted_lines(value: &str, lines: &mut std::str::Lines<'_>) -> Option<String> 
     None
 }
 
-/// Build every config, then write them with the primary last. Only the
-/// primary's write moves the fleet pointer, which selects the application, so
-/// neither a failed build nor a failed write can select another Worker.
-async fn deploy_projects(configs: &[PathBuf], store: &Store, logs: bool) -> anyhow::Result<()> {
-    let bucket = open_local_bucket(&store.database)?;
-    let mut builds: Vec<(&PathBuf, deploy::Built)> = Vec::with_capacity(configs.len());
-    for config in deploy_order(configs) {
-        let built = deploy::build(&deploy::Options {
-            config: Some(config.clone()),
-            bucket: None,
-            endpoint: None,
-            region: None,
-            dry_run: false,
-            json: false,
-            vars: read_dev_vars(config)?,
-            local_images: true,
-        })?;
-        // One name is one pointer, so a second config with the name would
-        // silently replace the first.
-        if let Some((other, _)) = builds
-            .iter()
-            .find(|(_, other)| other.script_name == built.script_name)
-        {
-            bail!(
-                "{} and {} both name the Worker {:?}",
-                other.display(),
-                config.display(),
-                built.script_name
-            );
+/// Build every config, then write them with the primary last.
+#[cfg(test)]
+async fn deploy_projects(
+    configs: &[PathBuf],
+    store: &Store,
+    logs: bool,
+    no_build: bool,
+) -> anyhow::Result<()> {
+    let builds = spawn_builds(configs.to_vec(), no_build)
+        .await
+        .context("the build task failed")??;
+    write_builds(&builds, store, logs).await
+}
+
+/// What a set of builds deploys: each Worker's name and deployment version,
+/// which hashes its code, metadata and assets.
+fn versions(builds: &[(PathBuf, deploy::Built)]) -> Vec<(String, String)> {
+    builds
+        .iter()
+        .map(|(_, built)| (built.script_name.clone(), built.version.clone()))
+        .collect()
+}
+
+/// Build every config, in write order, off the async runtime: a build
+/// command can run for minutes, and `celld dev` must still answer a signal
+/// meanwhile.
+#[allow(clippy::disallowed_methods)] // The build is host work outside the Actor domain.
+fn spawn_builds(
+    configs: Vec<PathBuf>,
+    no_build: bool,
+) -> tokio::task::JoinHandle<anyhow::Result<Vec<(PathBuf, deploy::Built)>>> {
+    tokio::task::spawn_blocking(move || {
+        let mut builds: Vec<(PathBuf, deploy::Built)> = Vec::with_capacity(configs.len());
+        for config in deploy_order(&configs) {
+            if deploy::builds_stopping() {
+                bail!("celld dev is stopping");
+            }
+            let built = deploy::build(&deploy::Options {
+                config: Some(config.clone()),
+                bucket: None,
+                endpoint: None,
+                region: None,
+                dry_run: false,
+                json: false,
+                vars: read_dev_vars(config)?,
+                no_build,
+                dev: true,
+                local_images: true,
+            })?;
+            // One name is one pointer, so a second config with the name would
+            // silently replace the first.
+            if let Some((other, _)) = builds
+                .iter()
+                .find(|(_, other)| other.script_name == built.script_name)
+            {
+                bail!(
+                    "{} and {} both name the Worker {:?}",
+                    other.display(),
+                    config.display(),
+                    built.script_name
+                );
+            }
+            builds.push((config.clone(), built));
         }
-        builds.push((config, built));
-    }
+        Ok(builds)
+    })
+}
+
+/// Write the builds, the primary last. Only the primary's write moves the
+/// fleet pointer, which selects the application, so neither a failed build
+/// nor a failed write can select another Worker.
+async fn write_builds(
+    builds: &[(PathBuf, deploy::Built)],
+    store: &Store,
+    logs: bool,
+) -> anyhow::Result<()> {
+    let bucket = open_local_bucket(&store.database)?;
     if logs {
-        for (_, built) in &builds {
+        for (_, built) in builds {
             built.report();
         }
     }
@@ -702,6 +915,43 @@ async fn deploy_projects(configs: &[PathBuf], store: &Store, logs: bool) -> anyh
         deploy::write_component(&bucket, built).await?;
     }
     deploy::write(&bucket, &primary.1).await
+}
+
+/// How a build that a signal can interrupt ended.
+enum Built {
+    Done(Vec<(PathBuf, deploy::Built)>),
+    /// SIGINT or SIGTERM arrived: the build commands were stopped.
+    Interrupted,
+}
+
+/// Build every config, or stop the build on a shutdown signal: SIGTERM to
+/// the build commands, SIGKILL two seconds later, or at once on a second
+/// signal.
+#[allow(clippy::disallowed_methods)] // Waiting on host processes outside the Actor domain.
+async fn build_or_stop(
+    configs: &[PathBuf],
+    no_build: bool,
+    signals: &mut ShutdownSignals,
+) -> anyhow::Result<Built> {
+    let mut builds = spawn_builds(configs.to_vec(), no_build);
+    crate::asyncrt::select! {
+        result = &mut builds => return Ok(Built::Done(result.context("the build task failed")??)),
+        _ = signals.received() => {}
+    }
+    #[cfg(unix)]
+    {
+        let mut stopping =
+            tokio::task::spawn_blocking(|| deploy::stop_builds(Duration::from_secs(2)));
+        crate::asyncrt::select! {
+            _ = &mut stopping => {}
+            _ = signals.received() => deploy::kill_builds(),
+        }
+        let _ = stopping.await;
+    }
+    // The task ends once its build command has; wait, so nothing the build
+    // started outlives `celld dev`.
+    let _ = builds.await;
+    Ok(Built::Interrupted)
 }
 
 /// The configs in write order: the primary, which is first on the command
@@ -723,17 +973,24 @@ async fn run_stack(
     // handler afterwards leaves the new node orphaned under the default Unix
     // signal action.
     let mut signals = ShutdownSignals::install()?;
-    let projects = configs
-        .iter()
-        .map(|config| project_directory(config).map(Path::to_path_buf))
-        .collect::<anyhow::Result<Vec<_>>>()?;
+    let run_build = !options.no_build;
     let mut watcher = options
         .watch
-        .then(|| ProjectWatcher::new(&projects, std::mem::take(&mut options.watch_ignores)))
+        .then(|| {
+            ProjectWatcher::new(
+                WatchPlan::for_configs(configs, run_build, console)?,
+                std::mem::take(&mut options.watch_ignores),
+            )
+        })
         .transpose()?;
 
     console.progress("building the application");
-    deploy_projects(configs, store, options.logs).await?;
+    let builds = match build_or_stop(configs, options.no_build, &mut signals).await? {
+        Built::Done(builds) => builds,
+        Built::Interrupted => return Ok(()),
+    };
+    write_builds(&builds, store, options.logs).await?;
+    let mut deployed = versions(&builds);
     let mut running = start_node(
         state,
         options.listener,
@@ -763,10 +1020,54 @@ async fn run_stack(
             }
             NodeEvent::Reload => {
                 console.progress("change detected; rebuilding the application");
-                if let Err(error) = deploy_projects(configs, store, options.logs).await {
+                if let Some(watcher) = watcher.as_mut() {
+                    watcher.snapshot();
+                }
+                let builds = match build_or_stop(configs, options.no_build, &mut signals).await {
+                    Ok(Built::Done(builds)) => builds,
+                    Ok(Built::Interrupted) => {
+                        stop_running_node(running).await;
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        console.failure(&format!("reload failed: {error:#}"));
+                        continue;
+                    }
+                };
+                // A config change can move `build.watch_dir`. A plan that
+                // cannot be read or watched keeps the current one.
+                if let Some(current) = watcher.as_mut() {
+                    let replanned =
+                        WatchPlan::for_configs(configs, run_build, console).and_then(|plan| {
+                            if plan == current.plan {
+                                return Ok(None);
+                            }
+                            ProjectWatcher::new(plan, current.ignored.clone()).map(Some)
+                        });
+                    match replanned {
+                        Ok(Some(replaced)) => *current = replaced,
+                        Ok(None) => {}
+                        Err(error) => console.failure(&format!(
+                            "kept watching the previous directories: {error:#}"
+                        )),
+                    }
+                }
+                // A build that writes into the watched directories reports
+                // its own writes as changes. When the rebuild deploys what
+                // already runs, a rewrite with the same content is no change:
+                // drop those, so the build does not start itself again.
+                if versions(&builds) == deployed {
+                    console.progress("no change in the build; the application keeps running");
+                    if let Some(watcher) = watcher.as_mut() {
+                        watcher.discard_unchanged();
+                    }
+                    continue;
+                }
+                if let Err(error) = write_builds(&builds, store, options.logs).await {
                     console.failure(&format!("reload failed: {error:#}"));
                     continue;
                 }
+                deployed = versions(&builds);
                 console.progress("restarting the application");
                 stop_running_node(running).await;
                 running = start_node(
@@ -1085,6 +1386,7 @@ async fn stop_child(child: &mut Child, internal: Option<&str>) {
 #[allow(clippy::disallowed_methods)] // Tests build throwaway projects on the host filesystem.
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn arguments(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
@@ -1140,6 +1442,13 @@ mod tests {
         );
         let error = options_from_arguments(arguments(&["-c"])).unwrap_err();
         assert_eq!(error.to_string(), "--config requires a value");
+    }
+
+    #[test]
+    fn no_build_is_a_flag() {
+        let parse = |values: &[&str]| options_from_arguments(arguments(values)).unwrap().unwrap();
+        assert!(!parse(&[]).stack.no_build);
+        assert!(parse(&["--no-build", "front"]).stack.no_build);
     }
 
     #[test]
@@ -1236,7 +1545,9 @@ mod tests {
             }
         };
 
-        deploy_projects(&configs, &store, false).await.unwrap();
+        deploy_projects(&configs, &store, false, false)
+            .await
+            .unwrap();
         assert_eq!(
             script("deploy/current.json").await.as_deref(),
             Some("front")
@@ -1256,6 +1567,8 @@ mod tests {
             dry_run: false,
             json: false,
             vars: deploy::VarOverrides::None,
+            no_build: false,
+            dev: true,
             local_images: true,
         })
         .unwrap();
@@ -1264,6 +1577,286 @@ mod tests {
             script("deploy/current.json").await.as_deref(),
             Some("front")
         );
+    }
+
+    /// An asset-only project whose build writes its assets, so its deploy
+    /// succeeds only when the build ran.
+    fn built_assets_project(root: &Path) -> PathBuf {
+        let directory = root.join("site");
+        std::fs::create_dir_all(&directory).unwrap();
+        let config = directory.join("wrangler.jsonc");
+        std::fs::write(
+            &config,
+            r#"{"name":"site","compatibility_date":"2026-09-04",
+                "assets":{"directory":"public"},
+                "build":{"command":"mkdir -p public && echo $WRANGLER_COMMAND > public/index.html"}}"#,
+        )
+        .unwrap();
+        config
+    }
+
+    fn modified(path: PathBuf) -> notify::Event {
+        notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any)).add_path(path)
+    }
+
+    #[test]
+    fn a_build_config_watches_its_directory_and_its_watch_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(root.path()).unwrap();
+        let app = root.join("app");
+        let shared = root.join("shared");
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        std::fs::create_dir_all(&shared).unwrap();
+        let config = app.join("wrangler.jsonc");
+        // `main` is a source the build reads, not its output: a codegen step.
+        std::fs::write(
+            &config,
+            r#"{"name":"app","main":"src/index.ts",
+                "build":{"command":"npm run codegen","watch_dir":["src","../shared"]}}"#,
+        )
+        .unwrap();
+        let console = Console { color: false };
+        let plan = WatchPlan::for_configs(std::slice::from_ref(&config), true, &console).unwrap();
+        assert_eq!(
+            plan.roots,
+            [
+                WatchRoot {
+                    path: app.clone(),
+                    base: app.clone(),
+                },
+                WatchRoot {
+                    path: shared.clone(),
+                    base: shared.clone(),
+                },
+            ]
+        );
+        let relevant = |path: PathBuf| relevant_project_event(&plan, &modified(path), &[]);
+        assert!(relevant(app.join("src/index.ts")));
+        assert!(relevant(app.join("codegen.yaml")));
+        assert!(relevant(shared.join("types.ts")));
+        assert!(!relevant(app.join(".wrangler/out.js")));
+        assert!(!relevant(shared.join("node_modules/x.js")));
+
+        // `--no-build` runs no build, so `build.watch_dir` is not an input.
+        let unbuilt =
+            WatchPlan::for_configs(std::slice::from_ref(&config), false, &console).unwrap();
+        assert_eq!(unbuilt, WatchPlan::projects(std::slice::from_ref(&app)));
+    }
+
+    #[test]
+    fn a_config_change_replans_the_watch() {
+        let root = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(root.path()).unwrap();
+        let app = root.join("app");
+        let shared = root.join("shared");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::create_dir_all(&shared).unwrap();
+        let config = app.join("wrangler.jsonc");
+        let console = Console { color: false };
+        let plan = || WatchPlan::for_configs(std::slice::from_ref(&config), true, &console);
+        std::fs::write(&config, r#"{"name":"app","main":"index.js"}"#).unwrap();
+        let before = plan().unwrap();
+        assert_eq!(before, WatchPlan::projects(std::slice::from_ref(&app)));
+        std::fs::write(
+            &config,
+            r#"{"name":"app","main":"index.js","build":{"command":"make","watch_dir":"../shared"}}"#,
+        )
+        .unwrap();
+        let after = plan().unwrap();
+        assert_ne!(after, before);
+        assert!(relevant_project_event(
+            &after,
+            &modified(shared.join("x.ts")),
+            &[]
+        ));
+        // A config that no longer reads fails the plan; the reload keeps the
+        // previous watcher then.
+        std::fs::write(&config, "{").unwrap();
+        assert!(plan().is_err());
+    }
+
+    /// The process-wide registry of `celld dev` builds is shared, so the
+    /// tests that run one take turns.
+    static DEV_BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Start a `celld dev` build whose command runs `command` in the
+    /// background and waits; the background process records its pid and
+    /// outlives a kill of the shell alone. Returns the build and that pid.
+    async fn hung_build(
+        root: &Path,
+        command: &str,
+    ) -> (
+        tokio::task::JoinHandle<anyhow::Result<Vec<(PathBuf, deploy::Built)>>>,
+        i32,
+    ) {
+        let directory = root.join("site");
+        std::fs::create_dir_all(&directory).unwrap();
+        let config = directory.join("wrangler.jsonc");
+        std::fs::write(
+            &config,
+            json!({
+                "name": "site",
+                "assets": { "directory": "public" },
+                "build": { "command": command },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let build = spawn_builds(vec![config], false);
+        let pid_file = directory.join("child.pid");
+        let started = std::time::Instant::now();
+        while std::fs::read_to_string(&pid_file).map_or(true, |pid| pid.trim().is_empty()) {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the build did not start"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let child = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        (build, child)
+    }
+
+    /// Whether `pid` runs: a zombie waiting for init does not.
+    fn running(pid: i32) -> bool {
+        (unsafe { libc::kill(pid, 0) }) == 0
+            && !std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .is_ok_and(|stat| stat.contains(") Z "))
+    }
+
+    async fn stopped_with(
+        build: tokio::task::JoinHandle<anyhow::Result<Vec<(PathBuf, deploy::Built)>>>,
+    ) -> String {
+        let Err(error) = build.await.unwrap() else {
+            panic!("a stopped build succeeded");
+        };
+        format!("{error:#}")
+    }
+
+    #[test]
+    fn a_hung_build_is_stopped_with_its_process_group() {
+        let _turn = DEV_BUILD.lock().unwrap_or_else(|e| e.into_inner());
+        host_runtime().block_on(async {
+            let root = tempfile::tempdir().unwrap();
+            let (build, child) = hung_build(
+                root.path(),
+                "sh -c 'echo $$ > child.pid; exec sleep 600' & wait",
+            )
+            .await;
+            let stopping = std::time::Instant::now();
+            tokio::task::spawn_blocking(|| deploy::stop_builds(Duration::from_secs(2)))
+                .await
+                .unwrap();
+            let error = stopped_with(build).await;
+            assert!(stopping.elapsed() < Duration::from_secs(5));
+            assert!(error.contains("failed (signal: 15"), "{error}");
+            assert!(!running(child), "the build's child {child} survived");
+            deploy::reset_builds();
+        });
+    }
+
+    /// A second signal kills a build that ignores SIGTERM at once, and no
+    /// build starts once `celld dev` is stopping.
+    #[test]
+    fn a_build_that_ignores_sigterm_is_killed_and_no_build_follows() {
+        let _turn = DEV_BUILD.lock().unwrap_or_else(|e| e.into_inner());
+        host_runtime().block_on(async {
+            let root = tempfile::tempdir().unwrap();
+            let (build, child) = hung_build(
+                root.path(),
+                "trap '' TERM; sh -c 'echo $$ > child.pid; exec sleep 600' & wait",
+            )
+            .await;
+            let stopping =
+                tokio::task::spawn_blocking(|| deploy::stop_builds(Duration::from_secs(60)));
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            assert!(running(child), "SIGTERM is ignored");
+            let killing = std::time::Instant::now();
+            deploy::kill_builds();
+            let error = stopped_with(build).await;
+            assert!(killing.elapsed() < Duration::from_secs(2));
+            assert!(error.contains("failed (signal: 9"), "{error}");
+            stopping.await.unwrap();
+            assert!(!running(child), "the build's child {child} survived");
+
+            let config = built_assets_project(root.path());
+            let error = stopped_with(spawn_builds(vec![config], false)).await;
+            assert_eq!(error, "celld dev is stopping");
+            deploy::reset_builds();
+        });
+    }
+
+    #[test]
+    fn a_rebuild_drops_only_rewrites_with_the_same_content() {
+        host_runtime().block_on(async {
+            let root = tempfile::tempdir().unwrap();
+            let root = std::fs::canonicalize(root.path()).unwrap();
+            let generated = root.join("generated.js");
+            let source = root.join("index.js");
+            std::fs::write(&generated, "v1").unwrap();
+            std::fs::write(&source, "s1").unwrap();
+            let mut watcher =
+                ProjectWatcher::new(WatchPlan::projects(std::slice::from_ref(&root)), Vec::new())
+                    .unwrap();
+            let settle = || tokio::time::sleep(Duration::from_millis(300));
+            // Both files changed before the rebuild that records them.
+            std::fs::write(&generated, "v2").unwrap();
+            std::fs::write(&source, "s2").unwrap();
+            settle().await;
+            watcher.changed().await.unwrap();
+            watcher.snapshot();
+            // The build rewrites its output with the same content: dropped.
+            std::fs::write(&generated, "v2").unwrap();
+            settle().await;
+            watcher.discard_unchanged();
+            assert!(!watcher.kept);
+            // A save during the build is a change: kept.
+            watcher.snapshot();
+            std::fs::write(&generated, "v2").unwrap();
+            std::fs::write(&source, "s3").unwrap();
+            settle().await;
+            watcher.discard_unchanged();
+            assert!(watcher.kept);
+            tokio::time::timeout(Duration::from_secs(1), watcher.changed())
+                .await
+                .expect("a kept change is reported at once")
+                .unwrap();
+            // A new file has no recorded content, so it counts as a change.
+            watcher.snapshot();
+            std::fs::write(root.join("new.js"), "n").unwrap();
+            settle().await;
+            watcher.discard_unchanged();
+            assert!(watcher.kept);
+        });
+    }
+
+    #[test]
+    fn celld_dev_runs_the_build_command_unless_no_build() {
+        let _turn = DEV_BUILD.lock().unwrap_or_else(|e| e.into_inner());
+        host_runtime().block_on(async {
+            let root = tempfile::tempdir().unwrap();
+            let config = built_assets_project(root.path());
+            let store = Store {
+                database: root.path().join("objects.sqlite3"),
+            };
+            let error = deploy_projects(std::slice::from_ref(&config), &store, false, true)
+                .await
+                .unwrap_err();
+            assert!(
+                format!("{error:#}").contains("public"),
+                "--no-build leaves the assets unbuilt: {error:#}"
+            );
+            deploy_projects(std::slice::from_ref(&config), &store, false, false)
+                .await
+                .unwrap();
+            assert_eq!(
+                std::fs::read_to_string(config.with_file_name("public/index.html")).unwrap(),
+                "dev\n"
+            );
+        });
     }
 
     #[test]
@@ -1293,13 +1886,13 @@ mod tests {
             _ => panic!("front reads its .dev.vars"),
         }
         match vars(&back) {
-            deploy::VarOverrides::DotEnv(found) => {
+            deploy::VarOverrides::DotEnv { files: found, .. } => {
                 assert_eq!(found, entries(&[("TOKEN", "back"), ("OTHER", "2")]))
             }
             _ => panic!("back reads its dotenv files"),
         }
         match vars(&empty) {
-            deploy::VarOverrides::DotEnv(found) => assert!(found.is_empty()),
+            deploy::VarOverrides::DotEnv { files: found, .. } => assert!(found.is_empty()),
             _ => panic!("a project without files has no overrides"),
         }
     }
@@ -1353,7 +1946,7 @@ mod tests {
         let outer = PathBuf::from("/work/app");
         let inner = PathBuf::from("/work/app/workers/back");
         let sibling = PathBuf::from("/work/other");
-        let projects = [outer.clone(), inner.clone(), sibling.clone()];
+        let projects = WatchPlan::projects(&[outer.clone(), inner.clone(), sibling.clone()]);
         let ignored = [Pattern::new("generated/**").unwrap()];
         let event = |path: PathBuf| {
             notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))

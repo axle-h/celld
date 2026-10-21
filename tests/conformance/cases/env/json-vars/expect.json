@@ -1,0 +1,131 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "ADMINS": {
+          "type": "object",
+          "isArray": true,
+          "frozen": false,
+          "prototype": "Array"
+        },
+        "CONFIG": {
+          "type": "object",
+          "isArray": false,
+          "frozen": false,
+          "prototype": "Object"
+        },
+        "LIMIT": {
+          "type": "number",
+          "isArray": false,
+          "frozen": true,
+          "prototype": null
+        },
+        "ENABLED": {
+          "type": "boolean",
+          "isArray": false,
+          "frozen": true,
+          "prototype": null
+        },
+        "NOTHING": {
+          "type": "null",
+          "isArray": false,
+          "frozen": true,
+          "prototype": null
+        },
+        "EMPTY_LIST": {
+          "type": "object",
+          "isArray": true,
+          "frozen": false,
+          "prototype": "Array"
+        },
+        "LOOKS_JSON": {
+          "type": "string",
+          "isArray": false,
+          "frozen": true,
+          "prototype": null
+        },
+        "OVERRIDDEN": {
+          "type": "string",
+          "isArray": false,
+          "frozen": true,
+          "prototype": null
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "admins": [
+          "admin",
+          "ops"
+        ],
+        "includesAdmin": true,
+        "nestedList": [
+          1,
+          "two",
+          {
+            "three": 3
+          }
+        ],
+        "third": 3,
+        "nil": null,
+        "text": "line para end </script> \"quoted\" \\ é 😀",
+        "textCodes": [
+          8232,
+          8233
+        ],
+        "limit": 42,
+        "enabled": false,
+        "nothing": null,
+        "emptyList": [],
+        "looksJson": "[\"a\"]",
+        "overridden": "{\"from\":\"dotenv\"}",
+        "keys": [
+          "ADMINS",
+          "CONFIG",
+          "EMPTY_LIST",
+          "ENABLED",
+          "LIMIT",
+          "LOOKS_JSON",
+          "NOTHING",
+          "OVERRIDDEN"
+        ],
+        "stringified": "{\"list\":[1,\"two\",{\"three\":3}],\"empty\":{},\"nil\":null,\"flag\":true,\"n\":-1.5}"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "sameObject": true,
+        "enumerable": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "sameAsArgument": true,
+        "admins": [
+          "admin",
+          "ops"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 2,
+        "threw": null
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 3,
+        "threw": null
+      }
+    }
+  ]
+}

@@ -153,10 +153,9 @@ The trial harness lives in `starter:celld/` (see its `README.md`):
 
 - `generate.ts`: writes `celld.<worker>.jsonc` per Worker. It applies these
   workarounds, which this plan names **W1-W5**; later items remove them:
-  - **W1**: drops every top-level key celld refuses. That covers
-    `observability`, `build`, `ai`, `browser`, `workers_dev` and
-    `preview_urls` (trial failure 1). Removed by 1.6, except `ai`/`browser`,
-    which stay refused (D9) and are mapped to the AI shim instead.
+  - **W1**: drops every top-level key celld refuses (trial failure 1).
+    Since 1.6 it drops only `ai`/`browser`, which stay refused (D9) and are
+    mapped to the AI shim instead.
   - **W2**: strips `rules[].fallthrough` (trial failure 2). Removed by 1.6.
   - **W3**: passes `ADMINS` as a JSON string (trial failure 3). Removed by
     1.6.
@@ -348,8 +347,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 8 | 1.2 `tracing` with OTLP export | done | `6e8b960` |
 | 9 | 1.3 `ctx.exports` for migrated classes (W4 removed) | done | `9d443f5` |
 | 10 | 1.4 service-binding `props`, refused keys | done | `7e8570d` |
-| 11 | 1.5 `redirect: "manual"` on incoming requests | done | see log |
-| 12+ | Phase 1 in plan order (1.6-1.20), then 0.5 after 1.7 | queued | |
+| 11 | 1.5 `redirect: "manual"` on incoming requests | done | `1ca26cd` |
+| 12 | 1.6 deploy configuration relaxations (W1-W3 removed) | done | see log |
+| 13+ | Phase 1 in plan order (1.7-1.20), then 0.5 after 1.7, and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -409,8 +409,9 @@ a single project, so no test can co-host several scripts.
   console output stays on stderr, as `docs/README.md` requires: data to
   stdout, messages to stderr.
 - **Watching.** The watcher watches every config's project directory, with
-  the same ignore rules. `.wrangler` is already ignored, so `build.command`
-  output (1.6) does not loop.
+  the same ignore rules. Since 1.6, a rebuild that yields the same deployment
+  version doesn't restart the node, which stops `build.command` output from
+  looping.
 
 **Tests.**
 - Unit:
@@ -476,6 +477,9 @@ default.
   `--update` never touches these cases.
 
 **Steps.**
+- **`deploy`** (celld-only): `celld deploy --dry-run --json` without a
+  node, recording the exit code, worker name and stderr. The runner also
+  fails a case on any stdout line that isn't a ready record.
 - **`path`**: an HTTP request to the primary; the response status and body
   (JSON when typed so) are the transcript, plus any headers named in
   `responseHeaders`. The client doesn't follow redirects.
@@ -993,9 +997,10 @@ delivery in `__beginEvent`.
   on services, checked against Wrangler's shape.
 - A manifest with non-object props or a non-string entrypoint fails the
   load.
-- **Remaining difference:** `ctx.props` keys arrive sorted, because
-  serde_json has no `preserve_order` (a build-wide feature). Follow-up:
-  decide whether to enable it.
+- **Remaining difference:** `ctx.props` keys arrive sorted, because deploy
+  parses them into a `serde_json` value. Follow-up: store props as text, as
+  1.6 does for JSON vars, and add a `JSON.stringify` check to the props case
+  (`isDeepStrictEqual` ignores key order).
 
 **Prior art.** Rework IlyaGulya `2172ce1` (it applies cleanly). It carries
 props through to `__makeServiceBinding`, but has no validation, no
@@ -1054,6 +1059,30 @@ requests, DO `__dispatchTo`, service-binding targets and entrypoint targets.
 - Rework the JSON vars, `build` and `observability` pieces of IlyaGulya
   `d6e0988`. Add the size cap and `--no-build`. Drop its
   `rules` part.
+
+**As built.**
+- JSON vars are stored as compact JSON text, keeping the config's key order,
+  capped at 5 KiB each (Cloudflare's documented limit). String vars are not
+  capped. A dotenv override stays a string.
+- `fallthrough` follows Wrangler's `parseRules`. celld's `.wasm` default
+  rule comes after the configured rules.
+- Accepted platform keys: `observability`, `workers_dev`, `preview_urls`,
+  `account_id`, `upload_source_maps`, `placement`, `keep_vars`, `minify`,
+  `dev`, each checked against Wrangler 4.147's schema.
+- `build.command` runs with `sh -c` in `build.cwd` (resolved against the
+  config's directory), with stdout sent to stderr and `WRANGLER_COMMAND`
+  set. Under `celld dev` it runs in its own process group with a kill path.
+- `celld dev` watches each config's directory plus `build.watch_dir`. A
+  rebuild that yields the same deployment version doesn't restart the node,
+  and drops only events whose file content is unchanged. A build that writes
+  different content into a watched directory every run loops, as in
+  `wrangler dev`.
+- With `secrets` declared, `celld dev` filters dotenv entries as
+  `wrangler dev` does, and reads process env. A missing secret fails
+  (Wrangler warns).
+- **Fixed on the way:** crons and the fence image were not part of the
+  deployment version, so a crons-only deploy left nodes on the old
+  schedule.
 
 **Integration.**
 - A `deploy/` case runs `celld deploy --dry-run` on configs that use each key.
@@ -1445,6 +1474,9 @@ that the nested and concurrent cases stay green.
 - Populate `process.env` before module evaluation, honouring the date gate and
   the enable/disable flags. Build the literal with JSON.
 - Decide how JSON vars (1.6) appear in `process.env` with a differential test.
+  workerd puts a JSON binding's text into `process.env`
+  (`workerd-api.c++`, `createBindingValue`), so `process.env.ADMINS` should
+  be the JSON string.
 - Map `node:process` to the global.
 
 **Prior art.** Rework mertdogar `6d8e461` and take `cde80c7`, dropping the

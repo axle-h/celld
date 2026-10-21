@@ -69,6 +69,7 @@ pub use crate::engine_api::RpcData;
 pub use crate::engine_api::RpcOutcome;
 pub use crate::engine_api::ServiceBinding;
 pub use crate::engine_api::WorkerConfigOptions;
+pub use crate::engine_api::WorkerVar;
 pub use crate::engine_api::WorkflowBinding;
 pub use crate::engine_api::WsTarget;
 pub(crate) use crate::engine_api::BARE_NODE_BUILTINS;
@@ -1908,7 +1909,7 @@ pub struct WorkerConfig {
     /// `fetch` and provide only `queue`.
     declares_queue_consumer: bool,
     workflow_bindings: Vec<WorkflowBinding>,
-    vars: Vec<(String, String)>,
+    vars: Vec<(String, WorkerVar)>,
     node: String,
     /// The worker's non-main modules, so the main module can import siblings.
     modules: Vec<(String, ModuleSource)>,

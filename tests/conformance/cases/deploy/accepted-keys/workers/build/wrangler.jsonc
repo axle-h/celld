@@ -1,0 +1,12 @@
+// `build.command` writes `main` before celld reads it, and its output goes to
+// stderr. `build.cwd` is relative to this directory.
+{
+  "name": "build",
+  "main": "dist/index.js",
+  "compatibility_date": "2026-09-04",
+  "build": {
+    "command": "mkdir -p ../dist && cp ../index.js ../dist/index.js && echo built in $(basename \"$PWD\")",
+    "cwd": "scripts",
+    "watch_dir": "src"
+  }
+}

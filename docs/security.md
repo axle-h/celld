@@ -152,6 +152,20 @@ secret. A holder of the bucket credentials controls the fleet. Give each
 credential access to one fleet bucket only, and rotate it after a suspected
 disclosure.
 
+The deployments in the bucket hold each Worker's `vars` in plaintext, and
+celld has no other secret store, so a Wrangler secret is such a var. Anyone
+who can read the bucket can read them.
+
+## Deploy only configs you trust
+
+`celld deploy` and `celld dev` run a config's `build.command` with `sh -c`, as
+the user who runs them and with their environment, the bucket credentials
+included. The config is the deployer's own code, like the project's
+`package.json` scripts, so celld does not sandbox the command. Treat a
+Wrangler config from elsewhere like any other script before you deploy it, or
+deploy it with `--no-build` after you build it yourself. A Worker or a Dynamic
+Worker cannot reach the command: only the deploy reads the config.
+
 ## Cell ownership
 
 Each cell is a SQLite database with one writer. An ownership epoch fences each

@@ -27,7 +27,8 @@ case is malformed or the setup is incomplete. Each run works in a copy of the
 case under `.run/`, which is deleted unless the case fails.
 
 - On celld, the runner starts `target/<profile>/celld dev --no-watch --clean
-  --port 0 -c <first worker> -c …` and reads the ready line from stdout. When
+  --port 0 -c <first worker> -c …` and reads the ready line from stdout. Any
+  other line on stdout fails the case: stdout carries only ready records. When
   the steps finish, it sends `POST /shutdown?handoff=preserve` to the
   internal origin. `CELLD_ESBUILD` points at this package's esbuild.
 - On workerd, it uses wrangler's `createTestHarness`.
@@ -123,6 +124,18 @@ whose support hasn't landed yet: `nodes` greater than 1 or a step's `node`
   sort by content. The step needs `"kind": "celld-only"` and
   `"observability": true`: workerd's spans go to Miniflare's collector, which
   the runner doesn't read.
+
+- **`deploy`**: `{"deploy": "<worker>", "args": ["--no-build"]}` runs
+  `celld deploy --dry-run --json` on that worker's `wrangler.jsonc`, from the
+  case's directory, with `env`. `args` is optional, and `--no-build` is the
+  only flag it takes. The transcript records the exit code, the `worker` the
+  JSON row names (`null` on failure), and stderr's non-empty lines as
+  `output`. The runner rewrites the case directory as `<case>`, the celld
+  version line as ` celld <version>`, sizes as `<size>` and times as
+  `(<time>)`, so a celld release or a bundle change does not change the
+  transcript. A case with `deploy` steps must be `celld-only` and have only
+  `deploy` steps: it starts no node, so its configs can be ones `celld deploy`
+  refuses, and `observability` is refused.
 
 ### Kinds
 

@@ -1,0 +1,7 @@
+// A build that fails, skipped with --no-build: `main` is already built.
+{
+  "name": "no-build",
+  "main": "dist/index.js",
+  "compatibility_date": "2026-09-04",
+  "build": { "command": "echo the build ran; exit 1" }
+}

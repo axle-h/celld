@@ -702,7 +702,21 @@ pub(super) fn build_env(scope: &mut v8::PinScope, config: &WorkerConfig) -> Resu
             ));
         }
         for (name, value) in vars {
-            lines.push_str(&format!("e[{:?}] = {:?};\n", name, value));
+            match value {
+                WorkerVar::Text(text) => {
+                    lines.push_str(&format!("e[{:?}] = {:?};\n", name, text));
+                }
+                // Parsed, as workerd parses a JSON binding, rather than
+                // spliced in as a literal: JSON text is not always the same
+                // value as a JavaScript literal (a `"__proto__"` key).
+                WorkerVar::Json(text) => {
+                    lines.push_str(&format!(
+                        "e[{:?}] = JSON.parse({});\n",
+                        name,
+                        js_string_literal(text)?
+                    ));
+                }
+            }
         }
         if let Some(name) = asset_binding {
             lines.push_str(&format!(
@@ -759,8 +773,12 @@ pub(super) fn build_env(scope: &mut v8::PinScope, config: &WorkerConfig) -> Resu
 /// U+2028 and U+2029 are escaped as well, though ES2019 allows them in string
 /// literals, so the snippet never depends on that.
 fn json_text_literal(value: &serde_json::Map<String, serde_json::Value>) -> Result<String> {
-    let text = serde_json::to_string(value)?;
-    Ok(serde_json::to_string(&text)?
+    js_string_literal(&serde_json::to_string(value)?)
+}
+
+/// `text` as a JavaScript string literal.
+fn js_string_literal(text: &str) -> Result<String> {
+    Ok(serde_json::to_string(text)?
         .replace('\u{2028}', "\\u2028")
         .replace('\u{2029}', "\\u2029"))
 }

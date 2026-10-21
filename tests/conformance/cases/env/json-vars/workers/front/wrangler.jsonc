@@ -1,0 +1,20 @@
+// JSON-valued `vars` (Wrangler's `{"type": "json"}` bindings) beside string
+// ones, and a `.dev.vars` entry that overrides a JSON var with a string.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "vars": {
+    "ADMINS": ["admin", "ops"],
+    "CONFIG": {
+      "nested": { "list": [1, "two", { "three": 3 }], "empty": {}, "nil": null, "flag": true, "n": -1.5 },
+      "text": "line para end </script> \"quoted\" \\ é 😀"
+    },
+    "LIMIT": 42,
+    "ENABLED": false,
+    "NOTHING": null,
+    "EMPTY_LIST": [],
+    "LOOKS_JSON": "[\"a\"]",
+    "OVERRIDDEN": { "from": "config" }
+  }
+}

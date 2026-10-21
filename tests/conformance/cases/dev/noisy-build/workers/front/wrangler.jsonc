@@ -1,0 +1,11 @@
+// A build command that writes `main` and prints on stdout and stderr. Its
+// output must not reach `celld dev`'s stdout, which carries only the ready
+// line.
+{
+  "name": "front",
+  "main": "dist/index.js",
+  "compatibility_date": "2026-09-04",
+  "build": {
+    "command": "mkdir -p dist && cp src/worker.js dist/index.js && echo build stdout && echo build stderr >&2 && echo '{\"event\":\"build\"}'"
+  }
+}

@@ -38,6 +38,8 @@ export function describeStep(step) {
       return "restart";
     case "otlp":
       return `otlp ${step.spans.join(", ")}`;
+    case "deploy":
+      return `deploy ${[step.worker, ...step.args].join(" ")}`;
   }
 }
 
@@ -52,6 +54,8 @@ async function runStep(session, step) {
       return { restart: true };
     case "otlp":
       return { otlp: await session.otlp.take(step.spans, STEP_TIMEOUT_MS) };
+    case "deploy":
+      return session.deploy(step, STEP_TIMEOUT_MS);
   }
 }
 
@@ -135,11 +139,15 @@ function webSocketStep(origin, step) {
 
 function normalizeStrings(value, origin, rules) {
   if (typeof value === "string") {
-    const { host } = new URL(origin);
-    let text = value
-      .replaceAll(origin, STABLE_ORIGIN)
-      .replaceAll(`ws://${host}`, STABLE_ORIGIN.replace(/^http/, "ws"))
-      .replaceAll(host, new URL(STABLE_ORIGIN).host);
+    let text = value;
+    // A deploy session has no origin.
+    if (origin !== undefined) {
+      const { host } = new URL(origin);
+      text = text
+        .replaceAll(origin, STABLE_ORIGIN)
+        .replaceAll(`ws://${host}`, STABLE_ORIGIN.replace(/^http/, "ws"))
+        .replaceAll(host, new URL(STABLE_ORIGIN).host);
+    }
     for (const { regex, replace } of rules) text = text.replace(regex, replace);
     return text;
   }

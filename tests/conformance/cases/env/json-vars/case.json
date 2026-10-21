@@ -1,0 +1,11 @@
+{
+  "workers": ["front"],
+  "steps": [
+    {"path": "/shape"},
+    {"path": "/values"},
+    {"path": "/identity"},
+    {"path": "/module-env"},
+    {"path": "/mutate"},
+    {"path": "/mutate"}
+  ]
+}

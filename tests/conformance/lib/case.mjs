@@ -11,7 +11,11 @@ const STEP_KEYS = {
   ws: new Set(["ws", "send", "receive", "close"]),
   restart: new Set(["restart"]),
   otlp: new Set(["otlp"]),
+  deploy: new Set(["deploy", "args"]),
 };
+// The `celld deploy` flags a deploy step may add. The step always passes
+// --dry-run --json, so nothing is written.
+const DEPLOY_ARGS = new Set(["--no-build"]);
 const OTLP_KEYS = new Set(["spans"]);
 // The runner owns telemetry: "observability" turns it on for both runtimes.
 const RUNNER_ENV = /^(CELLD_OTEL|OTEL_)/;
@@ -103,6 +107,18 @@ export function loadCase(root, id) {
 
   if (!Array.isArray(raw.steps) || raw.steps.length === 0) fail(`"steps" must be a non-empty array`);
   const steps = raw.steps.map((step, index) => validateStep(step, (message) => fail(`steps[${index}]: ${message}`)));
+  const deploys = steps.filter((step) => step.kind === "deploy").length;
+  if (deploys > 0) {
+    // A deploy step runs `celld deploy`, not a node: workerd has nothing to
+    // compare, and a case that also serves would start a node for configs
+    // the deploy steps may refuse.
+    if (kind !== "celld-only") fail(`a "deploy" step runs \`celld deploy\`, so it needs "kind": "celld-only"`);
+    if (deploys !== steps.length) fail(`a case with a "deploy" step can have only "deploy" steps`);
+    if (observability) fail(`a case with "deploy" steps starts no node, so "observability" does nothing`);
+    steps.forEach((step, index) => {
+      if (!raw.workers.includes(step.worker)) fail(`steps[${index}]: "deploy" must name one of "workers"`);
+    });
+  }
   steps.forEach((step, index) => {
     if (step.kind !== "otlp") return;
     // workerd's spans go to Miniflare's own collector, not to this runner.
@@ -141,6 +157,7 @@ export function loadCase(root, id) {
     observability,
     xfail: raw.xfail,
     steps,
+    deployOnly: deploys > 0,
     normalize: rules,
     expectPath,
     expected,
@@ -218,6 +235,14 @@ function validateStep(step, fail) {
         fail(`"otlp.spans" must be a non-empty array of the span names to wait for`);
       }
       return { kind, spans };
+    }
+    case "deploy": {
+      if (!nonEmptyString(step.deploy)) fail(`"deploy" must name a worker`);
+      const args = step.args ?? [];
+      if (!Array.isArray(args) || !args.every((arg) => DEPLOY_ARGS.has(arg))) {
+        fail(`"args" must be an array of ${[...DEPLOY_ARGS].map((arg) => `"${arg}"`).join(", ")}`);
+      }
+      return { kind, worker: step.deploy, args };
     }
   }
 }

@@ -897,7 +897,7 @@ async fn load_worker_at_pointer(
         .filter_map(|binding| binding.get("name")?.as_str().map(str::to_string))
         .collect();
     let services = service_bindings(&manifest)?;
-    let vars = worker_vars(&manifest);
+    let vars = worker_vars(&manifest)?;
     let compat = crate::worker_compat(&manifest.raw_metadata);
     let assets = match &manifest.assets {
         Some(reference) => Some(
@@ -1031,13 +1031,43 @@ fn service_bindings(manifest: &Manifest) -> anyhow::Result<Vec<crate::js::Servic
         .collect()
 }
 
-fn worker_vars(manifest: &Manifest) -> Vec<(String, String)> {
-    bindings(manifest, "plain_text")
+/// The Worker variables of a manifest, in its binding order: `plain_text`
+/// bindings carry a string, and `json` bindings a JSON value. A malformed one
+/// fails the load rather than leave a variable out of `env`.
+fn worker_vars(manifest: &Manifest) -> anyhow::Result<Vec<(String, crate::js::WorkerVar)>> {
+    manifest
+        .raw_metadata
+        .get("bindings")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
         .filter_map(|binding| {
-            Some((
-                binding.get("name")?.as_str()?.to_string(),
-                binding.get("text")?.as_str()?.to_string(),
-            ))
+            let kind = binding.get("type").and_then(serde_json::Value::as_str)?;
+            if !matches!(kind, "plain_text" | "json") {
+                return None;
+            }
+            let Some(name) = binding.get("name").and_then(serde_json::Value::as_str) else {
+                return Some(Err(anyhow::anyhow!("a {kind} binding has no name")));
+            };
+            let value = match kind {
+                "plain_text" => binding
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|text| crate::js::WorkerVar::Text(text.to_string()))
+                    .ok_or_else(|| anyhow::anyhow!("var binding {name} has no `text` string")),
+                // JSON text, so the manifest's own parse cannot reorder it;
+                // checked here, so a malformed one fails the load instead of
+                // every isolate's `env`.
+                _ => binding
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|text| serde_json::from_str::<serde::de::IgnoredAny>(text).is_ok())
+                    .map(|text| crate::js::WorkerVar::Json(text.to_string()))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("JSON var binding {name} has no `text` that is JSON")
+                    }),
+            };
+            Some(value.map(|value| (name.to_string(), value)))
         })
         .collect()
 }
@@ -1078,6 +1108,55 @@ mod tests {
         assert_eq!(services[0].script, "t");
         assert_eq!(services[0].entrypoint.as_deref(), Some("Named"));
         assert_eq!(services[0].props.as_ref().unwrap()["a"], json!([1]));
+    }
+
+    fn vars(bindings: serde_json::Value) -> anyhow::Result<Vec<(String, crate::js::WorkerVar)>> {
+        let mut manifest = manifest(json!(null));
+        manifest.raw_metadata["bindings"] = bindings;
+        worker_vars(&manifest)
+    }
+
+    #[test]
+    fn text_and_json_vars_keep_their_values() {
+        use crate::js::WorkerVar;
+        assert_eq!(
+            vars(json!([
+                { "type": "plain_text", "name": "MODE", "text": "[1]" },
+                { "type": "json", "name": "ADMINS", "text": "[\"admin\"]" },
+                { "type": "json", "name": "ORDER", "text": "{\"b\":1,\"a\":2}" },
+                { "type": "json", "name": "NOTHING", "text": "null" },
+                { "type": "service", "name": "S", "service": "t" },
+            ]))
+            .unwrap(),
+            [
+                ("MODE".to_string(), WorkerVar::Text("[1]".to_string())),
+                (
+                    "ADMINS".to_string(),
+                    WorkerVar::Json("[\"admin\"]".to_string())
+                ),
+                (
+                    "ORDER".to_string(),
+                    WorkerVar::Json("{\"b\":1,\"a\":2}".to_string())
+                ),
+                ("NOTHING".to_string(), WorkerVar::Json("null".to_string())),
+            ]
+        );
+        for binding in [
+            json!({ "type": "json", "name": "ADMINS" }),
+            json!({ "type": "json", "name": "ADMINS", "text": ["admin"] }),
+            json!({ "type": "json", "name": "ADMINS", "text": "[admin]" }),
+        ] {
+            assert_eq!(
+                vars(json!([binding])).unwrap_err().to_string(),
+                "JSON var binding ADMINS has no `text` that is JSON"
+            );
+        }
+        assert_eq!(
+            vars(json!([{ "type": "plain_text", "name": "MODE", "text": 1 }]))
+                .unwrap_err()
+                .to_string(),
+            "var binding MODE has no `text` string"
+        );
     }
 
     #[test]

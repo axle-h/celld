@@ -1,0 +1,8 @@
+// `workers_dev` and `preview_urls` set to true: accepted with a warning each.
+{
+  "name": "urls-on",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "workers_dev": true,
+  "preview_urls": true
+}

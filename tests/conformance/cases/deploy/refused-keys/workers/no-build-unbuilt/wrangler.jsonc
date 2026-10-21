@@ -1,0 +1,7 @@
+// --no-build with no earlier build: `main` does not exist.
+{
+  "name": "no-build-unbuilt",
+  "main": "dist/index.js",
+  "compatibility_date": "2026-09-04",
+  "build": { "command": "mkdir -p dist && cp index.js dist/index.js" }
+}

@@ -240,6 +240,23 @@ bindings, variables, cron triggers, D1 databases, KV namespaces, Queues,
 R2 buckets, Workflows, WebAssembly modules, and static assets. An unknown
 Wrangler configuration key stops the deploy. See
 [Cloudflare compatibility](cloudflare-compat.md) for the complete boundary.
+
+Before it bundles `main`, `celld deploy` runs the config's `build.command`
+with `sh -c` in `build.cwd` (default: the config's directory), as
+`wrangler deploy` does. The command's output goes to stderr, and a failed
+command stops the deploy. The command runs as you; see
+[Security](security.md#deploy-only-configs-you-trust).
+
+| flag | effect |
+| --- | --- |
+| `--config PATH` | The config or project directory, as the positional argument |
+| `--bucket URL` | The fleet bucket and prefix. Defaults to `CELLD_BUCKET` |
+| `--endpoint URL` | The S3-compatible endpoint. Defaults to `S3_ENDPOINT` |
+| `--region REGION` | The storage region. Defaults to `AWS_REGION` |
+| `--dry-run` | Build and print the version without writing |
+| `--json` | Print the deployment as one JSON object on stdout |
+| `--no-build` | Do not run `build.command`, for a project built already |
+
 A node verifies the SHA-256 digest of each module before it builds a
 deployment.
 
@@ -291,12 +308,13 @@ local state, so use `--clean` after removing a config.
 | `--clean` | Delete the primary's `.celld/dev` before the start |
 | `--watch-ignore GLOB` | Ignore one more project-relative glob. Repeatable. Not valid with `--no-watch` |
 | `--no-watch` | Disable automatic builds and restarts |
+| `--no-build` | Do not run any config's `build.command` |
 
 Set `NO_COLOR` to disable color, or `FORCE_COLOR` to enable it when the
 output is not a terminal. `NO_COLOR` takes priority.
 
 The console output goes to stderr. When the node is ready, and again after
-each rebuild, the command prints one JSON line to stdout:
+each rebuild that restarts it, the command prints one JSON line to stdout:
 
 ```json
 {"event":"ready","public":"http://127.0.0.1:9876","internal":"http://127.0.0.1:41234"}
@@ -331,6 +349,25 @@ build, and a failed build does not replace it. The watcher ignores
 and it does not watch files outside the projects. A `--watch-ignore` glob
 is relative to the project that contains the file, the innermost one when
 one project contains another.
+
+Each build runs every config's `build.command` first, as `celld deploy` does,
+with `WRANGLER_COMMAND=dev` and its output on stderr. The command runs in its
+own process group, which SIGINT or SIGTERM to `celld dev` stops: SIGTERM, then
+SIGKILL two seconds later. For a config with a build command, the command also
+watches `build.watch_dir` (default `src`) when it is outside the config's
+directory.
+
+A build usually writes files in the directories the command watches, which
+report a change. When a rebuild deploys exactly what already runs, the same
+deployment version, the command keeps the node running and drops the changes
+reported meanwhile to files whose content is what it was when the rebuild
+started. So a build that writes the same output each time settles after one
+extra build, and a save during that build still rebuilds. A build that writes
+different content on every run, such as a timestamp, into a watched directory
+rebuilds without end, as it does under `wrangler dev`: write that output under
+an ignored directory such as `.wrangler`, add a `--watch-ignore` glob, or keep
+it out of `build.watch_dir`. With `--no-build`, no command runs and
+`build.watch_dir` is not watched.
 
 The local object store is not available to a fleet node or an operator
 subcommand; they need a supported cloud bucket.

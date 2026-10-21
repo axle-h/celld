@@ -1,0 +1,93 @@
+{
+  "steps": [
+    {
+      "exit": 0,
+      "worker": "json-vars",
+      "output": [
+        " celld <version>",
+        "───────────────────────────────────────────────",
+        "Total Upload: <size> / gzip: <size>",
+        "Your Worker has access to the following bindings:",
+        "Binding                Resource",
+        "env.ADMINS (JSON)      Environment Variable",
+        "env.LIMITS (JSON)      Environment Variable",
+        "env.MODE (Text)        Environment Variable",
+        "Bundled json-vars (<time>)"
+      ]
+    },
+    {
+      "exit": 0,
+      "worker": "fallthrough",
+      "output": [
+        "warning: module rule Data [\"**/*.dat\"] is ignored: an earlier Data rule has no `fallthrough: true`",
+        " celld <version>",
+        "───────────────────────────────────────────────",
+        "Total Upload: <size> / gzip: <size>",
+        "Your Worker has no bindings.",
+        "Bundled fallthrough (<time>)"
+      ]
+    },
+    {
+      "exit": 0,
+      "worker": "platform",
+      "output": [
+        "note: `observability` is not read; telemetry is operator-controlled (CELLD_OTEL), see docs/telemetry.md",
+        " celld <version>",
+        "───────────────────────────────────────────────",
+        "Total Upload: <size> / gzip: <size>",
+        "Your Worker has no bindings.",
+        "Bundled platform (<time>)"
+      ]
+    },
+    {
+      "exit": 0,
+      "worker": "urls-on",
+      "output": [
+        "warning: `preview_urls` is true, but celld has no preview URLs",
+        "warning: `workers_dev` is true, but celld has no workers.dev URLs; a node serves the Worker on its own listener",
+        " celld <version>",
+        "───────────────────────────────────────────────",
+        "Total Upload: <size> / gzip: <size>",
+        "Your Worker has no bindings.",
+        "Bundled urls-on (<time>)"
+      ]
+    },
+    {
+      "exit": 0,
+      "worker": "build",
+      "output": [
+        "Running the build command `mkdir -p ../dist && cp ../index.js ../dist/index.js && echo built in $(basename \"$PWD\")` in workers/build/scripts",
+        "built in scripts",
+        " celld <version>",
+        "───────────────────────────────────────────────",
+        "Total Upload: <size> / gzip: <size>",
+        "Your Worker has no bindings.",
+        "Bundled build (<time>)"
+      ]
+    },
+    {
+      "exit": 0,
+      "worker": "no-build",
+      "output": [
+        " celld <version>",
+        "───────────────────────────────────────────────",
+        "Total Upload: <size> / gzip: <size>",
+        "Your Worker has no bindings.",
+        "Bundled no-build (<time>)"
+      ]
+    },
+    {
+      "exit": 0,
+      "worker": "secrets",
+      "output": [
+        " celld <version>",
+        "───────────────────────────────────────────────",
+        "Total Upload: <size> / gzip: <size>",
+        "Your Worker has access to the following bindings:",
+        "Binding                   Resource",
+        "env.API_TOKEN (Text)      Environment Variable",
+        "Bundled secrets (<time>)"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+// Two rule types that claim one extension.
+{
+  "name": "rules-conflict",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "rules": [
+    { "type": "Text", "globs": ["**/*.txt"], "fallthrough": true },
+    { "type": "Data", "globs": ["*.txt"] }
+  ]
+}

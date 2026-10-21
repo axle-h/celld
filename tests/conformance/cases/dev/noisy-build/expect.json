@@ -1,0 +1,7 @@
+{
+  "steps": [
+    { "status": 200, "body": "built" },
+    { "restart": true },
+    { "status": 200, "body": "built" }
+  ]
+}

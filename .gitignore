@@ -7,3 +7,5 @@ package-lock.json
 
 # tests/conformance: per-run copies of the cases (kept when a case fails)
 /tests/conformance/.run/
+# A case's .dev.vars is a fixture, not a local credential.
+!/tests/conformance/cases/**/.dev.vars
