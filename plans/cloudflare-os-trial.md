@@ -92,8 +92,12 @@ paths were exercised.
    (`ctx.exports.XAccount({props})` from another Worker). Also reproduced
    in one script: a `ctx.exports` loopback stub or an RpcTarget passed into a
    DO and then `storage.kv.put`. This is plan gap 3, compounded by failure 6.
-8. **`stub.onRpcBroken()` is missing.** Used by `user.ts:492` and
-   `overseer.ts:870` to drop subscribers when the client goes away.
+8. **`subscriber.onRpcBroken is not a function`.** Used by `user.ts:492` and
+   `overseer.ts:870` to drop subscribers when the client goes away. Later
+   analysis: the subscriber is a forwarded Cap'n Web stub, and workerd itself
+   has no native `onRpcBroken` (`server.ts:307`), so this is a symptom of
+   failure 6, not a missing native API. See decision D3 in
+   [cloudflare-os-fixes.md](cloudflare-os-fixes.md).
 9. **BYOB readers are refused on non-byte streams**: "Invalid reader mode
    'byob'". `git-codec.ts:663` calls `getReader({ mode: "byob" })` on a pack
    stream; in workerd the platform streams (R2 bodies, `DecompressionStream`
@@ -119,7 +123,6 @@ paths were exercised.
   - WebSocket responses through service bindings (failure 5) — a bug.
   - `ctx.exports` namespaces for migrated classes without bindings (failure 4).
   - JSON `vars` and `rules[].fallthrough` (failures 2, 3).
-  - `stub.onRpcBroken()` (failure 8).
   - BYOB readers on platform streams (failure 9).
 
 ## Reproducing

@@ -104,6 +104,10 @@ supported keys and runs the build step first.
 
 ## What it would take, in order of effort
 
+Superseded by the ordered implementation plan in
+[cloudflare-os-fixes.md](cloudflare-os-fixes.md). The list below is the
+original summary.
+
 1. Cross-isolate JS RPC carrying stubs, RpcTargets, streams, and promise
    pipelining. The largest item, and the foundation for 2 and 3.
 2. Cross-script DurableObjectClass as a facet class, and durable storage of
