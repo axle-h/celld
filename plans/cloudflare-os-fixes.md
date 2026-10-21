@@ -342,8 +342,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 3 | 0.2 Conformance corpus and runner, seed cases | done | `2b445e4` |
 | 4 | 0.6 CI | done | `370d7df` |
 | 5 | 0.4 part 1: e2e bring-up, mock LLM | done | starter `46ea5ad` |
-| 5b | 0.4 part 2: smoke, browser, checklist, baseline | next | |
-| 6 | Phase 0 gate evidence | queued | |
+| 5b | 0.4 part 2: smoke, browser, checklist, baseline | done | starter `c17f99a` |
+| 6 | Phase 0 gate evidence | next | |
 | 7+ | Phase 1 in plan order (1.1-1.17), then 0.5 after 1.7 | queued | |
 
 ## Phase overview
@@ -570,8 +570,10 @@ shows a full-binary Rust test pattern.
 ### 0.4 Cloudflare OS e2e harness in the starter: `starter:celld/e2e/`
 
 There is one entry point:
-`starter:celld/e2e.sh [check|up|build|deploy|node|smoke|browser|all|down] [--router] [--fresh] [--dev-store]`.
-Part 1 (everything but smoke and browser) landed as starter `46ea5ad`. Ports
+`starter:celld/e2e.sh [check|up|build|deploy|node|smoke|browser|restart|all|down] [--router] [--fresh] [--dev-store] [--quick]`.
+Part 1 (bring-up) landed as starter `46ea5ad`, part 2 (smoke, browser,
+checklist) as `c17f99a`. `all --router` stops at the health check until 1.7;
+run `smoke --router` and `browser --router` by hand. Ports
 are configurable (`E2E_PORT`, `E2E_AZURITE_PORT`, `MOCK_LLM_PORT`, defaulting
 to the plan's numbers), so it can run beside the manual trial. State lives in
 `.celld/e2e/`, except that `--dev-store` uses the primary's `./.celld/dev`.
@@ -627,30 +629,40 @@ to the plan's numbers), so it can run beside the manual trial. State lives in
 
      | Step | Call | Expected | Covers |
      | --- | --- | --- | --- |
-     | S0 | `GET /` (router assets); a router → binding → backend JSON probe | 200 / JSON | |
+     | S0 | `GET /` (router assets); `ping()` as a Cap'n Web HTTP batch to `POST /api` | 200 / JSON | |
      | S1 | `amIAdmin()`, `getAdminApi()` | `true`; a stub | |
-     | S2 | `admin.setGatekeeperMode(v, "optional")` for each built-in gatekeeper | resolves | 7 |
+     | S2 | `admin.setGatekeeperMode(v, "optional")` for each built-in gatekeeper, `custom` set to the non-default `"disabled"` | modes read back | |
      | S3 | `subscribeToNotifications(new RpcStub(sub))`; dispose | no server error | 6, 8 |
      | S4 | `subscribeConnectedAccounts(sub)` | `ready()` called within 10 s | 6 |
      | S5 | `provisionAmbientAccount("context")` | account arrives on S4's subscriber | 7 |
-     | S6 | `api.newGadget().newChat("hello", "scripted")`, pipelined | chat id; model called; chat goes idle | 6 |
+     | S6 | `api.newGadget().newChat("hello", "scripted")`, pipelined | chat id; model called; chat goes idle; the scripted reply is in `getChatHistory`, with no error message | 6 |
      | S7 | `newGadgetFromBlueprint(id, {})`, with `id` taken from `listFeaturedBlueprints()[0]`; then `getMetadata()` | title | 9 |
-     | S8 | scripted tool call that schedules a task 5 s out | alarm fires; hook message in chat | |
-     | S9 | restart the node, log in; S5's account still listed; reopen S6's gadget | works | durable stubs, restore |
-     | S10 | `--router`: rerun S1-S7 through the router | same | 5 |
+     | S8 | scripted tool call that schedules a one-shot task 60 s out; `enableHook` | alarm fires; an `agentCallback` `onSchedule` message in chat | |
+     | S9 | restart the node, log in; S2's `custom` mode, S5's account (if made this run) and S6's chat survive | works | durable stubs, restore |
+     | S10 | `--router`: S1-S7 all passed through the router (not a rerun: `provisionAmbientAccount` throws the second time) | same | 5 |
      | S11 | scan `node.log` for "cannot cross isolate", "could not be cloned", "is not a function", "dropped a frame for a closed WebSocket", "Invalid reader mode", "already disposed", "does not implement" | none | all |
 
-     celld logs "dropped a frame for a closed WebSocket" (`ws_registry.rs:569`)
-     on every clean client disconnect, including the health probe's. S11
-     counts it only when a 1006 close appears with it, until 1.17 revisits close
-     handling.
+     Notes from building the gate:
+     - celld logs "dropped a frame for a closed WebSocket" (`ws_registry.rs:569`)
+       on every clean client disconnect. S11 counts it only when one of
+       smoke's sockets closed with 1006. Revisit with 1.17.
+     - RPC errors go back to the client and are not logged, so S11 can't see
+       them. Phase gates rely on the per-step results.
+     - S12 can't prove that the sessions' own isolate retired: nothing ties an
+       `/api` session to its isolate. It counts `isolate retiring` lines and
+       says so. **Follow-up (Phase 3, with N5/N12):** an info line
+       `ws session bound ws_id=N isolate=<heap_id>`, and a way for the client
+       to learn its ws_id.
+     - S5 is a SKIP on a reused bucket; use `--fresh` for gate runs.
      | S12 | two sessions subscribed to one workspace; wait more than 60 s, so the session isolate retires; edit in one session | the other sees the change | N5, N12 |
-     | S13 | scripted code-mode call `env.GADGET.getDocument()` | returns the document | N2, N6 |
+     | S13 | scripted code-mode call `env.GADGET.rpc.getDocument()` in a Workspace Docs workspace | returns the document | N2, N6 |
 7. **browser** (`e2e/browser.ts`)
    - Uses `playwright-core` 1.64 from `starter:cloudflare-os/node_modules/.pnpm`
      with the cached Chromium in `~/.cache/ms-playwright/`.
-   - Steps: log in → home renders → send "hello" and see the mock reply →
-     Gatekeepers page: toggle one on → create a gadget from a blueprint.
+   - Steps B0-B6: account and model over the API → log in → home renders
+     (onboarding leaves Web Search off) → send "hello" and see the mock reply
+     → Gatekeepers page: turn Web Search on → create a gadget from a
+     blueprint (reads the landing page's error banner) → scan `node.log`.
    - Fails on console errors outside an allowlist. The allowlist starts with
      the upstream `useAuthenticatedApi must be used within an AuthProvider`
      and `Flagship binding missing`.
@@ -752,8 +764,10 @@ capabilities. They become Phase 8's gates. The fork's CI commits
 
 - The seed conformance cases pass on both runtimes.
 - `e2e.sh all --no-router` runs end to end on `main`.
-- **The baseline is recorded.** Record each smoke step's actual PASS/FAIL in
-  [cloudflare-os-trial.md](cloudflare-os-trial.md) under "Baseline".
+- **The baseline is recorded** (done 2026-10-21, in
+  [cloudflare-os-trial.md](cloudflare-os-trial.md#baseline); every FAIL is
+  explained by trial failures 5-9). Record each smoke step's actual
+  PASS/FAIL there.
   - Every FAIL must name the trial failure or plan item that explains it. A
     failure with no explanation is a new finding, and is added to the plan
     before Phase 1 starts.
@@ -1583,7 +1597,7 @@ cases:
 ### Phase 2 gate
 
 - `storage-stubs/` passes on both runtimes.
-- S2 and S5 pass.
+- S5 passes (S2 already does).
 - `node.log` has no "could not be cloned".
 
 ---

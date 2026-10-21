@@ -125,6 +125,58 @@ paths were exercised.
   - JSON `vars` and `rules[].fallthrough` (failures 2, 3).
   - BYOB readers on platform streams (failure 9).
 
+## Baseline
+
+The e2e harness's first full run (plan item 0.4), against which every phase
+gate counts steps turned from FAIL to PASS.
+
+- Date: 2026-10-21
+- celld: `target/lab/celld` (0.6.2), built after `d20d9a6`; `crates/` is
+  unchanged from there to `e2dbde4`
+- Starter: `46ea5ad` plus the uncommitted 0.4 part 2 (`celld/e2e/smoke.ts`,
+  `browser.ts`, after review fixes); submodule `a6794421`
+- Runs: `celld/e2e.sh all --fresh` (workshop primary, workaround W5); then,
+  on a new blob container, `up --fresh`, `deploy --router`, `node --router`
+  (its health check fails at `ping()`), `smoke --router` and
+  `browser --router`
+
+| Step | No router | Router | Why it fails |
+| --- | --- | --- | --- |
+| S0 | PASS | PASS | |
+| S1 | PASS | FAIL | Router: `WebSocket connection failed`; the client sees 1006 (trial failure 5, plan 1.7) |
+| S2 | PASS | SKIP | (sets the built-in gatekeepers to `optional` and `custom` to the non-default `disabled`) |
+| S3 | FAIL | SKIP | `subscriber.onRpcBroken is not a function` (trial failures 6 and 8; Phase 3) |
+| S4 | FAIL | SKIP | `subscriber.ready is not a function` (trial failure 6; Phase 3) |
+| S5 | SKIP | SKIP | Needs S4. The browser's onboarding shows the provisioning itself fails with `function () {} could not be cloned` (trial failure 7; Phase 2) |
+| S6 | FAIL | SKIP | `'newChat' is not a function.` (trial failure 6; Phase 3) |
+| S7 | FAIL | SKIP | `Invalid reader mode 'byob'` (trial failure 9; plan 1.8, then Phase 5) |
+| S8 | SKIP | SKIP | Needs S5 and S6 |
+| S9 | PASS | SKIP | Partial: restart, sign-in, and `custom` still `disabled`; no S5 account or S6 chat to check |
+| S10 | SKIP | FAIL | Runs only with `--router`; S1-S7 did not pass through the router (trial failure 5, plan 1.7) |
+| S11 | PASS | FAIL | Router: one `/api` WebSocket closed with 1006, and the run's log has one "dropped a frame for a closed WebSocket" (trial failure 5). No router: clean, because the RPC errors above reach the client and are not logged |
+| S12 | SKIP | SKIP | Needs S6 |
+| S13 | SKIP | SKIP | Needs S6 and S7 |
+
+`browser.ts`, no router (`all --fresh`):
+
+| Step | Result | Why it fails |
+| --- | --- | --- |
+| B0 | PASS | (account and model over the API) |
+| B1 log in | FAIL | Console: notification and account subscriptions fail (trial failures 6, 8) |
+| B2 home | FAIL | Renders; onboarding's "turn on" fails for context, scheduler and custom with `function () {} could not be cloned` (trial failure 7) |
+| B3 hello | FAIL | `Failed to create gadget: TypeError: 'newChat' is not a function.` (trial failure 6) |
+| B4 gatekeeper | FAIL | `Failed to connect account: Error: function () {} could not be cloned.` (trial failure 7) |
+| B5 blueprint | FAIL | The page shows `Invalid reader mode 'byob'` (trial failure 9) |
+| B6 node.log | PASS | |
+
+In router mode `browser.ts` fails at B0 with `WebSocket connection failed`
+(trial failure 5); B6 passes, since no page opened.
+
+Every FAIL is explained by a trial failure; there is no new finding. S8, S12
+and S13 have not run yet, so their scripts (the scheduler tool call, the
+65-second wait, `env.GADGET.rpc.getDocument()`) are unproven until S5, S6 and
+S7 pass.
+
 ## Reproducing
 
 ```sh
