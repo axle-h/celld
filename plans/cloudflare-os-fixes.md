@@ -32,6 +32,21 @@ No fork's cross-isolate capability routing may be merged, in any form: they
 all let code forge capabilities. The full disposition table is in the
 prior-art page.
 
+### Scope: fresh deployments only
+
+This work targets **new Cloudflare OS deployments on this celld fork**. There
+are no existing fleets, manifests or cell data to carry forward. So:
+- no migrations;
+- no legacy code paths;
+- no compatibility with data or manifests written by v0.6.2;
+- no rolling upgrades between old and new nodes.
+
+Every node in a fleet runs the same build. If an item seems to need backward
+compatibility, that is a sign the design is wrong for this project; raise it
+rather than adding a compatibility path. If this work is ever offered
+upstream, upstream's compatibility rules (feature flags in `protocol.rs`,
+rolling-upgrade support) would be added then.
+
 ### The two repositories
 
 | Repo | Path | Notes |
@@ -129,8 +144,9 @@ MinIO images can no longer be pulled anonymously, so use Azurite.
 ## Decisions
 
 Alex settled all of these on 2026-10-21. The **Decision** column is binding.
-Phases refer to them as D1-D15. Three went against the original
-recommendation: D12, D13 and D15.
+Phases refer to them as D1-D15. Two went against the original
+recommendation: D12 and D13. D6 and D15 were later simplified: deployments
+are always fresh, so there is nothing to keep compatible.
 
 | # | Question | Decision |
 | --- | --- | --- |
@@ -139,7 +155,7 @@ recommendation: D12, D13 and D15.
 | D3 | Native `stub.onRpcBroken()`. Cloudflare OS calls it on stubs that are really forwarded Cap'n Web stubs (`cos:workshop-backend/src/server.ts:307` says the built-in RPC lacks it). | Don't add a native method that would shadow the forwarded one. Confirm with a workerd differential test at compat date 2026-09-04. |
 | D4 | Can a DO with live exported capabilities be evicted? | No idle eviction while exports are live. Pressure eviction is still allowed and breaks them. |
 | D5 | Re-exported stubs (B passes X's stub on to C): take a shortcut, or proxy through B as workerd does? | Shortcut, documented as a difference. |
-| D6 | `allow_irrevocable_stub_storage` enforcement. celld currently stores same-script loopbacks without the flag. | Enforce the flag for new token kinds and for restore. Same-script loopbacks keep working with a deprecation warning for one release. |
+| D6 | `allow_irrevocable_stub_storage` enforcement. celld currently stores same-script loopbacks without the flag. | **Enforce strictly, as workerd does,** for every storable stub, including same-script loopbacks. (Alex first chose a one-release deprecation, but there are no existing apps to protect: fresh deployments only.) |
 | D7 | Authenticate stored capability tokens? | Yes, with HMAC, as workerd authenticates its channel tokens. Key = HMAC(peer_secret, "celld-capability-key-v1"), as in royalcala `2bd84cd`: fleet-wide, and it survives restarts. |
 | D8 | Where a facet whose class comes from another script runs. | In the target script's isolate, on the root's owner node, so it gets its own `env`, `ctx.exports` and flags. |
 | D9 | `ai` and `browser` bindings. | Keep them refused in celld. The starter maps `WORKERS_AI`/`AI` to a service binding on an operator shim Worker (Phase 9). A first-class celld binding is deferred. |
@@ -148,7 +164,7 @@ recommendation: D12, D13 and D15.
 | D12 | `accept()` on a WebSocket that a stateless Worker returned through a service binding. | **Implement the host-side frame bridge in 1.7**, so passthrough and `accept()` both work (about 2 more days). The recommendation had been to refuse it for now. |
 | D13 | `tracing`: a correct no-op first (`isTraced=false`), or OTLP export straight away? | **OTLP export in Phase 1 (1.2).** With `CELLD_OTEL` on, spans are traced and exported; with it off, `isTraced=false`. The recommendation had been a no-op first. |
 | D14 | Dynamic Worker tails: legacy `tail()` for RPC and facet invocations, or `tailStream`? | Legacy only. Cloudflare OS doesn't use `tailStream` yet; refuse `streamingTails`. |
-| D15 | Existing cells when cell scopes become script-qualified (2.4): a fallback lookup or a one-time migration? | **New deployments only.** Script-qualified scopes apply to fleets created with the feature. Existing fleets keep today's naming, and still refuse colliding class names, loudly. Both naming paths are permanent and both are tested. The recommendation had been a fallback, then a migration. |
+| D15 | How cell scopes become script-qualified (2.4). | **Always script-qualified, one code path.** Every deployment names cells by (script, class). There is no fleet setting, legacy naming or migration, because there are only fresh deployments. |
 
 ## Adoption policy for code from other forks
 
@@ -551,9 +567,7 @@ migration-only classes:
 
 **Design.**
 - In `read_project`, add each non-reserved class from `sqlite_classes` to
-  `do_classes`. Namespace keys depend only on (script, class), so ids don't
-  change, and trial data created under the `CELLD_DO_*` workaround stays
-  reachable.
+  `do_classes`. Namespace keys depend only on (script, class).
 - Fix the "DO class not exported" check (`js.rs:5936`). `ns.get` returns
   `undefined`, not `None`, so the check never fires; make it a clear load
   error.
@@ -566,8 +580,8 @@ migration-only classes:
   check passes.
 - Integration: an `exports/migrated-namespace` case. The id from
   `ctx.exports.X.getByName("a")` equals the id from an `env` binding.
-- E2E/manual: remove `generate.ts` workaround 4 and redeploy over the trial
-  bucket. The admin user and their settings survive.
+- E2E/manual: remove `generate.ts` workaround 4 and deploy to a fresh bucket.
+  Sign-up, admin settings and the user DO work.
 
 ### 1.4 Service-binding `props`, and refusing ignored keys
 
@@ -624,7 +638,7 @@ requests, DO `__dispatchTo`, service-binding targets and entrypoint targets.
 
 | Change | Design | Unit tests |
 | --- | --- | --- |
-| JSON `vars` | A `{"type":"json"}` binding, installed with `JSON.parse` per isolate. Add feature flag `FEATURE_JSON_VARS_V1` (`protocol.rs:64`). Cap each var at 5 KiB. Dotenv overrides stay strings. | Nested values; a dotenv override; an old node refusing the feature |
+| JSON `vars` | A `{"type":"json"}` binding, installed with `JSON.parse` per isolate. Cap each var at 5 KiB. Dotenv overrides stay strings. | Nested values; a dotenv override; the size cap |
 | `rules[].fallthrough` | Accept `false`. Accept `true` only when no other rule claims that extension; refuse it otherwise. | All three cases |
 | `observability` | Accept, and print one line: telemetry is operator-controlled (`CELLD_OTEL`). | Warning text |
 | `build` | Run `build.command` with `sh -c` in `build.cwd` (default: the config's directory) before resolving `main`. A non-zero exit stops the deploy. `--no-build` skips it. `celld dev` watches `watch_dir`. | cwd; failure propagation; `--no-build` |
@@ -638,7 +652,7 @@ requests, DO `__dispatchTo`, service-binding targets and entrypoint targets.
   cleanly. Keep refusing `routes`/`route`. Make `workers_dev`/`preview_urls`
   silent when `false` and warned when `true`. Its extra keys are fine.
 - Rework the JSON vars, `build` and `observability` pieces of IlyaGulya
-  `d6e0988`. Add the size cap, the feature flag and `--no-build`. Drop its
+  `d6e0988`. Add the size cap and `--no-build`. Drop its
   `rules` part.
 
 **Integration.**
@@ -1020,8 +1034,8 @@ stored records must never throw.
   - a plain transient stub or RpcTarget ("not a persistent stub")
 - **Compat:** `Compat` (`engine_api.rs:247-266`) gains
   `allow_irrevocable_stub_storage`.
-- **Existing behaviour:** same-script loopback storage without the flag stays
-  allowed, with a deprecation warning (D6).
+- **Same-script loopbacks** need the flag too (D6). This changes today's
+  lenient behaviour; update `docs/services/durable-objects.md` accordingly.
 
 **Prior art.**
 - **Rework** royalcala `d534083`: the HMAC-SHA256 token codec, with bounds,
@@ -1067,33 +1081,20 @@ fork). Use it as a reference.
   The remaining work is the class-keyed tables: `cell_configs`,
   `register_cell_class`, and the cell-scope routing in `generation.rs` and
   `runtime.rs`.
-- **New deployments only (D15).**
-  - A fleet created with the feature (a fleet-level setting recorded in the
-    bucket at first deploy, with a feature flag in `protocol.rs`) uses
-    script-qualified scopes for every class.
-  - A fleet without it keeps today's naming and its collision refusal. Make
-    the refusal message point at the feature, and say that it needs a new
-    fleet.
-  - There is no in-place migration, so existing data is never at risk. Both
-    naming paths are permanent, so both are covered by every test that touches
-    cell scopes.
+- **Always on, one code path (D15).** Every deployment names cells this way.
+  Remove the "exported by more than one co-hosted script" refusal
+  (`generation.rs:587-596`).
 - **Do not** copy IlyaGulya's approach of hashing only **non-primary** scripts'
   classes (`.svc.<hash>`, `30f2a48`). Which script is primary changes with
-  deploy order (for example, the trial's `--no-router` mode), and that would
-  orphan data.
+  deploy order (for example, the trial's `--no-router` mode), so names would
+  change with deploy order.
 
 
 **Tests.**
-- Unit:
-  - Scope derivation for qualified fleets does not depend on which script is
-    primary.
-  - Legacy fleets derive exactly today's scopes.
-  - The feature setting cannot change after a fleet is created.
+- Unit: scope derivation does not depend on which script is primary.
 - Integration: port IlyaGulya's `same-class` case (router + A + B, both
-  exporting `UserAccount`; `/a` → `a:1`,`a:2`; `/b` → `b:110`,`b:120`) on a
-  qualified fleet. Then swap which script is primary and check that the data
-  is still there. On a legacy fleet, the same deployment is refused with the
-  new message.
+  exporting `UserAccount`; `/a` → `a:1`,`a:2`; `/b` → `b:110`,`b:120`). Then
+  swap which script is primary and check that the data is still there.
 - E2E/manual: deploy with two OAuth gatekeepers (for example GitHub and
   Linear, without credentials); the node starts and both appear on the
   Gatekeepers page.
@@ -1720,11 +1721,9 @@ phase's gate includes the parts that apply to it.
 - **Resource limits.** Every new table and queue has a documented, enforced
   bound, and a `/state` metric. That covers exports, imports, parked
   WebSocket handoffs, restore chains and tails.
-- **Upgrade safety.**
-  - Every manifest or wire change is behind a feature flag (`protocol.rs`).
-  - A rolling upgrade from v0.6.2 is tested.
-  - Cell data written before an upgrade stays reachable. Legacy fleets keep
-    their naming (2.4 / D15).
+- **Fresh-deployment correctness.** Every e2e and fleet gate runs against a
+  fresh bucket. The [scope](#scope-fresh-deployments-only) rules out upgrade
+  and compatibility paths, and new code must not add them.
 - **Performance.** Before/after benchmarks for the request hot path (fetch
   bodies after 1.8, RPC calls after Phase 3) and the memory per isolate.
   Regressions are justified or fixed.

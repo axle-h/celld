@@ -208,7 +208,7 @@ bring it up to the adoption policy before it lands. "Rework" means cherry-pick a
 | royalcala `ef5e87c` stream-capability path | Reference | 7.1 | A per-chunk baseline; our single-claim `register_body_stream` is the target. |
 | IlyaGulya `b22c115`, `2a4a1d6` | Reference | 8 | Adopt: the identity triple (node, process generation from the **signed lease**, id), resolving origins through the lease, `GONE` semantics. Don't adopt: HTTP-per-op transport, sequential ids, the `PROTOCOL_VERSION` bump. |
 | IlyaGulya `6e6af49` | **Adopt** (applies cleanly) | 8 / N11 | Independent fleet fix; also worth sending upstream |
-| IlyaGulya `876a472`, `914bb60` (upgrade drill) | Reference | 8 | Needs old refs we don't have. |
+| IlyaGulya `876a472`, `914bb60` (upgrade drill) | Skip | — | Out of scope: fresh deployments only, no mixed-version fleets. |
 | patcon `ead1d36` (app `web-fetch.ts` without AI) | **Do not copy** | 9.2 | An app-side shortcut that hides N7. The AI shim must provide `toMarkdown`. |
 
 ### Not needed
