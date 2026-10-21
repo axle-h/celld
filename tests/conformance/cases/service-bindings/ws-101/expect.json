@@ -1,0 +1,210 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 426,
+      "body": "back: websocket upgrade required"
+    },
+    {
+      "frames": [
+        "back:hello",
+        "back:a",
+        "back:b"
+      ],
+      "close": {
+        "code": 4000,
+        "reason": "back closed"
+      }
+    },
+    {
+      "frames": [
+        "back:later:x"
+      ],
+      "close": {
+        "code": 4100,
+        "reason": "back closed later"
+      }
+    },
+    {
+      "protocol": "chat.v2",
+      "frames": [
+        "back:a"
+      ],
+      "close": {
+        "code": 4001,
+        "reason": "back closed"
+      }
+    },
+    {
+      "frames": [
+        "back:hello",
+        "back:a"
+      ],
+      "close": {
+        "code": 4002,
+        "reason": "back closed"
+      }
+    },
+    {
+      "frames": [
+        "back:later:y"
+      ],
+      "close": {
+        "code": 4100,
+        "reason": "back closed later"
+      }
+    },
+    {
+      "frames": [
+        "back:hello",
+        "back:a"
+      ],
+      "close": {
+        "code": 4003,
+        "reason": "back closed"
+      }
+    },
+    {
+      "protocol": "chat.v1",
+      "frames": [
+        "back:a"
+      ],
+      "close": {
+        "code": 4004,
+        "reason": "back closed"
+      }
+    },
+    {
+      "frames": [
+        "dynamic:hello",
+        "dynamic:a"
+      ],
+      "close": {
+        "code": 4005,
+        "reason": "dynamic closed"
+      }
+    },
+    {
+      "frames": [
+        "dynamic:later:z"
+      ],
+      "close": {
+        "code": 4100,
+        "reason": "dynamic closed later"
+      }
+    },
+    {
+      "frames": [
+        "front:back:hello",
+        "front:back:a",
+        "front:back:b"
+      ],
+      "close": {
+        "code": 4006,
+        "reason": "front relayed 4006 back closed"
+      }
+    },
+    {
+      "frames": [
+        "front:back:later:w"
+      ],
+      "close": {
+        "code": 4100,
+        "reason": "front relayed 4100 back closed later"
+      }
+    },
+    {
+      "frames": [
+        "front:back:a"
+      ],
+      "close": {
+        "code": 4007,
+        "reason": "front relayed 4007 back saw 4007 front closed"
+      }
+    },
+    {
+      "protocol": "chat.v2",
+      "frames": [
+        "front:back:a"
+      ],
+      "close": {
+        "code": 4008,
+        "reason": "front relayed 4008 back closed"
+      }
+    },
+    {
+      "frames": [
+        "front:len:700000",
+        "front:len:700000",
+        "front:len:700000",
+        "front:back:len:700000",
+        "front:back:len:700000",
+        "front:back:len:700000",
+        "front:back:done"
+      ],
+      "close": {
+        "code": 4009,
+        "reason": "front relayed 4009 back closed"
+      }
+    },
+    {
+      "frames": [
+        "back:hello",
+        "back:a"
+      ],
+      "close": {
+        "code": 4010,
+        "reason": "back closed"
+      }
+    },
+    {
+      "frames": [
+        "object:back:hello",
+        "object:back:a"
+      ],
+      "close": {
+        "code": 4011,
+        "reason": "object relayed 4011 back closed"
+      }
+    },
+    {
+      "frames": [
+        "object:back:a"
+      ],
+      "close": {
+        "code": 4012,
+        "reason": "object relayed 4012 back saw 4012 object closed"
+      }
+    },
+    {
+      "frames": [
+        "back:hello",
+        "back:a"
+      ],
+      "close": {
+        "code": 4013,
+        "reason": "back closed"
+      }
+    },
+    {
+      "status": 200,
+      "body": "status 101"
+    },
+    {
+      "frames": [],
+      "close": {
+        "code": 1006,
+        "reason": ""
+      }
+    },
+    {
+      "status": 500,
+      "body": "DataCloneError: Could not serialize object of type \"WebSocket\". This type does not support serialization."
+    },
+    {
+      "status": 500,
+      "body": "RangeError: Responses may only be constructed with status codes in the range 200 to 599, inclusive."
+    }
+  ]
+}

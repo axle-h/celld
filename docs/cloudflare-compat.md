@@ -155,9 +155,25 @@ The `tail` and `email` handlers are unavailable.
 ### [WebSockets](https://developers.cloudflare.com/workers/runtime-apis/websockets/)
 
 - An outbound Worker socket closes when its event and `waitUntil` work end. A
-  socket returned in the response stays open.
+  socket returned in the response stays open. A socket that a service binding,
+  a Dynamic Worker or a Durable Object returned keeps its request alive once
+  the request accepts it, as in workerd.
+- celld closes a WebSocket that a service binding, a Dynamic Worker or a
+  Durable Object returned with code 1011 when the caller has not taken it from
+  the response after 30 seconds, or 5 seconds after its deployment retires.
+- A request can hold at most 64 such sockets that it has not returned or
+  accepted. The call that would return one more throws, and that socket closes
+  with code 1011.
+- A socket accepted from such a response forwards a Close the Worker sends
+  and waits 10 seconds for the other side's reply. The Worker then sees code
+  1006.
+- A Worker response with status 101 and no WebSocket fails with status 500,
+  and `new Response(null, { status: 101 })` throws workerd's `RangeError`. A
+  `fetch()` without `Upgrade: websocket` that a server answers with 101 throws
+  a `TypeError` that says so.
 - Each isolate-polled input queue has a 1 MiB budget for non-terminal frames. A
-  message larger than 1 MiB uses the complete budget.
+  message larger than 1 MiB uses the complete budget. A socket accepted from a
+  subrequest's response has such a queue at each end.
 - If the isolate stops polling, celld discards unread frames during cleanup. A
   later pull reports an abnormal close.
 - A WebSocket transport cannot move to a new cell owner. A client must reconnect

@@ -75,6 +75,10 @@ Fetcher brokers each `fetch()` through the loader. A `connect()` or a WebSocket
 through a Fetcher throws, because the celld service protocol carries no
 bidirectional tunnel.
 
+An entrypoint's `fetch()` can answer with a WebSocket upgrade. The loader
+returns or accepts the socket as it does one from a
+[service binding](workers.md#service-bindings), with the same limits.
+
 ## Lifetime and caching
 
 `get(id, getCode)` memoizes the compiled Worker by id inside one loader binding

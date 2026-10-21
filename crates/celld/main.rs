@@ -342,10 +342,23 @@ fn forwards_worker_header(
             && status != StatusCode::NO_CONTENT))
 }
 
+/// Why a 101 reached the client path with no socket: the response promised
+/// a protocol switch that nothing can carry out. A bare 101 leaves the client
+/// waiting for a handshake that never comes, so it is a Worker failure.
+const UPGRADE_WITHOUT_WEBSOCKET: &str = "the Worker answered 101 Switching Protocols without a \
+     WebSocket for this connection";
+
+/// Answer with a Worker response that carries no WebSocket.
 fn runtime_response(
     worker_response: celld::js::HttpResponse,
     preserve_representation_length: bool,
 ) -> HttpReply {
+    if worker_response.status == 101 {
+        return response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Worker failed: {UPGRADE_WITHOUT_WEBSOCKET}"),
+        );
+    }
     let Ok(status) = StatusCode::from_u16(worker_response.status) else {
         return response(StatusCode::INTERNAL_SERVER_ERROR, "invalid Worker status");
     };
@@ -2003,6 +2016,12 @@ pub(crate) enum ForwardedFetchOutcome {
     },
 }
 
+/// Why a Durable Object on another node cannot return a WebSocket that a
+/// stateless Worker holds: the tunnel carries a Durable Object's socket, and
+/// a Worker socket lives in an isolate on the owner node.
+const REMOTE_WORKER_WEBSOCKET: &str = "a Durable Object on another node returned a WebSocket \
+     that a stateless Worker holds; celld carries such a socket only within one node";
+
 pub(crate) async fn dispatch_forwarded_fetch(
     app: AppHandle,
     scope: String,
@@ -2110,6 +2129,16 @@ pub(crate) async fn dispatch_forwarded_fetch(
             };
             match result {
                 Ok(mut worker_response) => {
+                    if let Some(HttpResponseWebSocket::Worker(_)) = &worker_response.websocket {
+                        // The socket belongs to a stateless isolate on this
+                        // node, and only a Durable Object's socket can be
+                        // tunneled. Dropping the response releases it.
+                        abort.disarm();
+                        return ForwardedFetchOutcome::Reply(peer_response(response(
+                            StatusCode::BAD_GATEWAY,
+                            REMOTE_WORKER_WEBSOCKET,
+                        )));
+                    }
                     if let Some(HttpResponseWebSocket::Cell(target)) = &worker_response.websocket {
                         let (cell, hibernatable) = celld::js::ws_core_registration(target);
                         let kind = if hibernatable {
@@ -5674,4 +5703,40 @@ fn forwarder_response_stream(
 #[cfg(all(test, celld_internal_tests))]
 mod durability_lifecycle_private {
     include!(env!("CELLD_CONFORMANCE_MAIN_DURABILITY_TESTS"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn worker_response(status: u16) -> celld::js::HttpResponse {
+        celld::js::HttpResponse {
+            status,
+            body: Vec::new(),
+            stream: None,
+            headers: Vec::new(),
+            websocket: None,
+            write_position: None,
+            observed_position: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_101_without_a_websocket_is_a_500_that_names_the_cause() {
+        let reply = runtime_response(worker_response(101), false);
+        assert_eq!(reply.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = reply.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            std::str::from_utf8(&body).unwrap(),
+            format!("Worker failed: {UPGRADE_WITHOUT_WEBSOCKET}"),
+        );
+    }
+
+    #[test]
+    fn other_statuses_pass_through() {
+        assert_eq!(
+            runtime_response(worker_response(204), false).status(),
+            StatusCode::NO_CONTENT
+        );
+    }
 }

@@ -59,6 +59,7 @@ nondeterministic case shows up when it is recorded. A case runs as it would unde
     { "path": "/items", "method": "POST", "headers": { "content-type": "text/plain" }, "body": "x" },
     { "path": "/login", "responseHeaders": ["location"] },
     { "ws": "/socket", "send": ["a"], "close": 1000 },
+    { "ws": "/chat", "protocols": ["chat.v2", "chat.v1"], "send": ["a"] },
     { "restart": true }
   ],
   "normalize": [{ "pattern": "id-[0-9a-f]{32}", "replace": "id-<id>", "why": "ids are random" }]
@@ -99,6 +100,8 @@ whose support hasn't landed yet: `nodes` greater than 1 or a step's `node`
   - With `close`, the client waits for `receive` frames, or one frame per
     frame sent by default. It then closes with that code.
   - Without `close`, the step waits for the server to close.
+  - `protocols` (optional) offers those subprotocols, and the transcript
+    then also records the one the server selected as `protocol`.
 
   The transcript records the frames received and the close code and reason.
   A text frame is recorded as a string, and a binary frame as

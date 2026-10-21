@@ -1,0 +1,15 @@
+// The primary. It reaches `back` through a service binding, directly, through
+// `mid` and through its own Durable Object, and loads a Dynamic Worker that
+// answers the same way.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [
+    { "binding": "BACK", "service": "back" },
+    { "binding": "MID", "service": "mid" }
+  ],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "durable_objects": { "bindings": [{ "name": "RELAY", "class_name": "Relay" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Relay"] }]
+}

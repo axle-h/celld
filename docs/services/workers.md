@@ -60,6 +60,14 @@ have the shape Wrangler requires and otherwise ignores them. `environment` and
 any other key stop the deployment: celld has one deployment of each script,
 and no Wrangler environments.
 
+A `fetch()` through a binding can answer with a WebSocket upgrade, as on
+Cloudflare. The caller passes the socket on by returning the response, also
+after a rebuild such as `new Response(r.body, r)`, through any number of hops.
+It can instead call `accept()` on `response.webSocket` to see each frame, for
+example to relay the socket through a `WebSocketPair` of its own. A request
+that accepted such a socket stays alive until the socket closes. A Durable
+Object can return or accept such a socket too.
+
 `ctx.exports.Name({ props })` carries props too. When such a stub leaves the
 isolate, as a Dynamic Worker's `globalOutbound` or in its `env`, its
 structured-clone props are limited to 1 MiB, as Worker Loader props are; a
@@ -71,6 +79,19 @@ call within the isolate has no limit, as on Cloudflare.
 - The keys of a service binding's `props` reach the target in sorted order,
   not in the order the config gives them.
 - `ctx.passThroughOnException()` has no effect, because celld has no CDN.
+- A WebSocket that a binding's target returns waits at most 30 seconds for
+  the caller to take it from the response. celld then closes it with code
+  1011. This happens only when the caller stops running, such as when its
+  request is cancelled.
+- A request can hold at most 64 WebSockets from its bindings that it has not
+  returned or accepted yet. The `fetch()` that would return one more throws.
+- A WebSocket that the caller accepts has a 1 MiB input queue at each end.
+  Frames the target sends before the caller accepts the socket wait in an
+  unbounded buffer, as frames do on any socket before its upgrade. A Close
+  that the caller sends waits 10 seconds for the target's reply, and the
+  caller then sees code 1006.
+- A Durable Object on another node cannot return a WebSocket that a stateless
+  Worker holds. The caller receives status 502.
 - celld does not supply a Workers AI binding. The process rejects
   `CELLD_AI_BINDING` and `CELLD_AI_URL`, and a deployment rejects an `ai`
   declaration.

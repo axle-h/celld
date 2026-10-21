@@ -6744,6 +6744,8 @@ ops! { OP_NAMES, install_op_functions,
         "__ws_auto_response_ts" => websocket::op_ws_auto_response_ts,
         "__ws_connect" => websocket::op_ws_connect,
         "__ws_bind_target" => websocket::op_ws_bind_target,
+        "__ws_adopt_worker_handoff" => websocket::op_ws_adopt_worker_handoff,
+        "__ws_bind_worker_handoff" => websocket::op_ws_bind_worker_handoff,
         "__ws_next" => websocket::op_ws_next,
         "__ws_upgrade" => websocket::op_ws_upgrade,
         "__hr_create" => html_rewriter::op_hr_create,
@@ -7250,12 +7252,13 @@ fn op_svc_call_impl(
         headers,
         reply: tx,
     };
+    let ws_issuer = Some(event_context(scope).handoff_issuer(current_generation(scope)));
     let stream_service = http_stream_service();
     let id = asyncrt::enqueue(async move {
         let mut cancel_guard = cancel_guard;
         gated_channel_send(gate, &SVC_CALL_TX, request, "no service binding channel").await?;
         let result = match rx.await {
-            Ok(Ok(response)) => encode_http_response(response, true, &stream_service),
+            Ok(Ok(response)) => encode_http_response(response, ws_issuer, &stream_service),
             Ok(Err(error)) => Err(format!("{error}")),
             Err(error) => Err(format!("service dropped: {error}")),
         };
@@ -7863,6 +7866,7 @@ fn op_loader_fetch(
         .get(&id)
         .map(|entry| entry.state.clone());
     let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Service);
+    let ws_issuer = Some(event_context(scope).handoff_issuer(current_generation(scope)));
     let stream_service = http_stream_service();
     let async_id = asyncrt::enqueue(async move {
         let mut cancel_guard = cancel_guard;
@@ -7914,7 +7918,7 @@ fn op_loader_fetch(
         // context. That context owns an unread body tail through its
         // waitUntil work.
         body_guard.disarm();
-        encode_http_response(response, false, &stream_service)
+        encode_http_response(response, ws_issuer, &stream_service)
     });
     let response = promise_for(scope, async_id);
     if let Some(request_id) = cancel_id {
@@ -8557,6 +8561,7 @@ fn op_facet_fetch(
     };
     let host = FacetHost::of(loader);
     let trace = current_trace_context(scope);
+    let ws_issuer = Some(event_context(scope).handoff_issuer(current_generation(scope)));
     let stream_service = http_stream_service();
     let async_id = asyncrt::enqueue(async move {
         let facet = prepare_facet(
@@ -8603,7 +8608,7 @@ fn op_facet_fetch(
                 };
                 facet.gate_response(socket).await?;
                 facet.attach_websocket(&response);
-                encode_http_response(response, true, &stream_service)
+                encode_http_response(response, ws_issuer, &stream_service)
             }
             Ok(Err(error)) => Err(format!("{error}")),
             Err(_) => match driving.await {
@@ -8842,11 +8847,12 @@ fn op_do_call_impl(
         order,
         parent: current_trace_context(scope),
     };
+    let ws_issuer = Some(event_context(scope).handoff_issuer(current_generation(scope)));
     let stream_service = http_stream_service();
     let id = asyncrt::enqueue(async move {
         gated_channel_send(gate, &DO_CALL_TX, request, "no proxy channel").await?;
         let result = match rx.await {
-            Ok(Ok(response)) => encode_http_response(response, true, &stream_service),
+            Ok(Ok(response)) => encode_http_response(response, ws_issuer, &stream_service),
             Ok(Err(e)) => Err(format!("{e}")),
             Err(e) => Err(format!("proxy dropped: {e}")),
         };
@@ -9154,12 +9160,13 @@ fn op_fetch(
             headers,
             reply: tx,
         };
+        let ws_issuer = Some(event_context(scope).handoff_issuer(current_generation(scope)));
         let stream_service = http_stream_service();
         let id = asyncrt::enqueue(async move {
             let mut cancel_guard = cancel_guard;
             gated_channel_send(gate, &SVC_CALL_TX, request, "no service binding channel").await?;
             let result = match rx.await {
-                Ok(Ok(response)) => encode_http_response(response, true, &stream_service),
+                Ok(Ok(response)) => encode_http_response(response, ws_issuer, &stream_service),
                 Ok(Err(error)) => Err(format!("{error}")),
                 Err(error) => Err(format!("globalOutbound Fetcher dropped: {error}")),
             };
@@ -9390,7 +9397,7 @@ fn op_asset_fetch(
             return Err("no asset resolver channel".to_string());
         }
         match rx.await {
-            Ok(Ok(response)) => encode_http_response(response, false, &stream_service),
+            Ok(Ok(response)) => encode_http_response(response, None, &stream_service),
             Ok(Err(error)) => Err(format!("asset fetch: {error}")),
             Err(error) => Err(format!("asset resolver dropped: {error}")),
         }
@@ -11009,6 +11016,14 @@ pub struct IoContext {
     /// a service-binding dispatch or a Durable Object call gets a context of
     /// its own rather than a frame inside this one.
     sockets: Mutex<Vec<u64>>,
+    /// Worker sockets that a subrequest's 101 handed to this request and that
+    /// it has neither returned nor accepted yet. Retiring releases them, so a
+    /// response the request dropped does not keep the other isolate's socket.
+    worker_handoffs: Mutex<Vec<WorkerHandoffToken>>,
+    /// Names this request to the host's handed-over sockets: a socket parked
+    /// for a subrequest of this request can be adopted and taken only here.
+    /// Process-wide and never reused, unlike the context's address.
+    handoff_request: u64,
     /// HTMLRewriter instances this request created. Each holds a parked
     /// parser thread; freeing them at retirement is what reclaims the
     /// thread when a transform is abandoned unread — nothing else can,
@@ -11302,6 +11317,8 @@ impl IoContext {
             events: Mutex::new(IoEventState::default()),
             vfs: OnceLock::new(),
             sockets: Mutex::new(Vec::new()),
+            worker_handoffs: Mutex::new(Vec::new()),
+            handoff_request: next_handoff_request(),
             rewriters: Mutex::new(Vec::new()),
             tcp_sockets: Mutex::new(Vec::new()),
             input_gates: Mutex::new(InputGateClaims::default()),
@@ -11336,6 +11353,8 @@ impl IoContext {
             events: Mutex::new(IoEventState::default()),
             vfs: OnceLock::new(),
             sockets: Mutex::new(Vec::new()),
+            worker_handoffs: Mutex::new(Vec::new()),
+            handoff_request: next_handoff_request(),
             rewriters: Mutex::new(Vec::new()),
             tcp_sockets: Mutex::new(Vec::new()),
             input_gates: Mutex::new(InputGateClaims::default()),
@@ -11593,6 +11612,11 @@ impl IoContext {
     fn close_sockets(&self) {
         let opened = self.sockets.lock().unwrap().drain(..).collect();
         ws_close_request_sockets(opened);
+        let handoffs: Vec<WorkerHandoffToken> =
+            self.worker_handoffs.lock().unwrap().drain(..).collect();
+        for token in handoffs {
+            release_worker_handoff(&token, self.handoff_request);
+        }
         let rewriters: Vec<u64> = self.rewriters.lock().unwrap().drain(..).collect();
         for id in rewriters {
             html_rewriter::free(id);
@@ -11760,6 +11784,22 @@ impl IoContextRegistryForTest {
 /// is the difference between a rule every exit path has to remember and one
 /// it cannot get wrong: a request that times out, that is abandoned as stuck,
 /// or whose client disconnects drops its context on a path of its own.
+/// The next request id for handed-over sockets; see `IoContext::handoff_request`.
+fn next_handoff_request() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+impl IoContext {
+    /// The issuer of a socket that a subrequest of this event hands back.
+    pub(crate) fn handoff_issuer(&self, generation: u64) -> WorkerHandoffIssuer {
+        WorkerHandoffIssuer {
+            generation,
+            request: self.handoff_request,
+        }
+    }
+}
+
 impl Drop for IoContext {
     fn drop(&mut self) {
         let already_panicking = std::thread::panicking();
@@ -12818,6 +12858,43 @@ fn read_response(scope: &mut v8::PinScope, ret: v8::Local<v8::Value>) -> Result<
             websocket::transfer_worker_websocket_handoff(worker_id)
                 .ok_or_else(|| anyhow!("Worker WebSocket {worker_id} has no frame handoff"))?,
         )
+    };
+    // A socket another isolate holds, which a subrequest's 101 handed to this
+    // request and which it now returns unaccepted.
+    let handoff_key = v8::String::new(scope, "workerHandoff").unwrap();
+    let handed_over = match out
+        .get(scope, handoff_key.into())
+        .filter(|value| value.is_string())
+    {
+        Some(token) => Some(
+            websocket::take_request_worker_handoff(
+                &event_context(scope),
+                &WorkerHandoffToken::from(token.to_rust_string_lossy(scope)),
+            )
+            .map_err(|error| anyhow!(error))?
+            .0,
+        ),
+        None => None,
+    };
+    let accepted_key = v8::String::new(scope, "acceptedWebSocket").unwrap();
+    let accepted = out
+        .get(scope, accepted_key.into())
+        .is_some_and(|value| value.is_true());
+    let handed_over = if accepted {
+        // workerd's error when the socket couples to the receiver. The
+        // response still leaves, as in workerd, with a socket whose reader is
+        // gone, so the receiver's connection ends with 1006.
+        tracing::warn!("TypeError: Can't return WebSocket in a Response after calling accept().");
+        let (gone, reader) = ws_pull_channel();
+        drop(reader);
+        Some(WorkerWebSocket::new(ws_next_id(), gone))
+    } else {
+        handed_over
+    };
+    let worker_ws = match (worker_ws, handed_over) {
+        (worker_ws, None) => worker_ws,
+        (None, handed_over) => handed_over,
+        (Some(_), Some(_)) => return Err(anyhow!("Worker response has two WebSockets")),
     };
     if status == 101 {
         tracing::info!(%ws_json, has_target = ws.is_some(), "JS WebSocket response");

@@ -1,0 +1,28 @@
+{
+  "workers": ["front", "mid", "back"],
+  "steps": [
+    {"path": "/pass/echo"},
+    {"ws": "/pass/greet", "send": ["a", "b", "close:4000"]},
+    {"ws": "/pass/echo", "send": ["later:x"]},
+    {"ws": "/pass/protocol", "protocols": ["chat.v2", "chat.v1"], "send": ["a", "close:4001"]},
+    {"ws": "/rebuild/greet", "send": ["a", "close:4002"]},
+    {"ws": "/rebuild/echo", "send": ["later:y"]},
+    {"ws": "/double/greet", "send": ["a", "close:4003"]},
+    {"ws": "/double/protocol", "protocols": ["chat.v1"], "send": ["a", "close:4004"]},
+    {"ws": "/dynamic/greet", "send": ["a", "close:4005"]},
+    {"ws": "/dynamic/echo", "send": ["later:z"]},
+    {"ws": "/accept/greet", "send": ["a", "b", "close:4006"]},
+    {"ws": "/accept/echo", "send": ["later:w"]},
+    {"ws": "/accept/echo", "send": ["a", "relay-close:4007"]},
+    {"ws": "/accept/protocol", "protocols": ["chat.v2", "chat.v1"], "send": ["a", "close:4008"]},
+    {"ws": "/accept/echo", "send": ["big:700000x3", "up:700000x3", "done", "close:4009"]},
+    {"ws": "/object/greet", "send": ["a", "close:4010"]},
+    {"ws": "/object-accept/greet", "send": ["a", "close:4011"]},
+    {"ws": "/object-accept/echo", "send": ["a", "relay-close:4012"]},
+    {"ws": "/rewrite/greet", "send": ["a", "close:4013"]},
+    {"path": "/object-return-accepted"},
+    {"ws": "/object-return-accepted-pass/echo", "send": ["a"], "close": 4014},
+    {"path": "/rpc-response"},
+    {"path": "/bare-101"}
+  ]
+}

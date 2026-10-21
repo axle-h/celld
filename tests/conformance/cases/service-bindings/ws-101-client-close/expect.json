@@ -1,0 +1,24 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "frames": [
+        "back:a"
+      ],
+      "close": {
+        "code": 4000,
+        "reason": "back saw 4000"
+      }
+    },
+    {
+      "frames": [
+        "front:back:a"
+      ],
+      "close": {
+        "code": 4001,
+        "reason": "front relayed 4001 back saw 4001 front saw 4001"
+      }
+    }
+  ]
+}

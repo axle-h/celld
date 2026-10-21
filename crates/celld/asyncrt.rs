@@ -195,6 +195,18 @@ pub fn set_host_handle(handle: tokio::runtime::Handle) {
     );
 }
 
+/// The process runtime for unit tests. It can be installed only once per
+/// process, so every test that needs a domain shares it.
+#[cfg(test)]
+pub(crate) fn test_host_runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        set_host_handle(runtime.handle().clone());
+        runtime
+    })
+}
+
 /// Return the Tokio handle for the V8 arm.
 pub fn op_handle() -> tokio::runtime::Handle {
     current_domain().owner.handle.clone()

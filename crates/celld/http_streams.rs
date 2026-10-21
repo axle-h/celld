@@ -1746,23 +1746,41 @@ pub(crate) fn claim_http_stream(stream_id: u64) -> Option<HttpStreamClaim> {
 /// Encode a host response for the JS side. A text body crosses as a
 /// JS string (cheap, lossless), binary as a byte array, and a streaming body
 /// by id — serializing a Vec<u8> as a JSON number array is the dominant cost
-/// for real DO responses. `ws_target` is carried by the paths that can answer
-/// with a WebSocket upgrade: a Durable Object call and a service-binding call.
+/// for real DO responses.
+///
+/// `ws_target` names the calling request and generation on the paths that can answer with a
+/// WebSocket upgrade: a Durable Object or facet call, a service-binding call,
+/// a Worker Loader entrypoint, and a `globalOutbound` Fetcher. A Durable
+/// Object's socket crosses as its target. A stateless Worker's socket lives
+/// in the isolate that answered, so it is parked for the calling request
+/// under a token that only that request receives (`wsWorker`). Every other path has nowhere to put a
+/// socket, so a response that carries one is an error rather than a socket
+/// silently dropped.
 pub(crate) fn encode_http_response(
     mut response: HttpResponse,
-    ws_target: bool,
+    ws_target: Option<crate::ws_registry::WorkerHandoffIssuer>,
     stream_service: &Arc<HttpStreamService>,
 ) -> Result<String, String> {
     let mut obj = serde_json::json!({
         "status": response.status,
         "headers": response.headers,
     });
-    if ws_target {
-        let target = match response.websocket.as_ref() {
-            Some(HttpResponseWebSocket::Cell(target)) => Some(target),
-            _ => None,
-        };
-        obj["wsTarget"] = serde_json::json!(target);
+    match (ws_target, response.websocket.take()) {
+        (Some(_), None) => obj["wsTarget"] = serde_json::Value::Null,
+        (Some(_), Some(HttpResponseWebSocket::Cell(target))) => {
+            obj["wsTarget"] = serde_json::json!(target);
+        }
+        (Some(issuer), Some(HttpResponseWebSocket::Worker(socket))) => {
+            let token = crate::ws_registry::park_worker_handoff(socket, issuer)?;
+            obj["wsWorker"] = serde_json::Value::String(token.as_str().to_string());
+        }
+        (None, None) => {}
+        // Dropping a Worker socket releases it. A Durable Object target has
+        // no path here at all: no caller without a WebSocket route reaches a
+        // Durable Object.
+        (None, Some(_)) => {
+            return Err("a WebSocket response reached a call that cannot carry one".into());
+        }
     }
     if let Some(stream) = response.stream.take() {
         let Some(stream_id) = stream_service.register_source(HttpStreamSource::Stream(stream))
@@ -2102,4 +2120,73 @@ pub(crate) fn prepare_http_stream_tee(
 pub fn register_body_stream(stream: HttpChunkStream) -> Result<u64, String> {
     register_http_stream(HttpStreamSource::Stream(stream))
         .ok_or_else(|| HTTP_STREAM_REGISTRATION_CLOSED.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ws_registry::tests::worker_socket;
+
+    fn upgrade(websocket: Option<HttpResponseWebSocket>) -> HttpResponse {
+        HttpResponse {
+            status: 101,
+            body: Vec::new(),
+            stream: None,
+            headers: Vec::new(),
+            websocket,
+            write_position: None,
+            observed_position: None,
+        }
+    }
+
+    #[test]
+    fn encoding_a_worker_socket_parks_it_registered() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let (socket, queue) = worker_socket();
+            let encoded = encode_http_response(
+                upgrade(Some(HttpResponseWebSocket::Worker(socket))),
+                Some(crate::ws_registry::WorkerHandoffIssuer {
+                    generation: 1,
+                    request: u64::MAX,
+                }),
+                &http_stream_service(),
+            )
+            .unwrap();
+            let encoded: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+            assert!(encoded.get("wsTarget").is_none());
+            let token = encoded["wsWorker"]
+                .as_str()
+                .expect("a handoff token")
+                .to_string();
+            // The server end can still send and receive while the socket waits
+            // for its caller, and the caller's token names it.
+            assert!(queue.registered());
+            let token = crate::ws_registry::WorkerHandoffToken::from(token);
+            let caller =
+                crate::ws_registry::adopt_worker_handoff(&token, u64::MAX).expect("parked");
+            let (socket, taken_caller) =
+                crate::ws_registry::take_worker_handoff(&token, u64::MAX).expect("adopted");
+            assert_eq!(socket.id(), queue.0);
+            assert_eq!(taken_caller, caller);
+            assert_ne!(caller, queue.0);
+        });
+    }
+
+    #[test]
+    fn a_socket_on_a_call_without_a_websocket_route_is_an_error() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let (socket, queue) = worker_socket();
+            let encoded = encode_http_response(
+                upgrade(Some(HttpResponseWebSocket::Worker(socket))),
+                None,
+                &http_stream_service(),
+            );
+            assert_eq!(
+                encoded.unwrap_err(),
+                "a WebSocket response reached a call that cannot carry one"
+            );
+            // Released, not leaked: nothing can reach the socket any more.
+            assert!(!queue.registered());
+        });
+    }
 }

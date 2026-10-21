@@ -322,10 +322,14 @@
       if (charset) config.encoding = charset[1].replace(/^"|"$/g, "");
       const id = __hr_create(JSON.stringify(config));
 
+      // A 101 keeps its WebSocket, as in workerd: the body is rewritten,
+      // and the socket is not part of the body.
       const init = {
         status: response.status,
         statusText: response.statusText,
         headers: response.headers,
+        webSocket: response.webSocket,
+        __wsTarget: response._wsTarget,
       };
       const source = response.body;
       if (!source) {

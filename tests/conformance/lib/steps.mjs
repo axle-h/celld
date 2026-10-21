@@ -89,7 +89,7 @@ function webSocketStep(origin, step) {
   const url = new URL(step.path, origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
+    const socket = new WebSocket(url, step.protocols);
     socket.binaryType = "arraybuffer";
     const frames = [];
     let done = false;
@@ -132,7 +132,10 @@ function webSocketStep(origin, step) {
     // for is part of the transcript, not a runner failure: the diff shows it.
     socket.addEventListener("close", (event) => {
       if (!opened) finish(null, refused());
-      else finish({ frames, close: { code: event.code, reason: event.reason } });
+      else {
+        const result = { frames, close: { code: event.code, reason: event.reason } };
+        finish(step.protocols === undefined ? result : { protocol: socket.protocol, ...result });
+      }
     });
   });
 }

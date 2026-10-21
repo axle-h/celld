@@ -383,8 +383,10 @@ impl Generation {
 
     /// Stop every isolate of this generation from taking new work. Stateless
     /// isolates free as their affiliations drop; cell isolates free as their
-    /// cells move to a newer generation.
+    /// cells move to a newer generation. A WebSocket that one of its
+    /// subrequests returned and no caller adopted yet closes now.
     pub(crate) fn retire(&self) {
+        crate::ws_registry::close_generation_worker_handoffs(self.id);
         for service in self.services.values() {
             service.isolates.retire_all();
         }

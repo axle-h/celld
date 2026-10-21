@@ -1499,15 +1499,9 @@ mod tests {
         assert_eq!(deploy_order(&single).collect::<Vec<_>>(), [&single[0]]);
     }
 
-    /// The process runtime that the local store's I/O runs on. It can be
-    /// installed only once per process, so every test shares it.
+    /// The process runtime that the local store's I/O runs on.
     fn host_runtime() -> &'static tokio::runtime::Runtime {
-        static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-        RUNTIME.get_or_init(|| {
-            let runtime = tokio::runtime::Runtime::new().unwrap();
-            crate::asyncrt::set_host_handle(runtime.handle().clone());
-            runtime
-        })
+        crate::asyncrt::test_host_runtime()
     }
 
     #[test]

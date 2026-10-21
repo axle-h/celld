@@ -132,6 +132,10 @@ stopped.
   [RPC](../cloudflare-compat.md#rpc).
 - An outbound WebSocket does not continue after the object moves to another
   node.
+- An object can return or accept a WebSocket that a service binding or a
+  Dynamic Worker answered it with, as a Worker can. An object on another node
+  from its caller cannot return such a socket; the caller receives status
+  502.
 - `SqlStorage.Cursor.toArray()` gives a celld-specific error near the V8 heap
   limit.
 - `storage.sync()` waits for the object store or the fleet ensemble to hold all

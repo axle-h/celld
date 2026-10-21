@@ -349,7 +349,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 10 | 1.4 service-binding `props`, refused keys | done | `7e8570d` |
 | 11 | 1.5 `redirect: "manual"` on incoming requests | done | `1ca26cd` |
 | 12 | 1.6 deploy configuration relaxations (W1-W3 removed) | done | see log |
-| 13+ | Phase 1 in plan order (1.7-1.20), then 0.5 after 1.7, and the 1.4 props key-order follow-up | queued | |
+| 13 | 1.7 WebSocket through a service binding; router mode default | done | see log |
+| 14 | 1.21 WebSocket id ownership (security) | queued | |
+| 15+ | 0.5, then Phase 1 in plan order (1.8-1.22), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -602,8 +604,8 @@ to the plan's numbers), so it can run beside the manual trial. State lives in
      the Azurite container and every run's data.
 2. **build**: `celld/build.sh`, skipped when outputs are newer than sources.
    After D10 lands, `celld deploy` runs the builds itself.
-3. **deploy**: `celld/deploy.sh [--no-router]`. Router mode becomes the
-   default after 1.7.
+3. **deploy**: `celld/deploy.sh [--no-router]`. Router mode is the default
+   since 1.7; `e2e.sh --no-router` opts out.
 4. **Node**
    - Starts the node, logging to `.celld/e2e/node.log`.
    - Health check (`e2e/health.ts`): `GET /` returns HTML, then `ping()` over
@@ -654,8 +656,8 @@ to the plan's numbers), so it can run beside the manual trial. State lives in
 
      Notes from building the gate:
      - celld logs "dropped a frame for a closed WebSocket" (`ws_registry.rs:569`)
-       on every clean client disconnect. S11 counts it only when one of
-       smoke's sockets closed with 1006. Revisit with 1.17.
+       on every clean client disconnect, in both modes. S11 counts it only when
+       one of smoke's sockets closed with 1006. Revisit with 1.17.
      - RPC errors go back to the client and are not logged, so S11 can't see
        them. Phase gates rely on the per-step results.
      - S12 can't prove that the sessions' own isolate retired: nothing ties an
@@ -1148,6 +1150,24 @@ requests, DO `__dispatchTo`, service-binding targets and entrypoint targets.
   workerd allows it, implement it; if workerd refuses it, refuse it with
   workerd's message. Either way it is not a documented celld divergence.
 
+**As built.**
+- Parked sockets are keyed by a 128-bit random token, not the socket id. The
+  parked entry owns the socket (no `into_handoff`). `ws_target` is
+  `Option<GenerationId>`.
+- Only the request whose subrequest parked a socket can adopt it. The host
+  chooses the caller-end id, and `accept()` binds only that id for that
+  request. There are at most 64 held sockets per request.
+- The target's event stays alive through its pending `__ws_next`; a
+  stateless caller's stays alive through `waitUntil` after `accept()`.
+- A DO may return a handed-over socket on the same node, as in workerd; across
+  nodes it gets a 502. A DO returning a socket it already accepted logs
+  workerd's text, and the client sees 1006, as on workerd.
+- Retire closes parked sockets after a 5 s grace (two passes).
+- A Response carrying a WebSocket can't cross RPC (workerd's DataCloneError).
+  `HTMLRewriter` keeps the socket.
+- Left for 1.17: the caller's close reply when the target closes first.
+  Left for 1.22: bounding every socket's outbound frame channel.
+
 **Prior art.**
 - IlyaGulya `8376ebc` is a minimal reference. Its `WorkerWebSocket::repark`
   is our `park_worker_handoff`, but it keeps the id on the Response, so a
@@ -1536,8 +1556,9 @@ showed.
 for accepted sockets only when the flag is on. 1.16 classifies both flags as
 honoured.
 
-**Tests.** `websocket/close-without-handler` (compat date 2026-01-01) loses
-its `xfail`. Add the same case at a date after 2026-04-07 for the accepted
+**Tests.** `websocket/close-without-handler` (compat date 2026-01-01) and
+`service-bindings/ws-101-client-close` lose their `xfail`; S11 then sees no
+"dropped a frame" lines. Add the same case at a date after 2026-04-07 for the accepted
 socket.
 
 ### 1.18 Worker Loader startup error text
@@ -1583,6 +1604,37 @@ Each one differs from workerd 1.20261001.1:
 
 **Tests.** Differential cases for each, in `service-bindings/` and
 `fetch/`.
+
+### 1.21 WebSocket ids carry authority (found by 1.7) — security, next after 1.7
+
+**Problem.** The harness trusts writable properties on its WebSocket
+objects (`_id`, `_target`, `_peer`), and `op_ws_send`, `op_ws_next` and
+`op_ws_bind_target` check no ownership. A Worker, including a Dynamic
+Worker running model-written code, can set `ws._id = n` and read or send
+frames on any socket in the process, including other scripts' sockets.
+
+**Design.** The host owns socket ids: every op checks that the id belongs to
+the current IoContext (or its cell), and refuses otherwise with workerd's
+cross-request I/O error. The harness keeps ids in private state (a WeakMap
+or private fields), not writable properties, and captures its primordials.
+
+**Tests.** A celld-only case where a Worker (and a Dynamic Worker) forges an
+id and is refused; unit tests for each op's ownership check.
+
+### 1.22 WebSocket follow-ups (found by 1.7)
+
+- A stateless Worker that `accept()`s a DO socket from `stub.fetch`
+  (`op_ws_bind_target`) has it closed when its request retires. It needs the
+  `waitUntil` pump that 1.7 added for handoffs.
+- `worker_websocket_task` drops the socket right after `send_close`, losing
+  frames still queued. Wait for `drained()`.
+- The Response constructor checks no status range except 101.
+- `close()` before `accept()` on a handoff socket is never sent.
+- The `globalOutbound` broker path for a 101 is untested.
+- Outbound frame channels (`outputs`) and the pre-upgrade `WsMeta.pending`
+  buffer are unbounded for every socket. Add a per-socket byte budget with
+  backpressure (a `bufferedAmount` model) or a close on overflow (1009/1011),
+  and make the 1.7 bridge propagate its pull-queue backpressure into it.
 
 ### Phase 1 gate
 

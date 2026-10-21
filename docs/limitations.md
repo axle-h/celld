@@ -39,6 +39,9 @@ APIs, and Wrangler configuration.
   the cell moves to another node, so the application must store the
   connection intent and reconnect.
 - A node limits the resident cells and outbound WebSockets.
+- A WebSocket that a stateless Worker holds crosses service bindings, Dynamic
+  Worker entrypoints and Durable Object calls only within one node. A Durable
+  Object on another node cannot return one.
 
 ## Platforms
 

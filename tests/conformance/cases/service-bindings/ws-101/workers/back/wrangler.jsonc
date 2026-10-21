@@ -1,0 +1,7 @@
+// The script that answers the upgrade. It holds the server end of every
+// socket; front and mid only pass the 101 on.
+{
+  "name": "back",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

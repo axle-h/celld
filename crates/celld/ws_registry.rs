@@ -395,6 +395,18 @@ impl WsPullSender {
     }
 }
 
+impl WsPullSender {
+    /// Wait until the reader has taken the terminal frame, or has gone away.
+    ///
+    /// A reader looks its queue up by socket id for each pull, so removing
+    /// the registration while frames wait in it loses them. A sender that
+    /// ends a socket waits here first.
+    pub(crate) async fn drained(&self) {
+        let tx = self.state.lock().unwrap().tx.clone();
+        tx.closed().await;
+    }
+}
+
 impl WsPullReceiver {
     pub(crate) async fn recv(&mut self) -> Option<WsPull> {
         let queued = self.rx.recv().await?;
@@ -447,11 +459,15 @@ pub fn ws_pull_unregister(id: u64) {
 /// the HTTP upgrade, or ending the upgrade task, therefore removes every host
 /// registration instead of leaving a socket that no isolate can reach.
 pub struct WorkerWebSocket {
-    pub(crate) id: u64,
-    pub(crate) inbound: WsPullSender,
+    id: u64,
+    inbound: WsPullSender,
 }
 
 impl WorkerWebSocket {
+    pub(crate) fn new(id: u64, inbound: WsPullSender) -> Self {
+        Self { id, inbound }
+    }
+
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -465,6 +481,532 @@ impl Drop for WorkerWebSocket {
     fn drop(&mut self) {
         ws_pull_unregister(self.id);
         ws_unregister(self.id);
+    }
+}
+
+/// How long a parked Worker socket waits for the caller that received its
+/// 101 to adopt it.
+///
+/// Adoption normally follows the response within one isolate turn. A caller
+/// that never runs again, because its request was cancelled or its isolate
+/// stopped, leaves the target's socket and its event pinned, so the sweep
+/// closes it with [`WORKER_HANDOFF_UNADOPTED_CODE`].
+pub const WORKER_HANDOFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How often the sweep looks for parked sockets past
+/// [`WORKER_HANDOFF_TIMEOUT`]. A socket can wait this much longer than the
+/// timeout before it closes.
+pub const WORKER_HANDOFF_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How long a parked socket of a retiring generation still waits for its
+/// caller. Callers of that generation finish their requests, and one that
+/// is still running adopts its socket within a turn.
+pub const WORKER_HANDOFF_RETIRE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The close code a parked socket's server end receives when no caller
+/// adopted it, or when its generation retired first.
+pub const WORKER_HANDOFF_UNADOPTED_CODE: u16 = 1011;
+
+/// How long a bridge waits for the reply to a Close it carried before it
+/// closes the side that sent the Close abnormally.
+pub const WORKER_BRIDGE_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How many handed-over sockets one request can hold at once, parked for it
+/// or adopted by it but not yet returned or accepted.
+///
+/// Each one pins the event of the isolate that answered, its input queue,
+/// and whatever that server end sends before the caller accepts it. A
+/// router passes one socket on per request, and Cloudflare lets a request
+/// hold six connections open at once; 64 leaves a fan-out relay ten times
+/// that, while one request cannot pin an unbounded number of other events.
+pub const WORKER_HANDOFFS_PER_REQUEST: usize = 64;
+
+/// The request a parked socket belongs to: the generation that made the
+/// call, and the engine's id for the event that made it. Only that event can
+/// adopt the socket, and only that event can then take it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorkerHandoffIssuer {
+    pub generation: u64,
+    pub request: u64,
+}
+
+/// A random name for a parked Worker socket.
+///
+/// Not the socket id: ids are a per-instance counter, and an application can
+/// read and set the id on its own socket objects. The name alone grants
+/// nothing: the host also requires the request that made the call.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct WorkerHandoffToken(String);
+
+impl WorkerHandoffToken {
+    fn random() -> Self {
+        let mut bytes = [0u8; 16];
+        rand::RngCore::fill_bytes(&mut asyncrt::rng("worker_handoff"), &mut bytes);
+        Self(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for WorkerHandoffToken {
+    fn from(token: String) -> Self {
+        Self(token)
+    }
+}
+
+/// Why a handed-over socket could not be parked, adopted or taken.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum WorkerHandoffRefusal {
+    /// The token names no socket in that state: the sweep or a retirement
+    /// closed it, or it was used already.
+    Gone,
+    /// The socket belongs to another request.
+    OtherRequest,
+}
+
+/// Who holds a handed-over socket between the response that carried it and
+/// the caller's `accept()` or own response.
+enum WorkerHandoffHolder {
+    /// Parked by the host at this monotonic time. The sweep closes it if
+    /// its request does not adopt it.
+    Parked { since_ms: u64 },
+    /// Adopted by its request, which releases it when it retires. The host
+    /// chose `caller`, the id of the caller's own end, at adoption, so an
+    /// `accept()` registers under that id and no value the application can
+    /// write.
+    Adopted { caller: u64 },
+}
+
+struct WorkerHandoff {
+    socket: WorkerWebSocket,
+    issuer: WorkerHandoffIssuer,
+    holder: WorkerHandoffHolder,
+}
+
+/// When the sweep runs and what it closes. Only tests change it.
+#[derive(Clone, Copy)]
+struct SweepTiming {
+    interval: std::time::Duration,
+    timeout: std::time::Duration,
+}
+
+const SWEEP_TIMING: SweepTiming = SweepTiming {
+    interval: WORKER_HANDOFF_SWEEP_INTERVAL,
+    timeout: WORKER_HANDOFF_TIMEOUT,
+};
+
+/// Worker sockets that crossed a service binding, a Worker Loader entrypoint
+/// or a Durable Object call, by token.
+///
+/// Each entry owns the socket: dropping it releases the registrations, so
+/// every path out of this map either hands the socket to a new owner or
+/// closes it.
+#[derive(Default)]
+pub(crate) struct WorkerHandoffs {
+    entries: HashMap<WorkerHandoffToken, WorkerHandoff>,
+    /// Whether a sweep task is running for this map.
+    sweeping: bool,
+}
+
+impl WorkerHandoffs {
+    /// Park `socket` for its issuer, or give it back when the issuing request
+    /// holds [`WORKER_HANDOFFS_PER_REQUEST`] already.
+    fn park(
+        &mut self,
+        socket: WorkerWebSocket,
+        now_ms: u64,
+        issuer: WorkerHandoffIssuer,
+    ) -> Result<WorkerHandoffToken, WorkerWebSocket> {
+        let held = self
+            .entries
+            .values()
+            .filter(|handoff| handoff.issuer.request == issuer.request)
+            .count();
+        if held >= WORKER_HANDOFFS_PER_REQUEST {
+            return Err(socket);
+        }
+        let token = WorkerHandoffToken::random();
+        let replaced = self.entries.insert(
+            token.clone(),
+            WorkerHandoff {
+                socket,
+                issuer,
+                holder: WorkerHandoffHolder::Parked { since_ms: now_ms },
+            },
+        );
+        assert!(replaced.is_none(), "a 128-bit handoff token repeated");
+        Ok(token)
+    }
+
+    /// Move a parked socket to the request that made the call. A token
+    /// adopts once, and only for that request.
+    fn adopt(
+        &mut self,
+        token: &WorkerHandoffToken,
+        request: u64,
+        caller: u64,
+    ) -> Result<(), WorkerHandoffRefusal> {
+        let handoff = self
+            .entries
+            .get_mut(token)
+            .filter(|handoff| matches!(handoff.holder, WorkerHandoffHolder::Parked { .. }))
+            .ok_or(WorkerHandoffRefusal::Gone)?;
+        if handoff.issuer.request != request {
+            return Err(WorkerHandoffRefusal::OtherRequest);
+        }
+        handoff.holder = WorkerHandoffHolder::Adopted { caller };
+        Ok(())
+    }
+
+    /// Take an adopted socket out for its new owner, a response or an
+    /// `accept()` bridge, with the caller id chosen at adoption.
+    fn take_adopted(
+        &mut self,
+        token: &WorkerHandoffToken,
+        request: u64,
+    ) -> Result<(WorkerWebSocket, u64), WorkerHandoffRefusal> {
+        let handoff = self.entries.get(token).ok_or(WorkerHandoffRefusal::Gone)?;
+        if handoff.issuer.request != request {
+            return Err(WorkerHandoffRefusal::OtherRequest);
+        }
+        let WorkerHandoffHolder::Adopted { caller } = handoff.holder else {
+            return Err(WorkerHandoffRefusal::Gone);
+        };
+        let handoff = self.entries.remove(token).expect("the entry was just read");
+        Ok((handoff.socket, caller))
+    }
+
+    /// Remove every parked socket that waited `timeout` or longer, or that
+    /// belongs to the retired generation and waited its grace or longer.
+    fn take_unadopted(
+        &mut self,
+        now_ms: u64,
+        timeout: std::time::Duration,
+        retired: Option<(u64, std::time::Duration)>,
+    ) -> Vec<WorkerWebSocket> {
+        let expired: Vec<WorkerHandoffToken> = self
+            .entries
+            .iter()
+            .filter(|(_, handoff)| {
+                let WorkerHandoffHolder::Parked { since_ms } = handoff.holder else {
+                    return false;
+                };
+                let waited = now_ms.saturating_sub(since_ms);
+                waited >= timeout.as_millis() as u64
+                    || retired.is_some_and(|(generation, grace)| {
+                        handoff.issuer.generation == generation
+                            && waited >= grace.as_millis() as u64
+                    })
+            })
+            .map(|(token, _)| token.clone())
+            .collect();
+        expired
+            .iter()
+            .filter_map(|token| self.entries.remove(token))
+            .map(|handoff| handoff.socket)
+            .collect()
+    }
+
+    fn has_parked(&self) -> bool {
+        self.entries
+            .values()
+            .any(|handoff| matches!(handoff.holder, WorkerHandoffHolder::Parked { .. }))
+    }
+}
+
+/// Close a handed-over socket that no caller uses, then release it once its
+/// server end has read the Close: the server end looks its queue up by id
+/// for each pull, so releasing at once could replace the Close with 1006.
+pub(crate) fn close_handed_over(socket: WorkerWebSocket, code: u16, reason: &str, was_clean: bool) {
+    let inbound = socket.inbound();
+    let _ = inbound.send_close(code, reason.to_string(), was_clean);
+    asyncrt::spawn(async move {
+        let _ = asyncrt::timeout(WORKER_BRIDGE_CLOSE_TIMEOUT, inbound.drained()).await;
+        drop(socket);
+    });
+}
+
+fn close_unadopted(socket: WorkerWebSocket, reason: &str) {
+    close_handed_over(socket, WORKER_HANDOFF_UNADOPTED_CODE, reason, false);
+}
+
+/// workerd has no such limit, so the text is celld's.
+pub(crate) const TOO_MANY_WORKER_HANDOFFS: &str =
+    "this request holds too many WebSockets that subrequests returned and that it has not \
+     returned or accepted yet";
+
+/// Park a Worker socket that a subrequest's 101 carries back to its caller,
+/// and name it for that caller.
+///
+/// The socket keeps its frame channel and its id: the server end in the
+/// target's isolate goes on sending to the same registration, and frames it
+/// sends before anyone adopts the socket wait in its pre-upgrade buffer. A
+/// request over its limit gets an error, and the socket closes with 1011.
+pub(crate) fn park_worker_handoff(
+    socket: WorkerWebSocket,
+    issuer: WorkerHandoffIssuer,
+) -> Result<WorkerHandoffToken, String> {
+    park_worker_handoff_in(&ws_registry(), socket, issuer, SWEEP_TIMING)
+}
+
+fn park_worker_handoff_in(
+    registry: &Arc<std::sync::Mutex<WsRegistry>>,
+    socket: WorkerWebSocket,
+    issuer: WorkerHandoffIssuer,
+    timing: SweepTiming,
+) -> Result<WorkerHandoffToken, String> {
+    let parked = {
+        let mut registry = registry.lock().unwrap();
+        registry
+            .worker_handoff_parks
+            .park(socket, asyncrt::mono_ms(), issuer)
+            .map(|token| {
+                let start_sweep =
+                    !std::mem::replace(&mut registry.worker_handoff_parks.sweeping, true);
+                (token, start_sweep)
+            })
+    };
+    match parked {
+        Ok((token, start_sweep)) => {
+            if start_sweep {
+                asyncrt::spawn(sweep_worker_handoffs(registry.clone(), timing));
+            }
+            Ok(token)
+        }
+        Err(socket) => {
+            close_handed_over(
+                socket,
+                WORKER_HANDOFF_UNADOPTED_CODE,
+                "the caller holds too many WebSockets",
+                false,
+            );
+            Err(format!(
+                "{TOO_MANY_WORKER_HANDOFFS} (at most {WORKER_HANDOFFS_PER_REQUEST})"
+            ))
+        }
+    }
+}
+
+/// Close every parked socket that waited longer than the timeout, until
+/// none is parked. A later park starts a new sweep.
+///
+/// Holds this instance's registry rather than resolving it, for the reason a
+/// flush does: the task runs on a runtime with no services of its own.
+async fn sweep_worker_handoffs(registry: Arc<std::sync::Mutex<WsRegistry>>, timing: SweepTiming) {
+    loop {
+        asyncrt::sleep(timing.interval).await;
+        let expired = {
+            let mut registry = registry.lock().unwrap();
+            let expired = registry.worker_handoff_parks.take_unadopted(
+                asyncrt::mono_ms(),
+                timing.timeout,
+                None,
+            );
+            if expired.is_empty() && !registry.worker_handoff_parks.has_parked() {
+                registry.worker_handoff_parks.sweeping = false;
+                return;
+            }
+            expired
+        };
+        for socket in expired {
+            tracing::warn!(
+                ws_id = socket.id(),
+                "closed a WebSocket handoff that no caller adopted"
+            );
+            close_unadopted(socket, "no caller adopted this WebSocket");
+        }
+    }
+}
+
+/// Close the parked sockets of a generation that stopped taking work.
+///
+/// Its callers can still be running, and one that is adopts its socket
+/// within a turn, so a socket parked moments ago waits
+/// [`WORKER_HANDOFF_RETIRE_GRACE`]. A second pass at the end of the grace
+/// closes what was parked before the retirement and is still unadopted.
+pub(crate) fn close_generation_worker_handoffs(generation: u64) {
+    close_generation_worker_handoffs_in(ws_registry(), generation, WORKER_HANDOFF_RETIRE_GRACE);
+}
+
+fn close_generation_worker_handoffs_in(
+    registry: Arc<std::sync::Mutex<WsRegistry>>,
+    generation: u64,
+    grace: std::time::Duration,
+) {
+    let pass = move |registry: &std::sync::Mutex<WsRegistry>| {
+        let expired = registry
+            .lock()
+            .unwrap()
+            .worker_handoff_parks
+            .take_unadopted(
+                asyncrt::mono_ms(),
+                WORKER_HANDOFF_TIMEOUT,
+                Some((generation, grace)),
+            );
+        for socket in expired {
+            close_unadopted(socket, "the deployment that made this WebSocket retired");
+        }
+    };
+    pass(&registry);
+    asyncrt::spawn(async move {
+        asyncrt::sleep(grace).await;
+        pass(&registry);
+    });
+}
+
+/// Give a parked socket to the request that made the call, and choose the
+/// id of the caller's own end.
+pub(crate) fn adopt_worker_handoff(
+    token: &WorkerHandoffToken,
+    request: u64,
+) -> Result<u64, WorkerHandoffRefusal> {
+    let caller = ws_next_id();
+    ws_registry()
+        .lock()
+        .unwrap()
+        .worker_handoff_parks
+        .adopt(token, request, caller)
+        .map(|()| caller)
+}
+
+/// Take an adopted socket, with its caller's id, for the caller's response
+/// or its `accept()`.
+pub(crate) fn take_worker_handoff(
+    token: &WorkerHandoffToken,
+    request: u64,
+) -> Result<(WorkerWebSocket, u64), WorkerHandoffRefusal> {
+    ws_registry()
+        .lock()
+        .unwrap()
+        .worker_handoff_parks
+        .take_adopted(token, request)
+}
+
+/// How one direction of a bridge ended.
+enum BridgeLeg {
+    /// A Close passed through, with its code.
+    Closed(u16, String),
+    /// The sending side's registration went away without a Close.
+    SourceGone,
+    /// The receiving side stopped reading.
+    DestinationGone,
+}
+
+/// Carry one direction of a bridge until a Close passes or a side goes away.
+///
+/// Each frame waits for room in the receiving queue, so that queue holds at
+/// most its budget. The other direction runs separately and is never held
+/// up by this one.
+async fn carry_bridge_leg(
+    from: &mut tokio::sync::mpsc::UnboundedReceiver<WsOut>,
+    to: &WsPullSender,
+) -> BridgeLeg {
+    loop {
+        let frame = match from.recv().await {
+            Some(WsOut::Text(text)) => WsPull::Text(text),
+            Some(WsOut::Binary(bytes)) => WsPull::Binary(bytes),
+            Some(WsOut::Close(code, reason)) => {
+                let _ = to.send_close(code, reason.clone(), true);
+                return BridgeLeg::Closed(code, reason);
+            }
+            None => return BridgeLeg::SourceGone,
+        };
+        if to.send(frame).await.is_err() {
+            return BridgeLeg::DestinationGone;
+        }
+    }
+}
+
+/// The two ends a bridge joins: the socket the caller accepted, and the
+/// handed-over server end in the isolate that answered the subrequest.
+pub(crate) struct WorkerHandoffBridge {
+    pub(crate) caller: u64,
+    pub(crate) caller_pull: WsPullSender,
+    pub(crate) from_caller: tokio::sync::mpsc::UnboundedReceiver<WsOut>,
+    pub(crate) target: WorkerWebSocket,
+    pub(crate) from_target: tokio::sync::mpsc::UnboundedReceiver<WsOut>,
+}
+
+/// Carry frames between a caller that accepted a handed-over Worker socket
+/// and that socket's server end, which another isolate holds.
+///
+/// Both ends are isolate-polled, so each direction ends in a pull queue with
+/// the usual 1 MiB budget, and each runs on its own.
+///
+/// A Close from either side reaches the other with the same code and reason.
+/// The caller's Close is a question that the server end answers, so the
+/// bridge waits up to [`WORKER_BRIDGE_CLOSE_TIMEOUT`] for that reply before
+/// it closes the caller abnormally. The server end that closes first cannot
+/// observe a reply: celld marks a server socket closed as it sends its Close
+/// (plan item 1.17), and a caller's socket ignores `close()` once it is
+/// closed. So the bridge ends the server end's queue at once. A side that
+/// goes away without a Close closes the other with 1006, which reports an
+/// error there.
+///
+/// Ends with both queues terminated and both sockets unregistered.
+pub(crate) async fn bridge_worker_handoff(bridge: WorkerHandoffBridge) {
+    bridge_worker_handoff_within(bridge, WORKER_BRIDGE_CLOSE_TIMEOUT).await;
+}
+
+async fn bridge_worker_handoff_within(
+    bridge: WorkerHandoffBridge,
+    close_timeout: std::time::Duration,
+) {
+    let WorkerHandoffBridge {
+        caller,
+        caller_pull,
+        mut from_caller,
+        target,
+        mut from_target,
+    } = bridge;
+    let target_pull = target.inbound();
+    {
+        let to_target = carry_bridge_leg(&mut from_caller, &target_pull);
+        let to_caller = carry_bridge_leg(&mut from_target, &caller_pull);
+        tokio::pin!(to_target, to_caller);
+        crate::asyncrt::select! {
+            leg = &mut to_target => {
+                if let BridgeLeg::Closed(..) = leg {
+                    // The server end answers the caller's Close. Its handler
+                    // chooses the reason, so wait for it.
+                    let _ = asyncrt::timeout(close_timeout, &mut to_caller).await;
+                }
+            }
+            leg = &mut to_caller => {
+                if let BridgeLeg::Closed(code, reason) = leg {
+                    let _ = target_pull.send_close(code, reason, true);
+                }
+            }
+        }
+    }
+    // Whatever is still open closes abnormally. A queue that already holds
+    // its Close refuses a second one.
+    let _ = caller_pull.send_close(1006, String::new(), false);
+    let _ = target_pull.send_close(1006, String::new(), false);
+    // Each side reads what is still queued, its Close last, before its
+    // registration goes. A side that stopped reading is not waited for long.
+    let _ = asyncrt::timeout(close_timeout, async {
+        tokio::join!(caller_pull.drained(), target_pull.drained());
+    })
+    .await;
+    ws_pull_unregister(caller);
+    ws_unregister(caller);
+    drop(target);
+}
+
+/// Release a socket that its request adopted and neither returned nor
+/// accepted. The server end sees the close a retiring request gives its own
+/// sockets.
+pub(crate) fn release_worker_handoff(token: &WorkerHandoffToken, request: u64) {
+    let released = ws_registry()
+        .lock()
+        .unwrap()
+        .worker_handoff_parks
+        .take_adopted(token, request);
+    if let Ok((socket, _)) = released {
+        close_handed_over(socket, 1001, "request ended", true);
     }
 }
 
@@ -538,6 +1080,8 @@ pub struct WsRegistry {
     pub(crate) outputs: HashMap<u64, tokio::sync::mpsc::UnboundedSender<WsOut>>,
     pub metadata: HashMap<u64, WsMeta>,
     pub(crate) worker_handoffs: HashMap<u64, WsPullSender>,
+    /// Worker sockets on their way to the caller of a subrequest.
+    worker_handoff_parks: WorkerHandoffs,
 }
 impl WsRegistry {
     #[doc(hidden)]
@@ -1356,5 +1900,436 @@ pub(crate) fn ws_close_facet(scope: &str, reason: &str) {
         .collect();
     for id in ids {
         registry.emit(id, WsOut::Close(1001, reason.to_string()));
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// A Worker socket registered as `__readResponse` registers one: an
+    /// input queue the server end reads and an output registration with no
+    /// sink yet, which buffers what the server end sends.
+    pub(crate) fn worker_socket() -> (WorkerWebSocket, WsPullReceiverHandle) {
+        let id = ws_next_id();
+        let (inbound, queue) = ws_pull_channel();
+        ws_pull_register(id, queue);
+        ws_register_outbound(id, "", None);
+        let queue = ws_pull().lock().unwrap().get(&id).cloned().unwrap();
+        (
+            WorkerWebSocket::new(id, inbound),
+            WsPullReceiverHandle(id, queue),
+        )
+    }
+
+    /// The server end's input queue, held as a pending `__ws_next` holds it.
+    pub(crate) struct WsPullReceiverHandle(pub(crate) u64, WsPullQueue);
+
+    impl WsPullReceiverHandle {
+        pub(crate) fn registered(&self) -> bool {
+            ws_pull().lock().unwrap().contains_key(&self.0)
+                && ws_registry().lock().unwrap().metadata.contains_key(&self.0)
+        }
+
+        /// The close the server end reads next, as (code, reason).
+        pub(crate) async fn next_close(&self) -> Option<(u16, String)> {
+            let mut queue = self.1.lock().await;
+            match asyncrt::timeout(Duration::from_secs(1), queue.recv()).await {
+                Ok(Some(WsPull::Close(code, reason, _))) => Some((code, reason)),
+                _ => None,
+            }
+        }
+    }
+
+    /// Wait for a spawned release to drop its socket.
+    pub(crate) async fn released(queue: &WsPullReceiverHandle) -> bool {
+        for _ in 0..100 {
+            if !queue.registered() {
+                return true;
+            }
+            asyncrt::sleep(Duration::from_millis(10)).await;
+        }
+        false
+    }
+
+    fn issuer(request: u64) -> WorkerHandoffIssuer {
+        WorkerHandoffIssuer {
+            generation: 7,
+            request,
+        }
+    }
+
+    /// A registry of its own, so a test's sweep and retirement see only
+    /// that test's sockets.
+    fn own_registry() -> Arc<std::sync::Mutex<WsRegistry>> {
+        Arc::new(std::sync::Mutex::new(WsRegistry::default()))
+    }
+
+    #[test]
+    fn the_sweep_closes_unadopted_handoffs_after_thirty_seconds() {
+        assert_eq!(WORKER_HANDOFF_TIMEOUT, Duration::from_secs(30));
+        assert_eq!(WORKER_HANDOFF_SWEEP_INTERVAL, Duration::from_secs(5));
+        assert!(WORKER_HANDOFF_SWEEP_INTERVAL < WORKER_HANDOFF_TIMEOUT);
+        assert!(WORKER_HANDOFF_RETIRE_GRACE < WORKER_HANDOFF_TIMEOUT);
+        assert_eq!(WORKER_HANDOFF_UNADOPTED_CODE, 1011);
+
+        let mut parks = WorkerHandoffs::default();
+        let (waiting, waiting_queue) = worker_socket();
+        let (adopted, _) = worker_socket();
+        let (other, other_queue) = worker_socket();
+        parks.park(waiting, 1_000, issuer(1)).ok().unwrap();
+        let adopted = parks.park(adopted, 1_000, issuer(1)).ok().unwrap();
+        parks.adopt(&adopted, 1, 99).unwrap();
+        let mut later_generation = issuer(2);
+        later_generation.generation = 8;
+        parks.park(other, 1_000, later_generation).ok().unwrap();
+
+        let timeout = WORKER_HANDOFF_TIMEOUT.as_millis() as u64;
+        let grace = Duration::from_millis(500);
+        assert!(parks
+            .take_unadopted(1_000 + timeout - 1, WORKER_HANDOFF_TIMEOUT, None)
+            .is_empty());
+        // A retired generation's caller may still be about to adopt.
+        assert!(parks
+            .take_unadopted(1_499, WORKER_HANDOFF_TIMEOUT, Some((7, grace)))
+            .is_empty());
+        // After the grace, the retirement takes its own parked socket only.
+        let retired = parks.take_unadopted(1_500, WORKER_HANDOFF_TIMEOUT, Some((7, grace)));
+        assert_eq!(
+            retired.iter().map(WorkerWebSocket::id).collect::<Vec<_>>(),
+            [waiting_queue.0]
+        );
+        drop(retired);
+        assert!(!waiting_queue.registered());
+        // An adopted socket belongs to its caller's event, never the sweep.
+        let expired = parks.take_unadopted(1_000 + timeout, WORKER_HANDOFF_TIMEOUT, None);
+        assert_eq!(
+            expired.iter().map(WorkerWebSocket::id).collect::<Vec<_>>(),
+            [other_queue.0]
+        );
+        assert!(!parks.has_parked());
+        assert_eq!(
+            parks.take_adopted(&adopted, 1).map(|(_, caller)| caller),
+            Ok(99)
+        );
+    }
+
+    #[test]
+    fn only_the_issuing_request_adopts_and_takes_once() {
+        let mut parks = WorkerHandoffs::default();
+        let (socket, queue) = worker_socket();
+        let token = parks.park(socket, 0, issuer(1)).ok().unwrap();
+        assert_eq!(token.as_str().len(), 32);
+        // Not adopted yet: not even its request can take it.
+        assert_eq!(
+            parks.take_adopted(&token, 1).err(),
+            Some(WorkerHandoffRefusal::Gone)
+        );
+        // Another request knowing the token cannot adopt it, and the socket
+        // stays parked for its own request.
+        assert_eq!(
+            parks.adopt(&token, 2, 5),
+            Err(WorkerHandoffRefusal::OtherRequest)
+        );
+        assert!(parks.has_parked());
+        parks.adopt(&token, 1, 5).unwrap();
+        assert_eq!(parks.adopt(&token, 1, 6), Err(WorkerHandoffRefusal::Gone));
+        assert_eq!(
+            parks.adopt(&WorkerHandoffToken::from(queue.0.to_string()), 1, 7),
+            Err(WorkerHandoffRefusal::Gone)
+        );
+        // Nor can another request take it once adopted.
+        assert_eq!(
+            parks.take_adopted(&token, 2).err(),
+            Some(WorkerHandoffRefusal::OtherRequest)
+        );
+        let (socket, caller) = parks.take_adopted(&token, 1).expect("adopted");
+        assert_eq!(caller, 5);
+        assert_eq!(
+            parks.take_adopted(&token, 1).err(),
+            Some(WorkerHandoffRefusal::Gone)
+        );
+        assert!(queue.registered());
+        drop(socket);
+        assert!(!queue.registered());
+    }
+
+    #[test]
+    fn a_request_holds_at_most_its_limit() {
+        let mut parks = WorkerHandoffs::default();
+        let mut queues = Vec::new();
+        for _ in 0..WORKER_HANDOFFS_PER_REQUEST {
+            let (socket, queue) = worker_socket();
+            parks.park(socket, 0, issuer(1)).ok().unwrap();
+            queues.push(queue);
+        }
+        let (socket, queue) = worker_socket();
+        let refused = parks
+            .park(socket, 0, issuer(1))
+            .expect_err("over the limit");
+        assert_eq!(refused.id(), queue.0);
+        // Another request has its own allowance.
+        let (socket, _) = worker_socket();
+        assert!(parks.park(socket, 0, issuer(2)).is_ok());
+        // Adopted sockets count until the request takes them.
+        let token = parks.entries.keys().next().unwrap().clone();
+        let request = parks.entries[&token].issuer.request;
+        parks.adopt(&token, request, 1).unwrap();
+        let (socket, _) = worker_socket();
+        let socket = parks.park(socket, 0, issuer(1)).expect_err("still full");
+        drop(parks.take_adopted(&token, request).unwrap());
+        assert!(parks.park(socket, 0, issuer(1)).is_ok());
+    }
+
+    #[test]
+    fn a_request_over_its_limit_gets_an_error_and_the_socket_closes() {
+        asyncrt::test_host_runtime().block_on(async {
+            let registry = own_registry();
+            let timing = SweepTiming {
+                interval: Duration::from_secs(60),
+                timeout: WORKER_HANDOFF_TIMEOUT,
+            };
+            for _ in 0..WORKER_HANDOFFS_PER_REQUEST {
+                let (socket, _) = worker_socket();
+                park_worker_handoff_in(&registry, socket, issuer(3), timing).unwrap();
+            }
+            let (socket, queue) = worker_socket();
+            let error = park_worker_handoff_in(&registry, socket, issuer(3), timing).unwrap_err();
+            assert!(error.starts_with(TOO_MANY_WORKER_HANDOFFS), "{error}");
+            assert_eq!(
+                queue.next_close().await,
+                Some((1011, "the caller holds too many WebSockets".into())),
+            );
+            assert!(released(&queue).await);
+        });
+    }
+
+    #[test]
+    fn an_unadopted_socket_closes_with_1011_before_its_release() {
+        asyncrt::test_host_runtime().block_on(async {
+            let (socket, queue) = worker_socket();
+            close_unadopted(socket, "no caller adopted this WebSocket");
+            // Still registered until the server end has read its Close.
+            assert!(queue.registered());
+            assert_eq!(
+                queue.next_close().await,
+                Some((1011, "no caller adopted this WebSocket".into())),
+            );
+            assert!(released(&queue).await);
+        });
+    }
+
+    #[test]
+    fn the_sweep_task_closes_parked_sockets_and_stops_until_the_next_park() {
+        asyncrt::test_host_runtime().block_on(async {
+            let registry = own_registry();
+            let timing = SweepTiming {
+                interval: Duration::from_millis(10),
+                timeout: Duration::from_millis(30),
+            };
+            let sweeping = || registry.lock().unwrap().worker_handoff_parks.sweeping;
+            for _ in 0..2 {
+                let (socket, queue) = worker_socket();
+                park_worker_handoff_in(&registry, socket, issuer(4), timing).unwrap();
+                assert!(sweeping());
+                assert_eq!(
+                    queue.next_close().await,
+                    Some((1011, "no caller adopted this WebSocket".into())),
+                );
+                assert!(released(&queue).await);
+                // With nothing parked, the sweep ends, and the next park
+                // starts another.
+                for _ in 0..100 {
+                    if !sweeping() {
+                        break;
+                    }
+                    asyncrt::sleep(Duration::from_millis(10)).await;
+                }
+                assert!(!sweeping());
+            }
+        });
+    }
+
+    #[test]
+    fn a_retired_generation_closes_its_parked_sockets_after_the_grace() {
+        asyncrt::test_host_runtime().block_on(async {
+            let registry = own_registry();
+            let timing = SweepTiming {
+                interval: Duration::from_secs(60),
+                timeout: WORKER_HANDOFF_TIMEOUT,
+            };
+            let (socket, queue) = worker_socket();
+            let (kept, kept_queue) = worker_socket();
+            park_worker_handoff_in(&registry, socket, issuer(5), timing).unwrap();
+            let mut other = issuer(5);
+            other.generation = 8;
+            park_worker_handoff_in(&registry, kept, other, timing).unwrap();
+            close_generation_worker_handoffs_in(registry.clone(), 7, Duration::from_millis(100));
+            // Parked moments ago: its caller may still adopt it.
+            assert!(queue.registered());
+            // The second pass, at the end of the grace, closes it.
+            assert_eq!(
+                queue.next_close().await,
+                Some((
+                    1011,
+                    "the deployment that made this WebSocket retired".into()
+                )),
+            );
+            assert!(released(&queue).await);
+            assert!(kept_queue.registered());
+        });
+    }
+
+    /// A bridge between a caller end the test reads and a server end, with
+    /// the senders of both sides' frames.
+    struct TestBridge {
+        caller: WsPullReceiver,
+        to_bridge_from_caller: tokio::sync::mpsc::UnboundedSender<WsOut>,
+        to_bridge_from_target: tokio::sync::mpsc::UnboundedSender<WsOut>,
+        target: WsPullReceiverHandle,
+        done: asyncrt::TaskHandle<()>,
+    }
+
+    fn start_bridge(close_timeout: Duration) -> TestBridge {
+        let (target, target_queue) = worker_socket();
+        let (caller_pull, caller) = ws_pull_channel();
+        let (to_bridge_from_caller, from_caller) = tokio::sync::mpsc::unbounded_channel();
+        let (to_bridge_from_target, from_target) = tokio::sync::mpsc::unbounded_channel();
+        let bridge = WorkerHandoffBridge {
+            caller: ws_next_id(),
+            caller_pull,
+            from_caller,
+            target,
+            from_target,
+        };
+        TestBridge {
+            caller,
+            to_bridge_from_caller,
+            to_bridge_from_target,
+            target: target_queue,
+            done: asyncrt::spawn(bridge_worker_handoff_within(bridge, close_timeout)),
+        }
+    }
+
+    fn close_of(frame: Option<WsPull>) -> Option<(u16, String, bool)> {
+        match frame {
+            Some(WsPull::Close(code, reason, clean)) => Some((code, reason, clean)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_bridge_carries_frames_both_ways_and_the_target_close() {
+        asyncrt::test_host_runtime().block_on(async {
+            let mut bridge = start_bridge(Duration::from_secs(5));
+            bridge
+                .to_bridge_from_caller
+                .send(WsOut::Text("up".into()))
+                .unwrap();
+            let up = bridge.target.1.lock().await.recv().await;
+            assert!(matches!(up, Some(WsPull::Text(text)) if text == "up"));
+            bridge
+                .to_bridge_from_target
+                .send(WsOut::Binary(vec![1, 2]))
+                .unwrap();
+            assert!(
+                matches!(bridge.caller.recv().await, Some(WsPull::Binary(bytes)) if bytes == [1, 2])
+            );
+            // The server end closes first: the caller sees its code, and the
+            // server end's queue ends with the same Close.
+            bridge
+                .to_bridge_from_target
+                .send(WsOut::Close(4001, "bye".into()))
+                .unwrap();
+            assert_eq!(
+                close_of(bridge.caller.recv().await),
+                Some((4001, "bye".into(), true))
+            );
+            assert_eq!(bridge.target.next_close().await, Some((4001, "bye".into())));
+            bridge.done.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn a_caller_close_with_no_reply_ends_in_1006() {
+        asyncrt::test_host_runtime().block_on(async {
+            let mut bridge = start_bridge(Duration::from_millis(50));
+            bridge
+                .to_bridge_from_caller
+                .send(WsOut::Close(4000, "done".into()))
+                .unwrap();
+            assert_eq!(
+                bridge.target.next_close().await,
+                Some((4000, "done".into()))
+            );
+            // The server end never answers.
+            assert_eq!(
+                close_of(bridge.caller.recv().await),
+                Some((1006, String::new(), false))
+            );
+            bridge.done.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn a_caller_close_carries_the_server_reply() {
+        asyncrt::test_host_runtime().block_on(async {
+            let mut bridge = start_bridge(Duration::from_secs(5));
+            bridge
+                .to_bridge_from_caller
+                .send(WsOut::Close(4000, "done".into()))
+                .unwrap();
+            assert_eq!(
+                bridge.target.next_close().await,
+                Some((4000, "done".into()))
+            );
+            bridge
+                .to_bridge_from_target
+                .send(WsOut::Close(4000, "saw it".into()))
+                .unwrap();
+            assert_eq!(
+                close_of(bridge.caller.recv().await),
+                Some((4000, "saw it".into(), true))
+            );
+            bridge.done.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn a_side_that_goes_away_closes_the_other_with_1006() {
+        asyncrt::test_host_runtime().block_on(async {
+            let mut bridge = start_bridge(Duration::from_millis(50));
+            drop(bridge.to_bridge_from_caller);
+            assert_eq!(
+                bridge.target.next_close().await,
+                Some((1006, String::new()))
+            );
+            assert_eq!(
+                close_of(bridge.caller.recv().await),
+                Some((1006, String::new(), false))
+            );
+            bridge.done.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn a_side_that_stops_reading_closes_the_other_with_1006() {
+        asyncrt::test_host_runtime().block_on(async {
+            let mut bridge = start_bridge(Duration::from_millis(50));
+            // The server end's isolate is gone: nothing holds its queue.
+            let target = bridge.target.0;
+            drop(bridge.target);
+            ws_pull_unregister(target);
+            bridge
+                .to_bridge_from_caller
+                .send(WsOut::Text("lost".into()))
+                .unwrap();
+            assert_eq!(
+                close_of(bridge.caller.recv().await),
+                Some((1006, String::new(), false))
+            );
+            bridge.done.await.unwrap();
+        });
     }
 }

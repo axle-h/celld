@@ -1,0 +1,7 @@
+// The middle hop of /double: front -> mid -> back.
+{
+  "name": "mid",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }]
+}

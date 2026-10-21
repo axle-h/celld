@@ -8,7 +8,7 @@ import { join, relative } from "node:path";
 const CASE_KEYS = new Set(["kind", "reason", "workers", "env", "observability", "nodes", "xfail", "steps", "normalize"]);
 const STEP_KEYS = {
   path: new Set(["path", "method", "headers", "body", "responseHeaders"]),
-  ws: new Set(["ws", "send", "receive", "close"]),
+  ws: new Set(["ws", "send", "receive", "close", "protocols"]),
   restart: new Set(["restart"]),
   otlp: new Set(["otlp"]),
   deploy: new Set(["deploy", "args"]),
@@ -208,19 +208,28 @@ function validateStep(step, fail) {
       if (!Array.isArray(send) || !send.every((frame) => typeof frame === "string")) {
         fail(`"send" must be an array of text frames`);
       }
+      // Offered subprotocols. With them, the transcript also records the one
+      // the server selected.
+      const protocols = step.protocols;
+      if (protocols !== undefined) {
+        if (!Array.isArray(protocols) || protocols.length === 0 || !protocols.every(nonEmptyString)) {
+          fail(`"protocols" must be a non-empty array of subprotocol names`);
+        }
+        if (new Set(protocols).size !== protocols.length) fail(`"protocols" names a subprotocol twice`);
+      }
       // With "close", the client closes after "receive" frames (by default
       // one per frame sent). Without it, the step waits for the server to
       // close.
       if (!("close" in step)) {
         if ("receive" in step) fail(`"receive" needs "close"; without "close" the step waits for the server to close`);
-        return { kind, path: step.ws, send, receive: Infinity };
+        return { kind, path: step.ws, send, receive: Infinity, protocols };
       }
       if (!(Number.isInteger(step.close) && (step.close === 1000 || (step.close >= 3000 && step.close <= 4999)))) {
         fail(`"close" must be 1000 or an application code in 3000-4999`);
       }
       const receive = step.receive ?? send.length;
       if (!Number.isInteger(receive) || receive < 0) fail(`"receive" must be a non-negative integer`);
-      return { kind, path: step.ws, send, receive, close: step.close };
+      return { kind, path: step.ws, send, receive, close: step.close, protocols };
     }
     case "restart":
       if (step.restart !== true) fail(`"restart" must be true`);

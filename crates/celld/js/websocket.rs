@@ -38,7 +38,136 @@ pub(super) fn transfer_worker_websocket_handoff(id: u64) -> Option<WorkerWebSock
         .lock()
         .unwrap()
         .retain(|opened| *opened != id);
-    Some(WorkerWebSocket { id, inbound })
+    Some(WorkerWebSocket::new(id, inbound))
+}
+
+/// workerd's text for an I/O object used from a request other than the one
+/// that created it.
+const CROSS_REQUEST_IO: &str = "Cannot perform I/O on behalf of a different request. I/O \
+     objects (such as streams, request/response bodies, and others) created in the context \
+     of one request handler cannot be accessed from a different request's handler. This is \
+     a limitation of Cloudflare Workers which allows us to improve overall performance. \
+     (I/O type: WebSocket)";
+
+/// The message for a handed-over socket that cannot be used.
+fn handoff_refusal(refusal: WorkerHandoffRefusal) -> String {
+    match refusal {
+        WorkerHandoffRefusal::OtherRequest => CROSS_REQUEST_IO.to_string(),
+        WorkerHandoffRefusal::Gone => {
+            "The WebSocket that the subrequest returned is no longer open".to_string()
+        }
+    }
+}
+
+/// Take a handed-over socket that `context`'s request adopted, for its
+/// response or its `accept()`, with the caller id the host chose.
+///
+/// The host parked the socket for the request that made the call and lets
+/// only that request adopt and take it, so a socket object that reached
+/// another request's hands, or a token another request learned, moves
+/// nothing.
+pub(super) fn take_request_worker_handoff(
+    context: &IoContext,
+    token: &WorkerHandoffToken,
+) -> std::result::Result<(WorkerWebSocket, u64), String> {
+    let taken = take_worker_handoff(token, context.handoff_request).map_err(handoff_refusal)?;
+    context
+        .worker_handoffs
+        .lock()
+        .unwrap()
+        .retain(|owned| owned != token);
+    Ok(taken)
+}
+
+/// `__ws_adopt_worker_handoff(token)`: give a socket that a subrequest's 101
+/// carried to the request whose continuation is running, which must be the
+/// request that made the call. That request releases the socket when it
+/// retires unless it returns or accepts it first. Returns the id of the
+/// caller's own end, which the host chooses.
+pub(super) fn op_ws_adopt_worker_handoff(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let token = WorkerHandoffToken::from(args.get(0).to_rust_string_lossy(scope));
+    let context = event_context(scope);
+    let caller =
+        match adopt_worker_handoff(&token, context.handoff_request) {
+            Ok(caller) => caller,
+            Err(WorkerHandoffRefusal::Gone) => return loader_throw(
+                scope,
+                "The WebSocket that the subrequest returned closed before its caller could take it",
+            ),
+            Err(refusal) => return loader_throw(scope, &handoff_refusal(refusal)),
+        };
+    context.worker_handoffs.lock().unwrap().push(token);
+    rv.set(v8::Number::new(scope, caller as f64).into());
+}
+
+/// Take the handed-over socket that `accept()` binds to the caller's end
+/// `id`. The caller's end registers under the id the host chose at
+/// adoption, never one that application code wrote on the socket object: a
+/// different id closes the server end with 1011 and fails the `accept()`.
+fn take_for_accept(
+    context: &IoContext,
+    token: &WorkerHandoffToken,
+    id: u64,
+) -> std::result::Result<WorkerWebSocket, String> {
+    let (target, caller) = take_request_worker_handoff(context, token)?;
+    if caller != id {
+        close_handed_over(target, 1011, "WebSocket is not valid", false);
+        return Err("WebSocket is not valid".to_string());
+    }
+    Ok(target)
+}
+
+/// `__ws_bind_worker_handoff(id, token, cell)`: `accept()` on a socket that a
+/// subrequest's 101 handed to this request. The server end lives in another
+/// isolate, so the host carries both directions between it and this
+/// isolate's socket `id`.
+pub(super) fn op_ws_bind_worker_handoff(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let id = args
+        .get(0)
+        .to_integer(scope)
+        .map(|n| n.value() as u64)
+        .unwrap_or(0);
+    let token = WorkerHandoffToken::from(args.get(1).to_rust_string_lossy(scope));
+    // The caller's scope, empty for a Worker, exactly as `op_ws_bind_target`
+    // reads it.
+    let cell = args.get(2).to_rust_string_lossy(scope);
+    let facet = match dialing_facet(scope, &cell) {
+        Ok(facet) => facet,
+        Err(error) => return loader_throw(scope, &error),
+    };
+    let target = match take_for_accept(&event_context(scope), &token, id) {
+        Ok(target) => target,
+        Err(error) => return loader_throw(scope, &error),
+    };
+    // Every registration happens here, on the JS thread, before the bridge
+    // task exists: a frame either side sends from now on has a channel, and
+    // the frames the server end sent before this point flush from its
+    // pre-upgrade buffer into the bridge.
+    let (caller_pull, caller_queue) = ws_pull_channel();
+    ws_pull_register(id, caller_queue);
+    if cell.is_empty() {
+        ws_track_request_socket(id);
+    }
+    ws_register_outbound(id, &cell, facet);
+    let (caller_tx, from_caller) = tokio::sync::mpsc::unbounded_channel();
+    ws_register(id, caller_tx);
+    let (target_tx, from_target) = tokio::sync::mpsc::unbounded_channel();
+    ws_register(target.id(), target_tx);
+    asyncrt::op_handle().spawn(bridge_worker_handoff(WorkerHandoffBridge {
+        caller: id,
+        caller_pull,
+        from_caller,
+        target,
+        from_target,
+    }));
 }
 
 /// Close every isolate-polled socket a finished request opened.
@@ -818,5 +947,87 @@ pub(super) fn op_ws_auto_response_ts(
     match stamped {
         Some(ms) => rv.set(v8::Number::new(scope, ms).into()),
         None => rv.set(v8::null(scope).into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ws_registry::tests::{released, worker_socket};
+
+    /// A socket parked for `context`'s request and adopted by it, as
+    /// `__hostResponseSocket` leaves one: returns its token and caller id.
+    fn adopted_by(context: &IoContext, socket: WorkerWebSocket) -> (WorkerHandoffToken, u64) {
+        let token = park_worker_handoff(socket, context.handoff_issuer(1)).unwrap();
+        let caller = adopt_worker_handoff(&token, context.handoff_request).unwrap();
+        context.worker_handoffs.lock().unwrap().push(token.clone());
+        (token, caller)
+    }
+
+    #[test]
+    fn a_retiring_caller_releases_the_socket_it_adopted() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let (socket, queue) = worker_socket();
+            let context = IoContext::new();
+            let (token, _) = adopted_by(&context, socket);
+
+            context.close_sockets();
+
+            assert!(take_worker_handoff(&token, context.handoff_request).is_err());
+            assert!(context.worker_handoffs.lock().unwrap().is_empty());
+            // The server end hears that the request ended, as a request's own
+            // sockets do when it retires, and the host holds nothing more.
+            assert_eq!(
+                queue.next_close().await,
+                Some((1001, "request ended".into()))
+            );
+            assert!(released(&queue).await);
+        });
+    }
+
+    #[test]
+    fn another_request_can_neither_adopt_nor_take_the_socket() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let (socket, queue) = worker_socket();
+            let caller = IoContext::new();
+            let other = IoContext::new();
+            let token = park_worker_handoff(socket, caller.handoff_issuer(1)).unwrap();
+            assert_eq!(
+                adopt_worker_handoff(&token, other.handoff_request),
+                Err(WorkerHandoffRefusal::OtherRequest)
+            );
+            adopt_worker_handoff(&token, caller.handoff_request).unwrap();
+            caller.worker_handoffs.lock().unwrap().push(token.clone());
+            assert_eq!(
+                take_request_worker_handoff(&other, &token).err().as_deref(),
+                Some(CROSS_REQUEST_IO)
+            );
+            // Still the caller's, and still open.
+            assert!(queue.registered());
+            let (socket, _) = take_request_worker_handoff(&caller, &token).unwrap();
+            assert!(caller.worker_handoffs.lock().unwrap().is_empty());
+            drop(socket);
+        });
+    }
+
+    #[test]
+    fn an_accept_under_another_id_closes_the_server_end() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let (socket, queue) = worker_socket();
+            let context = IoContext::new();
+            let (token, caller) = adopted_by(&context, socket);
+            assert_eq!(
+                take_for_accept(&context, &token, caller + 1)
+                    .err()
+                    .as_deref(),
+                Some("WebSocket is not valid")
+            );
+            assert_eq!(
+                queue.next_close().await,
+                Some((1011, "WebSocket is not valid".into()))
+            );
+            assert!(released(&queue).await);
+            assert!(context.worker_handoffs.lock().unwrap().is_empty());
+        });
     }
 }

@@ -2,6 +2,21 @@
 // once per isolate by `js.rs::install_harness` after the Web-API prelude.
 // Lived as a 4,000-line raw string inside js.rs until 2026-07-29; it is a
 // JavaScript program and belongs in a .js file, like the rest of src/js/.
+//
+// Intrinsics the handed-over WebSocket path uses, captured before any
+// application code runs, as tracing.js does, so that a Worker that replaces
+// JSON.parse or the WeakMap methods does not see that path's host results.
+const __ReflectApply = Reflect.apply;
+const __JSONParse = JSON.parse;
+const __jsonParse = (text) => __ReflectApply(__JSONParse, JSON, [text]);
+const __SafeWeakMap = WeakMap;
+const __WeakMapGet = WeakMap.prototype.get;
+const __WeakMapSet = WeakMap.prototype.set;
+const __WeakMapHas = WeakMap.prototype.has;
+const __WeakMapDelete = WeakMap.prototype.delete;
+const __SafeWeakSet = WeakSet;
+const __WeakSetAdd = WeakSet.prototype.add;
+const __WeakSetHas = WeakSet.prototype.has;
 function __bodyBytes(body) {
   if (body == null) return new Uint8Array();
   if (body && body.__celldBodyBytes instanceof Uint8Array)
@@ -289,6 +304,14 @@ globalThis.Response = class Response {
       this.headers.set("content-type", typed.type);
     this.webSocket = init.webSocket ?? null;
     this._wsTarget = init.__wsTarget || init._wsTarget || null;
+    // Workerd admits 101 only for a response that carries a WebSocket. A
+    // cross-isolate upgrade carries the socket's target instead, and its
+    // client end is made from that target.
+    if (this.status === 101 && this.webSocket === null && this._wsTarget === null) {
+      throw new RangeError(
+        "Responses may only be constructed with status codes in the range " +
+        "200 to 599, inclusive.");
+    }
     this.ok = this.status >= 200 && this.status <= 299;
     this.redirected = false;
     this.type = "default";
@@ -703,16 +726,33 @@ globalThis.fetch = async (input, init) => {
     }
     throw error;
   }
-  const r = JSON.parse(raw);
+  const r = __jsonParse(raw);
+  // A server may answer 101 to a request that did not ask to upgrade. There
+  // is no socket to give the caller, so say what happened instead of
+  // letting the Response constructor refuse the status.
+  if (r.status === 101 && !r.wsTarget && r.wsWorker === undefined) {
+    throw new TypeError(
+      `fetch: ${req.url} answered 101 Switching Protocols to a request ` +
+      'that did not ask to upgrade; send "Upgrade: websocket" to open a WebSocket');
+  }
   // Direct network responses always carry a stream id. A transferred
   // globalOutbound Fetcher can answer with an inline body, as service
   // bindings do, so preserve both response representations.
   const responseBody = r.streamId !== undefined
     ? new CelldHttpBodyStream(r.streamId)
     : r.body !== undefined ? r.body : Uint8Array.from(r.bodyBytes || []);
+  // A globalOutbound Fetcher is a service binding, so its target can answer
+  // with a WebSocket the same way.
   const response = new Response(
     responseBody,
-    { status: r.status, headers: r.headers },
+    {
+      status: r.status,
+      headers: r.headers,
+      __wsTarget: r.wsTarget,
+      webSocket: r.status === 101 && r.wsTarget
+        ? new WebSocket(undefined, [], r.wsTarget)
+        : __hostResponseSocket(r),
+    },
   );
   response.url = req.url;
   return response;
@@ -759,8 +799,7 @@ const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
     return response;
   }
   socket.protocol = raw.protocol ?? "";
-  const response = new Response(null, { status: 101 });
-  response.webSocket = socket;
+  const response = new Response(null, { status: 101, webSocket: socket });
   response.url = req.url;
   return response;
 };
@@ -2212,7 +2251,7 @@ class DurableObjectFacets {
         const req = new Request(input, init);
         const headers = JSON.stringify(req.headers.__celldHeaderList);
         const { body, streamId } = await __subrequestBody(req);
-        const response = JSON.parse(await __facet_fetch(
+        const response = __jsonParse(await __facet_fetch(
           loader, className, manager._state._scope, record.owner, name, id,
           propsSc, req.url, req.method, body, headers, streamId));
         const responseBody = response.streamId !== undefined
@@ -2226,6 +2265,7 @@ class DurableObjectFacets {
           status: response.status,
           headers: response.headers,
           __wsTarget: response.wsTarget,
+          webSocket: __hostResponseSocket(response),
         }), req.url);
       });
     };
@@ -3281,12 +3321,17 @@ __celld.__makeLoader = () => {
           // its IoContext cannot retire and abort the report operation.
           __registerWaitUntil(delivery);
         }
-        const r = JSON.parse(await response);
+        const r = __jsonParse(await response);
         const responseBody = r.streamId !== undefined
           ? new CelldHttpBodyStream(r.streamId)
           : r.body !== undefined ? r.body : Uint8Array.from(r.bodyBytes || []);
         return __wrapServiceResponse(
-          new Response(responseBody, { status: r.status, headers: r.headers }),
+          new Response(responseBody, {
+            status: r.status,
+            headers: r.headers,
+            __wsTarget: r.wsTarget,
+            webSocket: __hostResponseSocket(r),
+          }),
           req.url);
       },
     };
@@ -3624,7 +3669,7 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
     // Cross-isolate calls carry exact bytes. A host-backed stream transfers
     // its one source to the target, and another stream uses the byte fallback.
     const { body, streamId } = await __subrequestBody(req);
-    const r = JSON.parse(await (signal
+    const r = __jsonParse(await (signal
       ? __awaitCancellableDoCall(
         __svc_call_cancellable(
           script, req.url, req.method, body, headers, streamId, entrypoint,
@@ -3641,6 +3686,7 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
     return __finishServiceFetch(
       new Response(responseBody, {
         status: r.status, headers: r.headers, __wsTarget: r.wsTarget,
+        webSocket: __hostResponseSocket(r),
       }),
       req, redirectState);
   },
@@ -4333,6 +4379,9 @@ const __stubLift = (value, allowCapabilities = true, originals) => {
                  b: liftBody(v) };
     } else if (v instanceof Response) {
       if (!allowCapabilities) return v;
+      // Workerd serializes the socket too, and a WebSocket does not
+      // serialize. Dropping it would revive a 101 with nothing to switch to.
+      if (v.webSocket) throw __rpcUnsupportedType(v.webSocket);
       marker = { "__celld$res": v.status,
                  t: v.statusText ||
                     __STATUS_TEXT[v.status] || "",
@@ -5259,7 +5308,7 @@ class DurableObjectNamespace {
         const headersJson = req._headersJson !== undefined
           ? req._headersJson
           : JSON.stringify(req.headers.__celldHeaderList);
-        const r = JSON.parse(await invoke(() => {
+        const r = __jsonParse(await invoke(() => {
           if (!signal) return __do_call(
             scope, dispatchName ?? null, req.url, req.method, body_,
             headersJson, bodyStreamId,
@@ -5288,7 +5337,7 @@ class DurableObjectNamespace {
           __wsTarget: r.wsTarget,
           webSocket: r.status === 101 && r.wsTarget
             ? new WebSocket(undefined, [], r.wsTarget)
-            : undefined,
+            : __hostResponseSocket(r),
         });
     };
     const stub = new Proxy(target, { get: (_target, prop) => {
@@ -5407,8 +5456,11 @@ const __dispatchTo = __celld.__dispatchTo = async (
     // that would cancel the body reaches it through the routed channel's own
     // controller rather than this one.
     __attachResponseRequestCancellation(response, requestController, false);
+    // A socket that a subrequest handed to this object lives in another
+    // isolate, so it is no socket of this cell's: the host passes it on.
     if (response instanceof Response && response.status === 101 &&
-        response.webSocket && !response.webSocket._target) {
+        response.webSocket && !response.webSocket._target &&
+        !__isHandoffSocket(response.webSocket)) {
       const socket = response.webSocket._peer;
       const target = { id: response.webSocket._id, scope };
       response.webSocket._target = target;
@@ -10584,9 +10636,11 @@ globalThis.WebSocket = class WebSocket extends EventTarget {
   // runs and normally resolve with the host's 1001 "request ended" close.
   // They resolve as 1006 only if the sender disappears without a close frame.
   _startPump() {
-    if (this._pumping) return;
-    this._pumping = true;
-    this._pump().catch(() => {});
+    if (!this._pumping) {
+      this._pumping = true;
+      this._pumpDone = this._pump().catch(() => {});
+    }
+    return this._pumpDone;
   }
   // Drain the host queue for an isolate-polled socket. Each `__ws_next` is an
   // ordinary async op the request owns; a request that retires with the
@@ -10661,6 +10715,25 @@ globalThis.WebSocket = class WebSocket extends EventTarget {
           JSON.stringify(this._boundTarget),
           __currentActorScope(),
         );
+      }
+      const handoff = __ReflectApply(__WeakMapGet, __workerHandoffs, [this]);
+      if (handoff !== undefined) {
+        // The server end is a Worker socket in another isolate. The host
+        // bridges it to this socket. A refused bind throws and leaves the
+        // socket as it was; a bound one no longer names the server end.
+        const scope = __currentActorScope();
+        __ws_bind_worker_handoff(this._id, handoff, scope);
+        __ReflectApply(__WeakMapDelete, __workerHandoffs, [this]);
+        __ReflectApply(__WeakSetAdd, __acceptedHandoffs, [this]);
+        this.readyState = WebSocket.READY_STATE_OPEN;
+        const pump = this._startPump();
+        // A stateless request ends when its response and waitUntil work do,
+        // and its sockets close with it. Workerd keeps a request alive
+        // while a socket it accepted is open, which is what a Worker that
+        // relays this socket to its own client needs. A Durable Object's
+        // event keeps its pending I/O without this.
+        if (!scope) __registerWaitUntil(pump);
+        return;
       }
       this.readyState = WebSocket.READY_STATE_OPEN;
       if (this._polled) this._startPump();
@@ -10797,6 +10870,32 @@ globalThis.WebSocket = class WebSocket extends EventTarget {
   }
 };
 const __makeSocket = __celld.__makeSocket = (id) => new WebSocket(id);
+// The client end of a Worker socket that a subrequest's 101 handed to this
+// request, mapped to the token that names it to the host. A WeakMap rather
+// than a property, so the token does not sit on an object application code
+// handles. The token alone grants nothing: the host lets only the request
+// that made the call adopt the socket and take it.
+const __workerHandoffs = new __SafeWeakMap();
+// Such sockets once accepted, which a response can no longer carry.
+const __acceptedHandoffs = new __SafeWeakSet();
+const __isHandoffSocket = (socket) =>
+  __ReflectApply(__WeakMapHas, __workerHandoffs, [socket]) ||
+  __ReflectApply(__WeakSetHas, __acceptedHandoffs, [socket]);
+// Take the socket a host response handed over and give it to the running
+// request, which releases it when it retires unless it returns the socket
+// in a response or accepts it first. Returns the client end for a 101.
+const __hostResponseSocket = (r) => {
+  if (r.wsWorker === undefined) return undefined;
+  // The host chooses the id of this end, and registers the bridge under it.
+  const socket = __makeSocket(__ws_adopt_worker_handoff(r.wsWorker));
+  // Like a Durable Object's socket from a subrequest: the host carries its
+  // frames once it is accepted, and until then it is connecting.
+  socket._outbound = true;
+  socket._polled = true;
+  socket.readyState = WebSocket.READY_STATE_CONNECTING;
+  __ReflectApply(__WeakMapSet, __workerHandoffs, [socket, r.wsWorker]);
+  return r.status === 101 ? socket : undefined;
+};
 const __socketFromRow = __celld.__socketFromRow = (row) => {
   let ws = __sockets.get(Number(row.id));
   if (!ws) {
@@ -11555,7 +11654,19 @@ __celld.__readResponse = (r) => {
     return { error: __ERROR_RESPONSE_MESSAGE };
   let workerSocketId = 0;
   let wsTarget = r._wsTarget || (r.webSocket && r.webSocket._target) || null;
-  if (r.status === 101 && r.webSocket && wsTarget === null) {
+  // A socket another isolate holds, handed to this request by a subrequest
+  // and returned here without being accepted: the host passes that socket
+  // on, so its server end reaches this response's client.
+  // Workerd lets a socket this request accepted leave in a 101 and fails it
+  // when it couples to the receiver: the receiver's connection ends with
+  // 1006. The host gives the response a socket that is already gone.
+  const acceptedWebSocket = r.status === 101 && r.webSocket !== null &&
+    __ReflectApply(__WeakSetHas, __acceptedHandoffs, [r.webSocket]);
+  const workerHandoff = r.status === 101 && r.webSocket
+    ? __ReflectApply(__WeakMapGet, __workerHandoffs, [r.webSocket]) ?? null
+    : null;
+  if (r.status === 101 && r.webSocket && wsTarget === null && workerHandoff === null &&
+      !acceptedWebSocket) {
     const server = r.webSocket._peer;
     if (server && server._accepted) {
       workerSocketId = server._id;
@@ -11587,6 +11698,8 @@ __celld.__readResponse = (r) => {
       headersJson: JSON.stringify(Array.from(r.headers)),
       wsTargetJson: JSON.stringify(wsTarget),
       workerSocketId,
+      workerHandoff,
+      acceptedWebSocket,
     };
   }
   const bytes = r._bodyBytes;
@@ -11597,5 +11710,7 @@ __celld.__readResponse = (r) => {
     headersJson: JSON.stringify(Array.from(r.headers)),
     wsTargetJson: JSON.stringify(wsTarget),
     workerSocketId,
+    workerHandoff,
+    acceptedWebSocket,
   };
 };
