@@ -48,6 +48,9 @@ pub use crate::engine_api::PoolCensus;
 static NEXT_HEAP_ID: AtomicU64 = AtomicU64::new(1);
 
 fn next_heap_id() -> HeapId {
+    // Rust 1.99 deprecates `fetch_update` as a rename of `try_update`,
+    // which is stable only from 1.95; this crate's MSRV is 1.94.1.
+    #[allow(deprecated)]
     let value = NEXT_HEAP_ID
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
             value.checked_add(1)

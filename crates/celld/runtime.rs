@@ -534,6 +534,9 @@ struct CellRequestAdmission {
 
 impl CellRequestAdmission {
     fn acquire(self: &Arc<Self>) -> Option<CellRequestPermit> {
+        // Rust 1.99 deprecates `fetch_update` as a rename of `try_update`,
+        // which is stable only from 1.95; this crate's MSRV is 1.94.1.
+        #[allow(deprecated)]
         let admitted = self
             .in_flight
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |held| {

@@ -249,7 +249,7 @@ What a fresh machine needs, as on the machine where this plan was written
 
 | Tool | Version seen | Notes |
 | --- | --- | --- |
-| Rust | 1.99 (no `rust-toolchain` file) | `cargo build --profile lab -p celld` for test loops; `--release` (fat LTO) only for releases. Measured 2026-10-21 (V8 comes prebuilt): cold `lab` build 1m02s, warm rebuild after a `dev.rs` edit 25s. Rust 1.99 raises 19 clippy warnings in code from v0.6.2 (`fetch_update` deprecation, `needless_borrow`, `double_must_use`), and they must be fixed before CI (0.6) can run with `-D warnings`. |
+| Rust | 1.99 (no `rust-toolchain` file) | `cargo build --profile lab -p celld` for test loops; `--release` (fat LTO) only for releases. Measured 2026-10-21 (V8 comes prebuilt): cold `lab` build 1m02s, warm rebuild after a `dev.rs` edit 25s. The 19 clippy warnings Rust 1.99 raised in v0.6.2 code are fixed (0.3). `fetch_update` stays behind `#[allow(deprecated)]`: its replacement `try_update` needs Rust 1.95 and the crates' `rust-version` is 1.94.1. The Dockerfile and `release.yml` build with Rust 1.98.1, so lints must pass on both. |
 | Node.js | 26.3 (via nvm) | Runs the starter's TypeScript directly (`node celld/generate.ts`). |
 | pnpm | 11.17 (the starter pins 11.17) | `pnpm install` in the starter also installs the `cloudflare-os/` submodule workspace through a postinstall hook. |
 | esbuild | 0.28.x | `celld deploy` and `celld dev` need it. It isn't on `PATH`; `starter:celld/env.sh` sets `CELLD_ESBUILD` from the starter's `node_modules`. Do the same in `tests/conformance`. |
@@ -327,6 +327,22 @@ write ourselves, before it lands on `main`.
 7. **No spike builds.** Never build, deploy or develop against a branch that
    contains unadopted fork capability code, not even locally for tooling.
    The harness is developed against `main` and fails where `main` fails.
+
+## Progress
+
+Items run one at a time, in the order below. Each lands as its own commit on
+`main` after an independent review. The order follows the plan's dependencies:
+0.3 comes first because CI (0.6) needs a clean clippy, and 0.5 waits for 1.7.
+
+| Order | Item | Status | Commit |
+| --- | --- | --- | --- |
+| 1 | 0.1 Multi-config `celld dev` | done | `11f383b` |
+| 2 | 0.3 Rust unit-test convention, clippy clean on Rust 1.99 | done | see log |
+| 3 | 0.2 Conformance corpus and runner, seed cases (incl. 1.14) | next | |
+| 4 | 0.6 CI | queued | |
+| 5 | 0.4 Starter e2e harness, mock LLM, smoke, baseline | queued | |
+| 6 | Phase 0 gate evidence | queued | |
+| 7+ | Phase 1 in plan order (1.1-1.16), then 0.5 after 1.7 | queued | |
 
 ## Phase overview
 
@@ -522,10 +538,13 @@ shows a full-binary Rust test pattern.
 ### 0.3 Rust unit-test convention
 
 - Inline `#[cfg(test)] mod tests` beside the code, run with
-  `cargo test -p celld <module>::`.
+  `cargo test --profile lab -p celld <module>::tests`.
+- `crates/logic` and `crates/ltx` set `test = false`; a public inline test
+  there also needs that removed. The out-of-tree suites sit behind
+  `cfg(celld_internal_tests)`, which nothing sets, so they compile out.
 - First targets are the pure parsers in `deploy.rs`. Each test asserts both
   the accepted shape and the loud refusal message.
-- Keep `cargo clippy --all-targets -- -D warnings` clean. The `Dockerfile`
+- Keep `cargo clippy --profile lab --all-targets --locked -- -D warnings` clean. The `Dockerfile`
   test stage (lines 23-34) already runs `cargo test` and clippy.
 
 ### 0.4 Cloudflare OS e2e harness in the starter: `starter:celld/e2e/`

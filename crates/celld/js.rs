@@ -1050,6 +1050,9 @@ static NEXT_GATE_EVENT: AtomicU64 = AtomicU64::new(1);
 // isolate's gate and keep the wrong event alive.
 static NEXT_IO_CONTEXT_ID: AtomicU64 = AtomicU64::new(0);
 
+// Rust 1.99 deprecates `fetch_update` as a rename of `try_update`,
+// which is stable only from 1.95; this crate's MSRV is 1.94.1.
+#[allow(deprecated)]
 fn allocate_io_context_id() -> u64 {
     NEXT_IO_CONTEXT_ID
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {

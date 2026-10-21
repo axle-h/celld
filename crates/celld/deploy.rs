@@ -3049,3 +3049,271 @@ fn strip_jsonc(source: &str) -> String {
 mod deploy_contract {
     include!(env!("CELLD_INTERNAL_DEPLOY_TESTS"));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn object(value: Value) -> Map<String, Value> {
+        let Value::Object(object) = value else {
+            panic!("test config must be an object");
+        };
+        object
+    }
+
+    fn bundle(value: Value) -> anyhow::Result<BundleConfig> {
+        read_bundle_config(&object(value))
+    }
+
+    fn refusal<T>(result: anyhow::Result<T>) -> String {
+        match result {
+            Ok(_) => panic!("the config was accepted"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    #[test]
+    fn define_takes_string_values_under_plain_keys() {
+        let config = bundle(json!({ "define": { "DEBUG": "false" } })).unwrap();
+        assert_eq!(
+            config.define,
+            BTreeMap::from([("DEBUG".to_string(), "false".to_string())])
+        );
+        assert_eq!(
+            refusal(bundle(json!({ "define": { "DEBUG": false } }))),
+            "config `define` value for \"DEBUG\" must be a string"
+        );
+        assert_eq!(
+            refusal(bundle(json!({ "define": { "A=B": "1" } }))),
+            "invalid `define` key: \"A=B\""
+        );
+        assert_eq!(
+            refusal(bundle(json!({ "define": ["DEBUG"] }))),
+            "config `define` must be an object"
+        );
+    }
+
+    #[test]
+    fn module_rules_map_extensions_to_loaders() {
+        let config = bundle(json!({ "rules": [
+            { "type": "Text", "globs": ["**/*.txt"] },
+            { "type": "Data", "globs": ["*.bin"] },
+        ] }))
+        .unwrap();
+        assert_eq!(
+            config.loaders,
+            BTreeMap::from([
+                (".bin".to_string(), Loader::Binary),
+                (".txt".to_string(), Loader::Text),
+                (".wasm".to_string(), Loader::Copy),
+            ])
+        );
+        assert_eq!(
+            refusal(bundle(
+                json!({ "rules": [{ "type": "ESModule", "globs": ["**/*.mjs"] }] })
+            )),
+            "module rule type \"ESModule\" is not supported; celld supports Text, Data, and \
+             CompiledWasm"
+        );
+        assert_eq!(
+            refusal(bundle(json!({ "rules": [
+                { "type": "Text", "globs": ["**/*.txt"], "fallthrough": true }
+            ] }))),
+            "module rule sets `fallthrough`, which celld does not have"
+        );
+        assert_eq!(
+            refusal(bundle(
+                json!({ "rules": [{ "type": "Text", "globs": [] }] })
+            )),
+            "module rule Text has no globs"
+        );
+    }
+
+    #[test]
+    fn module_rules_that_disagree_on_an_extension_are_refused() {
+        bundle(json!({ "rules": [{ "type": "CompiledWasm", "globs": ["**/*.wasm"] }] })).unwrap();
+        assert_eq!(
+            refusal(bundle(
+                json!({ "rules": [{ "type": "Text", "globs": ["**/*.wasm"] }] })
+            )),
+            "two module rules claim \".wasm\": CompiledWasm and Text"
+        );
+    }
+
+    #[test]
+    fn a_rule_glob_must_be_an_extension_match() {
+        assert_eq!(rule_extension("**/*.txt").unwrap(), ".txt");
+        assert_eq!(rule_extension("*.txt").unwrap(), ".txt");
+        for glob in ["src/*.txt", "**/*.d.ts", "**/*.*", "**/*"] {
+            assert_eq!(
+                refusal(rule_extension(glob)),
+                format!(
+                    "module rule glob {glob:?} is not an extension match; celld supports a \
+                     glob of the form `**/*.ext`"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn crons_are_parsed_at_deploy() {
+        assert_eq!(
+            read_crons(&object(json!({}))).unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            read_crons(&object(json!({ "triggers": { "crons": [" 0 * * * * "] } }))).unwrap(),
+            ["0 * * * *"]
+        );
+        assert_eq!(
+            refusal(read_crons(&object(
+                json!({ "triggers": { "crons": "0 * * * *" } })
+            ))),
+            "config `triggers.crons` must be an array of strings"
+        );
+        assert_eq!(
+            refusal(read_crons(&object(
+                json!({ "triggers": { "crons": ["0 * * *"] } })
+            ))),
+            "cron expression \"0 * * *\": expected 5 fields (minute hour day-of-month month \
+             day-of-week), found 4"
+        );
+    }
+
+    #[test]
+    fn migrations_introduce_sqlite_classes_once() {
+        assert_eq!(
+            read_sqlite_classes(&object(json!({ "migrations": [
+                { "tag": "v1", "new_sqlite_classes": ["Room"] },
+                { "tag": "v2", "new_sqlite_classes": ["Lobby"] },
+            ] })))
+            .unwrap(),
+            ["Room", "Lobby"]
+        );
+        assert_eq!(
+            refusal(read_sqlite_classes(&object(json!({ "migrations": [
+                { "tag": "v1", "renamed_classes": [] }
+            ] })))),
+            "`celld deploy` does not support these migration keys: renamed_classes.\n\
+             Class rename, delete, transfer, and non-SQLite migration semantics need an \
+             explicit persisted-state contract before deployment."
+        );
+        assert_eq!(
+            refusal(read_sqlite_classes(&object(json!({ "migrations": [
+                { "tag": "v1" }, { "tag": "v1" }
+            ] })))),
+            "config has duplicate migration tag \"v1\""
+        );
+        assert_eq!(
+            refusal(read_sqlite_classes(&object(json!({ "migrations": [
+                { "tag": "v1", "new_sqlite_classes": ["Room"] },
+                { "tag": "v2", "new_sqlite_classes": ["Room"] },
+            ] })))),
+            "SQLite class \"Room\" is introduced by more than one migration"
+        );
+    }
+
+    #[test]
+    fn queue_settings_are_bounded_integers() {
+        let consumer = json!({ "queue": "jobs", "max_retries": 3, "max_batch_size": 70000 });
+        reject_queue_keys(
+            &consumer,
+            &["queue", "max_retries", "max_batch_size"],
+            "consumer",
+        )
+        .unwrap();
+        assert_eq!(queue_name(&consumer, "consumer").unwrap(), "jobs");
+        assert_eq!(
+            optional_queue_u32(&consumer, "max_retries").unwrap(),
+            Some(3)
+        );
+        assert_eq!(optional_queue_u16(&consumer, "absent").unwrap(), None);
+        assert_eq!(
+            refusal(optional_queue_u16(&consumer, "max_batch_size")),
+            "queue max_batch_size is too large: 70000"
+        );
+        assert_eq!(
+            refusal(optional_queue_u64(
+                &json!({ "max_retries": -1 }),
+                "max_retries"
+            )),
+            "queue max_retries must be a non-negative integer"
+        );
+        assert_eq!(
+            refusal(reject_queue_keys(
+                &consumer,
+                &["queue", "max_batch_size"],
+                "consumer"
+            )),
+            "queue consumer declares `max_retries`, which celld does not model"
+        );
+        assert_eq!(
+            refusal(queue_name(&json!({ "queue": "" }), "producer")),
+            "queue producer has an empty queue name"
+        );
+        assert_eq!(
+            refusal(queue_name(&json!({ "queue": "a/b" }), "producer")),
+            "queue producer has a name that cannot name a cell: \"a/b\"; use ASCII letters, \
+             digits, and `_ - . : $`"
+        );
+    }
+
+    #[test]
+    fn project_paths_stay_inside_the_project() {
+        assert_eq!(
+            project_relative_path("./public", "assets.directory").unwrap(),
+            "public"
+        );
+        for path in ["", "./", "../public", "/srv/public", "public/../.."] {
+            assert_eq!(
+                refusal(project_relative_path(path, "assets.directory")),
+                "config `assets.directory` must be a path inside the project"
+            );
+        }
+    }
+
+    #[test]
+    fn worker_first_routes_need_a_positive_rule() {
+        let routes = |routes: &[&str]| {
+            RunWorkerFirst::Routes(routes.iter().map(|r| r.to_string()).collect())
+        };
+        validate_worker_first(&RunWorkerFirst::Bool(true)).unwrap();
+        validate_worker_first(&routes(&["/api/*", "!/api/static/*"])).unwrap();
+        assert_eq!(
+            refusal(validate_worker_first(&routes(&[]))),
+            "asset worker-first routes must contain between 1 and 100 rules"
+        );
+        assert_eq!(
+            refusal(validate_worker_first(&routes(&["/api/*", "/api/*"]))),
+            "invalid asset worker-first route: \"/api/*\""
+        );
+        assert_eq!(
+            refusal(validate_worker_first(&routes(&["!/api/*"]))),
+            "asset worker-first routes require a positive rule"
+        );
+    }
+
+    #[test]
+    fn names_follow_the_upstream_rules() {
+        assert!(valid_script_name("my-worker-2"));
+        for name in ["", "-worker", "worker-", "My-Worker", "my_worker"] {
+            assert!(!valid_script_name(name), "{name:?}");
+        }
+        assert!(valid_script_name(&"a".repeat(MAX_SCRIPT_NAME_BYTES)));
+        assert!(!valid_script_name(&"a".repeat(MAX_SCRIPT_NAME_BYTES + 1)));
+        assert!(valid_resource_name("_bucket-1"));
+        for name in ["", "-bucket", "a/b", "a.b"] {
+            assert!(!valid_resource_name(name), "{name:?}");
+        }
+        assert!(valid_resource_name(&"a".repeat(64)));
+        assert!(!valid_resource_name(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn jsonc_drops_comments_and_trailing_commas_outside_strings() {
+        let source =
+            "{\n  // line\n  \"a\": \"// kept /* kept */\", /* block */\n  \"b\": [1, 2,],\n}";
+        let value: Value = serde_json::from_str(&strip_jsonc(source)).unwrap();
+        assert_eq!(value, json!({ "a": "// kept /* kept */", "b": [1, 2] }));
+    }
+}
