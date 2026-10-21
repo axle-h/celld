@@ -1,0 +1,16 @@
+{
+  "observability": true,
+  "workers": ["spans"],
+  "steps": [
+    {"path": "/surface"},
+    {"path": "/module-scope"},
+    {"path": "/enter-span"},
+    {"path": "/start-active-span"},
+    {"path": "/start-span"},
+    {"path": "/active-span"},
+    {"path": "/invocation-span"},
+    {"path": "/conversion"},
+    {"path": "/patched-globals"},
+    {"path": "/durable-object"}
+  ]
+}

@@ -344,8 +344,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 5 | 0.4 part 1: e2e bring-up, mock LLM | done | starter `46ea5ad` |
 | 5b | 0.4 part 2: smoke, browser, checklist, baseline | done | starter `c17f99a` |
 | 6 | Phase 0 gate evidence | recorded; awaiting Alex | |
-| 7 | 1.1 `cloudflare:workers` exports, `restore` | done | see log |
-| 8+ | Phase 1 in plan order (1.2-1.18), then 0.5 after 1.7 | queued | |
+| 7 | 1.1 `cloudflare:workers` exports, `restore` | done | `3ef548c` |
+| 8 | 1.2 `tracing` with OTLP export | done | see log |
+| 9+ | Phase 1 in plan order (1.3-1.19), then 0.5 after 1.7 | queued | |
 
 ## Phase overview
 
@@ -448,7 +449,7 @@ tests/conformance/
     {"path": "/run"},
     {"ws": "/x", "send": ["a"], "close": 1000},
     {"restart": true},
-    {"otlp": {"expectSpans": ["chat", "execute_tool"]}}
+    {"otlp": {"spans": ["chat", "execute_tool"]}}
   ],
   "normalize": [{"pattern": "…", "replace": "…", "why": "…"}]
 }
@@ -490,7 +491,7 @@ default.
     the same storage directory: memory resets and DO storage survives.
     `examples/counter` records an in-memory count, so a restart that does
     nothing fails.
-- **`otlp`** (arrives with 1.2; the runner refuses it until then): assert on spans captured by the runner's in-process OTLP/HTTP
+- **`otlp`** (`{"otlp": {"spans": [...]}}`, celld-only, needs `"observability": true`): assert on spans captured by the runner's in-process OTLP/HTTP
   receiver (`lib/otlp.mjs`). The runner sets `CELLD_OTEL` to it. No collector
   container is needed.
 
@@ -842,51 +843,65 @@ come through as `undefined`.
 
 ### 1.2 `tracing`, with OTLP export (D13)
 
+**Status.** Done. The design below is as built.
+
 **Design.**
-- Implement `tracing` and `ctx.tracing` (the same object) per Cloudflare's
-  custom-spans API: `enterSpan`, `startActiveSpan`, `startSpan`,
-  `getActiveSpan`, and the `Span` methods.
-- The active span is tracked with the existing CPED/AsyncLocalStorage frame
-  (`harness.js:3813`). `enterSpan` ends the span when its promise settles.
-- **With `CELLD_OTEL` off:** `isTraced` is `false`, as for an unsampled request
-  on Cloudflare, and spans are dropped.
-- **With `CELLD_OTEL` on:** `isTraced` is `true`, and spans are exported as
-  children of the invocation's span. Changes:
-  - `telemetry::Span` gets owned names and attributes (`telemetry.rs:322`)
-  - `otlp.rs:107` emits attributes
-  - the Parquet schema gains an attributes column (already `v0-unstable`)
-  - one host op: `__span_end(traceId, parentId, name, startUs, endUs, attrsJson, exception)`
-- Parent ids come from the same CPED that tags console logs.
-- Follow workerd's limits: names cut to 64 bytes, about 64 KB of attributes
-  per span, `undefined` attributes ignored.
+- `tracing` (from `cloudflare:workers`) and `ctx.tracing` follow
+  Cloudflare's custom-spans API and workerd's `src/workerd/api/tracing.c++`
+  at v1.20261001.1: `enterSpan`, `startActiveSpan`, `startSpan`,
+  `getActiveSpan`, and the `Span` methods, with workerd's error texts.
+- `ctx.tracing` is a distinct lazy `Tracing` per ExecutionContext (stateless
+  and workflow), **not** `=== tracing`; a DO's `ctx` has none, as in workerd.
+- The active span is a key in the AsyncLocalStorage frame. `enterSpan` and
+  `startActiveSpan` also put the span's rider in CPED's trace slot, so logs,
+  outbound fetches and DO `fetch()` inside the span are its children. A DO
+  RPC call starts a new trace (see 1.19).
+- `enterSpan` ends the span on sync return or throw, or when a returned
+  promise settles. The returned promise always settles, even when it
+  settles in another request's turn.
+- **Host state.** Each traced invocation owns its span state, which its
+  IoContext adopts before Worker code runs. The ops (`__span_owner`,
+  `__span_start`, `__span_enter`, `__span_update`, `__span_end`) route by
+  the current context. A rider is only a name inside that invocation, so it
+  carries no authority. No rider reaches JS. `tracing.js` captures its
+  primordials. Spans that are never ended are recorded when the invocation
+  ends. A span used from another request throws workerd's IoOwn error.
+- **With `CELLD_OTEL` off:** `isTraced` is `false` and spans are dropped.
+  Locally, workerd reports `true` by default (wrangler's
+  `X_LOCAL_OBSERVABILITY`), so cases set `"observability"` explicitly.
+- **With `CELLD_OTEL` on:** spans export over OTLP and Parquet as children
+  of the invocation's span. `telemetry::Span` has owned names, a
+  `SpanStatus`, attributes and exceptions. Parquet gains `attributes` and
+  `exceptions` columns.
+- **Limits.** workerd's: 64-byte names, about 64 KiB of attributes per span
+  (its `bytesUsed`, with its warning attributes), 64 KiB status messages,
+  `undefined` ignored. celld's, because the data is in host memory:
+  1024 open spans and 1 MiB per invocation with overhead charged, 64 MiB
+  node-wide (shared, with no per-script fairness), and a 64 MiB export
+  queue. `celld.` attribute keys are reserved for celld.
 - Sampling is operator-controlled. 1.6 accepts the Wrangler `observability`
   block with a note, and doesn't read it.
-- `telemetry::Span.name` becomes `Cow<'static, str>` (`telemetry.rs:325`).
-  Existing span producers keep passing static strings, so the change is
-  mechanical.
+- Also fixed here: `KIND_CONSUMER` exported as OTLP PRODUCER (4, now 5).
 
-**Prior art.** Rework royalcala `22b3352` (patcon `e5878e3`) or cnicolov's
-`tracing.js` as a seed. Neither has `ctx.tracing` on DO state, active-span
-tracking or settle-ending.
+**Prior art.** royalcala `22b3352` (patcon `e5878e3`) and cnicolov's
+`tracing.js` were read as reference only (no-op stubs); no code was taken.
 
 **Tests.**
-- Integration: a `tracing/` case covering:
-  - sync and async callbacks
-  - exception propagation
-  - nesting
-  - `getActiveSpan()` outside a request
-  - chaining of `setAttributes`
-  - `ctx.tracing === tracing`
-- Unit:
-  - OTLP encoding of attributes and exceptions
-  - parent/child ids
-  - the name and attribute limits
-- Integration: a `celld-only` case with an `otlp` step. The runner's
-  in-process receiver (0.2) checks that the spans arrive with the right parent
-  and attributes. The `differential` cases run with `CELLD_OTEL` off, where
-  `isTraced=false` matches workerd.
-- E2E/manual: becomes testable after Phase 3. A chat turn completes, and the
-  collector shows `invoke_agent`, `chat` and `execute_tool` spans.
+- Differential: `tracing/custom-spans` (including a `/patched-globals`
+  route), `tracing/untraced`, `tracing/cross-request`,
+  `tracing/workflow-context`.
+- celld-only: `tracing/otlp-export` (the `otlp` step, with the receiver in
+  `tests/conformance/lib/otlp.mjs`), and
+  `tracing/settle-in-another-request`.
+- Unit: limits, accounting, forged riders, concurrent invocations, OTLP
+  encoding, span kinds, the queue cap.
+- **Remaining differences (documented):** a function bound to module-scope
+  async context sees the invocation span during a request; workerd sees
+  `undefined`. Overlapping DO events have separate contexts, so a span used
+  from a sibling event throws.
+- E2E/manual: after Phase 3 and 1.19, a chat turn completes and the
+  collector shows `invoke_agent`, `chat` and `execute_tool` spans in one
+  trace.
 
 ### 1.3 `ctx.exports` namespaces for classes declared only in migrations (trial failure 4)
 
@@ -1455,6 +1470,19 @@ Loader.
 
 **Tests.** Widen the link steps in `modules/cloudflare-workers-exports`
 back to the full message.
+
+### 1.19 Trace context across DO RPC calls (found by 1.2)
+
+**Problem.** `op_rpc_call` and `RpcCallReq` carry no parent trace context,
+so a DO RPC event starts a new trace. Cloudflare OS's chat turns cross DO
+RPC, so their spans split across traces.
+
+**Design.** Thread the caller's trace context through `RpcCallReq` →
+`dispatch_rpc_call` → `CellJob::Rpc` and the peer tunnel, as DO `fetch()`
+already does.
+
+**Tests.** Update the `tracing/otlp-export` transcript, which pins the new
+root today.
 
 ### Phase 1 gate
 

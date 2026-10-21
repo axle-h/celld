@@ -1,0 +1,7 @@
+{
+  "name": "untraced",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": { "bindings": [{ "name": "OBJECT", "class_name": "Untraced" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Untraced"] }]
+}

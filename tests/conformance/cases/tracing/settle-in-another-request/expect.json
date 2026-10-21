@@ -1,0 +1,114 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "wait": "released",
+        "release": "released"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "wait": "in span: released",
+        "release": "released"
+      }
+    },
+    {
+      "otlp": {
+        "spans": [
+          {
+            "name": "celld.fetch",
+            "kind": "server",
+            "children": [
+              {
+                "name": "fetch",
+                "kind": "client",
+                "attributes": {
+                  "celld.parent_remote": false,
+                  "http.response.status_code": 200,
+                  "url.full": "http://origin.test/release"
+                },
+                "children": [
+                  {
+                    "name": "celld.fetch",
+                    "kind": "server",
+                    "attributes": {
+                      "celld.parent_remote": true
+                    }
+                  }
+                ]
+              },
+              {
+                "name": "fetch",
+                "kind": "client",
+                "attributes": {
+                  "celld.parent_remote": false,
+                  "http.response.status_code": 200,
+                  "url.full": "http://origin.test/wait?span=0"
+                },
+                "children": [
+                  {
+                    "name": "celld.fetch",
+                    "kind": "server",
+                    "attributes": {
+                      "celld.parent_remote": true
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "name": "celld.fetch",
+            "kind": "server",
+            "children": [
+              {
+                "name": "fetch",
+                "kind": "client",
+                "attributes": {
+                  "celld.parent_remote": false,
+                  "http.response.status_code": 200,
+                  "url.full": "http://origin.test/release"
+                },
+                "children": [
+                  {
+                    "name": "celld.fetch",
+                    "kind": "server",
+                    "attributes": {
+                      "celld.parent_remote": true
+                    }
+                  }
+                ]
+              },
+              {
+                "name": "fetch",
+                "kind": "client",
+                "attributes": {
+                  "celld.parent_remote": false,
+                  "http.response.status_code": 200,
+                  "url.full": "http://origin.test/wait?span=1"
+                },
+                "children": [
+                  {
+                    "name": "celld.fetch",
+                    "kind": "server",
+                    "attributes": {
+                      "celld.parent_remote": true
+                    },
+                    "children": [
+                      {
+                        "name": "waits",
+                        "kind": "internal"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

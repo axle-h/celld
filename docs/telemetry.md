@@ -55,8 +55,9 @@ Log files from earlier celld versions have no severity columns. Read a mix of
 versions with `union_by_name = true`.
 
 celld reads the W3C `traceparent` header on incoming requests and sends it on
-outbound `fetch()`. A malformed header starts a new trace. A Worker call to a
-Durable Object stays in one trace.
+outbound `fetch()`. A malformed header starts a new trace. A Worker's
+`fetch()` to a Durable Object stays in one trace. A Durable Object RPC call
+starts a new trace.
 
 The sampler decides at the start of a request, and an unsampled request
 records nothing. A ratio of `0` records no traces and `1` records all. An
@@ -67,6 +68,45 @@ sampled flag clear.
 
 Under load, telemetry sheds before requests do, and celld counts what it
 sheds. celld records no metrics yet.
+
+## Custom spans
+
+A Worker's own spans, from `tracing` in `cloudflare:workers` or
+`ctx.tracing`, are exported with celld's spans. See
+[Cloudflare compatibility](cloudflare-compat.md#custom-spans) for the API.
+
+- A custom span is a child of the active custom span, or else of the
+  invocation's span: `celld.fetch` for a request, or the Durable Object
+  event's span. Its kind is internal.
+- Inside `enterSpan` and `startActiveSpan`, the span is the parent of what the
+  callback does: `console.log` lines carry its span id, and an outbound
+  `fetch()` or a Durable Object `fetch()` is its child. A Durable Object RPC
+  call starts a new trace, as it does outside a span.
+- The span's attributes are exported as OTLP attributes, after celld's own.
+  Each key appears once: celld's value wins, and a Worker's attribute under a
+  `celld.` key is dropped.
+  `recordException()` adds an `exception` event with `exception.type`,
+  `exception.message`, `exception.stacktrace`, and `exception.code` for a
+  code. `setStatus()` sets the OTLP status; only an error keeps its message.
+- `tracing.getActiveSpan()` outside a custom span is the invocation's span.
+  Attributes, a name or a status set on it apply to the invocation's span
+  until celld records it, when the response is sent. A failed request stays
+  an error whatever status the Worker set.
+- A span the Worker never ends is recorded when its invocation finishes,
+  including its `waitUntil` work, with that time as its end. So is an
+  `enterSpan` span whose promise settles in another request's turn: the
+  promise still settles, but only its own invocation can end the span.
+- celld holds open span data outside the isolate, within bounds: 1,024 spans
+  and 1 MiB per invocation, and 64 MiB for the whole node. The node-wide
+  budget is shared, with no fairness between scripts, so one script holding
+  many open spans can make other scripts' new spans untraced. Each refused
+  span is counted in `celld.tracing.spans_dropped` on its own invocation's
+  span.
+
+The Parquet traces have two more columns: `attributes` (a JSON object of the
+custom attributes) and `exceptions` (a JSON array). A number JSON cannot hold
+is written as the string `"NaN"`, `"Infinity"` or `"-Infinity"`. An explicit
+OK status reads as `ok = true`, like an unset one.
 
 ## Query the bucket with DuckDB
 
@@ -118,8 +158,8 @@ honors `Retry-After`, with each delay capped at 30 seconds. A permanent
 refusal drops the batch.
 
 The exporter holds one retrying batch, and the input channel holds 8192 new
-events. When the channel is full, celld drops and counts new telemetry, so
-request handling continues.
+events, up to an estimated 64 MiB. When the channel is full, celld drops and
+counts new telemetry, so request handling continues.
 
 The retention sweep runs at startup and six hours after each completed sweep.
 

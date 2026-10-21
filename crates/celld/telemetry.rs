@@ -21,7 +21,9 @@
 use crate::bucket::Bucket;
 use anyhow::anyhow;
 use anyhow::bail;
+use std::borrow::Cow;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -46,6 +48,11 @@ const SCHEMA_VERSION: &str = "v0-unstable";
 /// The pump drains continuously and the size trigger bounds its batch, so
 /// this only needs to cover a scheduling hiccup, not a flush interval.
 const CHANNEL_CAPACITY: usize = 8_192;
+
+/// The estimated bytes the queue may hold. A custom span can carry about
+/// 64 KiB of attributes, so the event count alone would let a stalled
+/// exporter pin half a gigabyte; this sheds, counted, long before that.
+const CHANNEL_BYTES_CAP: usize = 64 * 1024 * 1024;
 
 /// One batch remains exporter-owned while it retries. The channel stays
 /// bounded behind it, so an outage can consume this batch and at most
@@ -219,7 +226,7 @@ impl Config {
 pub const KIND_INTERNAL: u8 = 1;
 pub const KIND_SERVER: u8 = 2;
 pub const KIND_CLIENT: u8 = 3;
-pub const KIND_CONSUMER: u8 = 4;
+pub const KIND_CONSUMER: u8 = 5;
 
 /// A recorded span's identity.
 #[derive(Clone, Copy, Debug)]
@@ -322,11 +329,13 @@ fn hex_nibble(byte: u8) -> Option<u8> {
 pub struct Span {
     pub ids: TraceIds,
     pub parent_span_id: Option<[u8; 8]>,
-    pub name: &'static str,
+    /// Static for celld's own spans; owned for a custom span's name.
+    pub name: Cow<'static, str>,
     pub kind: u8,
     pub start_unix_us: i64,
     pub duration_us: i64,
-    pub ok: bool,
+    pub status: SpanStatus,
+    /// The status message: why the span failed.
     pub error: Option<String>,
     pub request_id: Option<String>,
     pub cell: Option<String>,
@@ -338,6 +347,67 @@ pub struct Span {
     /// `Some(true)` for a parent extracted from a caller's traceparent,
     /// `Some(false)` for an in-process parent, `None` for a root.
     pub parent_remote: Option<bool>,
+    /// Attributes a Worker set through the `tracing` API, in the order set.
+    pub attributes: Vec<(String, AttrValue)>,
+    /// Exceptions a Worker recorded through `Span.recordException()`.
+    pub exceptions: Vec<SpanException>,
+}
+
+/// The OpenTelemetry span status. `Ok` is only ever a Worker's explicit
+/// `setStatus({code: "ok"})`; celld's own spans are `Unset` or `Error`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpanStatus {
+    Unset,
+    Ok,
+    Error,
+}
+
+/// A custom span attribute: the three value types workerd's `tracing`
+/// accepts. JavaScript numbers are doubles, so there is no integer.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AttrValue {
+    Bool(bool),
+    Double(f64),
+    String(String),
+}
+
+impl AttrValue {
+    /// workerd's size estimate for the per-span data budget: a string
+    /// counts its bytes, anything else 8.
+    pub fn estimated_size(&self) -> usize {
+        match self {
+            AttrValue::String(text) => text.len(),
+            AttrValue::Bool(_) | AttrValue::Double(_) => 8,
+        }
+    }
+}
+
+/// `exception.code`: workerd accepts a string or a number.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExceptionCode {
+    Text(String),
+    Number(f64),
+}
+
+/// One `recordException()` call, exported as an OTLP span event named
+/// `exception` with the semantic-convention attributes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpanException {
+    pub time_unix_us: i64,
+    pub code: Option<ExceptionCode>,
+    pub name: String,
+    pub message: String,
+    pub stack: Option<String>,
+}
+
+impl SpanException {
+    fn approx_bytes(&self) -> usize {
+        let code = match &self.code {
+            Some(ExceptionCode::Text(text)) => text.len(),
+            _ => 8,
+        };
+        24 + code + self.name.len() + self.message.len() + self.stack.as_deref().map_or(0, str::len)
+    }
 }
 
 /// One captured console line, correlated to the trace whose turn (or
@@ -395,15 +465,15 @@ impl Severity {
 }
 
 impl Span {
-    pub fn new(ids: TraceIds, name: &'static str, kind: u8) -> Span {
+    pub fn new(ids: TraceIds, name: impl Into<Cow<'static, str>>, kind: u8) -> Span {
         Span {
             ids,
             parent_span_id: None,
-            name,
+            name: name.into(),
             kind,
             start_unix_us: 0,
             duration_us: 0,
-            ok: true,
+            status: SpanStatus::Unset,
             error: None,
             request_id: None,
             cell: None,
@@ -413,12 +483,29 @@ impl Span {
             url: None,
             http_status: None,
             parent_remote: None,
+            attributes: Vec::new(),
+            exceptions: Vec::new(),
         }
+    }
+
+    /// The runtime outcome: `Error` with the message when the work failed.
+    pub fn set_outcome(&mut self, ok: bool, error: Option<String>) {
+        self.status = if ok {
+            SpanStatus::Unset
+        } else {
+            SpanStatus::Error
+        };
+        self.error = error;
+    }
+
+    pub fn ok(&self) -> bool {
+        self.status != SpanStatus::Error
     }
 }
 
 enum Event {
-    Span(Span),
+    /// Boxed: a span is several times the size of a log line.
+    Span(Box<Span>),
     Log(Log),
 }
 
@@ -435,14 +522,69 @@ impl Event {
                     + LEN(&span.request_id)
                     + LEN(&span.cell)
                     + LEN(&span.url)
+                    + span
+                        .attributes
+                        .iter()
+                        .map(|(key, value)| 16 + key.len() + value.estimated_size())
+                        .sum::<usize>()
+                    + span
+                        .exceptions
+                        .iter()
+                        .map(SpanException::approx_bytes)
+                        .sum::<usize>()
             }
             Event::Log(log) => 40 + log.body.len(),
         }
     }
 }
 
+/// A byte count with a ceiling, shared across threads: what the telemetry
+/// queue holds, and what custom spans hold open on the host.
+#[derive(Debug)]
+pub struct ByteBudget {
+    used: AtomicUsize,
+    cap: usize,
+}
+
+impl ByteBudget {
+    pub const fn new(cap: usize) -> ByteBudget {
+        ByteBudget {
+            used: AtomicUsize::new(0),
+            cap,
+        }
+    }
+
+    /// Take `bytes` if they fit under the cap.
+    // `try_update` needs Rust 1.95; the crates' rust-version is 1.94.1.
+    #[allow(deprecated)]
+    pub fn try_take(&self, bytes: usize) -> bool {
+        self.used
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_add(bytes).filter(|total| *total <= self.cap)
+            })
+            .is_ok()
+    }
+
+    /// Take `bytes` whatever the cap: for a bounded write the budget must
+    /// still count.
+    pub fn force_take(&self, bytes: usize) {
+        self.used.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    pub fn give_back(&self, bytes: usize) {
+        let previous = self.used.fetch_sub(bytes, Ordering::Relaxed);
+        debug_assert!(previous >= bytes, "a budget gave back more than it took");
+    }
+
+    pub fn used(&self) -> usize {
+        self.used.load(Ordering::Relaxed)
+    }
+}
+
 struct Telemetry {
     tx: tokio::sync::mpsc::Sender<Event>,
+    /// The estimated bytes of the events in `tx`.
+    queued: ByteBudget,
     dropped: AtomicU64,
     sampler: Sampler,
     parent_based: bool,
@@ -576,7 +718,7 @@ pub fn child_context(parent: &TraceContext) -> TraceContext {
 /// Queue a finished span. Never blocks: a full channel counts a drop —
 /// telemetry sheds, requests do not.
 pub fn record(span: Span) {
-    send(Event::Span(span));
+    send(Event::Span(Box::new(span)));
 }
 
 /// Queue a captured console line, truncated to the cap.
@@ -608,7 +750,13 @@ fn send(event: Event) {
     let Some(telemetry) = TELEMETRY.get() else {
         return;
     };
+    let bytes = event.approx_bytes();
+    if !telemetry.queued.try_take(bytes) {
+        telemetry.dropped.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     if telemetry.tx.try_send(event).is_err() {
+        telemetry.queued.give_back(bytes);
         telemetry.dropped.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -665,6 +813,7 @@ pub fn init(
     let (tx, rx) = tokio::sync::mpsc::channel(CHANNEL_CAPACITY);
     let telemetry = Telemetry {
         tx,
+        queued: ByteBudget::new(CHANNEL_BYTES_CAP),
         dropped: AtomicU64::new(0),
         sampler: Sampler::from_ratio(config.sample_ratio),
         parent_based: config.parent_based,
@@ -921,7 +1070,11 @@ async fn pump(
         loop {
             match tokio::time::timeout_at(deadline, rx.recv()).await {
                 Ok(Some(event)) => {
-                    bytes += event.approx_bytes();
+                    let size = event.approx_bytes();
+                    if let Some(telemetry) = TELEMETRY.get() {
+                        telemetry.queued.give_back(size);
+                    }
+                    bytes += size;
                     batch.push(event);
                     // Firehose semantics: the size trigger cuts a batch
                     // early so a busy node ships few, fat objects.
@@ -940,7 +1093,7 @@ async fn pump(
         let mut logs = Vec::new();
         for event in batch.drain(..) {
             match event {
-                Event::Span(span) => spans.push(span),
+                Event::Span(span) => spans.push(*span),
                 Event::Log(log) => logs.push(log),
             }
         }
@@ -1110,6 +1263,8 @@ message celld_span {
   optional binary url (STRING);
   optional int32 http_status (INTEGER(16,false));
   optional boolean parent_remote;
+  optional binary attributes (JSON);
+  optional binary exceptions (JSON);
 }";
 
 /// The logs signal: one row per captured console line, joined to traces
@@ -1186,11 +1341,11 @@ pub fn encode_spans(spans: &[Span], node: &str, region: &str) -> anyhow::Result<
     column!(ByteArrayType, req each.clone().map(|s| text(&hex(&s.ids.trace_id))).collect::<Vec<_>>());
     column!(ByteArrayType, req each.clone().map(|s| text(&hex(&s.ids.span_id))).collect::<Vec<_>>());
     column!(ByteArrayType, opt each.clone().map(|s| s.parent_span_id.map(|id| text(&hex(&id)))).collect::<Vec<_>>());
-    column!(ByteArrayType, req each.clone().map(|s| text(s.name)).collect::<Vec<_>>());
+    column!(ByteArrayType, req each.clone().map(|s| text(&s.name)).collect::<Vec<_>>());
     column!(Int32Type, req each.clone().map(|s| s.kind as i32).collect::<Vec<_>>());
     column!(Int64Type, req each.clone().map(|s| s.start_unix_us).collect::<Vec<_>>());
     column!(Int64Type, req each.clone().map(|s| s.duration_us).collect::<Vec<_>>());
-    column!(BoolType, req each.clone().map(|s| s.ok).collect::<Vec<_>>());
+    column!(BoolType, req each.clone().map(|s| s.ok()).collect::<Vec<_>>());
     column!(ByteArrayType, opt each.clone().map(|s| s.error.as_deref().map(text)).collect::<Vec<_>>());
     column!(ByteArrayType, opt each.clone().map(|s| s.request_id.as_deref().map(text)).collect::<Vec<_>>());
     column!(ByteArrayType, opt each.clone().map(|s| s.cell.as_deref().map(text)).collect::<Vec<_>>());
@@ -1200,9 +1355,67 @@ pub fn encode_spans(spans: &[Span], node: &str, region: &str) -> anyhow::Result<
     column!(ByteArrayType, opt each.clone().map(|s| s.url.as_deref().map(text)).collect::<Vec<_>>());
     column!(Int32Type, opt each.clone().map(|s| s.http_status.map(|v| v as i32)).collect::<Vec<_>>());
     column!(BoolType, opt each.clone().map(|s| s.parent_remote).collect::<Vec<_>>());
+    column!(ByteArrayType, opt each.clone().map(|s| attributes_json(&s.attributes).map(|json| text(&json))).collect::<Vec<_>>());
+    column!(ByteArrayType, opt each.clone().map(|s| exceptions_json(&s.exceptions).map(|json| text(&json))).collect::<Vec<_>>());
 
     group.close()?;
     Ok(writer.into_inner()?)
+}
+
+/// A JSON number, or for a double JSON cannot hold, its JavaScript name:
+/// `"NaN"`, `"Infinity"` or `"-Infinity"`.
+fn json_double(value: f64) -> serde_json::Value {
+    match serde_json::Number::from_f64(value) {
+        Some(number) => serde_json::Value::Number(number),
+        None if value.is_nan() => serde_json::Value::String("NaN".into()),
+        None if value > 0.0 => serde_json::Value::String("Infinity".into()),
+        None => serde_json::Value::String("-Infinity".into()),
+    }
+}
+
+/// The `attributes` column: one JSON object. Keys are unique, because
+/// setting an attribute again replaces it.
+fn attributes_json(attributes: &[(String, AttrValue)]) -> Option<String> {
+    if attributes.is_empty() {
+        return None;
+    }
+    let object: serde_json::Map<String, serde_json::Value> = attributes
+        .iter()
+        .map(|(key, value)| {
+            let value = match value {
+                AttrValue::Bool(value) => serde_json::Value::Bool(*value),
+                AttrValue::Double(value) => json_double(*value),
+                AttrValue::String(value) => serde_json::Value::String(value.clone()),
+            };
+            (key.clone(), value)
+        })
+        .collect();
+    Some(serde_json::Value::Object(object).to_string())
+}
+
+/// The `exceptions` column: a JSON array of the recorded exceptions.
+fn exceptions_json(exceptions: &[SpanException]) -> Option<String> {
+    if exceptions.is_empty() {
+        return None;
+    }
+    let array: Vec<serde_json::Value> = exceptions
+        .iter()
+        .map(|exception| {
+            let code = match &exception.code {
+                Some(ExceptionCode::Text(text)) => serde_json::Value::String(text.clone()),
+                Some(ExceptionCode::Number(number)) => json_double(*number),
+                None => serde_json::Value::Null,
+            };
+            serde_json::json!({
+                "time_unix_us": exception.time_unix_us,
+                "code": code,
+                "name": exception.name,
+                "message": exception.message,
+                "stack": exception.stack,
+            })
+        })
+        .collect();
+    Some(serde_json::Value::Array(array).to_string())
 }
 
 #[doc(hidden)]
@@ -1261,4 +1474,146 @@ pub fn encode_logs(logs: &[Log], node: &str, region: &str) -> anyhow::Result<Vec
 
     group.close()?;
     Ok(writer.into_inner()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_span_data_lands_in_the_json_columns() {
+        let mut span = Span::new(
+            TraceIds {
+                trace_id: [1; 16],
+                span_id: [2; 8],
+            },
+            String::from("custom"),
+            KIND_INTERNAL,
+        );
+        span.status = SpanStatus::Ok;
+        span.attributes = vec![
+            ("text".into(), AttrValue::String("a".into())),
+            ("flag".into(), AttrValue::Bool(true)),
+            ("nan".into(), AttrValue::Double(f64::NAN)),
+        ];
+        span.exceptions = vec![SpanException {
+            time_unix_us: 5,
+            code: Some(ExceptionCode::Number(42.0)),
+            name: "Error".into(),
+            message: "boom".into(),
+            stack: None,
+        }];
+        let attributes = r#"{"flag":true,"nan":"NaN","text":"a"}"#;
+        let exceptions =
+            r#"[{"code":42.0,"message":"boom","name":"Error","stack":null,"time_unix_us":5}]"#;
+        assert_eq!(
+            attributes_json(&span.attributes).as_deref(),
+            Some(attributes)
+        );
+        assert_eq!(
+            exceptions_json(&span.exceptions).as_deref(),
+            Some(exceptions)
+        );
+        assert_eq!(attributes_json(&[]), None);
+
+        use parquet::file::reader::FileReader;
+        use parquet::file::reader::SerializedFileReader;
+        use parquet::record::Field;
+        let bytes = encode_spans(&[span], "node", "region").unwrap();
+        let reader = SerializedFileReader::new(bytes::Bytes::from(bytes)).unwrap();
+        let row = reader.get_row_iter(None).unwrap().next().unwrap().unwrap();
+        let columns: std::collections::HashMap<_, _> = row
+            .get_column_iter()
+            .map(|(name, field)| (name.as_str(), field.clone()))
+            .collect();
+        assert_eq!(columns["name"], Field::Str("custom".into()));
+        // An explicit OK is not a failure.
+        assert_eq!(columns["ok"], Field::Bool(true));
+        assert_eq!(columns["attributes"], Field::Str(attributes.into()));
+        assert_eq!(columns["exceptions"], Field::Str(exceptions.into()));
+    }
+
+    #[test]
+    fn a_byte_budget_refuses_past_its_cap() {
+        let budget = ByteBudget::new(10);
+        assert!(budget.try_take(6));
+        assert!(!budget.try_take(5));
+        assert!(budget.try_take(4));
+        assert_eq!(budget.used(), 10);
+        budget.give_back(6);
+        assert!(budget.try_take(5));
+        budget.force_take(100);
+        assert_eq!(budget.used(), 109);
+        assert!(!budget.try_take(1));
+    }
+
+    #[test]
+    fn the_queue_byte_cap_binds_before_the_event_count_for_large_spans() {
+        let mut span = Span::new(
+            TraceIds {
+                trace_id: [1; 16],
+                span_id: [2; 8],
+            },
+            "custom",
+            KIND_INTERNAL,
+        );
+        span.attributes = vec![("big".into(), AttrValue::String("x".repeat(64 * 1024)))];
+        let event = Event::Span(Box::new(span));
+        let size = event.approx_bytes();
+        assert!(size > 64 * 1024);
+        let queue = ByteBudget::new(CHANNEL_BYTES_CAP);
+        let mut queued = 0;
+        while queue.try_take(size) {
+            queued += 1;
+        }
+        assert!(queued < CHANNEL_CAPACITY, "{queued} events of {size} bytes");
+        assert!(queue.used() <= CHANNEL_BYTES_CAP);
+        // Ordinary log lines still fill the queue by count, as before.
+        let log = Event::Log(Log {
+            trace_id: None,
+            span_id: None,
+            time_unix_us: 0,
+            severity: Severity::Info,
+            body: "x".repeat(1024),
+        });
+        assert!(CHANNEL_CAPACITY * log.approx_bytes() <= CHANNEL_BYTES_CAP);
+    }
+
+    #[test]
+    fn json_doubles_name_what_json_cannot_hold() {
+        assert_eq!(json_double(1.5), serde_json::json!(1.5));
+        assert_eq!(json_double(f64::NAN), serde_json::json!("NaN"));
+        assert_eq!(json_double(f64::INFINITY), serde_json::json!("Infinity"));
+        assert_eq!(
+            json_double(f64::NEG_INFINITY),
+            serde_json::json!("-Infinity")
+        );
+    }
+
+    #[test]
+    fn span_kinds_are_the_otlp_numbers() {
+        // opentelemetry-proto trace.proto SpanKind.
+        assert_eq!(
+            [KIND_INTERNAL, KIND_SERVER, KIND_CLIENT, KIND_CONSUMER],
+            [1, 2, 3, 5]
+        );
+    }
+
+    #[test]
+    fn a_runtime_failure_is_an_error_status() {
+        let mut span = Span::new(
+            TraceIds {
+                trace_id: [1; 16],
+                span_id: [2; 8],
+            },
+            "celld.fetch",
+            KIND_SERVER,
+        );
+        assert!(span.ok());
+        span.set_outcome(false, Some("threw".into()));
+        assert_eq!(span.status, SpanStatus::Error);
+        assert!(!span.ok());
+        span.set_outcome(true, None);
+        assert_eq!(span.status, SpanStatus::Unset);
+    }
 }

@@ -67,7 +67,15 @@ nondeterministic case shows up when it is recorded. A case runs as it would unde
   receives the steps' requests.
 - `env` sets environment variables for the `celld dev` process. Names must
   be valid environment variable names. workerd
-  doesn't use it.
+  doesn't use it. Telemetry variables (`CELLD_OTEL*`, `OTEL_*`) are refused:
+  the runner sets them, from `observability`.
+- `observability` (default `false`) turns tracing on for both runtimes. On
+  celld the runner starts an OTLP/HTTP receiver (`lib/otlp.mjs`) and sets
+  `CELLD_OTEL` to it, with `CELLD_OTEL_FLUSH_MS=100`; otherwise it clears
+  every telemetry variable the shell has. On workerd it sets wrangler's
+  `X_LOCAL_OBSERVABILITY`, which attaches Miniflare's trace collector. So
+  `tracing` spans report `isTraced: true` on both runtimes with it, and
+  `false` on both without it.
 - `normalize` rewrites matches of a regular expression in every string value
   of the transcript. It doesn't touch numbers, booleans or object keys. Use it only for values that differ from run to run, such as
   random ids or timestamps, and say why in `why`. The runner itself rewrites
@@ -75,8 +83,8 @@ nondeterministic case shows up when it is recorded. A case runs as it would unde
   listen on a random port.
 
 The runner refuses unknown keys and malformed values. It also refuses fields
-whose support hasn't landed yet: the `otlp` step (plan item 1.2), and
-`nodes` greater than 1 or a step's `node` (multi-node).
+whose support hasn't landed yet: `nodes` greater than 1 or a step's `node`
+(multi-node).
 
 ### Steps
 
@@ -100,6 +108,18 @@ whose support hasn't landed yet: the `otlp` step (plan item 1.2), and
     replaces the workerd process and keeps the storage directory. The
     harness can't reopen another harness's storage, because it hard-codes
     `persist: false`.
+
+- **`otlp`**: `{"otlp": {"spans": ["celld.fetch", "outer"]}}` waits until
+  celld has exported spans with those names (a name listed twice waits for
+  two), then until nothing more arrives for 500 ms. It records everything
+  exported since the previous `otlp` step as trees: each span's name, kind,
+  status, attributes, exception events, log lines and children. ids, times
+  and the per-run attributes (`celld.request_id`, `celld.isolate`,
+  `celld.queue_wait_us`, `celld.epoch`) are left out; a span whose parent was
+  not exported is a root marked `"parent": "remote"` if it had one. Siblings
+  sort by content. The step needs `"kind": "celld-only"` and
+  `"observability": true`: workerd's spans go to Miniflare's collector, which
+  the runner doesn't read.
 
 ### Kinds
 

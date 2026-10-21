@@ -1,0 +1,11 @@
+{
+  "kind": "celld-only",
+  "reason": "the waiting request is resolved from another request's turn; workerd cancels both as code that had hung, so it has no transcript to record",
+  "observability": true,
+  "workers": ["settle"],
+  "steps": [
+    {"path": "/run?span=0"},
+    {"path": "/run?span=1"},
+    {"otlp": {"spans": ["celld.fetch", "celld.fetch", "celld.fetch", "celld.fetch", "celld.fetch", "celld.fetch", "fetch", "fetch", "fetch", "fetch", "waits"]}}
+  ]
+}

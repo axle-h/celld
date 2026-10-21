@@ -2231,10 +2231,15 @@ async fn drive_affiliated_inner(
     // here for the request's whole life, so maintenance cannot free the heap
     // between placement and this first turn or while a promise is suspended.
     let _affiliation = affiliation;
+    let spans = timing
+        .as_ref()
+        .and_then(|timing| timing.spans.as_ref())
+        .map(crate::user_spans::InvocationGuard::invocation);
     drive_worker(
         &slot,
         job,
         trace,
+        spans,
         budget,
         |entry| {
             if let Some(timing) = &mut timing {
@@ -2253,13 +2258,16 @@ async fn drive_worker(
     slot: &crate::pool::Slot,
     job: crate::WorkerJob,
     trace: Option<crate::telemetry::TraceContext>,
+    spans: Option<Arc<crate::user_spans::Invocation>>,
     budget: Duration,
     mut after_turn: impl FnMut(&js::InFlight),
     on_finish: impl FnOnce(&js::InFlight),
 ) {
     let mut ops = Ops::new();
 
-    let (begun, started) = slot.turn(|worker| worker.turn_begin(job, trace)).await;
+    let (begun, started) = slot
+        .turn(|worker| worker.turn_begin(job, trace, spans))
+        .await;
     // Nothing is in flight; the reply already carries the error.
     let Some(mut entry) = begun else {
         drop(started);
@@ -2608,6 +2616,8 @@ struct StatelessTiming {
     failure: Option<String>,
     span_name: &'static str,
     span_kind: u8,
+    /// The request's custom spans, for as long as the request runs.
+    spans: Option<crate::user_spans::InvocationGuard>,
 }
 
 impl StatelessTiming {
@@ -2656,6 +2666,7 @@ impl StatelessTiming {
             failure: None,
             span_name,
             span_kind,
+            spans: trace.map(crate::user_spans::InvocationGuard::open),
         }
     }
 
@@ -2676,14 +2687,16 @@ impl StatelessTiming {
             let mut span = crate::telemetry::Span::new(ids, self.span_name, self.span_kind);
             span.start_unix_us = crate::telemetry::now_unix_us() - total_us;
             span.duration_us = total_us;
-            span.ok = self.failure.is_none();
-            span.error = self.failure.clone();
+            span.set_outcome(self.failure.is_none(), self.failure.clone());
             span.request_id = self.request_id.map(js::request_id_string);
             span.isolate = Some(self.isolate as u64);
             span.parent_span_id = self.remote_parent.map(|parent| parent.span_id);
             span.parent_remote = self.remote_parent.map(|_| true);
             span.queue_wait_us =
                 Some(self.admitted.duration_since(self.queued_at).as_micros() as i64);
+            if let Some(spans) = &self.spans {
+                spans.merge(&mut span);
+            }
             crate::telemetry::record(span);
         }
         // An info!-per-request costs real throughput on the hot path, so the
@@ -2951,8 +2964,8 @@ impl CellIsolateStartupTiming {
             );
             span.start_unix_us = crate::telemetry::now_unix_us() - total_us as i64;
             span.duration_us = total_us as i64;
-            span.ok = outcome == "ready";
-            span.error = (!span.ok).then(|| failure_phase.to_string());
+            let ok = outcome == "ready";
+            span.set_outcome(ok, (!ok).then(|| failure_phase.to_string()));
             span.cell = Some(self.scope.clone());
             span.epoch = Some(self.epoch);
             crate::telemetry::record(span);
@@ -3006,10 +3019,14 @@ async fn drive_worker_on_cell(affiliation: crate::pool::Affiliation, job: crate:
     let trace = crate::telemetry::start_trace_with_parent(remote.as_ref());
     let recording = trace.and_then(crate::telemetry::TraceContext::recording_ids);
     let span_started = recording.map(|_| (Instant::now(), crate::telemetry::now_unix_us()));
+    let spans = recording.map(crate::user_spans::InvocationGuard::open);
     drive_worker(
         &slot,
         job,
         trace,
+        spans
+            .as_ref()
+            .map(crate::user_spans::InvocationGuard::invocation),
         js::handler_budget(),
         |_| {},
         |entry| {
@@ -3018,10 +3035,15 @@ async fn drive_worker_on_cell(affiliation: crate::pool::Affiliation, job: crate:
                     crate::telemetry::Span::new(ids, "celld.fetch", crate::telemetry::KIND_SERVER);
                 span.start_unix_us = start_unix;
                 span.duration_us = started.elapsed().as_micros() as i64;
-                span.ok = entry.finished() && entry.failure().is_none();
-                span.error = entry.failure().map(str::to_string);
+                span.set_outcome(
+                    entry.finished() && entry.failure().is_none(),
+                    entry.failure().map(str::to_string),
+                );
                 span.parent_span_id = remote.map(|parent| parent.span_id);
                 span.parent_remote = remote.map(|_| true);
+                if let Some(spans) = &spans {
+                    spans.merge(&mut span);
+                }
                 crate::telemetry::record(span);
             }
         },
@@ -3349,6 +3371,7 @@ async fn drive_cell_inner(
         None => crate::telemetry::start_trace(),
     };
     let recording = trace.and_then(crate::telemetry::TraceContext::recording_ids);
+    let spans = recording.map(crate::user_spans::InvocationGuard::open);
     let span_seed = recording.map(|_| {
         let name = match &job {
             CellJob::Fetch { .. } => "celld.cell_fetch",
@@ -3397,7 +3420,13 @@ async fn drive_cell_inner(
                     pending = Some(job);
                     return None;
                 }
-                let (begun, started) = worker.turn_begin_cell(job, trace);
+                let (begun, started) = worker.turn_begin_cell(
+                    job,
+                    trace,
+                    spans
+                        .as_ref()
+                        .map(crate::user_spans::InvocationGuard::invocation),
+                );
                 Some((begun, started, worker.take_alarm_moves()))
             })
             .await;
@@ -3570,11 +3599,16 @@ async fn drive_cell_inner(
         let mut span = crate::telemetry::Span::new(ids, name, kind);
         span.start_unix_us = start_unix;
         span.duration_us = started.elapsed().as_micros() as i64;
-        span.ok = entry.finished() && entry.failure().is_none();
-        span.error = entry.failure().map(str::to_string);
+        span.set_outcome(
+            entry.finished() && entry.failure().is_none(),
+            entry.failure().map(str::to_string),
+        );
         span.cell = Some(cell);
         span.parent_span_id = parent.map(|parent| parent.span_id);
         span.parent_remote = parent.map(|_| false);
+        if let Some(spans) = &spans {
+            spans.merge(&mut span);
+        }
         crate::telemetry::record(span);
     }
     slot.turn(|worker| worker.turn_abandon_input_gates(&entry))

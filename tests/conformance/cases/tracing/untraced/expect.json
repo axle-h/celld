@@ -1,0 +1,41 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "invocation": {
+          "type": "object",
+          "isTraced": false,
+          "stable": true,
+          "chained": true
+        },
+        "enterSpan": {
+          "value": [
+            false,
+            true
+          ],
+          "afterwards": false
+        },
+        "startActiveSpan": [
+          false,
+          false
+        ],
+        "startSpan": false,
+        "bigintAttribute": "TypeError: Cannot convert a BigInt value to a number",
+        "badStatus": "TypeError: Span status code must be 'unset', 'ok', or 'error'.",
+        "bigintExceptionCode": "undefined",
+        "missingException": "TypeError: Failed to execute 'recordException' on 'Span': parameter 1 is not of type 'Value'."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "invocation": "object",
+        "isTraced": false,
+        "inSpan": false
+      }
+    }
+  ]
+}

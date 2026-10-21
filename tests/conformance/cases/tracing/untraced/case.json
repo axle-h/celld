@@ -1,0 +1,7 @@
+{
+  "workers": ["untraced"],
+  "steps": [
+    {"path": "/"},
+    {"path": "/durable-object"}
+  ]
+}

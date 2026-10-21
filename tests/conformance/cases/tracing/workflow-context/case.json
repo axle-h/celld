@@ -1,0 +1,4 @@
+{
+  "workers": ["flow"],
+  "steps": [{"path": "/"}]
+}

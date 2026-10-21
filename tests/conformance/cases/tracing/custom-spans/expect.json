@@ -1,0 +1,369 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "typeofTracing": "object",
+        "tracingTag": "[object Tracing]",
+        "tracingConstructor": "Tracing",
+        "tracingOwnKeys": [],
+        "tracingProto": [
+          "enterSpan",
+          "startActiveSpan",
+          "startSpan",
+          "getActiveSpan",
+          "Span",
+          "constructor"
+        ],
+        "tracingProtoParent": true,
+        "tracingMethod": {
+          "value": "function",
+          "writable": "true",
+          "enumerable": "true",
+          "configurable": "true"
+        },
+        "tracingSpan": {
+          "value": "function",
+          "writable": "true",
+          "enumerable": "true",
+          "configurable": "true"
+        },
+        "tracingTagDescriptor": {
+          "value": "Tracing",
+          "writable": "true",
+          "enumerable": "false",
+          "configurable": "true"
+        },
+        "lengths": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "newTracing": "TypeError: Illegal constructor",
+        "spanClass": [
+          "function",
+          "Span",
+          0
+        ],
+        "newSpan": "TypeError: Illegal constructor",
+        "subclassSpan": "TypeError: Illegal constructor",
+        "spanTag": "[object Span]",
+        "spanJson": "{}",
+        "spanKeys": [],
+        "spanProto": [
+          "isTraced",
+          "setAttribute",
+          "setAttributes",
+          "recordException",
+          "updateName",
+          "setStatus",
+          "end",
+          "constructor"
+        ],
+        "spanProtoIsSpan": true,
+        "isTraced": {
+          "get": "function",
+          "set": "undefined",
+          "enumerable": "true",
+          "configurable": "true"
+        },
+        "spanMethod": {
+          "value": "function",
+          "writable": "true",
+          "enumerable": "true",
+          "configurable": "true"
+        },
+        "spanTagDescriptor": {
+          "value": "Span",
+          "writable": "true",
+          "enumerable": "false",
+          "configurable": "true"
+        },
+        "spanLengths": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "illegal": {
+          "enterSpan": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "getActiveSpan": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "isTraced": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "setAttribute": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "end": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "ctxTracing": {
+          "descriptor": {
+            "value": "[object Tracing]",
+            "writable": "true",
+            "enumerable": "true",
+            "configurable": "true"
+          },
+          "sameAsModule": false,
+          "stable": true,
+          "sameClass": true,
+          "instance": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "activeSpan": "undefined",
+        "enterSpan": {
+          "isTraced": false,
+          "active": true
+        },
+        "startSpan": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "sync": {
+          "args": [
+            1,
+            2,
+            3
+          ],
+          "receiver": true,
+          "isTraced": true,
+          "active": true
+        },
+        "syncEnded": false,
+        "thrown": "RangeError: sync failure",
+        "returnsPromise": true,
+        "openWhilePending": true,
+        "async": [
+          true,
+          true
+        ],
+        "asyncEnded": false,
+        "newPromise": true,
+        "resolved": "value",
+        "derived": [
+          false,
+          "Promise",
+          "derived"
+        ],
+        "thenable": true,
+        "rejected": {
+          "error": "TypeError: async failure"
+        },
+        "nonError": "undefined: undefined",
+        "nested": {
+          "inner": true,
+          "distinct": true,
+          "outerAgain": true
+        },
+        "afterwards": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "result": [
+          "arg",
+          true
+        ],
+        "open": true,
+        "ended": false,
+        "samePromise": true,
+        "thrown": "Error: manual failure",
+        "stillOpen": true,
+        "stream": [
+          true,
+          "drained",
+          false
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "notActive": true,
+        "open": true,
+        "chained": [
+          true,
+          true,
+          true,
+          true,
+          null
+        ],
+        "afterEnd": [
+          false,
+          true,
+          true,
+          true,
+          "undefined"
+        ],
+        "longName": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "afterAwait": true,
+        "inTimer": true,
+        "withStore": true,
+        "restored": true,
+        "afterSpan": true,
+        "inTimerOutside": true,
+        "inWaitUntil": true,
+        "startSpanParent": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "type": "object",
+        "isSpan": true,
+        "stable": true,
+        "viaContext": true,
+        "isTraced": true,
+        "afterEnd": true,
+        "chained": [
+          true,
+          true,
+          true,
+          true,
+          "undefined"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "enterSpan": {
+          "noArguments": "TypeError: Failed to execute 'enterSpan' on 'Tracing': parameter 1 is not of type 'string'.",
+          "noCallback": "TypeError: Failed to execute 'enterSpan' on 'Tracing': parameter 2 is not of type 'Function'.",
+          "notCallable": "TypeError: Failed to execute 'enterSpan' on 'Tracing': parameter 2 is not of type 'Function'.",
+          "symbolName": "TypeError: Cannot convert a Symbol value to a string",
+          "nameFirst": "TypeError: Cannot convert a Symbol value to a string",
+          "objectName": "ok",
+          "undefinedName": "ok"
+        },
+        "startActiveSpan": "TypeError: Failed to execute 'startActiveSpan' on 'Tracing': parameter 2 is not of type 'Function'.",
+        "startSpan": [
+          "TypeError: Failed to execute 'startSpan' on 'Tracing': parameter 1 is not of type 'string'.",
+          true
+        ],
+        "setAttribute": {
+          "noArguments": "TypeError: Failed to execute 'setAttribute' on 'Span': parameter 1 is not of type 'string'.",
+          "keyOnly": true,
+          "values": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "bigint": "TypeError: Cannot convert a BigInt value to a number",
+          "symbol": "TypeError: Cannot convert a Symbol value to a string",
+          "nullPrototype": "TypeError: Cannot convert object to primitive value",
+          "symbolKey": "TypeError: Cannot convert a Symbol value to a string",
+          "objectKey": true
+        },
+        "setAttributes": {
+          "rejected": [
+            "TypeError: Failed to execute 'setAttributes' on 'Span': parameter 1 is not of type 'object'.",
+            "TypeError: Failed to execute 'setAttributes' on 'Span': parameter 1 is not of type 'object'.",
+            "TypeError: Failed to execute 'setAttributes' on 'Span': parameter 1 is not of type 'object'.",
+            "TypeError: Failed to execute 'setAttributes' on 'Span': parameter 1 is not of type 'object'.",
+            "TypeError: Failed to execute 'setAttributes' on 'Span': parameter 1 is not of type 'object'."
+          ],
+          "accepted": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "noArguments": "TypeError: Failed to execute 'setAttributes' on 'Span': parameter 1 is not of type 'object'.",
+          "badValue": "TypeError: Cannot convert a BigInt value to a number",
+          "getters": [
+            "a",
+            "b"
+          ]
+        },
+        "setStatus": {
+          "noArguments": "TypeError: Failed to execute 'setStatus' on 'Span': parameter 1 is not of type 'TracingSpanStatus'.",
+          "undefined": "TypeError: Cannot initialize N7workerd3api12user_tracing17TracingSpanStatusE with required members from an undefined or null value.",
+          "null": "TypeError: Cannot initialize N7workerd3api12user_tracing17TracingSpanStatusE with required members from an undefined or null value.",
+          "string": "TypeError: Failed to execute 'setStatus' on 'Span': parameter 1 is not of type 'TracingSpanStatus'.",
+          "empty": "TypeError: Span status code must be 'unset', 'ok', or 'error'.",
+          "badCode": "TypeError: Span status code must be 'unset', 'ok', or 'error'.",
+          "array": "TypeError: Span status code must be 'unset', 'ok', or 'error'.",
+          "codeObject": true,
+          "symbolCode": "TypeError: Cannot convert a Symbol value to a string",
+          "symbolMessage": "TypeError: Cannot convert a Symbol value to a string",
+          "numberMessage": true
+        },
+        "updateName": {
+          "noArguments": "TypeError: Failed to execute 'updateName' on 'Span': parameter 1 is not of type 'string'.",
+          "symbol": "TypeError: Cannot convert a Symbol value to a string",
+          "object": true
+        },
+        "recordException": {
+          "noArguments": "TypeError: Failed to execute 'recordException' on 'Span': parameter 1 is not of type 'Value'.",
+          "values": [
+            "undefined",
+            "undefined",
+            "undefined",
+            "undefined",
+            "undefined",
+            "undefined",
+            "undefined",
+            "undefined"
+          ],
+          "bigintCode": "TypeError: Cannot convert a BigInt value to a number",
+          "symbolMessage": "TypeError: Cannot convert a Symbol value to a string"
+        },
+        "afterEnd": {
+          "bigint": "TypeError: Cannot convert a BigInt value to a number",
+          "setAttributes": "TypeError: Failed to execute 'setAttributes' on 'Span': parameter 1 is not of type 'object'.",
+          "badCode": "TypeError: Span status code must be 'unset', 'ok', or 'error'.",
+          "recordException": "undefined"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "result": [
+          "arg",
+          true,
+          true,
+          true
+        ],
+        "seen": {
+          "arrayBuffers": 0,
+          "symbolKeys": 0,
+          "spans": 0,
+          "keys": 0,
+          "pushes": 0
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "stateHasTracing": false,
+        "invocation": "object",
+        "isTraced": true,
+        "stable": true,
+        "inSpan": {
+          "active": true,
+          "isTraced": true
+        }
+      }
+    }
+  ]
+}

@@ -11,7 +11,8 @@ export const STABLE_ORIGIN = "http://origin.test";
 /**
  * `session` has `origin` (the runtime's current public origin) and
  * `restart()`, which stops the runtime with its state kept, starts it again
- * and updates `origin`.
+ * and updates `origin`. A celld session with observability on also has
+ * `otlp`, its OTLP receiver.
  */
 export async function runSteps(session, steps, normalize) {
   const transcript = [];
@@ -35,6 +36,8 @@ export function describeStep(step) {
       return `ws ${step.path}`;
     case "restart":
       return "restart";
+    case "otlp":
+      return `otlp ${step.spans.join(", ")}`;
   }
 }
 
@@ -47,6 +50,8 @@ async function runStep(session, step) {
     case "restart":
       await session.restart();
       return { restart: true };
+    case "otlp":
+      return { otlp: await session.otlp.take(step.spans, STEP_TIMEOUT_MS) };
   }
 }
 

@@ -89,15 +89,50 @@ Only the binding types in the [services table](#services) are available.
 - The module exports the same names as workerd 1.20261001.1. An import of any
   other name, or a default import, stops the Worker from loading, as on
   Cloudflare.
-- `tracing`, `cache`, `withEnv`, `withExports`, `withEnvAndExports`, and
-  `abortIsolate` are not implemented. They import, but a call, a construction,
-  or a property access throws an error that names the export. Logging or
-  serializing `tracing` or `cache` does not throw.
+- `cache`, `withEnv`, `withExports`, `withEnvAndExports`, and `abortIsolate`
+  are not implemented. They import, but a call, a construction, or a property
+  access throws an error that names the export. Logging or serializing `cache`
+  does not throw.
 - `cache` throws on use everywhere, including at module scope, where
   Cloudflare's `cache` reads every property as `undefined` outside a
   request.
 - `restore` is the symbol that names a `[restore]()` method, as on Cloudflare,
   but celld never calls that method.
+
+### [Custom spans](https://developers.cloudflare.com/workers/observability/traces/custom-spans/)
+
+`tracing` from `cloudflare:workers` and `ctx.tracing` work as in workerd
+1.20261001.1: `enterSpan`, `startActiveSpan`, `startSpan`, `getActiveSpan`,
+and the `Span` methods, with workerd's argument conversion, errors and
+limits. Each ExecutionContext, a workflow's included, has its own
+`ctx.tracing`; a Durable Object's `ctx` has none, as in workerd. A span
+belongs to the request that made it, and from another request its methods
+throw workerd's "Cannot perform I/O on behalf of a different request" error.
+
+- A span is traced when the request is: with telemetry on (`CELLD_OTEL`) and
+  the request sampled. celld exports a traced span as a child of the active
+  span, or of the invocation's span, with its attributes, status and
+  exceptions. See [Telemetry](telemetry.md#custom-spans). The Wrangler
+  `observability` settings do not turn tracing on or off.
+- With telemetry off, or for an unsampled request, `isTraced` is `false` and
+  nothing is recorded, as for an unsampled request on Cloudflare.
+- Names are cut to 64 bytes, at a character boundary; workerd cuts at the
+  byte. A span holds about 64 KiB of attributes and exceptions, after which
+  celld drops writes and adds workerd's `span_data_limit_exceeded` warning.
+- celld holds span data outside the isolate, so it bounds it, counting each
+  span's and attribute's overhead: one invocation can hold 1,024 spans open
+  with at most 1 MiB between them, and all invocations together 64 MiB. A span
+  past a bound is untraced, an attribute past one is dropped with the same
+  warning, and the invocation span records `celld.tracing.spans_dropped`.
+- Attribute keys starting with `celld.` are reserved for celld's own
+  attributes. celld drops a Worker's attribute under one, and celld's value
+  wins over a Worker's for any key celld sets on the span.
+- workerd shares one context between overlapping requests to a Durable
+  Object, so a span from one can be used in the other. celld gives each event
+  its own, and the other event's use throws the I/O error.
+- A function bound to the module's async context, with
+  `AsyncLocalStorage.bind()` or `snapshot()`, sees the invocation span when it
+  runs during a request. In workerd it sees `undefined`.
 
 ### [Handlers](https://developers.cloudflare.com/workers/runtime-apis/handlers/)
 

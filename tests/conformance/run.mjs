@@ -180,8 +180,15 @@ async function execute(runtime, testCase, tools) {
   try {
     session =
       runtime === "celld"
-        ? await startCelld({ binary: tools.celld, esbuild: tools.esbuild, dir, workers: testCase.workers, env: testCase.env })
-        : await startWorkerd({ dir, workers: testCase.workers });
+        ? await startCelld({
+            binary: tools.celld,
+            esbuild: tools.esbuild,
+            dir,
+            workers: testCase.workers,
+            env: testCase.env,
+            observability: testCase.observability,
+          })
+        : await startWorkerd({ dir, workers: testCase.workers, observability: testCase.observability });
     run.transcript = await runSteps(session, testCase.steps, testCase.normalize);
     await session.stop();
   } catch (error) {

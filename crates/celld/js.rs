@@ -3969,9 +3969,9 @@ fn set_cped(
 /// is the exactness `console.log` correlation needs: a continuation
 /// belonging to a *different* entry that runs during this turn's
 /// microtask checkpoint carries its own context, not this turn's. The
-/// layout is 16 trace-id bytes, 8 span-id bytes, and one sampling byte
-/// in one ArrayBuffer. Sampled contexts pay the existing cost, and only a
-/// rejected foreign context adds this cost to an unsampled request.
+/// layout is `user_spans::TraceRider`'s in one ArrayBuffer. Sampled contexts
+/// pay the existing cost, and only a rejected foreign context adds this cost
+/// to an unsampled request.
 ///
 /// Returns the previous slot value *only when a trace was installed*; the
 /// caller restores it before releasing the isolate. An untraced turn does not
@@ -3984,20 +3984,40 @@ fn install_trace<'s>(
 ) -> Option<v8::Local<'s, v8::Value>> {
     let context = trace?;
     let previous = scope.get_continuation_preserved_embedder_data();
-    let buffer = v8::ArrayBuffer::new(scope, 25);
-    let data = buffer.get_backing_store().data()?;
-    let bytes = data.as_ptr() as *mut u8;
-    // SAFETY: a freshly created 25-byte buffer, written before any JS
-    // can see it.
-    unsafe {
-        std::ptr::copy_nonoverlapping(context.trace_id.as_ptr(), bytes, 16);
-        std::ptr::copy_nonoverlapping(context.span_id.as_ptr(), bytes.add(16), 8);
-        bytes.add(24).write(u8::from(context.sampled));
-    }
+    let buffer = trace_rider_buffer(scope, &crate::user_spans::TraceRider::from_context(context))?;
     let frame = cped_frame(scope);
     let io_context = cped_io_context(scope);
     set_cped(scope, frame, buffer.into(), io_context);
     Some(previous)
+}
+
+/// A rider as the ArrayBuffer the CPED trace slot holds.
+fn trace_rider_buffer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rider: &crate::user_spans::TraceRider,
+) -> Option<v8::Local<'s, v8::ArrayBuffer>> {
+    let length = rider.byte_len();
+    let buffer = v8::ArrayBuffer::new(scope, length);
+    let data = buffer.get_backing_store().data()?;
+    // SAFETY: a freshly created buffer of exactly this length, written
+    // before any JS can see it.
+    rider.write(unsafe { std::slice::from_raw_parts_mut(data.as_ptr() as *mut u8, length) });
+    Some(buffer)
+}
+
+/// The rider an ArrayBuffer holds, if it is one.
+fn trace_rider(value: v8::Local<v8::Value>) -> Option<crate::user_spans::TraceRider> {
+    let buffer = v8::Local::<v8::ArrayBuffer>::try_from(value).ok()?;
+    let length = buffer.byte_length();
+    if length != crate::user_spans::TraceRider::INVOCATION_LEN
+        && length != crate::user_spans::TraceRider::CUSTOM_LEN
+    {
+        return None;
+    }
+    let data = buffer.get_backing_store().data()?;
+    // SAFETY: the length is checked; the buffer is alive for this scope.
+    let bytes = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, length) };
+    crate::user_spans::TraceRider::parse(bytes)
 }
 
 fn restore_trace(scope: &mut v8::PinScope, previous: Option<v8::Local<v8::Value>>) {
@@ -4122,26 +4142,7 @@ pub(crate) fn current_trace_context(
     if !crate::telemetry::active() {
         return None;
     }
-    let data = cped_trace(scope);
-    let buffer = v8::Local::<v8::ArrayBuffer>::try_from(data).ok()?;
-    if buffer.byte_length() != 25 {
-        return None;
-    }
-    let data = buffer.get_backing_store().data()?;
-    let bytes = data.as_ptr() as *const u8;
-    let mut trace_id = [0u8; 16];
-    let mut span_id = [0u8; 8];
-    // SAFETY: length checked; the buffer is alive for this scope.
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes, trace_id.as_mut_ptr(), 16);
-        std::ptr::copy_nonoverlapping(bytes.add(16), span_id.as_mut_ptr(), 8);
-    }
-    let sampled = unsafe { bytes.add(24).read() != 0 };
-    Some(crate::telemetry::TraceContext {
-        trace_id,
-        span_id,
-        sampled,
-    })
+    trace_rider(cped_trace(scope)).map(|rider| rider.context())
 }
 
 /// The isolate, entered for one turn. Everything a request does to a shared
@@ -4180,6 +4181,7 @@ impl Worker {
         &mut self,
         job: crate::WorkerJob,
         trace: Option<crate::telemetry::TraceContext>,
+        spans: Option<Arc<crate::user_spans::Invocation>>,
     ) -> (Option<InFlight>, Vec<Op>) {
         let Some(inner) = self.inner.as_mut() else {
             return (None, Vec::new());
@@ -4211,7 +4213,9 @@ impl Worker {
             declared_ms.map(|milliseconds| Duration::from_millis(u64::from(milliseconds))),
             declared_ms,
         );
+        let offered = BeginningSpans::offer(spans);
         let begun = begin(tc, realm.fetch, job);
+        drop(offered);
         drop(cpu_watchdog);
         let out = match begun {
             Begun::Running(mut entry) => {
@@ -4572,6 +4576,7 @@ fn begin<'s>(
         effective_resource_limits(runtime_state.resource_limits, invocation_limits),
         tail_reporting,
     );
+    adopt_user_spans(&context);
     if let Some(stream_id) = body.stream_id() {
         context.own_body_stream(stream_id);
     }
@@ -4670,6 +4675,7 @@ fn begin_entrypoint_rpc(
         actor_runtime_state(tc).resource_limits,
         invocation_limits,
     ));
+    adopt_user_spans(&context);
     let guard = CurrentGuard::enter(context.clone());
     context.begin_cpu_turn();
     let started = (|| {
@@ -4926,6 +4932,7 @@ fn begin_queue(
     reply: tokio::sync::oneshot::Sender<Result<QueueDispatchResult>>,
 ) -> Begun {
     let context = IoContext::with_resource_limits(actor_runtime_state(tc).resource_limits);
+    adopt_user_spans(&context);
     let guard = CurrentGuard::enter(context.clone());
     context.begin_cpu_turn();
     let started = (|| {
@@ -5087,6 +5094,7 @@ fn start_cell_event<'s>(
 ) -> Begun {
     let runtime_state = actor_runtime_state(tc);
     let context = IoContext::tracked(&runtime_state);
+    adopt_user_spans(&context);
     if let Some(stream_id) = body_stream_id {
         context.own_body_stream(stream_id);
     }
@@ -6277,6 +6285,7 @@ impl Worker {
         &mut self,
         job: CellJob,
         trace: Option<crate::telemetry::TraceContext>,
+        spans: Option<Arc<crate::user_spans::Invocation>>,
     ) -> (Option<InFlight>, Vec<Op>) {
         let Some(inner) = self.inner.as_mut() else {
             return (None, Vec::new());
@@ -6299,7 +6308,9 @@ impl Worker {
                 .resource_limits
                 .and_then(|limits| limits.cpu_ms),
         );
+        let offered = BeginningSpans::offer(spans);
         let begun = begin_cell(tc, job, event_time);
+        drop(offered);
         drop(cpu_watchdog);
         let out = match begun {
             Begun::Running(mut entry) => {
@@ -6882,6 +6893,12 @@ ops! { OP_NAMES, install_op_functions,
         "__event_depth" => op_event_depth,
         "__als_get" => op_als_get,
         "__als_set" => op_als_set,
+        "__span_owner" => span_ops::op_span_owner,
+        "__lazy_data_property" => op_lazy_data_property,
+        "__span_start" => span_ops::op_span_start,
+        "__span_enter" => span_ops::op_span_enter,
+        "__span_update" => span_ops::op_span_update,
+        "__span_end" => span_ops::op_span_end,
         "__util_type_flags" => op_util_type_flags,
         "__util_constructor_name" => op_util_constructor_name,
         "__util_proxy_details" => op_util_proxy_details,
@@ -9185,9 +9202,8 @@ fn op_fetch(
             if let Some(mut span) = span.take() {
                 span.start_unix_us = span_started.unwrap_or_default();
                 span.duration_us = crate::telemetry::now_unix_us() - span.start_unix_us;
-                span.ok = ok;
+                span.set_outcome(ok, error);
                 span.http_status = status;
-                span.error = error;
                 crate::telemetry::record(span);
             }
         };
@@ -10433,6 +10449,7 @@ fn op_test_queue_rearm_bounded(
 // calls the very functions the ops call rather than a second implementation
 // of the object record.
 pub(crate) mod r2_ops;
+mod span_ops;
 mod storage_ops;
 use storage_ops::{actor_runtime_state, throw_storage_error};
 
@@ -11030,6 +11047,47 @@ pub struct IoContext {
     /// Whether this event records console calls for a Dynamic Worker tail.
     tail_reporting: bool,
     tail_logs: Mutex<TailLogCapture>,
+    /// The custom spans of the traced invocation this context runs. Adopted
+    /// when the context is created for its invocation, before any of the
+    /// Worker's code runs, and the only way a span op reaches them.
+    user_spans: OnceLock<Arc<crate::user_spans::Invocation>>,
+    /// The identity a `tracing` Span records as its owner, allocated the first
+    /// time code asks. A tracked context uses its continuation id.
+    identity: OnceLock<u64>,
+}
+
+thread_local! {
+    /// The custom spans of the invocation whose turn is beginning, for the
+    /// context that turn creates for it to adopt. Set only while
+    /// `turn_begin` or `turn_begin_cell` runs, and taken by the first context
+    /// created; nested work in the same turn makes contexts of its own.
+    static BEGINNING_SPANS: RefCell<Option<Arc<crate::user_spans::Invocation>>> =
+        const { RefCell::new(None) };
+}
+
+/// Offers an invocation's custom spans to the context its turn creates, and
+/// withdraws the offer when the turn's beginning ends.
+struct BeginningSpans;
+
+impl BeginningSpans {
+    fn offer(spans: Option<Arc<crate::user_spans::Invocation>>) -> BeginningSpans {
+        BEGINNING_SPANS.with(|slot| *slot.borrow_mut() = spans);
+        BeginningSpans
+    }
+}
+
+impl Drop for BeginningSpans {
+    fn drop(&mut self) {
+        BEGINNING_SPANS.with(|slot| slot.borrow_mut().take());
+    }
+}
+
+/// Adopt the custom spans of the invocation that is beginning, if this is
+/// the first context its turn created.
+fn adopt_user_spans(context: &IoContext) {
+    if let Some(spans) = BEGINNING_SPANS.with(|slot| slot.borrow_mut().take()) {
+        let _ = context.user_spans.set(spans);
+    }
 }
 
 /// An op enqueued by one event's continuation during another event's turn: the
@@ -11082,6 +11140,19 @@ impl IoContext {
 
     /// The continuation id this context is registered under, which names
     /// the event to the cell's gate. `None` for a context V8 never captures.
+    /// The id a `tracing` Span records as its owner.
+    fn identity(&self) -> u64 {
+        match &self.continuation {
+            Some((id, _)) => *id,
+            None => *self.identity.get_or_init(allocate_io_context_id),
+        }
+    }
+
+    /// The custom spans of the traced invocation this context runs.
+    fn user_spans(&self) -> Option<&Arc<crate::user_spans::Invocation>> {
+        self.user_spans.get()
+    }
+
     fn continuation_id(&self) -> Option<u64> {
         self.continuation.as_ref().map(|(id, _)| *id)
     }
@@ -11208,6 +11279,8 @@ impl IoContext {
             cpu_turn: Mutex::new(None),
             tail_reporting,
             tail_logs: Mutex::new(TailLogCapture::default()),
+            user_spans: OnceLock::new(),
+            identity: OnceLock::new(),
         })
     }
 
@@ -11246,6 +11319,8 @@ impl IoContext {
             // context is constructed from the report sender in `begin`.
             tail_reporting: false,
             tail_logs: Mutex::new(TailLogCapture::default()),
+            user_spans: OnceLock::new(),
+            identity: OnceLock::new(),
         });
         runtime_state
             .io_contexts
@@ -11981,6 +12056,51 @@ fn op_als_set(
     let trace = cped_trace(scope);
     let io_context = cped_io_context(scope);
     set_cped(scope, args.get(0), trace, io_context);
+}
+
+/// `__lazy_data_property(object, key, factory)`: define `key` as V8 defines
+/// workerd's `JSG_LAZY_INSTANCE_PROPERTY`. It reads as an ordinary data
+/// property; `factory()` runs on the first read and its value replaces the
+/// accessor. So a per-request object costs nothing until code uses it.
+fn op_lazy_data_property(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let (Ok(object), Ok(key), Ok(factory)) = (
+        v8::Local::<v8::Object>::try_from(args.get(0)),
+        v8::Local::<v8::Name>::try_from(args.get(1)),
+        v8::Local::<v8::Function>::try_from(args.get(2)),
+    ) else {
+        let message = v8::String::new(scope, "__lazy_data_property: bad arguments").unwrap();
+        let exception = v8::Exception::type_error(scope, message);
+        scope.throw_exception(exception);
+        return;
+    };
+    object.set_lazy_data_property_with_data(
+        scope,
+        key,
+        lazy_data_property_getter,
+        factory.into(),
+        v8::PropertyAttribute::NONE,
+        v8::SideEffectType::HasSideEffect,
+        v8::SideEffectType::HasSideEffect,
+    );
+}
+
+fn lazy_data_property_getter(
+    scope: &mut v8::PinScope,
+    _name: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let Ok(factory) = v8::Local::<v8::Function>::try_from(args.data()) else {
+        return;
+    };
+    let receiver = v8::undefined(scope).into();
+    if let Some(value) = factory.call(scope, receiver, &[]) {
+        rv.set(value);
+    }
 }
 
 // node:util prelude calls these; registration is the sole per-isolate cost.

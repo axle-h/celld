@@ -1,0 +1,219 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": "spans"
+    },
+    {
+      "otlp": {
+        "spans": [
+          {
+            "name": "spans-request",
+            "kind": "server",
+            "attributes": {
+              "route": "spans"
+            },
+            "logs": [
+              "outside any span"
+            ],
+            "children": [
+              {
+                "name": "detached-renamed",
+                "kind": "internal",
+                "status": {
+                  "code": "error",
+                  "message": "it failed"
+                },
+                "events": [
+                  {
+                    "name": "exception",
+                    "attributes": {
+                      "exception.type": "TypeError",
+                      "exception.message": "boom",
+                      "exception.stacktrace": "TypeError: boom\n    at fetch (worker.js:<line>:<column>)"
+                    }
+                  },
+                  {
+                    "name": "exception",
+                    "attributes": {
+                      "exception.code": 42,
+                      "exception.message": "with a code"
+                    }
+                  }
+                ]
+              },
+              {
+                "name": "forgotten",
+                "kind": "internal",
+                "attributes": {
+                  "ended": false
+                }
+              },
+              {
+                "name": "limited",
+                "kind": "internal",
+                "attributes": {
+                  "cloudflare.warning.message": "exceeded span data limit while trying to record attribute \"big\" of size 65536",
+                  "cloudflare.warning.type": "span_data_limit_exceeded"
+                }
+              },
+              {
+                "name": "never-settles",
+                "kind": "internal"
+              },
+              {
+                "name": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn",
+                "kind": "internal"
+              },
+              {
+                "name": "ok",
+                "kind": "internal",
+                "status": {
+                  "code": "ok"
+                }
+              },
+              {
+                "name": "outer",
+                "kind": "internal",
+                "attributes": {
+                  "flag": true,
+                  "number": 1.5,
+                  "text": "a"
+                },
+                "logs": [
+                  "in outer",
+                  "in outer again"
+                ],
+                "children": [
+                  {
+                    "name": "inner",
+                    "kind": "internal",
+                    "attributes": {
+                      "depth": 2
+                    },
+                    "logs": [
+                      "in inner"
+                    ]
+                  }
+                ]
+              },
+              {
+                "name": "reserved",
+                "kind": "internal",
+                "attributes": {
+                  "url.full": "chosen"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": "fetched leaf"
+    },
+    {
+      "otlp": {
+        "spans": [
+          {
+            "name": "celld.fetch",
+            "kind": "server",
+            "children": [
+              {
+                "name": "around-fetch",
+                "kind": "internal",
+                "children": [
+                  {
+                    "name": "fetch",
+                    "kind": "client",
+                    "attributes": {
+                      "celld.parent_remote": false,
+                      "http.response.status_code": 200,
+                      "url.full": "http://origin.test/leaf"
+                    },
+                    "children": [
+                      {
+                        "name": "celld.fetch",
+                        "kind": "server",
+                        "attributes": {
+                          "celld.parent_remote": true
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": "called"
+    },
+    {
+      "otlp": {
+        "spans": [
+          {
+            "name": "celld.cell_startup",
+            "kind": "internal",
+            "attributes": {
+              "celld.cell": "Exported:10c78bf6e13ed0fe6fc228164f2eb7c8206ea40d0dc72d396f4de999a2ab25ba"
+            }
+          },
+          {
+            "name": "celld.fetch",
+            "kind": "server",
+            "children": [
+              {
+                "name": "around-call",
+                "kind": "internal"
+              }
+            ]
+          },
+          {
+            "name": "celld.rpc",
+            "kind": "internal",
+            "attributes": {
+              "celld.cell": "Exported:10c78bf6e13ed0fe6fc228164f2eb7c8206ea40d0dc72d396f4de999a2ab25ba"
+            },
+            "children": [
+              {
+                "name": "in-object",
+                "kind": "internal",
+                "attributes": {
+                  "side": "object"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": "answered"
+    },
+    {
+      "otlp": {
+        "spans": [
+          {
+            "name": "celld.fetch",
+            "kind": "server",
+            "children": [
+              {
+                "name": "after-response",
+                "kind": "internal",
+                "attributes": {
+                  "late": true
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

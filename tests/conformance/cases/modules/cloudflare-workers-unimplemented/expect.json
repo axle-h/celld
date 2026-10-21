@@ -12,10 +12,9 @@
           "subclass": "Error: cloudflare:workers export 'withEnv' is not implemented in celld"
         },
         "objects": {
-          "read": "Error: cloudflare:workers export 'tracing' is not implemented in celld",
-          "readCache": "Error: cloudflare:workers export 'cache' is not implemented in celld",
-          "write": "Error: cloudflare:workers export 'tracing' is not implemented in celld",
-          "has": "Error: cloudflare:workers export 'tracing' is not implemented in celld",
+          "read": "Error: cloudflare:workers export 'cache' is not implemented in celld",
+          "write": "Error: cloudflare:workers export 'cache' is not implemented in celld",
+          "has": "Error: cloudflare:workers export 'cache' is not implemented in celld",
           "delete": "Error: cloudflare:workers export 'cache' is not implemented in celld"
         },
         "inert": {
@@ -25,10 +24,7 @@
             "withExports",
             "withEnvAndExports"
           ],
-          "types": [
-            "object",
-            "object"
-          ],
+          "type": "object",
           "then": "undefined",
           "awaited": true,
           "keys": [],

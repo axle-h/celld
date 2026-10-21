@@ -1,0 +1,19 @@
+{
+  "kind": "celld-only",
+  "reason": "workerd sends its spans to Miniflare's collector, which the runner cannot read; this pins what celld exports over OTLP",
+  "observability": true,
+  "workers": ["exporter"],
+  "steps": [
+    {"path": "/spans"},
+    {"otlp": {"spans": ["spans-request", "outer", "inner", "detached-renamed", "forgotten", "never-settles", "limited", "ok", "reserved", "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"]}},
+    {"path": "/fetch"},
+    {"otlp": {"spans": ["celld.fetch", "around-fetch", "fetch", "celld.fetch"]}},
+    {"path": "/object"},
+    {"otlp": {"spans": ["celld.fetch", "around-call", "celld.cell_startup", "celld.rpc", "in-object"]}},
+    {"path": "/after-response"},
+    {"otlp": {"spans": ["celld.fetch", "after-response"]}}
+  ],
+  "normalize": [
+    {"pattern": "\\(worker\\.js:\\d+:\\d+\\)", "replace": "(worker.js:<line>:<column>)", "why": "the stack's line and column move whenever the Worker is edited"}
+  ]
+}

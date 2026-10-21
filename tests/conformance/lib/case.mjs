@@ -5,12 +5,16 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
-const CASE_KEYS = new Set(["kind", "reason", "workers", "env", "nodes", "xfail", "steps", "normalize"]);
+const CASE_KEYS = new Set(["kind", "reason", "workers", "env", "observability", "nodes", "xfail", "steps", "normalize"]);
 const STEP_KEYS = {
   path: new Set(["path", "method", "headers", "body"]),
   ws: new Set(["ws", "send", "receive", "close"]),
   restart: new Set(["restart"]),
+  otlp: new Set(["otlp"]),
 };
+const OTLP_KEYS = new Set(["spans"]);
+// The runner owns telemetry: "observability" turns it on for both runtimes.
+const RUNNER_ENV = /^(CELLD_OTEL|OTEL_)/;
 const NORMALIZE_KEYS = new Set(["pattern", "replace", "why"]);
 
 export class CaseError extends Error {}
@@ -77,7 +81,11 @@ export function loadCase(root, id) {
   for (const [name, value] of Object.entries(env)) {
     if (!/^[A-Z_][A-Z0-9_]*$/i.test(name)) fail(`"env" name ${JSON.stringify(name)} is not an environment variable name`);
     if (typeof value !== "string") fail(`"env.${name}" must be a string`);
+    if (RUNNER_ENV.test(name)) fail(`"env.${name}" is the runner's to set; use "observability"`);
   }
+
+  if ("observability" in raw && typeof raw.observability !== "boolean") fail(`"observability" must be true or false`);
+  const observability = raw.observability ?? false;
 
   if ("nodes" in raw) {
     if (!Number.isInteger(raw.nodes) || raw.nodes < 1) fail(`"nodes" must be a positive integer`);
@@ -95,6 +103,12 @@ export function loadCase(root, id) {
 
   if (!Array.isArray(raw.steps) || raw.steps.length === 0) fail(`"steps" must be a non-empty array`);
   const steps = raw.steps.map((step, index) => validateStep(step, (message) => fail(`steps[${index}]: ${message}`)));
+  steps.forEach((step, index) => {
+    if (step.kind !== "otlp") return;
+    // workerd's spans go to Miniflare's own collector, not to this runner.
+    if (kind !== "celld-only") fail(`steps[${index}]: an "otlp" step reads celld's export, so it needs "kind": "celld-only"`);
+    if (!observability) fail(`steps[${index}]: an "otlp" step needs "observability": true`);
+  });
 
   const normalize = raw.normalize ?? [];
   if (!Array.isArray(normalize)) fail(`"normalize" must be an array`);
@@ -124,6 +138,7 @@ export function loadCase(root, id) {
     reason: raw.reason,
     workers: raw.workers,
     env,
+    observability,
     xfail: raw.xfail,
     steps,
     normalize: rules,
@@ -134,9 +149,6 @@ export function loadCase(root, id) {
 
 function validateStep(step, fail) {
   if (!isObject(step)) fail("must be an object");
-  if ("otlp" in step) {
-    fail(`the "otlp" step and its receiver (lib/otlp.mjs) arrive with plan item 1.2`);
-  }
   if ("node" in step) {
     fail(`"node" directs a step in a multi-node case, which is not supported yet (plan 0.2)`);
   }
@@ -182,6 +194,17 @@ function validateStep(step, fail) {
     case "restart":
       if (step.restart !== true) fail(`"restart" must be true`);
       return { kind };
+    case "otlp": {
+      if (!isObject(step.otlp)) fail(`"otlp" must be an object`);
+      for (const key of Object.keys(step.otlp)) {
+        if (!OTLP_KEYS.has(key)) fail(`unknown key "otlp.${key}"`);
+      }
+      const { spans } = step.otlp;
+      if (!Array.isArray(spans) || spans.length === 0 || !spans.every(nonEmptyString)) {
+        fail(`"otlp.spans" must be a non-empty array of the span names to wait for`);
+      }
+      return { kind, spans };
+    }
   }
 }
 

@@ -9225,6 +9225,9 @@ const __WorkflowCell = (() => {
       waitUntil: __registerWaitUntil,
       passThroughOnException() {},
     });
+    // Its run() executes in an ExecutionContext on workerd, which has
+    // `tracing`.
+    __celld.__defineContextTracing(ctx);
     (async () => new cls(ctx, __cell.env).run(event, step))().then(
       (value) => driver.finish({ kind: "complete", value }),
       (error) => driver.finish({ kind: "error", error }),
@@ -9555,7 +9558,8 @@ const __cfUnimplementedObject = (name) => {
   });
 };
 // `cloudflare:workers` module surface: exactly the names in modules.rs
-// CLOUDFLARE_WORKERS_EXPORTS. The DO base class sets ctx/env the way
+// CLOUDFLARE_WORKERS_EXPORTS, with `tracing` added by tracing.js, which runs
+// after the harness. The DO base class sets ctx/env the way
 // `class X extends DurableObject` expects; env aliases the cell env.
 const __cf = __celld.__cf = {
   DurableObject: class DurableObject {
@@ -9616,7 +9620,6 @@ const __cf = __celld.__cf = {
   restore: Symbol("cloudflare:workers:restore"),
   abortIsolate: __cfUnimplementedFunction("abortIsolate"),
   cache: __cfUnimplementedObject("cache"),
-  tracing: __cfUnimplementedObject("tracing"),
   withEnv: __cfUnimplementedFunction("withEnv"),
   withEnvAndExports: __cfUnimplementedFunction("withEnvAndExports"),
   withExports: __cfUnimplementedFunction("withExports"),
@@ -11056,13 +11059,17 @@ const __registerWaitUntil = __celld.__registerWaitUntil = (promise) => {
 // `props` are the per-stub props a loopback service stub carries
 // (ctx.props); `exports` is built once, on first access.
 const __defaultProps = {};
-const __entrypointContext = (props = __defaultProps) => __withCtxRestore({
-  waitUntil: __registerWaitUntil,
-  passThroughOnException() {},
-  abort: __ctxAbortCurrent,
-  props,
-  get exports() { return __ctxExports(); },
-});
+const __entrypointContext = (props = __defaultProps) => {
+  const ctx = __withCtxRestore({
+    waitUntil: __registerWaitUntil,
+    passThroughOnException() {},
+    abort: __ctxAbortCurrent,
+    props,
+    get exports() { return __ctxExports(); },
+  });
+  __celld.__defineContextTracing(ctx);
+  return ctx;
+};
 const __beginEvent = __celld.__beginEvent = (props = __defaultProps) => {
   __rpcSignalRefresh();
   __event_begin();

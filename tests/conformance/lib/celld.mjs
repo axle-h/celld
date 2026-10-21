@@ -2,6 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { FLUSH_MS, startOtlpReceiver } from "./otlp.mjs";
 
 const READY_TIMEOUT_MS = 120_000;
 const EXIT_TIMEOUT_MS = 45_000;
@@ -23,28 +24,49 @@ for (const [signal, number] of [["SIGHUP", 1], ["SIGINT", 2], ["SIGTERM", 15]]) 
 
 /**
  * Starts the case's workers from `dir` (a temp copy of the case) and returns a
- * session for runSteps. `logs()` returns the supervisor's stderr so far.
+ * session for runSteps. `logs()` returns the supervisor's stderr so far. With
+ * `observability`, celld exports telemetry to a receiver the session owns.
  */
-export async function startCelld({ binary, esbuild, dir, workers, env }) {
+export async function startCelld({ binary, esbuild, dir, workers, env, observability }) {
   const configs = workers.flatMap((name) => ["-c", `workers/${name}/wrangler.jsonc`]);
   const stderr = [];
-  const environment = { ...process.env, ...env, CELLD_ESBUILD: esbuild };
+  // Telemetry is off unless the case turns it on, whatever the shell has.
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(CELLD_OTEL|OTEL_)/.test(name)));
+  const otlp = observability ? await startOtlpReceiver() : undefined;
+  const telemetry = otlp ? { CELLD_OTEL: otlp.url, CELLD_OTEL_FLUSH_MS: String(FLUSH_MS) } : {};
+  const environment = { ...inherited, ...env, ...telemetry, CELLD_ESBUILD: esbuild };
   // A failed start has no session to read the logs from, so its error
   // carries them.
   const start = (args) =>
     launch({ binary, dir, env: environment, args, stderr }).catch((error) => {
       throw new Error(`${error.message}\n--- celld dev stderr ---\n${stderr.join("").trim()}`, { cause: error });
     });
-  let node = await start(["--clean", ...configs]);
+  let node;
+  try {
+    node = await start(["--clean", ...configs]);
+  } catch (error) {
+    await otlp?.close();
+    throw error;
+  }
   const session = {
     origin: node.ready.public,
+    otlp,
     async restart() {
       await stop(node);
       node = await start(configs);
       session.origin = node.ready.public;
     },
-    stop: () => stop(node),
-    kill: () => node.child.kill("SIGKILL"),
+    async stop() {
+      try {
+        await stop(node);
+      } finally {
+        await otlp?.close();
+      }
+    },
+    kill() {
+      node.child.kill("SIGKILL");
+      return otlp?.close();
+    },
     logs: () => stderr.join(""),
   };
   return session;

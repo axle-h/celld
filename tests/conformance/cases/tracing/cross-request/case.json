@@ -1,0 +1,8 @@
+{
+  "observability": true,
+  "workers": ["requests"],
+  "steps": [
+    {"path": "/first"},
+    {"path": "/second"}
+  ]
+}
