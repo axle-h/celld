@@ -7,7 +7,6 @@ first, then work the phases in order.
 
 Related documents:
 
-- [cloudflare-os.md](cloudflare-os.md): the gap analysis.
 - [cloudflare-os-trial.md](cloudflare-os-trial.md): the first trial run and
   its failures, numbered 1 to 9. This plan refers to them as "trial failure N".
 - [cloudflare-os-prior-art.md](cloudflare-os-prior-art.md): other forks that
@@ -115,6 +114,35 @@ error-reporter. The browser talks Cap'n Web over a WebSocket at `/api`. Boundary
 | J4: gadget from a blueprint | The BYOB pack reader (`cos:workshop-backend/src/git-codec.ts:663` on `new Blob([pack]).stream()`), `LOADER.get`, a facet from a Dynamic Worker class reached through `ctx.restore` (`overseer.ts:4549`), and a facet Proxy that claims RpcTarget's prototype, forwarded to the browser. | Phases 1, 3 and 5 |
 | J5: gatekeeper tool use and scheduler | Pipelined `startGatekeeperSession` (`overseer.ts:10815`). An ApprovalQueue RpcTarget goes into a facet from another script (E). `bindHook` stores a controller from another script and a persistent callback. The ScheduleDriver alarm calls a stored initiator (`cos:gatekeeper-scheduler/src/schedule-driver.ts:136,410`). | Phases 3, 4 and 5 |
 | J6: code mode | `LOADER.load` with loopback env stubs. Tails report RPC calls (`verify`/`run`). A `RestoreForger` RpcTarget goes into the Dynamic Worker. `ctx.restore` runs inside the Dynamic Worker. | Phases 3, 5 and 6 |
+
+Each Worker's needs, from the starter's final configs (`starter:packages/cf-os/src/core/deployment.ts`, `generateConfigs()`):
+
+| Worker | Notable needs |
+| --- | --- |
+| router | static assets (SPA, `run_worker_first`), service bindings to workshop and every `GATEKEEPER_*` |
+| workshop-backend | `LOADER`, facets, KV x2, R2, `ai`, `browser`, service bindings with `entrypoint: "GatekeeperVendor"` and `props`, 5 SQLite DO classes via `ctx.exports` |
+| gatekeeper-context | KV, optional Artifacts, 4 SQLite DO classes |
+| gatekeeper-scheduler | alarms, stores the workshop's hook stub and calls it from an alarm |
+| gatekeeper-websearch | `ai` (`AI.websearch`) |
+| custom-gatekeeper, error-reporter | starter-owned; error-reporter reads service-binding `props` |
+
+No Worker declares `durable_objects` bindings: every namespace is reached
+through `ctx.exports`. All but router and error-reporter set
+`allow_irrevocable_stub_storage`.
+
+### What already works on celld (v0.6.2)
+
+The trial and source review confirmed these, so no item here re-does them:
+
+- Several Workers linked by service bindings, co-hosted on one node
+  (`crates/celld/generation.rs`), with named entrypoints.
+- SQLite DOs through `ctx.exports`; sync KV, `transactionSync`, alarms,
+  `deleteAll`, `sync()`, `blockConcurrencyWhile`, `abort()`.
+- Facets; Worker Loader `get`/`load` with `globalOutbound: null` and `tails`.
+- KV, R2, static assets with SPA fallback and `run_worker_first`.
+- `FixedLengthStream`, `DigestStream`, `timingSafeEqual`, ECDH, HKDF,
+  AES-GCM, `AsyncLocalStorage`, `URLPattern`.
+- Storing DO stubs and same-script `ctx.exports` loopback stubs in DO storage.
 
 In a single-node fleet no capability crosses a node. Cross-node support
 (Phase 8) is needed only for multi-node fleets.

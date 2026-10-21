@@ -1,7 +1,7 @@
 # Cloudflare OS on celld: trial run
 
 First attempt to run Cloudflare OS on celld, recorded for planning. See
-[cloudflare-os.md](cloudflare-os.md) for the gap analysis.
+[cloudflare-os-fixes.md](cloudflare-os-fixes.md) for the implementation plan.
 
 - Date: 2026-10-21
 - celld: v0.6.2 (`126a67e`), release build
