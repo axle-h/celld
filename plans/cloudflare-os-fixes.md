@@ -178,8 +178,9 @@ The services the trial used:
 - Azurite in podman: container `celld-azurite`, port 10000.
 - A celld node on `127.0.0.1:8790`, logging to `starter:.celld/node.log`.
 - A mock OpenAI-compatible LLM on `127.0.0.1:11434`, added in the UI as an
-  "Other Ollama…" provider with model `mock-llm`. It currently lives in a
-  scratch directory; Phase 0 commits a better one into the starter.
+  "Other Ollama…" provider. The trial used a scratch mock (model `mock-llm`);
+  `starter:celld/mock-llm.ts` replaces it (model `scripted`). `env.sh` sets
+  `CELLD_FETCH_PRIVATE_ALLOW` to its address.
 
 MinIO images can no longer be pulled anonymously, so use Azurite.
 
@@ -338,9 +339,10 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | --- | --- | --- | --- |
 | 1 | 0.1 Multi-config `celld dev` | done | `11f383b` |
 | 2 | 0.3 Rust unit-test convention, clippy clean on Rust 1.99 | done | `d20d9a6` |
-| 3 | 0.2 Conformance corpus and runner, seed cases | done | see log |
-| 4 | 0.6 CI | next | |
-| 5 | 0.4 Starter e2e harness, mock LLM, smoke, baseline | queued | |
+| 3 | 0.2 Conformance corpus and runner, seed cases | done | `2b445e4` |
+| 4 | 0.6 CI | done | `370d7df` |
+| 5 | 0.4 part 1: e2e bring-up, mock LLM | done | starter `46ea5ad` |
+| 5b | 0.4 part 2: smoke, browser, checklist, baseline | next | |
 | 6 | Phase 0 gate evidence | queued | |
 | 7+ | Phase 1 in plan order (1.1-1.17), then 0.5 after 1.7 | queued | |
 
@@ -568,30 +570,33 @@ shows a full-binary Rust test pattern.
 ### 0.4 Cloudflare OS e2e harness in the starter: `starter:celld/e2e/`
 
 There is one entry point:
-`starter:celld/e2e.sh [up|build|deploy|smoke|browser|all|down] [--router] [--fresh]`.
+`starter:celld/e2e.sh [check|up|build|deploy|node|smoke|browser|all|down] [--router] [--fresh] [--dev-store]`.
+Part 1 (everything but smoke and browser) landed as starter `46ea5ad`. Ports
+are configurable (`E2E_PORT`, `E2E_AZURITE_PORT`, `MOCK_LLM_PORT`, defaulting
+to the plan's numbers), so it can run beside the manual trial. State lives in
+`.celld/e2e/`, except that `--dev-store` uses the primary's `./.celld/dev`.
 
 0. **check**: `celld deploy --dry-run` for every Worker. This idea comes from
    mohamedalichelbi's recipe.
 1. **up**
-   - `--dev-store --workshop-only` runs a single-command, workshop-only loop
-     on today's single-config `celld dev`, with no podman and the frontend
-     assets copied in. It is modelled on patcon's
-     `scripts/celld/run-local.ts`, and is useful before 0.1 lands.
-   - Starts Azurite (`celld-e2e-azurite`). `celld/azurite-container.py <name>`
+   - Starts Azurite (`celld-e2e-azurite`, image pinned to 3.37.0 by digest). `celld/azurite-container.py <name>`
      takes the container name as its argument.
    - Waits for port 10000 and creates container `celld-e2e-$RUN_ID` (fresh per
      `--fresh`).
    - Starts the mock LLM.
-   - Once 0.1 exists, offers `--dev-store`: multi-config `celld dev` with no
-     podman.
+   - `--dev-store`: multi-config `celld dev` with no podman, at a fixed port
+     (`PUBLIC_BASE_URL` must match); `--fresh` passes `--clean`.
+   - `down` stops only what the script started; `down --fresh` also removes
+     the Azurite container and every run's data.
 2. **build**: `celld/build.sh`, skipped when outputs are newer than sources.
    After D10 lands, `celld deploy` runs the builds itself.
 3. **deploy**: `celld/deploy.sh [--no-router]`. Router mode becomes the
    default after 1.7.
 4. **Node**
    - Starts the node, logging to `.celld/e2e/node.log`.
-   - Health check: `GET /` returns HTML, then a cheap Cap'n Web call over
-     `ws://…/api`, with a 60 s timeout.
+   - Health check (`e2e/health.ts`): `GET /` returns HTML, then `ping()` over
+     `ws://…/api`, with a 60 s timeout. `deploy` fails if a running node does
+     not adopt the new version.
    - On failure, dumps the last 200 log lines.
 5. **Mock LLM**, committed as `starter:celld/mock-llm.ts` (Node 26 runs TS
    directly). It listens on `127.0.0.1:11434`.
@@ -604,10 +609,11 @@ There is one entry point:
        and `{error}` steps
      - `GET /__requests`
      - `POST /__reset`
-     - The default reply is `{text:"ok"}`.
-   - **Reuse:** import `scriptedChatCompletions` and the auxiliary-prompt
-     table from `cos:integration-tests/src/mock-model.ts`, so titles are
-     deterministic. Take tool names and argument shapes from
+     - The default reply is `{text:"ok"}`. `/__requests` keeps the last 1000.
+   - **Reuse:** import `scriptedChatCompletions` from
+     `cos:integration-tests/src/mock-model.ts`, which also answers the
+     auxiliary prompts (upstream doesn't export the table), so titles are
+     deterministic. `node celld/mock-llm.ts --self-test` checks it. Take tool names and argument shapes from
      `cos:integration-tests/__tests__/workshop-agent*.test.ts` and
      `workshop-callable-agents.test.ts`.
 6. **smoke** (`e2e/smoke.ts`): Cap'n Web from Node.
@@ -633,6 +639,11 @@ There is one entry point:
      | S9 | restart the node, log in; S5's account still listed; reopen S6's gadget | works | durable stubs, restore |
      | S10 | `--router`: rerun S1-S7 through the router | same | 5 |
      | S11 | scan `node.log` for "cannot cross isolate", "could not be cloned", "is not a function", "dropped a frame for a closed WebSocket", "Invalid reader mode", "already disposed", "does not implement" | none | all |
+
+     celld logs "dropped a frame for a closed WebSocket" (`ws_registry.rs:569`)
+     on every clean client disconnect, including the health probe's. S11
+     counts it only when a 1006 close appears with it, until 1.17 revisits close
+     handling.
      | S12 | two sessions subscribed to one workspace; wait more than 60 s, so the session isolate retires; edit in one session | the other sees the change | N5, N12 |
      | S13 | scripted code-mode call `env.GADGET.getDocument()` | returns the document | N2, N6 |
 7. **browser** (`e2e/browser.ts`)
@@ -648,8 +659,8 @@ There is one entry point:
 8. **Manual checklist**: `starter:celld/e2e/CHECKLIST.md`. Each row of the
    phase sections below is a line in it.
 
-`generate.ts` gains a function export of its config filter, so the adapter in
-0.5 can reuse it.
+`generate.ts` exports `celldFilter(config)` and `generateConfigs(opts)`, so
+the adapter in 0.5 can reuse them.
 
 ### 0.5 Cloudflare OS integration-test adapter: `starter:celld/integration/`
 
@@ -704,7 +715,10 @@ gate.
 - Cache `~/.cargo` and `target/` with `Swatinem/rust-cache`, keyed on
   `Cargo.lock`.
 - Use the `lab` profile.
-- Record the cold and warm build times in this section after the first run.
+- Measured on ubuntu-24.04 (2026-10-21): cold run 9m44s (build 4m37s, tests
+  2m49s, clippy 1m23s); warm run, with `--runtime=both`, 6m04s (build 2m35s,
+  tests 1m45s, clippy 29s, conformance 26s). workerd runs on the hosted
+  runner.
 - If warm runs exceed about 30 minutes, revisit: a larger runner, or splitting
   build and test.
 
