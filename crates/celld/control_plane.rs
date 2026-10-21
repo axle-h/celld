@@ -2068,7 +2068,7 @@ fn valid_lower_hex(value: &str, length: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn validate_managed_class_migrations(manifest: &Manifest) -> anyhow::Result<()> {
+pub(crate) fn validate_managed_class_migrations(manifest: &Manifest) -> anyhow::Result<()> {
     let do_classes = manifest
         .do_classes
         .iter()

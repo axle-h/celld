@@ -1406,7 +1406,11 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
     // Wrangler-shaped upload metadata, so a manifest written here and one
     // written by the control plane describe a deployment the same way.
     let mut bindings = Vec::new();
-    let mut do_classes = Vec::new();
+    // A migration declares a Durable Object class whether or not a binding
+    // names it: workerd gives every migrated class a namespace in
+    // `ctx.exports`, and Cloudflare OS reaches all of its classes that way.
+    // Reserved classes were refused above, so this adds only user classes.
+    let mut do_classes = sqlite_classes.clone();
     for binding in object
         .get("durable_objects")
         .and_then(|value| value.get("bindings"))
@@ -1422,7 +1426,9 @@ fn read_project(path: &Path, root: &Path, overrides: &VarOverrides) -> anyhow::R
             .get("class_name")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("durable object binding {name} has no `class_name`"))?;
-        do_classes.push(class_name.to_string());
+        if !do_classes.iter().any(|class| class == class_name) {
+            do_classes.push(class_name.to_string());
+        }
         bindings.push(json!({
             "type": "durable_object_namespace",
             "name": name,
@@ -2166,7 +2172,7 @@ fn read_containers(
         if !do_classes.iter().any(|class| class == class_name) {
             bail!(
                 "config `containers[{index}].class_name` {class_name:?} is not a Durable Object \
-                 class of this Worker; declare it in `durable_objects.bindings`"
+                 class of this Worker; add it to `migrations[].new_sqlite_classes`"
             );
         }
         if !sqlite_classes.iter().any(|class| class == class_name) {
@@ -3210,6 +3216,121 @@ mod tests {
                 { "tag": "v2", "new_sqlite_classes": ["Room"] },
             ] })))),
             "SQLite class \"Room\" is introduced by more than one migration"
+        );
+    }
+
+    /// `read_project` over `config` as a project's `wrangler.json`, with an
+    /// empty `index.js` as its `main`.
+    fn project(config: Value) -> anyhow::Result<Project> {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = object(config);
+        config.insert("name".into(), json!("app"));
+        config.insert("main".into(), json!("index.js"));
+        let path = root.path().join("wrangler.json");
+        std::fs::write(&path, Value::Object(config).to_string()).unwrap();
+        std::fs::write(root.path().join("index.js"), "").unwrap();
+        read_project(&path, root.path(), &VarOverrides::None)
+    }
+
+    fn do_bindings(project: &Project) -> Vec<&str> {
+        project.metadata["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|binding| binding["type"] == "durable_object_namespace")
+            .map(|binding| binding["name"].as_str().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_class_declared_only_in_migrations_is_a_durable_object_class() {
+        let migrated = project(json!({ "migrations": [
+            { "tag": "v1", "new_sqlite_classes": ["Room"] },
+            { "tag": "v2", "new_sqlite_classes": ["Lobby"] },
+        ] }))
+        .unwrap();
+        assert_eq!(migrated.do_classes, ["Room", "Lobby"]);
+        assert_eq!(migrated.sqlite_classes, ["Room", "Lobby"]);
+        assert!(do_bindings(&migrated).is_empty());
+    }
+
+    #[test]
+    fn a_class_both_bound_and_migrated_is_listed_once() {
+        let bound = project(json!({
+            "durable_objects": { "bindings": [
+                { "name": "ROOM", "class_name": "Room" },
+                { "name": "ROOM_AGAIN", "class_name": "Room" },
+                { "name": "LOBBY", "class_name": "Lobby" },
+            ] },
+            "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room", "Lobby"] }],
+        }))
+        .unwrap();
+        assert_eq!(bound.do_classes, ["Room", "Lobby"]);
+        assert_eq!(do_bindings(&bound), ["ROOM", "ROOM_AGAIN", "LOBBY"]);
+    }
+
+    #[test]
+    fn reserved_classes_are_unaffected_by_migrations() {
+        let with_d1 = project(json!({
+            "d1_databases": [{ "binding": "DB", "database_name": "main" }],
+            "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
+        }))
+        .unwrap();
+        assert_eq!(with_d1.do_classes, ["Room", D1_CLASS]);
+        assert_eq!(with_d1.sqlite_classes, ["Room", D1_CLASS]);
+        assert_eq!(
+            refusal(project(json!({ "migrations": [
+                { "tag": "v1", "new_sqlite_classes": [D1_CLASS] }
+            ] }))),
+            "`__D1Database` is a runtime class; remove it from `migrations`"
+        );
+    }
+
+    /// The control plane refuses a manifest with a SQLite class that is not
+    /// a Durable Object class, which a migration-only class used to be.
+    #[test]
+    fn a_migration_only_class_passes_the_control_plane_manifest_check() {
+        let migrated = project(json!({
+            "durable_objects": { "bindings": [{ "name": "ROOM", "class_name": "Room" }] },
+            "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room", "Lobby"] }],
+        }))
+        .unwrap();
+        let manifest = |do_classes: &[String]| -> Manifest {
+            serde_json::from_value(json!({
+                "version": "v",
+                "script_name": "app",
+                "main_module": "index.js",
+                "do_classes": do_classes,
+                "sqlite_classes": migrated.sqlite_classes,
+                "modules": [],
+                "raw_metadata": { "migrations": { "steps": [
+                    { "new_sqlite_classes": migrated.sqlite_classes }
+                ] } },
+            }))
+            .unwrap()
+        };
+        crate::control_plane::validate_managed_class_migrations(&manifest(&migrated.do_classes))
+            .unwrap();
+        assert_eq!(
+            refusal(crate::control_plane::validate_managed_class_migrations(
+                &manifest(&["Room".to_string()])
+            )),
+            "managed manifest SQLite class \"Lobby\" is not a Durable Object class"
+        );
+    }
+
+    #[test]
+    fn a_container_class_must_be_a_migrated_class() {
+        let containers = |class: &str| {
+            json!({
+                "containers": [{ "class_name": class, "image": "./Dockerfile" }],
+                "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sandbox"] }],
+            })
+        };
+        assert_eq!(
+            refusal(project(containers("Missing"))),
+            "config `containers[0].class_name` \"Missing\" is not a Durable Object class of \
+             this Worker; add it to `migrations[].new_sqlite_classes`"
         );
     }
 

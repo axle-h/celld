@@ -218,7 +218,14 @@ pub fn check_supported_events(object: &Map<String, Value>) -> anyhow::Result<()>
                 object
                     .get("durable_objects")
                     .and_then(|d| d.get("bindings")),
-            ),
+            ) || object
+                .get("migrations")
+                .and_then(Value::as_array)
+                .is_some_and(|migrations| {
+                    migrations
+                        .iter()
+                        .any(|migration| non_empty(migration.get("new_sqlite_classes")))
+                }),
             "Durable Objects",
         ),
         (non_empty(object.get("workflows")), "Workflows"),
@@ -674,4 +681,35 @@ fn run_esbuild(directory: &Path) -> anyhow::Result<()> {
 #[cfg(all(test, celld_internal_tests))]
 mod internal_tests {
     include!(env!("CELLD_INTERNAL_PYTHON_DEPLOY_TESTS"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(value: Value) -> Map<String, Value> {
+        let Value::Object(object) = value else {
+            panic!("test config must be an object");
+        };
+        object
+    }
+
+    /// A Python Worker exports no Durable Object class, so a migrated class
+    /// would fail every load.
+    #[test]
+    fn a_migrated_class_is_refused() {
+        let error = check_supported_events(&config(json!({ "migrations": [
+            { "tag": "v1", "new_sqlite_classes": ["Room"] }
+        ] })))
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "celld does not run Durable Objects in Python Workers yet; a Python Worker \
+             handles `fetch` only"
+        );
+        check_supported_events(&config(json!({ "migrations": [
+            { "tag": "v1", "new_sqlite_classes": [] }
+        ] })))
+        .unwrap();
+    }
 }

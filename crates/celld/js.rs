@@ -5947,7 +5947,8 @@ impl Worker {
                 let key = v8::String::new(scope, cn).unwrap();
                 let cls = ns
                     .get(scope, key.into())
-                    .ok_or_else(|| anyhow!("DO class {cn} not exported"))?;
+                    .filter(|value| value.is_function())
+                    .ok_or_else(|| unexported_class_error(cn))?;
                 register_class(scope, cn, cls)?;
             }
             inject_namespace_keys(scope, script_name, do_classes)?;
@@ -12608,7 +12609,7 @@ use bootstrap::{
     harness_env, inject_compatibility_flags, inject_containers, inject_crons, inject_kv_limits,
     inject_namespace_keys, inject_queue_config, inject_routing, inject_storage_compatibility,
     inject_workflows, install_harness, install_prelude, populate_cf_exports, register_class,
-    register_entrypoints, validate_workflow_classes, EmbeddedStartup,
+    register_entrypoints, unexported_class_error, validate_workflow_classes, EmbeddedStartup,
 };
 use modules::{
     compile_module, host_import_module_dynamically, install_lazy_globals, op_builtin_module,

@@ -1,0 +1,14 @@
+// `Bound` has a binding and a migration; `Migrated` and `Plain` have only a
+// migration, as every Cloudflare OS class does. workerd gives all three a
+// namespace in `ctx.exports`. `Free` has neither, and `Flow` is a workflow.
+{
+  "name": "migrated",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": { "bindings": [{ "name": "BOUND", "class_name": "Bound" }] },
+  "workflows": [{ "name": "flow", "binding": "FLOW", "class_name": "Flow" }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Bound"] },
+    { "tag": "v2", "new_sqlite_classes": ["Migrated", "Plain"] }
+  ]
+}

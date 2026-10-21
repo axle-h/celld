@@ -161,7 +161,7 @@ The trial harness lives in `starter:celld/` (see its `README.md`):
   - **W3**: passes `ADMINS` as a JSON string (trial failure 3). Removed by
     1.6.
   - **W4**: adds a `CELLD_DO_<Class>` binding per migrated class (trial
-    failure 4). Removed by 1.3.
+    failure 4). Removed by 1.3 (done).
   - **W5**: `--no-router` makes the workshop primary and serves the frontend
     (trial failure 5). Removed by 1.7.
 
@@ -345,8 +345,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 5b | 0.4 part 2: smoke, browser, checklist, baseline | done | starter `c17f99a` |
 | 6 | Phase 0 gate evidence | recorded; awaiting Alex | |
 | 7 | 1.1 `cloudflare:workers` exports, `restore` | done | `3ef548c` |
-| 8 | 1.2 `tracing` with OTLP export | done | see log |
-| 9+ | Phase 1 in plan order (1.3-1.19), then 0.5 after 1.7 | queued | |
+| 8 | 1.2 `tracing` with OTLP export | done | `6e8b960` |
+| 9 | 1.3 `ctx.exports` for migrated classes (W4 removed) | done | see log |
+| 10+ | Phase 1 in plan order (1.4-1.19), then 0.5 after 1.7 | queued | |
 
 ## Phase overview
 
@@ -920,6 +921,16 @@ migration-only classes:
   error.
 
 **Prior art.** Adopt the `deploy.rs:1299` hunk of IlyaGulya `30f2a48`.
+
+**As built.** The hunk was applied by hand. Also:
+- `ctx.exports` lists every exported class as workerd does: a namespace for
+  a class with storage, otherwise a loopback facet class (plain classes
+  too). Workflow and cron classes are excluded.
+- An unexported or non-class DO is a **load error** with workerd's text
+  (workerd only logs it and fails calls), under the loud-gap rule. It fails
+  the whole generation, co-hosted scripts included.
+- A Python Worker with `new_sqlite_classes` is refused at deploy.
+- With W4 gone, the starter's e2e matches the baseline.
 
 **Tests.**
 - Unit: a migration-only class lands in `do_classes`; no duplicates when it
@@ -1594,6 +1605,10 @@ callable. `ctx.exports.Cls({props})` returns a `cls` token.
 **Prior art.** IlyaGulya `30f2a48` makes every `ctx.exports` class a callable
 factory that also carries the namespace methods (`harness.js:5395` in the
 fork). Use it as a reference.
+
+Also pin `typeof ctx.exports.X === "function"` and the
+`[object LoopbackDurableObjectClass]` tag of loopback classes in
+`exports/migrated-namespace`; 1.3 left both out.
 
 ### 2.4 DO class names that collide across co-hosted scripts (N10)
 

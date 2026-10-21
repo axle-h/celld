@@ -4984,10 +4984,13 @@ const __ctxExports = () => __ctxExportsCache ??= (() => {
     out[name] = __entrypointStub(name, undefined);
   for (const name of Object.keys(__cell.objectEntrypoints))
     out[name] = __entrypointStub(name, undefined);
-  // Loader 0 is the script's own isolate: a facet of such a class runs
-  // beside the object that holds it.
-  for (const name of Object.keys(__cell.doExports)) {
-    if (__runtimeClasses.has(name)) continue;
+  // Every Durable Object class the module exports, whether it extends
+  // DurableObject or no runtime base at all: a namespace when it has
+  // storage, otherwise a class for facets. The load refuses a class with
+  // storage that the module does not export. Loader 0 is the script's own
+  // isolate: a facet of such a class runs beside the object that holds it.
+  for (const name of Object.keys(__cell.classes)) {
+    if (Object.hasOwn(out, name) || __isRuntimeClass(name)) continue;
     out[name] = Object.hasOwn(__cell.namespaceKeys, name)
       ? __cell.makeNamespace(name)
       : __makeLoopbackDurableObjectClass(name);
@@ -6009,6 +6012,13 @@ const __runtimeClass = (name, cls) => {
   __cell.doExports[name] = true;
   __runtimeClasses.add(name);
 };
+// Whether a class in `__cell.classes` is the runtime's rather than the
+// application's: one registered above, the cron class (`.cron`, which needs
+// no RPC grant), or a script's workflow class, which `alias_workflow_class`
+// registers as `__Workflow.<script>`. The same rule as
+// `deploy::is_reserved_class`, plus cron, which is not a manifest class.
+const __isRuntimeClass = (name) =>
+  __runtimeClasses.has(name) || name === ".cron" || name.startsWith("__Workflow.");
 // ---- KV ------------------------------------------------------------------
 // The namespace cell and the binding's client are `services/kv.js`, which the
 // workerd engine runs too; this is the host they run against here.

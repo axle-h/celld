@@ -354,6 +354,18 @@ pub(super) fn register_class(
     Ok(())
 }
 
+/// The load error for a Durable Object class, bound or migrated, that the
+/// main module does not export as a class. workerd only warns, in these
+/// words, and fails each call to the class. celld fails the load instead, so
+/// a node refuses to adopt the deployment and keeps serving the one before.
+pub(super) fn unexported_class_error(class: &str) -> anyhow::Error {
+    anyhow!(
+        "A DurableObjectNamespace in the config referenced the class \"{class}\", but no \
+         such Durable Object class is exported from the worker. Please make sure the class \
+         name matches, it is exported, and the class extends 'DurableObject'."
+    )
+}
+
 /// Populate `cloudflare:workers` `exports` with the worker module's own exports:
 /// a Durable Object class is exposed as its namespace (idFromName/get/RPC), any
 /// other export by value. `default` is omitted (it is the fetch entrypoint, not
@@ -1100,3 +1112,53 @@ pub(super) fn end_event_context<'s>(
 }
 
 // ---- module compilation + request/response marshalling ----
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Loads `src` as a deployment's main module with `do_classes`, on a
+    /// thread started after V8 is, as `runtime::init_v8` requires.
+    fn load(src: &str, do_classes: &[&str]) -> Result<(), String> {
+        Engine::init();
+        let config = Arc::new(WorkerConfig::new(WorkerConfigOptions {
+            src: src.to_string(),
+            script_name: "test".to_string(),
+            do_classes: do_classes.iter().map(|class| class.to_string()).collect(),
+            bindings: Vec::new(),
+            r2_bindings: Vec::new(),
+            d1_bindings: Vec::new(),
+            kv_bindings: Vec::new(),
+            queue_bindings: Vec::new(),
+            queue_consumers: Vec::new(),
+            workflow_bindings: Vec::new(),
+            vars: Vec::new(),
+            node: String::new(),
+            modules: Vec::new(),
+            compat: Compat::default(),
+        }));
+        std::thread::spawn(move || {
+            Worker::load_config(config)
+                .map(drop)
+                .map_err(|error| error.to_string())
+        })
+        .join()
+        .expect("load thread panicked")
+    }
+
+    const HANDLER: &str = "export default { fetch() { return new Response(); } };\n";
+
+    #[test]
+    fn a_durable_object_class_the_module_does_not_export_fails_the_load() {
+        let refused = "A DurableObjectNamespace in the config referenced the class \"Room\", \
+                       but no such Durable Object class is exported from the worker. Please \
+                       make sure the class name matches, it is exported, and the class extends \
+                       'DurableObject'."
+            .to_string();
+        assert_eq!(load(HANDLER, &["Room"]), Err(refused.clone()));
+        let not_a_class = format!("{HANDLER}export const Room = {{ fetch() {{}} }};\n");
+        assert_eq!(load(&not_a_class, &["Room"]), Err(refused));
+        let exported = format!("{HANDLER}export class Room {{}}\n");
+        assert_eq!(load(&exported, &["Room"]), Ok(()));
+    }
+}

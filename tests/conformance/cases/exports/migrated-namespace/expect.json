@@ -1,0 +1,102 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "keys": [
+          "Bound",
+          "Free",
+          "Migrated",
+          "Plain",
+          "default"
+        ],
+        "Bound": {
+          "get": "function",
+          "getByName": "function",
+          "idFromName": "function",
+          "idFromString": "function",
+          "newUniqueId": "function"
+        },
+        "Migrated": {
+          "get": "function",
+          "getByName": "function",
+          "idFromName": "function",
+          "idFromString": "function",
+          "newUniqueId": "function"
+        },
+        "Plain": {
+          "get": "function",
+          "getByName": "function",
+          "idFromName": "function",
+          "idFromString": "function",
+          "newUniqueId": "function"
+        },
+        "imported": {
+          "get": "function",
+          "getByName": "function",
+          "idFromName": "function",
+          "idFromString": "function",
+          "newUniqueId": "function"
+        },
+        "Free": {
+          "type": "function",
+          "getByName": "undefined"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "boundMatchesBinding": true,
+        "bindingMatchesExport": true,
+        "migratedByName": true,
+        "importMatchesCtx": true,
+        "classesDiffer": true,
+        "roundTrips": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "total": 2
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "total": 5
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "status": 200,
+        "body": "plain"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "body": "free"
+      }
+    },
+    {
+      "restart": true
+    },
+    {
+      "status": 200,
+      "body": {
+        "total": 5
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "viaExports": "bound",
+        "viaBinding": "bound"
+      }
+    }
+  ]
+}

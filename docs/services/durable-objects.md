@@ -19,6 +19,10 @@ separate counter.
 - `env.COUNTER.idFromName(name)` returns an id, and `env.COUNTER.get(id)`
   returns a stub. `getByName(name)` performs both steps.
 - `newUniqueId()` and `idFromString()` create and parse a random id.
+- `ctx.exports.Counter`, and `exports.Counter` from `cloudflare:workers`, is
+  the namespace of each class that a `durable_objects` binding or a
+  `new_sqlite_classes` migration declares, so a class needs no binding to be
+  reached. It has the methods of `env.COUNTER` and reaches the same objects.
 - `ctx.storage.get()`, `put()`, `delete()`, `list()`, and `deleteAll()` are
   the key-value methods.
 - `ctx.storage.sql.exec()` runs SQL on the database of the object.
@@ -109,6 +113,12 @@ stopped.
   changes every id that `idFromName()` derives.
 - A `migrations` entry accepts `tag` and `new_sqlite_classes` only. A class
   rename, a class delete, and a class transfer stop the deployment.
+- The main module must export each class that a binding or a migration
+  declares, as a class. Otherwise the Worker does not load, with workerd's
+  message for this case, and neither does any script deployed with it: the
+  node does not start that deployment, and a running node keeps serving the
+  one before. workerd only logs that message and fails each call to the
+  class.
 - A Durable Object event keeps pending I/O active after the handler returns, so
   a timer or a subrequest does not require `ctx.waitUntil()`.
 - The imported `waitUntil()` and `ctx.waitUntil()` can add work while previously

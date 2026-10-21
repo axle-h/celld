@@ -1,0 +1,14 @@
+{
+  "workers": ["migrated"],
+  "steps": [
+    {"path": "/shape"},
+    {"path": "/ids"},
+    {"path": "/add?n=2"},
+    {"path": "/add?n=3"},
+    {"path": "/plain"},
+    {"path": "/free"},
+    {"restart": true},
+    {"path": "/total"},
+    {"path": "/bound"}
+  ]
+}
