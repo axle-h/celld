@@ -113,7 +113,7 @@ IDs (N1-N12) are referenced there.
 | N5 | **Pinned dispatch to a retiring isolate.** Calls into a *retiring* session isolate must still be accepted, or every browser subscriber drops about 30 s after the pool retires the isolate. Check `is_live()` **after** `affiliate()`, or the call can enter a freed isolate and panic. v0.6.2 already has `runtime::drive(slot, …)` (`runtime.rs:2161`) and `Slot::affiliate` (`pool.rs:307`), so 3.0 is smaller than estimated. | patcon `d8d7c6f`, `90a37b3` / royalcala `713f1a5` | 3.0 |
 | N6 | **DO stub methods must return an RpcPromise**, not a plain Promise. `GatekeeperLoopback` returns a get-only Proxy over an un-awaited `startGatekeeperSession()` (`harness.js:5275`). | patcon `333a2c7` / royalcala `38082b4` | 1.12 |
 | N7 | **A missing `WORKERS_AI` crashes the agent's `webFetch`** of HTML (`toMarkdown`) on the chat path, not only web search. patcon patched the app (`web-fetch.ts`, `ead1d36`); we must not rely on that. | patcon | 9.2, brought forward to Phase 4 |
-| N8 | **Nested transactions on the root storage object.** `ctx.storage.transactionSync` / `transaction()` called on the root object inside an open transaction issues `BEGIN IMMEDIATE`, which SQLite rejects (`harness.js:1717-1736`, `storage.rs:3265`). Cloudflare OS has about 55 `storage.transaction*` call sites. | mohamedalichelbi `7221aa7` | 1.14 |
+| N8 | **Nested transactions on the root storage object.** A real bug in v0.3.0 that **upstream already fixed in v0.6.0**: root `transactionSync`/`transaction()` route into the open view (`harness.js:1759-1780`, `1897-1911`; denoland/celld#226). Cloudflare OS has about 55 `storage.transaction*` call sites, so pin it with a conformance case. | mohamedalichelbi `7221aa7` (superseded) | 1.14 (test only) |
 | N9 | **`nodejs_compat_populate_process_env`** (default from 2025-04-01) is accepted without effect. Under `nodejs_compat`, `process.env` should hold the string vars. Also, `node:process` is not mapped to the global `process`. | mertdogar `6d8e461`, `cde80c7` | 1.15 |
 | N10 | **DO class names colliding across co-hosted scripts.** v0.6.2 refuses this at generation start (`generation.rs:587-596`). About 14 OAuth gatekeepers export `UserAccount`, and mcp/mcp-portal both export `McpAccount`, so Cloudflare OS hits this as soon as **two OAuth gatekeepers** are installed. IlyaGulya keyed only non-primary scripts' classes as `.svc.<hash>`, which changes cell names when the primary changes (for example, `--no-router`). That loses data. | IlyaGulya `30f2a48` | 2.4 (new) |
 | N11 | **Remote route generation retry.** `RemoteRouteRetry::failed` should set `blocked` for `NeverConnected` + redispatch (`main.rs:489-494`). This is an independent fleet fix. | IlyaGulya `6e6af49` | Phase 8 (any time) |
@@ -143,7 +143,7 @@ bring it up to the adoption policy before it lands. "Rework" means cherry-pick a
 | IlyaGulya `d6e0988` (`celld dev --service`) | Reference for 0.1 | Our `-c a -c b` has the same semantics (services first, primary last). |
 | IlyaGulya `fleet-test.sh`, `ha-test.sh`, `soak-test.sh` + `soak-driver.py`, `s3-fault-proxy.py` (`fe8938d`…`b40b607`) | **Import** under `tests/fleet/` | Adapt for Azurite, and add a `/call` capability load (the soak never exercises capabilities). The bars need a `/state` capability counter. |
 | IlyaGulya CI commits (`bdf5eac`…`5191eca`) | Reference for 0.6 | A moto S3 stand, port offsets |
-| cnicolov `tests/rpc_capabilities.rs`, `examples/rpc-capabilities/` | Seed the Phase 3 `rpc/` matrix | A full-binary test pattern |
+| cnicolov `crates/celld/tests/rpc_capabilities.rs`, `examples/rpc-capabilities/` (in `fcb1977`) | Seed the Phase 3 `rpc/` matrix | A full-binary test pattern |
 | patcon `scripts/celld/run-local.ts`, `make-config.ts` | Reference for 0.4 | A single-command workshop-only loop on `celld dev` (no podman), and the asset-copy step. Gives `e2e.sh up --dev-store --workshop-only`. |
 | patcon's verified-journey list | Add to smoke and the checklist | Two-tab live sync including after isolate retirement, `env.GADGET.getDocument()` from code mode, streaming reply growth, creating a workspace from Home with the first message |
 | mohamedalichelbi recipe (`portability/celld-mvp`) | Reference for 0.4 | A cheap S0 smoke (router → binding → backend JSON; router `/` assets) and a `celld deploy --dry-run` check step |
@@ -157,14 +157,14 @@ bring it up to the adoption policy before it lands. "Rework" means cherry-pick a
 | IlyaGulya `2172ce1` | **Rework** | 1.4 | Applies cleanly. Add object/size validation, default-entrypoint and fetch props, and unknown-key and DO `script_name` refusals. |
 | IlyaGulya `8376ebc` | Reference | 1.7 | `WorkerWebSocket::repark` is our `park_worker_handoff`. It keeps the id on the Response, not the socket (lost on rebuild), and has no adopt, sweep, loader or broker paths, or refusals. |
 | mohamedalichelbi `47b889d` | Reference | 1.7 | Keep one idea: register the target's socket pump as `waitUntil` of the target event. |
-| IlyaGulya `d6e0988` | **Rework** pieces | 1.6 | JSON vars (add the 5 KiB cap and feature flag), `build` (add `--no-build`), `observability`. Drop its `rules` part (superseded). |
+| IlyaGulya `d6e0988` | **Rework** pieces | 1.6 | JSON vars (add the 5 KiB cap; no feature flag, as deployments are fresh), `build` (add `--no-build`), `observability`. Drop its `rules` part (superseded). |
 | mertdogar `da1ef43` | **Rework** | 1.6 | `IGNORED_PLATFORM_KEYS` with a note. Adjust: keep refusing `routes`/`route`; `workers_dev`/`preview_urls` `false` silent, `true` warned. Its extras (`upload_source_maps`, `placement`, `dev`, `compatibility_domains`, `keep_vars`, `minify`) are fine to accept. |
 | royalcala `22b3352` / cnicolov `tracing.js` | Rework (seed) | 1.2 | Both lack `ctx.tracing` on DO state, active-span tracking through ALS, and ending a span when `enterSpan`'s promise settles. |
-| royalcala `ef5e87c` (byte-stream half only) | **Rework** | 1.8 | `CelldHttpBodyStream` and `Blob.stream()` as native `type:"bytes"` streams. A smaller route than the `_chunked` helper; still covers compression, KV, tee and RPC-revived streams. Gate on the `streams/byob-*` cases and a fetch-body throughput check. |
+| royalcala `ef5e87c` (byte-stream half) | Reference | 1.8 | Native `type:"bytes"` for `CelldHttpBodyStream`/`Blob` is the chosen design, but the commit depends on `crates/celld/capability.rs` from the forbidden routing. **It can't be cherry-picked; write the change fresh.** |
 | royalcala `60209d3` | Skip | 1.8 | Subsumed by the line above |
 | royalcala `ffd1011` or `da57cca` (from patcon) | **Adopt one** after a workerd differential test | 1.11 (N2) | Pick the resolution rule the differential test supports |
 | royalcala `38082b4` (from patcon) | **Adopt** | 1.12 (N6) | |
-| mohamedalichelbi `7221aa7` | **Port** (one `harness.js` conflict) | 1.14 (N8) | Check the depth isn't shared across two events' interleaved async `transaction()` calls. |
+| mohamedalichelbi `7221aa7` | Skip | 1.14 (N8) | Superseded by upstream's v0.6.0 fix. 1.14 only adds a pinning test. |
 | mertdogar `6d8e461` | **Rework** | 1.15 (N9) | Build the literal with JSON, not Rust `{:?}`. Decide how JSON vars appear in `process.env` with a differential test. |
 | mertdogar `cde80c7` | **Adopt** | 1.15 | Drop the FORK.md hunk. |
 | mertdogar `79fa97e` (`alias`), `df3c705` (`celld restore` offline reader) | Optional | after Phase 1 | `celld restore` is handy for inspecting trial DOs. |
@@ -185,13 +185,13 @@ bring it up to the adoption policy before it lands. "Rework" means cherry-pick a
 | Commit | Action | Notes |
 | --- | --- | --- |
 | royalcala `674a9c4` | Reference (lift pieces) | Lift `WorkerJob::StubRpc`/`begin_stub_rpc` and the reserved `__celld$` key refusal (`harness.js:4436`) into 3.0. Its refcounts (no importer key), regex-based breakage and retiring refusal must not be kept. |
-| royalcala `713f1a5` (patcon `90a37b3` + `d8d7c6f`) | **Adopt** | 3.0 (N5): affiliate, then `is_live()`; retiring isolates allowed |
+| royalcala `713f1a5` (patcon `90a37b3` + `d8d7c6f`) | Reference | 3.0 (N5): affiliate, then `is_live()`; retiring isolates allowed. It patches `op_stub_rpc_call_heap`, which exists only in the forbidden routing, and adds `Slot::is_live`. Implement both ideas ourselves. |
 | royalcala `64f8785`, `fd49be1`, `c6123d0`; patcon `8a1acd2`, `c6df64b`; IlyaGulya `8d6b0a0`; mohamedalichelbi `2498103` | Reference only | Plumbing shape. The dedicated `CellJob::StubRpc` (`64f8785`) is the right pattern; method-name multiplexing (`c6123d0`) is not. |
 | cnicolov `fcb1977` | Reference (reuse code) | Transactional lift (rolls back transfers, routes and locks on failure), revive-once for aliased markers, disposer snapshot, `CallOrder` + egress gate wiring, `runtime::drive(slot, …)` with `Slot::affiliate()` |
 | royalcala `b02d30e` (patcon `1f7076f`) | Reference | N1: apply workerd's `dup()` rule properly (params only, validate the result, workerd's errors) |
 | royalcala `280897e` (patcon `fdc49fb`) | **Adopt** once capabilities are sound | 3.1 rows E/F (N3) |
 | royalcala `874a2f2` (patcon `a34d8b5`) | Adopt local `dup()` only | Reject the native `onRpcBroken` (D3) |
-| IlyaGulya `4594b6c` | **Adopt** (applies cleanly) | 3.2: RpcPromise `Symbol.dispose`, refused after dispose |
+| IlyaGulya `4594b6c` | **Adopt** (applies cleanly) | 1.12: RpcPromise `Symbol.dispose`, refused after dispose |
 | IlyaGulya `779b7c9` | Reference | Importer request-context adoption with implicit release, and a `/state` live-capability counter. Adopt both. |
 | royalcala `2bd84cd`: `__facetStubs`, Proxy-RpcTarget wildcard resolution | Reference | 3.1 callable proxies, after differential tests |
 

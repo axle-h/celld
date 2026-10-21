@@ -123,8 +123,22 @@ In a single-node fleet no capability crosses a node. Cross-node support
 
 The trial harness lives in `starter:celld/` (see its `README.md`):
 
-- `generate.ts`: writes `celld.<worker>.jsonc` per Worker. Each workaround it
-  applies is commented, and later phases remove them.
+- `generate.ts`: writes `celld.<worker>.jsonc` per Worker. It applies these
+  workarounds, which this plan names **W1-W5**; later items remove them:
+  - **W1**: drops every top-level key celld refuses. That covers
+    `observability`, `build`, `ai`, `browser`, `workers_dev` and
+    `preview_urls` (trial failure 1). Removed by 1.6, except `ai`/`browser`,
+    which stay refused (D9) and are mapped to the AI shim instead.
+  - **W2**: strips `rules[].fallthrough` (trial failure 2). Removed by 1.6.
+  - **W3**: passes `ADMINS` as a JSON string (trial failure 3). Removed by
+    1.6.
+  - **W4**: adds a `CELLD_DO_<Class>` binding per migrated class (trial
+    failure 4). Removed by 1.3.
+  - **W5**: `--no-router` makes the workshop primary and serves the frontend
+    (trial failure 5). Removed by 1.7.
+
+  It also passes service-binding `props` through, but celld drops them
+  without an error until 1.4.
 - `build.sh`: builds the Workers, including the capnweb-validate step.
 - `deploy.sh [--no-router]`: deploys all seven Workers and reloads the node.
 - `env.sh`: bucket settings (Azurite), the `CELLD` binary path, and the trial
@@ -144,7 +158,7 @@ MinIO images can no longer be pulled anonymously, so use Azurite.
 ## Decisions
 
 Alex settled all of these on 2026-10-21. The **Decision** column is binding.
-Phases refer to them as D1-D15. Two went against the original
+Phases refer to them as D1-D16. Two went against the original
 recommendation: D12 and D13. D6 and D15 were later simplified: deployments
 are always fresh, so there is nothing to keep compatible.
 
@@ -160,11 +174,80 @@ are always fresh, so there is nothing to keep compatible.
 | D8 | Where a facet whose class comes from another script runs. | In the target script's isolate, on the root's owner node, so it gets its own `env`, `ctx.exports` and flags. |
 | D9 | `ai` and `browser` bindings. | Keep them refused in celld. The starter maps `WORKERS_AI`/`AI` to a service binding on an operator shim Worker (Phase 9). A first-class celld binding is deferred. |
 | D10 | Should `celld deploy` run Wrangler's `build.command`? | Yes, with `--no-build` to skip it. That removes `starter:celld/build.sh`'s capnweb step. |
-| D11 | `global_fetch_strictly_public` escape hatch, and always blocking the node's own listeners. | Add `CELLD_FETCH_PRIVATE_ALLOW` with host:port entries. Always block `--internal-listen` and the advertise addresses, even without the flag. |
+| D11 | Outbound egress (1.9): escape hatch, and always blocking the node's own listeners. | Add `CELLD_FETCH_PRIVATE_ALLOW` with host:port entries. Always block `--internal-listen` and the advertise addresses, even without the flag. |
 | D12 | `accept()` on a WebSocket that a stateless Worker returned through a service binding. | **Implement the host-side frame bridge in 1.7**, so passthrough and `accept()` both work (about 2 more days). The recommendation had been to refuse it for now. |
 | D13 | `tracing`: a correct no-op first (`isTraced=false`), or OTLP export straight away? | **OTLP export in Phase 1 (1.2).** With `CELLD_OTEL` on, spans are traced and exported; with it off, `isTraced=false`. The recommendation had been a no-op first. |
 | D14 | Dynamic Worker tails: legacy `tail()` for RPC and facet invocations, or `tailStream`? | Legacy only. Cloudflare OS doesn't use `tailStream` yet; refuse `streamingTails`. |
 | D15 | How cell scopes become script-qualified (2.4). | **Always script-qualified, one code path.** Every deployment names cells by (script, class). There is no fleet setting, legacy naming or migration, because there are only fresh deployments. |
+| D16 | Is the egress policy (1.9) on by default? | **Open.** See 1.9. |
+
+## Review and commits
+
+Decided by Alex on 2026-10-21.
+
+- **Direct commits to `main`** in both forks. There are no pull requests.
+  Commit messages follow the repo's style and end with the attribution trailer
+  in use.
+- **Before each commit, an independent agent review.** That is a fresh agent
+  with no implementation context, or `/code-review`. The reviewer reads:
+  - the diff
+  - the item's section in this plan
+  - the adoption policy, when fork code is involved
+
+  Findings are fixed, or answered in the commit message, before the commit
+  lands. The review checks:
+  - correctness
+  - the security checklist
+  - tests in all three tiers as the item specifies
+  - docs
+  - no scope creep
+- **Alex reviews at each phase gate.** The gate's evidence goes in this plan
+  under the phase heading:
+  - the conformance results
+  - the smoke PASS/FAIL table against the baseline
+  - the browser run
+  - benchmark numbers, where relevant
+- **Phase 3 security review.** Before Phase 3 code lands, a dedicated
+  security-review agent reviews the threat model (`docs/security.md`
+  additions); then Alex approves it. Each Phase 3 milestone gets the same
+  security review of its code, on top of the normal per-item review.
+- **CI** (0.6) runs on every push to `main`. A red build is fixed before the
+  next item starts.
+
+## Environment setup
+
+What a fresh machine needs, as on the machine where this plan was written
+(Fedora, x86-64):
+
+| Tool | Version seen | Notes |
+| --- | --- | --- |
+| Rust | 1.99 (no `rust-toolchain` file) | `cargo build --profile lab -p celld` for test loops; `--release` (fat LTO) only for releases. Record the cold and warm `lab` build times here after the first build. |
+| Node.js | 26.3 (via nvm) | Runs the starter's TypeScript directly (`node celld/generate.ts`). |
+| pnpm | 11.17 (the starter pins 11.17) | `pnpm install` in the starter also installs the `cloudflare-os/` submodule workspace through a postinstall hook. |
+| esbuild | 0.28.x | `celld deploy` and `celld dev` need it. It isn't on `PATH`; `starter:celld/env.sh` sets `CELLD_ESBUILD` from the starter's `node_modules`. Do the same in `tests/conformance`. |
+| podman | 5.8 | Runs Azurite: `mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --loose`. MinIO images can't be pulled anonymously any more. |
+| Python 3 | 3.x | `starter:celld/azurite-container.py <name>` creates a blob container (a SharedKey-signed PUT). |
+| `gh` | any | Reading workerd's source for differential details: `gh api repos/cloudflare/workerd/contents/<path>?ref=<tag>`. |
+| Playwright Chromium | cached under `~/.cache/ms-playwright/` | For `e2e/browser.ts`. Check which build `playwright-core` 1.64 expects (`npx playwright install --dry-run chromium`), and install it if it's missing. |
+| sqlite3 CLI | any | The Dockerfile's test stage expects it. |
+
+**Starter setup.**
+
+```sh
+cd ~/projects/cloudflare-os-starter
+git submodule update --init
+pnpm install
+celld/build.sh
+```
+
+**Fork branches.** Fetch them as described in the prior-art page. The app-side
+forks are re-cloned when needed:
+- `https://github.com/patcon/cloudflare-os-celld`, branch `celld-test`, for
+  `scripts/celld/run-local.ts`, `make-config.ts` and `TODO.md`
+- `https://github.com/mohamedalichelbi/cloudflare-os`, branch
+  `portability/celld-mvp`
+
+Earlier scratch copies under `/tmp` are not kept.
 
 ## Adoption policy for code from other forks
 
@@ -256,20 +339,37 @@ phase exists.
 a single project, so no test can co-host several scripts.
 
 **Design.**
-- Accept `celld dev -c a.jsonc -c b.jsonc …`, matching `wrangler dev -c`. The
-  **first config is the primary**, as in Wrangler, so a fixture runs unchanged
-  on both runtimes.
-- Deploy every config into the dev store; the primary is deployed last
-  internally.
-- Add `--port 0` and a machine-parsable stdout line with the public and
-  internal origins.
-- The watcher watches all project directories.
+- **Configs.** Accept `celld dev -c a.jsonc -c b.jsonc …`, matching
+  `wrangler dev -c`. A positional `PROJECT_DIR_OR_CONFIG` stays as the
+  one-config form.
+- **Primary.** The **first config is the primary**, as in Wrangler, so a
+  fixture runs unchanged on both runtimes. Every config is deployed into the
+  dev store, and the primary is deployed last internally.
+- **State.** Lives under the **primary's** directory (`<primary>/.celld/dev`),
+  as today. `--clean` deletes only that.
+- **Dotenv files.** Each config reads its own `.dev.vars` (or `.env`,
+  `.env.local`) from its own directory, as `wrangler dev -c` does. Dotenv
+  overrides never cross between scripts.
+- **Port.** `--port 0` is allowed. Today `dev.rs` refuses anything outside
+  1-65535.
+- **Ready line.** When the node is ready, print one JSON line to stdout:
+  `{"event":"ready","public":"http://127.0.0.1:P","internal":"http://127.0.0.1:Q"}`.
+  It is printed again after every successful rebuild. The human-readable
+  console output stays on stderr, as `docs/README.md` requires: data to
+  stdout, messages to stderr.
+- **Watching.** The watcher watches every config's project directory, with
+  the same ignore rules. `.wrangler` is already ignored, so `build.command`
+  output (1.6) does not loop.
 
 **Tests.**
-- Unit: argument parsing, and the deploy order (primary last).
+- Unit:
+  - argument parsing: one config, several, mixing positional and `-c`, and
+    duplicates refused
+  - deploy order: primary last
+  - per-config dotenv isolation
+  - the ready-line format
 - Integration: the runner (0.2) uses it for every case.
-- E2E/manual: the `wsfront`/`wsback` repro from the trial starts with one
-  command.
+- E2E/manual: the two-script WebSocket repro in 1.7 starts with one command.
 
 ### 0.2 Conformance corpus with workerd as reference: `tests/conformance/`
 
@@ -277,58 +377,119 @@ a single project, so no test can co-host several scripts.
 
 ```
 tests/conformance/
-  package.json        # pins wrangler 4.147.0 (createTestHarness), capnweb
-  run.mjs             # --runtime=celld|workerd|both  --update  --filter <glob>  --nodes N
+  package.json + pnpm-lock.yaml   # pnpm (as in the starter), lockfile committed;
+                                  # pins wrangler 4.147.0 (createTestHarness) and capnweb 0.12
+  run.mjs        # --runtime=celld|workerd|both  --update  --filter <glob>
+  lib/           # runner helpers, the OTLP receiver (1.2), the fleet bring-up
   cases/<area>/<case>/
-    workers/<name>/wrangler.jsonc + index.js   # first listed = primary
-    case.json         # {"workers":[...], "steps":[{"path":"/run"} | {"ws": "/x", "send": [...], "expect": [...]}], "normalize":[...]}
-    expect.json       # recorded from workerd with --update, committed
+    workers/<name>/wrangler.jsonc + index.js   # order in case.json: first = primary
+    case.json
+    expect.json
 ```
 
-**How a case works.**
-- The primary exposes `/run`, runs the scenario inside the runtime, and
-  returns a JSON transcript of `[step, value]` pairs.
-- Errors are recorded as `{name, message}`.
-- `normalize` lists regexes for messages that legitimately differ. Each entry
-  carries a comment, and an entry that hides a semantic difference is a bug.
+**`case.json`.**
+
+```json
+{
+  "kind": "differential",
+  "reason": "only for kind=celld-only: why workerd can't run this case",
+  "workers": ["front", "back"],
+  "env": {"CELLD_FETCH_PRIVATE_ALLOW": "…"},
+  "nodes": 1,
+  "xfail": "1.7",
+  "steps": [
+    {"path": "/run"},
+    {"ws": "/x", "send": ["a"], "expect": ["echo:a"], "close": 1000},
+    {"restart": true},
+    {"otlp": {"expectSpans": ["chat", "execute_tool"]}}
+  ],
+  "normalize": [{"pattern": "…", "replace": "…", "why": "…"}]
+}
+```
+
+`env`, `nodes`, `xfail` and `normalize` are optional. `nodes` is 1 by
+default.
+
+**Case kinds.**
+- **`differential`** (the default). `expect.json` is **recorded from workerd**
+  with `--update`; the celld run must match it. This is the only kind
+  allowed when workerd can run the scenario.
+- **`celld-only`.** For behaviour workerd can't exercise locally:
+  - OTLP export (1.2)
+  - the SSRF allowlist (1.9)
+  - `deploy --dry-run` refusals (1.6)
+  - multi-node (`nodes > 1`)
+  - celld limits
+
+  `expect.json` is written by hand and reviewed. `reason` is required.
+  `--update` never touches these cases.
+
+**Steps.**
+- **`path`**: an HTTP request to the primary; the response JSON is the
+  transcript.
+- **`ws`**: open a WebSocket, send frames, compare received frames and the
+  close code.
+- **`restart`**: stop the runtime, keep its state, start it again, then
+  continue.
+  - celld: `POST /shutdown`, then the same `celld dev` command without
+    `--clean`.
+  - workerd: re-create the harness with the same persistence directory. If
+    `createTestHarness` can't persist state across instances (check this
+    first), the case becomes `celld-only`, with that as its `reason`.
+- **`otlp`**: assert on spans captured by the runner's in-process OTLP/HTTP
+  receiver (`lib/otlp.mjs`). The runner sets `CELLD_OTEL` to it. No collector
+  container is needed.
+
+**Multi-node (`nodes > 1`, always `celld-only`).**
+- The runner starts Azurite in podman and creates a container through
+  `starter:celld/azurite-container.py`, or a copy under `lib/`.
+- It runs `celld deploy` for each worker (primary last), then starts N
+  `celld` nodes on one bucket with distinct `--listen`, `--internal-listen`
+  and `--advertise` addresses.
+- Steps go to node 1. A case can direct a step to `"node": 2`.
+
+**Expected failures.**
+- `"xfail": "<plan item>"` marks a case celld can't pass yet. The runner
+  reports `XFAIL (until 1.7)`.
+- A case that passes while marked xfail fails the run (**XPASS**), so the
+  marker is removed in the same change that fixes it.
 
 **How the runner works.**
 - **celld:** runs `target/<profile>/celld dev --no-watch --clean --port 0 -c …`
-  in a temp copy of the case, waits for the origin line, runs the steps,
-  diffs against `expect.json`, then `POST /shutdown` on the internal listener.
-- **workerd:** runs the case through wrangler's `createTestHarness`, which is
-  the API `cos:integration-tests/src/harness.ts` uses.
-- `--update` writes expectations **from workerd only**.
-- `--runtime=both` diffs the two live.
+  in a temp copy of the case. It waits for the ready line (0.1), runs the
+  steps, diffs against `expect.json`, then sends `POST /shutdown` to the
+  internal listener.
+- **workerd:** runs the case through wrangler's `createTestHarness`, the API
+  `cos:integration-tests/src/harness.ts` uses.
+- **`--update`** writes `expect.json` **from workerd only**, and only for
+  `differential` cases.
+- **`--runtime=both`** diffs the two runtimes live.
 
-**workerd binary.** Pin wrangler, and so workerd, in `package.json` and record
-the version in each `expect.json`. A copy already exists at
-`starter:node_modules/.pnpm/@cloudflare+workerd-linux-64@1.20261019.1/…/bin/workerd`.
-
-**Test-loop builds.** Use `cargo build --profile lab` (thin LTO, incremental).
-Release builds use fat LTO and are too slow for test loops.
+**workerd version.** Pin wrangler, and so workerd, in `package.json`, and
+record the resolved workerd version in each `expect.json` header.
+- The starter currently has two: 1.20261001.1 and 1.20261019.1.
+- Record which one wrangler 4.147.0 resolves to (`pnpm why workerd`).
 
 **Seed cases**, which pin current behaviour:
 - `examples/rpc` (same-isolate RPC)
 - `examples/facets`
 - `examples/dynamic-worker-tails`
 - `examples/counter`
+- `storage/nested-root-transactions` (see 1.14). Already fixed upstream, so
+  it is a first green case on both runtimes.
 
 **Prior art.** IlyaGulya's `examples/cloudflare-os-compat/` is a 43-case
 `curl`-and-substring suite of Cloudflare OS primitives. Run
 `git show refs/forks/IlyaGulya/agentos/cloudflare-os-phase0-runtime:examples/cloudflare-os-compat/test.sh`
 to see it.
+- **Not a 0.2 task.** Each later item converts the cases it names, into the
+  area it names. Cases are recorded from workerd, never by matching
+  substrings.
+- **Restart cases** use the `restart` step.
+- **Cases celld can't pass yet** carry `xfail`.
 
-- **Conversion:** turn every case into a conformance case with expectations
-  recorded from workerd, under the area each later item names.
-- **Restarts:** cases that restart the process need a `{"restart": true}`
-  runner step with persistent state.
-- **Mark the target:** cases that celld can't pass yet are marked with the
-  plan item that will fix them, so the runner can report "expected failure
-  until 2.4", for example.
-
-cnicolov's `tests/rpc_capabilities.rs` shows a full-binary test pattern. It is
-the first in-repo test of that kind.
+cnicolov's `crates/celld/tests/rpc_capabilities.rs` (in commit `fcb1977`)
+shows a full-binary Rust test pattern.
 
 ### 0.3 Rust unit-test convention
 
@@ -351,7 +512,8 @@ There is one entry point:
      on today's single-config `celld dev`, with no podman and the frontend
      assets copied in. It is modelled on patcon's
      `scripts/celld/run-local.ts`, and is useful before 0.1 lands.
-   - Starts Azurite (`celld-e2e-azurite`).
+   - Starts Azurite (`celld-e2e-azurite`). `celld/azurite-container.py <name>`
+     takes the container name as its argument.
    - Waits for port 10000 and creates container `celld-e2e-$RUN_ID` (fresh per
      `--fresh`).
    - Starts the mock LLM.
@@ -401,7 +563,7 @@ There is one entry point:
      | S4 | `subscribeConnectedAccounts(sub)` | `ready()` called within 10 s | 6 |
      | S5 | `provisionAmbientAccount("context")` | account arrives on S4's subscriber | 7 |
      | S6 | `api.newGadget().newChat("hello", "scripted")`, pipelined | chat id; model called; chat goes idle | 6 |
-     | S7 | `newGadgetFromBlueprint(featuredId, {})`, `getMetadata()` | title | 9 |
+     | S7 | `newGadgetFromBlueprint(id, {})`, with `id` taken from `listFeaturedBlueprints()[0]`; then `getMetadata()` | title | 9 |
      | S8 | scripted tool call that schedules a task 5 s out | alarm fires; hook message in chat | |
      | S9 | restart the node, log in; S5's account still listed; reopen S6's gadget | works | durable stubs, restore |
      | S10 | `--router`: rerun S1-S7 through the router | same | 5 |
@@ -426,7 +588,7 @@ There is one entry point:
 
 ### 0.5 Cloudflare OS integration-test adapter: `starter:celld/integration/`
 
-Upstream's `cos:integration-tests` (40 files) speak Cap'n Web over `/api`
+Upstream's `cos:integration-tests` (44 files) speak Cap'n Web over `/api`
 through `createTestHarness`. They are the best existing end-to-end coverage.
 
 **`startCelldHarness()`** returns the same `Harness` type, and is selected
@@ -454,20 +616,49 @@ only grows, and CI fails on a regression. Start with `workshop-lifecycle`,
 `observer-*`, `workshop-hooks`, `workshop-sharing` and `workshop-presence`.
 Exclude files that redeploy or need vendor fakes.
 
-### 0.6 CI
+After 1.9, `mock-upstream.ts` and the mock LLM are private addresses. The
+adapter, `starter:celld/env.sh` and `e2e.sh` must set
+`CELLD_FETCH_PRIVATE_ALLOW` for exactly their host:port entries.
 
-Add `.github/workflows/test.yml` for pull requests:
-- `cargo test --profile lab`
-- clippy
-- `node tests/conformance/run.mjs --runtime=celld`
+### 0.6 CI (GitHub Actions on Alex's fork)
 
-Add a nightly job:
-- `--runtime=both`
-- `--nodes 2` against an Azurite service container
+Work lands as direct commits to `main` (see [Review and commits](#review-and-commits)),
+so CI runs on **push to `main`** and nightly. There are no pull requests to
+gate.
 
-**Prior art.** Import IlyaGulya's fleet scripts under `tests/fleet/`:
-`fleet-test.sh`, `ha-test.sh`, `soak-test.sh`, `soak-driver.py` and
-`s3-fault-proxy.py`, from commits `fe8938d`…`b40b607`. Adapt them for Azurite,
+**`.github/workflows/test.yml`, on push:**
+- `cargo test --profile lab -p celld`
+- `cargo clippy --all-targets -- -D warnings`
+- `pnpm --dir tests/conformance install --frozen-lockfile`, then
+  `node tests/conformance/run.mjs --runtime=celld`. This runs the
+  single-node cases against the committed expectations.
+
+**Build cost.** A V8 build is heavy for hosted runners.
+- Cache `~/.cargo` and `target/` with `Swatinem/rust-cache`, keyed on
+  `Cargo.lock`.
+- Use the `lab` profile.
+- Record the cold and warm build times in this section after the first run.
+- If warm runs exceed about 30 minutes, revisit: a larger runner, or splitting
+  build and test.
+
+**Nightly (`schedule`):**
+- `--runtime=both`, with workerd from the pinned wrangler in
+  `tests/conformance`
+- the `nodes > 1` cases, with Azurite as a service container
+- the `tests/fleet/` scripts once they're imported (Phase 8)
+
+A failing nightly run opens an issue, or is reported at the next phase gate.
+
+The existing `release.yml` is unchanged.
+
+**Prior art.** Import IlyaGulya's fleet scripts under `tests/fleet/`, after a
+full review under policy rule 6.
+- **Scripts:** `fleet-test.sh`, `ha-test.sh`, `soak-test.sh`, `soak-driver.py`
+  and `s3-fault-proxy.py`, from commits `fe8938d`…`b40b607`.
+- **Location:** on the fork they live under `examples/cloudflare-os-compat/`.
+  The fork's workflow is `.github/workflows/cloudflare-os-compat.yml`.
+- **Skip** `restore-test.sh` and `mc-shim.py`, which are S3-only and outside
+  our scope. Adapt them for Azurite,
 and add a `/call` capability load, since their soak never exercises
 capabilities. They become Phase 8's gates. The fork's CI commits
 (`bdf5eac`…`5191eca`) show a moto S3 stand and port offsets.
@@ -475,9 +666,15 @@ capabilities. They become Phase 8's gates. The fork's CI commits
 ### Phase 0 gate
 
 - The seed conformance cases pass on both runtimes.
-- `e2e.sh all --no-router` reproduces the trial's state, so smoke steps S1-S11
-  fail exactly where the trial did.
-- CI runs on pull requests.
+- `e2e.sh all --no-router` runs end to end on `main`.
+- **The baseline is recorded.** Record each smoke step's actual PASS/FAIL in
+  [cloudflare-os-trial.md](cloudflare-os-trial.md) under "Baseline".
+  - Every FAIL must name the trial failure or plan item that explains it. A
+    failure with no explanation is a new finding, and is added to the plan
+    before Phase 1 starts.
+  - From then on, each phase gate lists which steps it turns from FAIL to
+    PASS, and no step goes from PASS to FAIL.
+- CI runs on push to `main` and nightly.
 
 ---
 
@@ -493,14 +690,23 @@ the early ones sit on the chat critical path or remove trial workarounds.
 come through as `undefined`.
 - `tracing` gives a `TypeError` on first use, on every chat turn
   (`cos:workshop-backend/src/agent-tracing.ts:92-204`).
-- `restore`, which is used as `[restore](params)` in 34 places, silently
-  defines a method named `"undefined"`.
+- `restore`, which is used as a computed key (`[restore](params)`) about 80
+  times in Cloudflare OS's non-test sources, silently defines a method named
+  `"undefined"`.
 
 **Design.**
 - Export exactly the names workerd's `cloudflare:workers` exports.
+  - The canonical list is workerd's `src/cloudflare/workers.ts`, at the tag of
+    the workerd version pinned in `tests/conformance`. Read it with
+    `gh api repos/cloudflare/workerd/contents/src/cloudflare/workers.ts?ref=<tag>`.
+  - Record the tag in a comment beside the list.
+  - The differential case below catches drift.
 - A name celld doesn't implement yet becomes a stub that throws on use and
   names itself.
 - A name workerd lacks fails at link time, as in workerd.
+- A namespace import (`import * as cf`), on the full-surface path at
+  `modules.rs:601`, exposes exactly the canonical list. Unimplemented names
+  appear there as the throwing stubs.
 - `restore` becomes a real well-known symbol now, ahead of Phase 5.
   `ctx.restore` throws "not implemented" until Phase 5.
 - **N4:** pin `Symbol.keyFor(restore)` and the symbol's description against
@@ -532,8 +738,11 @@ come through as `undefined`.
 - Parent ids come from the same CPED that tags console logs.
 - Follow workerd's limits: names cut to 64 bytes, about 64 KB of attributes
   per span, `undefined` attributes ignored.
-- Honour the Wrangler `observability.traces` sampling settings if 1.6 keeps
-  them; otherwise document that sampling is operator-controlled.
+- Sampling is operator-controlled. 1.6 accepts the Wrangler `observability`
+  block with a note, and doesn't read it.
+- `telemetry::Span.name` becomes `Cow<'static, str>` (`telemetry.rs:325`).
+  Existing span producers keep passing static strings, so the change is
+  mechanical.
 
 **Prior art.** Rework royalcala `22b3352` (patcon `e5878e3`) or cnicolov's
 `tracing.js` as a seed. Neither has `ctx.tracing` on DO state, active-span
@@ -551,8 +760,10 @@ tracking or settle-ending.
   - OTLP encoding of attributes and exceptions
   - parent/child ids
   - the name and attribute limits
-- Integration: with `CELLD_OTEL` pointing at a local collector, the spans
-  from a case arrive with the right parent and attributes.
+- Integration: a `celld-only` case with an `otlp` step. The runner's
+  in-process receiver (0.2) checks that the spans arrive with the right parent
+  and attributes. The `differential` cases run with `CELLD_OTEL` off, where
+  `isTraced=false` matches workerd.
 - E2E/manual: becomes testable after Phase 3. A chat turn completes, and the
   collector shows `invoke_agent`, `chat` and `execute_tool` spans.
 
@@ -580,7 +791,7 @@ migration-only classes:
   check passes.
 - Integration: an `exports/migrated-namespace` case. The id from
   `ctx.exports.X.getByName("a")` equals the id from an `env` binding.
-- E2E/manual: remove `generate.ts` workaround 4 and deploy to a fresh bucket.
+- E2E/manual: remove W4 from `generate.ts` and deploy to a fresh bucket.
   Sign-up, admin settings and the user DO work.
 
 ### 1.4 Service-binding `props`, and refusing ignored keys
@@ -591,10 +802,22 @@ migration-only classes:
 delivery in `__beginEvent`.
 
 **Design.**
-- **Deploy:** keep `props` (a JSON object, size-bounded like loader props) in
-  the binding metadata.
-- **Node:** `fleet.rs:999` `service_bindings` returns a struct with `props`.
-  `bootstrap.rs:660` passes them to `__makeServiceBinding`.
+- **Deploy:** keep `props`, which must be a JSON object, verbatim in the
+  binding metadata (`"props": {...}`). That is Cloudflare's upload shape.
+- **Node:** `fleet.rs:999` `service_bindings` returns a struct with
+  `props: Option<serde_json::Value>`.
+- **Encoding, end to end.** The manifest carries JSON. `bootstrap.rs:660`
+  emits `__makeServiceBinding(script, ep, __celld.__propsBytes(<JSON literal>))`.
+  `__propsBytes = (v) => __rpcOut(v, false)` structured-clone-encodes the
+  props once, at isolate start, into the `propsSc` bytes the runtime already
+  carries.
+  - Emit the literal with `serde_json` and escape U+2028/U+2029, never with
+    Rust `{:?}`.
+  - When there are no props, emit `undefined`, so the same-script fast path
+    still applies.
+- **Size bound:** 1 MiB of encoded props, the same limit as loader props
+  (`docs/services/dynamic-workers.md`). It is checked at deploy against the
+  JSON size and at isolate start against the encoded size.
 - **Default entrypoint:** `op_svc_call_impl` (`js.rs:7141-7148`) drops props
   when the entrypoint is null. Send them as entrypoint `"default"` instead.
 - **Refuse:** any unknown `services[]` key, and `environment`.
@@ -617,8 +840,8 @@ default-entrypoint props and no refusals.
 - Integration: a `service-bindings/props` case. A named entrypoint and the
   default export each echo `this.ctx.props` over fetch and over RPC, within
   one script and across scripts.
-- E2E/manual: drop the generator's props note; an error report carries
-  `service` and `environment`.
+- E2E/manual: an error report from the workshop carries the `service` and
+  `environment` props.
 
 ### 1.5 `redirect: "manual"` on incoming requests
 
@@ -645,7 +868,7 @@ requests, DO `__dispatchTo`, service-binding targets and entrypoint targets.
 | `workers_dev`, `preview_urls` | `false` is accepted silently; `true` is accepted with a warning. | Both |
 | `account_id` | Accept and ignore. | |
 | `routes` | Keep refusing, with a better message. | Message |
-| `secrets.required` | Each name must be provided by `vars` or a dotenv override, or the deploy fails. Document that celld secrets are plaintext vars. | Missing and present |
+| `secrets.required` | Each name must be provided by `vars` or, under `celld dev`, by a dotenv file (`.dev.vars`, `.env`). Otherwise the deploy fails. Document that celld secrets are plaintext vars. | Missing and present; dev vs deploy |
 
 **Prior art.**
 - Rework mertdogar `da1ef43`: `IGNORED_PLATFORM_KEYS` with a note, merging
@@ -696,7 +919,6 @@ requests, DO `__dispatchTo`, service-binding targets and entrypoint targets.
   - `__wrapServiceResponse` keeps the socket.
   - `__readResponse` passes `workerSocketId` through without a new pump.
 - **Refusals:**
-  - A DO returning a `_workerHandoff` socket still throws.
 - **The `accept()` bridge (D12).** When the intermediate Worker calls
   `accept()` on a `_workerHandoff` socket, it proxies frames itself.
   - The host adopts the target's handoff and bridges its pull queue to a new
@@ -710,8 +932,15 @@ requests, DO `__dispatchTo`, service-binding targets and entrypoint targets.
 - **Risks:**
   - The target's event must stay alive while its socket is pumped.
   - `Sec-WebSocket-Protocol` must pass through.
-  - A parked handoff that is never adopted must be swept, with a guard or a
-    generation sweep.
+  - A parked handoff that is never adopted is closed with code 1011 and
+    removed after **30 s**, and also when its generation retires. The sweep
+    interval and timeout are constants with a unit test.
+  - Only stateless Worker sockets go through this path. DO-held and
+    hibernatable sockets already use the `Cell` variant, which crosses
+    bindings today, and hibernation is unchanged.
+- **A DO returning a handed-over socket.** Write a differential case first. If
+  workerd allows it, implement it; if workerd refuses it, refuse it with
+  workerd's message. Either way it is not a documented celld divergence.
 
 **Prior art.**
 - IlyaGulya `8376ebc` is a minimal reference. Its `WorkerWebSocket::repark`
@@ -722,7 +951,21 @@ requests, DO `__dispatchTo`, service-binding targets and entrypoint targets.
   covers only the `Cell` half. Keep his idea of registering the target's pump
   as `waitUntil` of the target event.
 
-**Tests.**
+**Repro to start from** (trial failure 5; two scripts):
+
+```js
+// back.js (service "wsback")
+export default { fetch() {
+  const [client, server] = Object.values(new WebSocketPair());
+  server.accept();
+  server.addEventListener("message", (e) => server.send("echo:" + e.data));
+  return new Response(null, { status: 101, webSocket: client });
+} };
+// front.js (primary; services: [{binding: "BACK", service: "wsback"}])
+export default { fetch: (req, env) => env.BACK.fetch(req) };
+```
+
+**Tests.** The integration case needs the 0.2 runner's `ws` step.
 - Unit:
   - Encoding a Worker socket keeps it registered.
   - `ws_target=false` with a socket is an error.
@@ -759,23 +1002,41 @@ These platform streams don't support BYOB today:
 Trial failure 9 is `Blob.stream()`: `cos:workshop-backend/src/blueprint-release.ts:455`
 reads it through the BYOB `PackReader` (`git-codec.ts:663`).
 
-**Design.**
-- In `byte_streams.js`, generalise `ReadableStreamBYOBReader._buffered` into
-  `_chunked(pullChunk, cancel)`. It pulls whole chunks, copies them into the
-  caller's view, keeps the remainder, and supports `min`/`readAtLeast`.
-- Add a helper, `__makeInternalByteStream`, that installs the `getReader`
-  override the way `identity_transform_stream.js:311` already does. Apply it
-  to each stream above, and check the KV stream type.
-- `tee()` of these streams returns streams of the same kind.
+**Design (chosen).** Two mechanisms, each where it fits.
+- **Host-backed bodies and `Blob.stream()` become native `type:"bytes"`
+  streams.**
+  - This covers `CelldHttpBodyStream` (`harness.js:213`) and the Blob
+    polyfill's `stream()`.
+  - The underlying source fills `controller.byobRequest` directly when there
+    is one, and enqueues chunks otherwise.
+  - That is the spec's own mechanism, so BYOB, `readAtLeast`, `tee()` and
+    cancel come from the streams implementation, not a parallel code path.
+- **Generalise the rest with `_chunked`.** In `byte_streams.js`, turn
+  `ReadableStreamBYOBReader._buffered` into `_chunked(pullChunk, cancel)`
+  and install it with a `__makeInternalByteStream` helper, the way
+  `identity_transform_stream.js:311` already does. This covers:
+  - the readable side of `CompressionStream`/`DecompressionStream`
+  - RPC-revived readables
+  - KV streams, if they turn out not to be byte streams
+  
+  Each of those has its own chunk source.
+- `tee()` of any of these returns streams of the same kind.
 - A user `new ReadableStream()` without `type:"bytes"` keeps refusing BYOB,
   as the spec and workerd do.
 
-**Prior art.** royalcala `ef5e87c`'s byte-stream half makes
-`CelldHttpBodyStream` and `Blob.stream()` native `type:"bytes"` streams. That
-is a smaller route than the `_chunked` helper.
-- **Rework it**, and still cover compression, KV, tee and RPC-revived streams.
-- Add a fetch-body throughput check, because it changes the hot path.
-- Skip `60209d3`; the rework subsumes it.
+**Prior art.** royalcala `ef5e87c` takes the native `type:"bytes"` approach
+for `CelldHttpBodyStream` and `Blob`.
+- **Reference only:** it depends on `crates/celld/capability.rs` from the
+  forbidden capability routing, so it can't be cherry-picked. Write the change
+  fresh.
+- Skip `60209d3`.
+
+**Performance check.** This changes the fetch-body hot path. Add a script,
+`scripts/bench/fetch-body.sh`, that streams 256 MiB through a Worker
+(`request.body` piped to the response, and a `fetch()` body read to the end)
+on a `lab` build and reports MiB/s.
+- Record before and after numbers in the commit message.
+- A slowdown of more than 5% is fixed or explicitly justified.
 
 **Tests.**
 - Integration: `streams/byob-*` cases on each stream type, covering:
@@ -789,17 +1050,35 @@ is a smaller route than the `_chunked` helper.
   In the browser, "Create Gadget" from a blueprint no longer shows "Invalid
   reader mode".
 
-### 1.9 `global_fetch_strictly_public` (and `nodejs_als`)
+### 1.9 Outbound egress policy for `fetch()` (and `nodejs_als`)
 
-**Problem.** The flag is accepted with no effect. Global `fetch` uses plain
-`reqwest` clients (`js.rs:721-730`, `11091`), so any Worker can reach the
-internal listener's unauthenticated operator routes, cloud metadata
-endpoints, and peers. In Cloudflare OS that includes the agent's `webFetch` of
-model-chosen URLs. `reqwest` also honours proxy environment variables.
+**Correction (checked against workerd's `compatibility-date.capnp`, `@51`).**
+`global_fetch_strictly_public` is **not** a private-address filter. On
+Cloudflare it only decides whether a `fetch()` to a hostname in the Worker's
+**own zone** goes to the zone's origin server (`global_fetch_private_origin`)
+or through Cloudflare's public front door.
+
+What actually protects Workers on Cloudflare is the network. Global `fetch()`
+always leaves from Cloudflare's edge onto the public internet, so it can
+**never** reach private, loopback, link-local or metadata addresses, flag or
+not. Cloudflare OS relies on that when its agent fetches model-chosen URLs
+(`cos:workshop-backend/src/web-fetch.ts:12-19`).
+
+**Problem.** celld's global `fetch` uses plain `reqwest` clients
+(`js.rs:721-730`, `11091`), so any Worker can reach:
+- the node's internal listener, with its unauthenticated operator routes
+- cloud metadata endpoints
+- peer nodes
+- anything else on the host's networks
+
+`reqwest` also honours proxy environment variables. This affects every Worker,
+not only ones that set the flag.
 
 **Design.**
-- With the flag set, outbound clients use a resolver that drops these
-  ranges, including their IPv4-mapped forms:
+- **A node-wide egress policy for global `fetch()` and `new WebSocket()`**
+  (both are global outbound requests). It matches what Cloudflare's network
+  gives a Worker. The resolver drops these ranges, including their
+  IPv4-mapped and NAT64 forms:
   - loopback
   - RFC1918
   - CGNAT
@@ -807,26 +1086,49 @@ model-chosen URLs. `reqwest` also honours proxy environment variables.
   - ULA
   - multicast
   - unspecified
-- IP-literal hosts are checked before each request and in every redirect
-  hop.
-- Clients use `.no_proxy()`.
-- The error text matches workerd's.
-- Service bindings, `ctx.exports` and `connect()` are exempt, as in workerd.
-- Escape hatch (D11): `CELLD_FETCH_PRIVATE_ALLOW`, parsed in `env_vars.rs`.
-- Always block the node's own internal listener and advertise addresses,
-  flag or not, as a separate hardening commit.
-- `nodejs_als`: AsyncLocalStorage already works without gating. Add it to the
-  honoured-flags list in the docs and pin it with a case.
+- **Requests.**
+  - IP-literal hosts are checked before each request and at every redirect
+    hop.
+  - Clients use `.no_proxy()`.
+- **Exempt, as on Cloudflare:** service bindings, `ctx.exports`, Durable
+  Object stubs and `connect()` from `cloudflare:sockets`. The sockets API is
+  a deliberate operator-network tool: keep it unrestricted and document that.
+- **Operator escape hatch (D11):** `CELLD_FETCH_PRIVATE_ALLOW`, a list of
+  `host:port` entries parsed and validated once in `env_vars.rs`. It is for
+  self-hosted deployments that legitimately call internal services, and for
+  local development (a local model server).
+- **The node's own internal listener and advertise addresses are always
+  blocked**, even when they are allowlisted.
+  - **Plumbing:** the node passes those socket addresses into the outbound
+    client builder when it builds the runtime.
+  - This is a separate hardening commit.
+- **Error.** A refused request rejects with a `TypeError` whose message names
+  the policy and the escape hatch. Cloudflare can't produce this case, so no
+  workerd text is matched; document the message in `docs/security.md`.
+- **The `global_fetch_strictly_public` flag** is classified in 1.16 as
+  **no-op by design**: celld has no zone origin to bypass. The policy above
+  applies whatever the flag says.
+- **`nodejs_als`:** AsyncLocalStorage already works without gating. Classify
+  it as honoured in 1.16 and pin it with a case.
+
+**Decision needed (D16): default on or off.** See the decisions table.
 
 **Tests.**
 - Unit:
   - the resolver filter table, including v4, v6, mapped and NAT64 forms
-  - the escape-hatch parser
-- Integration: `fetch-public/` with and without the flag, covering:
-  - a literal IP
+  - the escape-hatch parser, including invalid entries
+  - the node's own addresses always refused
+- Integration: `fetch-public/` cases, all `celld-only` (Cloudflare's behaviour
+  comes from its network, not the runtime):
+  - a literal private IP
   - a redirect to a private address
-  - a hostname that resolves to a private address
+  - a hostname that resolves to a private address (`localhost`, which the
+    system resolver maps to 127.0.0.1)
   - a public host
+  - an allowlisted host:port passing, while the same host on another port is
+    refused
+  - the internal listener refused even when allowlisted
+  - `new WebSocket()` to a private address refused
 - E2E/manual:
   - The trial's mock LLM needs `CELLD_FETCH_PRIVATE_ALLOW=127.0.0.1:11434`
     (add it to `env.sh`).
@@ -923,26 +1225,22 @@ result.
   
   All diffed against workerd.
 
-### 1.14 Nested transactions on the root storage object (N8)
+### 1.14 Nested transactions on the root storage object (N8): already fixed, pin it
 
-**Problem.** Calling `ctx.storage.transactionSync` or `transaction()` on the
-**root** storage object inside an open transaction issues `BEGIN IMMEDIATE`,
-which SQLite rejects. The nesting test uses the view's depth
-(`harness.js:1717-1736`, `storage.rs:3265`). Cloudflare OS has about 55
-`storage.transaction*` call sites.
+**Status.** Already fixed upstream in v0.6.0.
+- `transactionSync` and `transaction()` called on the **root** storage object
+  inside an open transaction route into the open view. The owner is scoped by
+  `__io_context_id()` (`harness.js:1759-1780`, `1897-1911`; denoland/celld#226).
+- mohamedalichelbi `7221aa7` is a v0.3.0 fix that this supersedes. **Do not
+  port it.**
 
-**Design.** Track the active transaction depth on the root storage object, so
-nested calls use `SAVEPOINT`. Make sure the depth is scoped to the current
-event, so two events' interleaved async `transaction()` calls don't nest into
-each other.
-
-**Prior art.** Port mohamedalichelbi `7221aa7`. It conflicts with
-`harness.js` in one mechanical hunk.
-
-**Tests.**
-- Integration: `storage/nested-root-transactions`, covering nested sync,
-  nested async, interleaved async calls from two events, and rollback of
-  the inner transaction only.
+**Work.** Add the conformance case `storage/nested-root-transactions` as a
+0.2 seed case. It covers:
+- nested sync
+- nested async
+- interleaved async calls from two events, each staying in its own
+  transaction
+- rollback of the inner transaction only
 
 ### 1.15 `process.env` and `node:process` (N9)
 
@@ -965,11 +1263,41 @@ FORK.md hunks.
 - Integration: `node/process-env` (dates and flags, string and JSON vars) and
   `node/process-module`.
 
+### 1.16 Compatibility-flag audit
+
+**Problem.** `docs/cloudflare-compat.md:197` says celld "accepts every other
+flag without effect". That blanket rule breaks the loud-gap rule. Most flags
+are behaviour switches a Worker depends on, as
+`nodejs_compat_populate_process_env` (1.15) and `rpc_params_dup_stubs` (1.13)
+showed.
+
+**Design.**
+- List every flag that is enabled by a compatibility date up to 2026-09-04, or
+  that a Cloudflare OS Worker sets.
+- Classify each flag:
+  - **honoured:** implemented, with a case
+  - **no-op by design:** the behaviour is already celld's default, or the flag
+    doesn't apply; each needs a one-line reason in the docs
+  - **refused at deploy:** unimplemented behaviour a Worker would silently
+    lose
+- Unknown flags are refused at deploy, as workerd refuses them.
+- Replace the blanket sentence in the docs with the three lists.
+- New flags from later items (`rpc_params_dup_stubs` in 1.13,
+  `allow_irrevocable_stub_storage` in Phase 2, the `streamingTails` refusal in
+  Phase 6) are added to the lists as they land.
+
+**Tests.**
+- Unit: the classification table covers every flag in workerd's
+  `compatibility-date.capnp` at the pinned tag. A new upstream flag fails the
+  test until it is classified.
+- Integration: a `deploy/` case where a refused flag stops the deploy, and one
+  per honoured flag.
+
 ### Phase 1 gate
 
 - All new conformance cases pass on both runtimes.
-- `generate.ts` workarounds 2, 3 and 4, the props note and `--no-router` are
-  gone, and `e2e.sh deploy --router` succeeds.
+- W1 (except `ai`/`browser`), W2, W3, W4 and W5 are gone from
+  `generate.ts`, and `e2e.sh deploy --router` succeeds.
 - The browser shows the home page through the router.
 - Smoke S0, S1 and S10 pass. S3-S7 still fail, now only for the Phase 2/3
   reasons (S11 is clean of "Invalid reader mode" and "dropped a frame").
@@ -1009,9 +1337,10 @@ Each token carries a `persistent` bit taken from the minting script's flag.
 Props are nested trees and may contain tokens.
 
 **Where they apply:**
-- Extend `__svcMeta` and `__outboundMeta` (`harness.js:3668`) with `script`
-  and `persistent`. Give class handles (`__durableClassMeta`, ~2097) a
-  `script`.
+- Extend `__svcMeta` (`harness.js:4813`; loopback `ctx.exports` stubs) and
+  `__outboundMeta` (`harness.js:3196`; service-binding Fetchers) with
+  `script` and `persistent`.
+- Give class handles (`__durableClassMeta`, `harness.js:2097`) a `script`.
 - **Over RPC**, tokens replace `__celld$svc` and cross by value to any
   isolate.
 - **On revival:**
@@ -1026,8 +1355,19 @@ stored records must never throw.
 ### 2.2 Storage
 
 - **`__storedLift`/`__storedRevive`** (`harness.js:4856-4973`) store tokens as
-  `0x01 ‖ HMAC(key, bytes) ‖ bytes` (D7). The HMAC reuses the key material
-  behind DO-id HMACs.
+  `0x01 ‖ HMAC(key, bytes) ‖ bytes` (D7).
+- **The key (D7):** HMAC(peer_key, "celld-capability-key-v1").
+  - `peer_key` is the fleet's persisted peer-signing key
+    (`peer_auth::load_or_create`, `main.rs:3810`, `4004`), so the key is
+    fleet-wide and survives restarts.
+  - **Do not** use the DO-id key. That is `SHA256(namespace_key)`
+    (`engine_api.rs:433-441`), which anyone can derive.
+  - **`celld dev`** runs its node on the local dev store bucket, so it should
+    get a persisted peer key the same way. Confirm this first. If dev has no
+    persisted key, persist one in the dev store; a random key per process would
+    break the `restart` conformance cases.
+  - royalcala's random per-process fallback when no bucket exists is not
+    acceptable: there is always a bucket.
 - **Refused, with workerd's wording:**
   - a non-persistent token
   - any write from a script without the flag
@@ -1245,7 +1585,7 @@ prior-art security warning.
 
 | Milestone | Adopt / rework | Reference / reuse code |
 | --- | --- | --- |
-| 3.0 | Adopt royalcala `713f1a5` (affiliate then `is_live`, retiring allowed) | Lift `WorkerJob::StubRpc`/`begin_stub_rpc` and the reserved `__celld$` key refusal (`harness.js:4436` in the fork) from royalcala `674a9c4`. Use the dedicated `CellJob::StubRpc` shape of `64f8785`, **never** method-name multiplexing (`c6123d0`). |
+| 3.0 | — | Reference royalcala `713f1a5`: affiliate, then check liveness, and allow retiring slots. It patches `op_stub_rpc_call_heap`, which exists only in the forbidden routing, so it can't be adopted. Implement `Slot::is_live()` on `pool.rs` ourselves; today only `is_retiring` exists, at `pool.rs:409`. Lift `WorkerJob::StubRpc`/`begin_stub_rpc` and the reserved `__celld$` key refusal (`harness.js:4436` in the fork) from royalcala `674a9c4`. Use the dedicated `CellJob::StubRpc` shape of `64f8785`, **never** method-name multiplexing (`c6123d0`). |
 | 3.1 | Adopt royalcala `280897e` (facet and loader args lift) once capabilities are sound | From cnicolov `fcb1977`: the transactional lift (roll back transfers, routes and stream locks on failure), revive-once for aliased markers, the disposer snapshot through cloning, and the `CallOrder` + egress-gate wiring. From royalcala `2bd84cd`: the `__facetStubs`/Proxy-RpcTarget resolution. |
 | 3.2 | Adopt only the local `dup()` part of royalcala `874a2f2` | Reject its native `onRpcBroken` (D3). From IlyaGulya `779b7c9`: importer request-context adoption with implicit release, and a `/state` live-capability counter (expose this from `CapRegistry` as a metric). |
 | 3.3 | | 1.12 already covers DO-stub RpcPromises. |
@@ -1554,7 +1894,11 @@ Refuse `streamingTails`.
 **Prior art.**
 - **Adopt royalcala `2f10749`** (patcon `d35faa8`, adapted to v0.6.2): it adds
   `TailReportState.rpc_method`, `WorkerJob::Rpc.tail_report` and
-  `__deliverTails`. Then add facet fetch, RPC and alarm events, and the
+  `__deliverTails`.
+  - It conflicts unless `280897e` is applied first. Resolve the conflict by
+    hand instead; `280897e` belongs to Phase 3.
+  - The RPC half of Phase 6 doesn't depend on Phase 3, so it can run any time
+    after Phase 0. Only facet tails for gatekeeper facets wait for Phase 4. Then add facet fetch, RPC and alarm events, and the
   `streamingTails` refusal.
 - **Reference IlyaGulya `f62bf29`.** It delivers tails before the call
   answers, which differs from workerd.
@@ -1733,9 +2077,9 @@ phase's gate includes the parts that apply to it.
 - **Docs.** `docs/cloudflare-compat.md` lists every remaining difference from
   workerd. The trial workarounds are gone from the starter. Upstream-quality
   changelog entries are written per phase.
-- **Review.** Each phase lands as reviewed PRs: no direct pushes of
-  unreviewed work for Phase 2 and later. Phase 3 gets a dedicated security
-  review.
+- **Review.** As set out in [Review and commits](#review-and-commits): an
+  independent agent review of every item, Alex at every phase gate, and a
+  dedicated security review of the Phase 3 threat model and code.
 
 ## Definition of done: "Cloudflare OS works on celld"
 
