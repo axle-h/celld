@@ -214,7 +214,7 @@ write ourselves, before it lands on `main`.
 | 6 | Dynamic Worker tails for RPC and facets | J6 code mode, gadget logs | 0.5 week |
 | 7 | Streams over RPC and stream performance | gitPull, gadget export | 1.5 weeks |
 | 8 | Cross-node capabilities | Multi-node fleets | 4 weeks |
-| 9 | Follow-ups | OTLP spans, AI shim, wider integration coverage | 1.5 weeks |
+| 9 | Follow-ups | AI shim (websearch half), wider integration coverage, docs | 1 week |
 
 Phases 0 and 1 can overlap: Phase 1 items need only the Phase 0 runner. Phase 2
 can start alongside Phase 3; Phase 4 needs both.
