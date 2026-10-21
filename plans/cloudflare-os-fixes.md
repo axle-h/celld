@@ -10,8 +10,25 @@ Related documents:
 - [cloudflare-os.md](cloudflare-os.md): the gap analysis.
 - [cloudflare-os-trial.md](cloudflare-os-trial.md): the first trial run and
   its failures, numbered 1 to 9. This plan refers to them as "trial failure N".
+- [cloudflare-os-prior-art.md](cloudflare-os-prior-art.md): other forks that
+  attempted this, their commits (fetched as `refs/forks/*`), and learnings
+  N1-N12. **Read its security warning before touching any fork's RPC code.**
 
-Status: planned 2026-10-21. Nothing in this plan is implemented yet.
+### Using prior art
+
+Each item below has a **Prior art** line where another fork did related work.
+
+- **Take:** cherry-pick with `git cherry-pick -x`. Drop any Cargo version-bump
+  hunks, add a `Co-authored-by:` trailer, then add the item's tests.
+- **Rework:** cherry-pick as a starting point, then change it as noted.
+- **Reference:** read it for mechanism, but **do not cherry-pick**.
+
+No fork's cross-isolate capability routing may be merged: they all let code
+forge capabilities. The full disposition table is in the prior-art page.
+
+Status: planned 2026-10-21. Revised the same day with prior art from other
+forks ([cloudflare-os-prior-art.md](cloudflare-os-prior-art.md)). Nothing in
+this plan is implemented yet.
 
 ## Orientation
 
@@ -112,7 +129,7 @@ MinIO images can no longer be pulled anonymously, so use Azurite.
 ## Decisions to settle before starting
 
 Each decision has a recommendation. They are listed here so they can be
-agreed up front. Phases refer to them as D1-D14.
+agreed up front. Phases refer to them as D1-D15.
 
 | # | Decision | Recommendation |
 | --- | --- | --- |
@@ -122,7 +139,7 @@ agreed up front. Phases refer to them as D1-D14.
 | D4 | Can a DO with live exported capabilities be evicted? | No idle eviction while exports are live. Pressure eviction is still allowed and breaks them. |
 | D5 | Re-exported stubs (B passes X's stub on to C): take a shortcut, or proxy through B as workerd does? | Shortcut, documented as a difference. |
 | D6 | `allow_irrevocable_stub_storage` enforcement. celld currently stores same-script loopbacks without the flag. | Enforce the flag for new token kinds and for restore. Same-script loopbacks keep working with a deprecation warning for one release. |
-| D7 | Authenticate stored capability tokens? | Yes: HMAC with deployment key material, as workerd authenticates its channel tokens. |
+| D7 | Authenticate stored capability tokens? | Yes, with HMAC, as workerd authenticates its channel tokens. Key = HMAC(peer_secret, "celld-capability-key-v1"), as in royalcala `2bd84cd`: fleet-wide, and it survives restarts. |
 | D8 | Where a facet whose class comes from another script runs. | In the target script's isolate, on the root's owner node, so it gets its own `env`, `ctx.exports` and flags. |
 | D9 | `ai` and `browser` bindings. | Keep them refused in celld. The starter maps `WORKERS_AI`/`AI` to a service binding on an operator shim Worker (Phase 9). A first-class celld binding is deferred. |
 | D10 | Should `celld deploy` run Wrangler's `build.command`? | Yes, with `--no-build` to skip it. That removes `starter:celld/build.sh`'s capnweb step. |
@@ -130,15 +147,16 @@ agreed up front. Phases refer to them as D1-D14.
 | D12 | `accept()` on a WebSocket that a stateless Worker returned through a service binding. | Refuse loudly for now; only passthrough is needed. |
 | D13 | `tracing`: a correct no-op first (`isTraced=false`), or OTLP export straight away? | No-op first (Phase 1), OTLP later (Phase 9). |
 | D14 | Dynamic Worker tails: legacy `tail()` for RPC and facet invocations, or `tailStream`? | Legacy only. Cloudflare OS doesn't use `tailStream` yet; refuse `streamingTails`. |
+| D15 | Existing cells when cell scopes become script-qualified (2.4): a fallback lookup or a one-time migration? | Fallback lookup for one release, then migrate. Never orphan data. |
 
 ## Phase overview
 
 | Phase | Theme | Unblocks | Effort (engineer time) |
 | --- | --- | --- | --- |
 | 0 | Test infrastructure | Every later gate | 1.5-2 weeks |
-| 1 | Loud gaps and small fixes | Router mode; the trial workarounds go away; BYOB; chat critical path (tracing) | 2.5-3 weeks |
-| 2 | Address-like capability tokens and storage | J2 ("turn on" gatekeepers) | 1.5-2 weeks |
-| 3 | Cross-isolate RPC on one node | J1, J3 chat | 5-7 weeks |
+| 1 | Loud gaps and small fixes, including N1/N2/N6/N8/N9 | Router mode; the trial workarounds go away; BYOB; chat critical path (tracing, Proxy lookup, RpcPromise) | 3-3.5 weeks (several items are cherry-picks) |
+| 2 | Address-like capability tokens and storage; script-qualified cell scopes | J2 ("turn on" gatekeepers); more than one OAuth gatekeeper | 2.5-3 weeks |
+| 3 | Cross-isolate RPC on one node, including facet and loader args | J1, J3 chat | 4.5-6.5 weeks |
 | 4 | Facets from another script's class | J3 gatekeepers, J5 | 1.5-2 weeks |
 | 5 | `ctx.restore` and persistent stubs | J4, J5 hooks, J6 | 4 weeks |
 | 6 | Dynamic Worker tails for RPC and facets | J6 code mode, gadget logs | 0.5 week |
@@ -228,6 +246,22 @@ Release builds use fat LTO and are too slow for test loops.
 - `examples/dynamic-worker-tails`
 - `examples/counter`
 
+**Prior art.** IlyaGulya's `examples/cloudflare-os-compat/` is a 43-case
+`curl`-and-substring suite of Cloudflare OS primitives. Run
+`git show refs/forks/IlyaGulya/agentos/cloudflare-os-phase0-runtime:examples/cloudflare-os-compat/test.sh`
+to see it.
+
+- **Conversion:** turn every case into a conformance case with expectations
+  recorded from workerd, under the area each later item names.
+- **Restarts:** cases that restart the process need a `{"restart": true}`
+  runner step with persistent state.
+- **Mark the target:** cases that celld can't pass yet are marked with the
+  plan item that will fix them, so the runner can report "expected failure
+  until 2.4", for example.
+
+cnicolov's `tests/rpc_capabilities.rs` shows a full-binary test pattern. It is
+the first in-repo test of that kind.
+
 ### 0.3 Rust unit-test convention
 
 - Inline `#[cfg(test)] mod tests` beside the code, run with
@@ -242,7 +276,13 @@ Release builds use fat LTO and are too slow for test loops.
 There is one entry point:
 `starter:celld/e2e.sh [up|build|deploy|smoke|browser|all|down] [--router] [--fresh]`.
 
+0. **check**: `celld deploy --dry-run` for every Worker. This idea comes from
+   mohamedalichelbi's recipe.
 1. **up**
+   - `--dev-store --workshop-only` runs a single-command, workshop-only loop
+     on today's single-config `celld dev`, with no podman and the frontend
+     assets copied in. It is modelled on patcon's
+     `scripts/celld/run-local.ts`, and is useful before 0.1 lands.
    - Starts Azurite (`celld-e2e-azurite`).
    - Waits for port 10000 and creates container `celld-e2e-$RUN_ID` (fresh per
      `--fresh`).
@@ -286,6 +326,7 @@ There is one entry point:
 
      | Step | Call | Expected | Covers |
      | --- | --- | --- | --- |
+     | S0 | `GET /` (router assets); a router → binding → backend JSON probe | 200 / JSON | |
      | S1 | `amIAdmin()`, `getAdminApi()` | `true`; a stub | |
      | S2 | `admin.setGatekeeperMode(v, "optional")` for each built-in gatekeeper | resolves | 7 |
      | S3 | `subscribeToNotifications(new RpcStub(sub))`; dispose | no server error | 6, 8 |
@@ -296,7 +337,9 @@ There is one entry point:
      | S8 | scripted tool call that schedules a task 5 s out | alarm fires; hook message in chat | |
      | S9 | restart the node, log in; S5's account still listed; reopen S6's gadget | works | durable stubs, restore |
      | S10 | `--router`: rerun S1-S7 through the router | same | 5 |
-     | S11 | scan `node.log` for "cannot cross isolate", "could not be cloned", "is not a function", "dropped a frame for a closed WebSocket", "Invalid reader mode" | none | all |
+     | S11 | scan `node.log` for "cannot cross isolate", "could not be cloned", "is not a function", "dropped a frame for a closed WebSocket", "Invalid reader mode", "already disposed", "does not implement" | none | all |
+     | S12 | two sessions subscribed to one workspace; wait more than 60 s, so the session isolate retires; edit in one session | the other sees the change | N5, N12 |
+     | S13 | scripted code-mode call `env.GADGET.getDocument()` | returns the document | N2, N6 |
 7. **browser** (`e2e/browser.ts`)
    - Uses `playwright-core` 1.64 from `starter:cloudflare-os/node_modules/.pnpm`
      with the cached Chromium in `~/.cache/ms-playwright/`.
@@ -354,6 +397,25 @@ Add a nightly job:
 - `--runtime=both`
 - `--nodes 2` against an Azurite service container
 
+**Prior art.** Import IlyaGulya's fleet scripts under `tests/fleet/`:
+`fleet-test.sh`, `ha-test.sh`, `soak-test.sh`, `soak-driver.py` and
+`s3-fault-proxy.py`, from commits `fe8938d`…`b40b607`. Adapt them for Azurite,
+and add a `/call` capability load, since their soak never exercises
+capabilities. They become Phase 8's gates. The fork's CI commits
+(`bdf5eac`…`5191eca`) show a moto S3 stand and port offsets.
+
+### 0.7 Optional: a spike build for harness development
+
+The smoke steps S3-S13 and the browser script are easier to write against a
+runtime that already gets past chat.
+
+- Build a **local, unmerged** branch of `main` plus royalcala's
+  `spike/rpc-062`, which merges cleanly.
+- Use it only to develop and debug the harness. Each later phase gate must
+  then reproduce those results on `main`.
+- **Never deploy or push this build.** Its capabilities can be forged; see the
+  prior-art page.
+
 ### Phase 0 gate
 
 - The seed conformance cases pass on both runtimes.
@@ -385,6 +447,9 @@ come through as `undefined`.
 - A name workerd lacks fails at link time, as in workerd.
 - `restore` becomes a real well-known symbol now, ahead of Phase 5.
   `ctx.restore` throws "not implemented" until Phase 5.
+- **N4:** pin `Symbol.keyFor(restore)` and the symbol's description against
+  workerd with a differential case. workerd's symbol is native
+  (`src/cloudflare/workers.ts:21`), while every fork used `Symbol.for(...)`.
 
 **Tests.**
 - Unit: `stub_source` output for a known name, an unimplemented name and an
@@ -402,6 +467,10 @@ come through as `undefined`.
 - The active span is tracked with the existing CPED/AsyncLocalStorage frame
   (`harness.js:3813`). `enterSpan` ends the span when its promise settles.
 - Spans are dropped, and the compat doc says so.
+
+**Prior art.** Rework royalcala `22b3352` (patcon `e5878e3`) or cnicolov's
+`tracing.js` as a seed. Neither has `ctx.tracing` on DO state, active-span
+tracking or settle-ending.
 
 **Tests.**
 - Integration: a `tracing/` case covering:
@@ -431,6 +500,8 @@ migration-only classes:
   `undefined`, not `None`, so the check never fires; make it a clear load
   error.
 
+**Prior art.** Take the `deploy.rs:1299` hunk of IlyaGulya `30f2a48`.
+
 **Tests.**
 - Unit: a migration-only class lands in `do_classes`; no duplicates when it
   is also bound; reserved classes are unaffected; the control-plane manifest
@@ -459,6 +530,10 @@ delivery in `__beginEvent`.
   other than `name`/`class_name` in a binding. Also refuse any key other
   than `bindings` at the `durable_objects` top level.
 - **Accept:** `remote`, which only affects `wrangler dev`, with a code comment.
+
+**Prior art.** Rework IlyaGulya `2172ce1` (it applies cleanly). It carries
+props through to `__makeServiceBinding`, but has no validation, no
+default-entrypoint props and no refusals.
 
 **Tests.**
 - Unit:
@@ -499,6 +574,14 @@ requests, DO `__dispatchTo`, service-binding targets and entrypoint targets.
 | `account_id` | Accept and ignore. | |
 | `routes` | Keep refusing, with a better message. | Message |
 | `secrets.required` | Each name must be provided by `vars` or a dotenv override, or the deploy fails. Document that celld secrets are plaintext vars. | Missing and present |
+
+**Prior art.**
+- Rework mertdogar `da1ef43`: `IGNORED_PLATFORM_KEYS` with a note, merging
+  cleanly. Keep refusing `routes`/`route`. Make `workers_dev`/`preview_urls`
+  silent when `false` and warned when `true`. Its extra keys are fine.
+- Rework the JSON vars, `build` and `observability` pieces of IlyaGulya
+  `d6e0988`. Add the size cap, the feature flag and `--no-build`. Drop its
+  `rules` part.
 
 **Integration.**
 - A `deploy/` case runs `celld deploy --dry-run` on configs that use each key.
@@ -550,6 +633,15 @@ requests, DO `__dispatchTo`, service-binding targets and entrypoint targets.
   - A parked handoff that is never adopted must be swept, with a guard or a
     generation sweep.
 
+**Prior art.**
+- IlyaGulya `8376ebc` is a minimal reference. Its `WorkerWebSocket::repark`
+  is our `park_worker_handoff`, but it keeps the id on the Response, so a
+  rebuild loses it. It also has no adopt, sweep, loader or broker paths, or
+  refusals.
+- mohamedalichelbi's `fix/service-binding-websocket` is already upstream and
+  covers only the `Cell` half. Keep his idea of registering the target's pump
+  as `waitUntil` of the target event.
+
 **Tests.**
 - Unit:
   - Encoding a Worker socket keeps it registered.
@@ -596,6 +688,13 @@ reads it through the BYOB `PackReader` (`git-codec.ts:663`).
 - `tee()` of these streams returns streams of the same kind.
 - A user `new ReadableStream()` without `type:"bytes"` keeps refusing BYOB,
   as the spec and workerd do.
+
+**Prior art.** royalcala `ef5e87c`'s byte-stream half makes
+`CelldHttpBodyStream` and `Blob.stream()` native `type:"bytes"` streams. That
+is a smaller route than the `_chunked` helper.
+- **Rework it**, and still cover compression, KV, tee and RPC-revived streams.
+- Add a fetch-body throughput check, because it changes the hot path.
+- Skip `60209d3`; the rework subsumes it.
 
 **Tests.**
 - Integration: `streams/byob-*` cases on each stream type, covering:
@@ -662,14 +761,137 @@ model-chosen URLs. `reqwest` also honours proxy environment variables.
   `Z_BEST_SPEED`). Honour `level`. Honour `maxOutputLength`, or throw on it.
 - **`scheduler.wait({signal})`:** implement the signal, or throw on it.
 
+### 1.11 Method lookup on get-only Proxies (N2)
+
+**Problem.** `__stubResolve` (`harness.js:4018-4021`) and
+`__entrypointResolve` (`4541-4546`) test methods with `prop in target`. A Proxy
+without a `has` trap answers from its bare target, so a forwarded method is
+rejected with "RPC receiver does not implement". workerd uses `[[Get]]`.
+
+Cloudflare OS hits this in two places:
+- the `getGadgetFacet` facet Proxy
+- `GatekeeperLoopback`, whose constructor returns a Proxy
+
+This is a same-isolate bug, independent of Phase 3.
+
+**Design.** Fall back to `target[prop] !== undefined`, keeping workerd's
+visibility rules for reserved names and own properties.
+
+**Prior art.** Take royalcala `ffd1011` (RpcTarget) and `da57cca` (entrypoint
+instance), from patcon. royalcala `2bd84cd` has a different variant. Choose
+the one the differential case supports.
+
+**Tests.**
+- Integration: an `rpc/proxy-targets` case for a get-only Proxy RpcTarget, a
+  WorkerEntrypoint whose constructor returns a Proxy, and `new RpcStub(proxy)`,
+  diffed against workerd. Port IlyaGulya's `/proxy-rpc-target` and
+  `/proxy-entrypoint` cases.
+- E2E/manual: smoke S13 once Phase 3 lands.
+
+### 1.12 DO stub calls return an RpcPromise (N6)
+
+**Problem.** DO stub methods return a plain `async` Promise
+(`harness.js:5275`), so pipelining (`stub.method().other()`) and property
+access on the result fail. Cloudflare OS's `GatekeeperLoopback` returns a
+get-only Proxy over an un-awaited `startGatekeeperSession()`.
+
+**Design.** Return
+`__makeNode(__valueSession(invoke(...)), [], __ctxNow())`, as entrypoint stubs
+already do.
+
+**Prior art.** Take royalcala `38082b4` (patcon `333a2c7`). For
+`Symbol.dispose` on RpcPromises, also take IlyaGulya `4594b6c`, which applies
+cleanly.
+
+**Tests.**
+- Integration: `rpc/do-promise-pipeline`, covering `host.returnTool().echo()`
+  and the dispose of an RpcPromise. Port IlyaGulya's `/do-return-rpc-pipeline`
+  and `/rpc-promise-dispose`.
+
+### 1.13 Stubs passed as params are duplicated (N1, same-isolate part)
+
+**Problem.**
+- From compat date 2026-01-20, workerd **duplicates** stubs in call params
+  (`rpcParamsDupStubs @152`; disabled by `rpc_params_transfer_stubs`), but
+  still transfers return values.
+- For an RpcTarget, function or Proxy with its own `dup()`, workerd calls it
+  and takes ownership of the result. The result must be the same kind, or
+  workerd throws `DOMDataCloneError` (`worker-rpc.c++` ~3010-3155).
+- celld transfers instead (`harness.js:4231`,
+  `meta.disposed = true; // the ref moves to the receiver`).
+- Cap'n Web depends on duplication: a forwarded stub dies when the forwarding
+  call returns ("This RpcImportHook was already disposed").
+
+**Design.**
+- Add `Compat.rpc_params_dup_stubs` (date-gated, with the disable flag).
+- Duplicate in the **param** lift only, and apply the `dup()` rule with
+  workerd's error text.
+- Phase 3.2 extends this across isolates.
+
+**Prior art.** Reference royalcala `b02d30e` (patcon `1f7076f`). It is a
+heuristic: it applies to returns too, swallows errors and never validates the
+result.
+
+**Tests.**
+- Integration: `rpc/params-dup`, covering:
+  - proxying a call twice
+  - a callee keeping `dup()` past the call
+  - a return value still transferring
+  - a `dup()` returning the wrong kind
+  - the flag off
+  
+  All diffed against workerd.
+
+### 1.14 Nested transactions on the root storage object (N8)
+
+**Problem.** Calling `ctx.storage.transactionSync` or `transaction()` on the
+**root** storage object inside an open transaction issues `BEGIN IMMEDIATE`,
+which SQLite rejects. The nesting test uses the view's depth
+(`harness.js:1717-1736`, `storage.rs:3265`). Cloudflare OS has about 55
+`storage.transaction*` call sites.
+
+**Design.** Track the active transaction depth on the root storage object, so
+nested calls use `SAVEPOINT`. Make sure the depth is scoped to the current
+event, so two events' interleaved async `transaction()` calls don't nest into
+each other.
+
+**Prior art.** Port mohamedalichelbi `7221aa7`. It conflicts with
+`harness.js` in one mechanical hunk.
+
+**Tests.**
+- Integration: `storage/nested-root-transactions`, covering nested sync,
+  nested async, interleaved async calls from two events, and rollback of
+  the inner transaction only.
+
+### 1.15 `process.env` and `node:process` (N9)
+
+**Problem.**
+- `nodejs_compat_populate_process_env` (default from 2025-04-01) is accepted
+  without effect: under `nodejs_compat`, `process.env` should hold the string
+  vars.
+- `import process from "node:process"` is not the global `process`.
+
+**Design.**
+- Populate `process.env` before module evaluation, honouring the date gate and
+  the enable/disable flags. Build the literal with JSON.
+- Decide how JSON vars (1.6) appear in `process.env` with a differential test.
+- Map `node:process` to the global.
+
+**Prior art.** Rework mertdogar `6d8e461` and take `cde80c7`, dropping the
+FORK.md hunks.
+
+**Tests.**
+- Integration: `node/process-env` (dates and flags, string and JSON vars) and
+  `node/process-module`.
+
 ### Phase 1 gate
 
 - All new conformance cases pass on both runtimes.
 - `generate.ts` workarounds 2, 3 and 4, the props note and `--no-router` are
   gone, and `e2e.sh deploy --router` succeeds.
 - The browser shows the home page through the router.
-- Smoke S1 and S10 pass. S3-S7 still fail, now only for the Phase 2/3 reasons
-  (S11 is clean of "Invalid reader mode" and "dropped a frame").
+- Smoke S0, S1 and S10 pass. S3-S7 still fail, now only for the Phase 2/3
+  reasons (S11 is clean of "Invalid reader mode" and "dropped a frame").
 - The 0.5 adapter boots.
 
 ---
@@ -734,6 +956,20 @@ stored records must never throw.
 - **Existing behaviour:** same-script loopback storage without the flag stays
   allowed, with a deprecation warning (D6).
 
+**Prior art.**
+- **Rework** royalcala `d534083`: the HMAC-SHA256 token codec, with bounds,
+  domain separation and 9 inline tests. Delete its unused
+  `CapabilityRegistry`.
+- **Take** `init_capability_key` from royalcala `2bd84cd` (`js.rs:9069`,
+  `main.rs:4142`). The key is HMAC(peer_secret, "celld-capability-key-v1").
+  The peer secret is already persisted, so the key is fleet-wide and survives
+  restarts. **This is D7's key source.**
+- **Reference** IlyaGulya `141db35` (`svc{script}` by value; its script field
+  is trusted from the payload, which our HMAC fixes) and `30f2a48`
+  (DurableObjectClass lift/revive/store).
+- Do **not** take cnicolov's loopback hunk, which makes `ctx.exports` stubs
+  transient and unstorable.
+
 ### 2.3 Callable migrated namespace
 
 workerd's `LoopbackDurableObjectNamespace` is a namespace that is also
@@ -743,6 +979,50 @@ callable. `ctx.exports.Cls({props})` returns a `cls` token.
   supply one".
 - Using the token as a facet class is Phase 4.
 
+**Prior art.** IlyaGulya `30f2a48` makes every `ctx.exports` class a callable
+factory that also carries the namespace methods (`harness.js:5395` in the
+fork). Use it as a reference.
+
+### 2.4 DO class names that collide across co-hosted scripts (N10)
+
+**Problem.**
+- v0.6.2 refuses two co-hosted scripts that export the same DO class name
+  (`generation.rs:587-596`, "exported by more than one co-hosted script").
+- About 14 Cloudflare OS OAuth gatekeepers (github, gitlab, slack, notion,
+  google, …) each export `UserAccount`, and mcp and mcp-portal both export
+  `McpAccount`.
+- So a deployment with **two OAuth gatekeepers** can't start. The trial
+  didn't hit this because it installed none.
+
+**Design.**
+- Key every user class's cells by `(script, class)`, whichever script is
+  primary. Namespace keys already include the script (`engine_api.rs:545`).
+  The remaining work is the class-keyed tables: `cell_configs`,
+  `register_cell_class`, and the cell-scope routing in `generation.rs` and
+  `runtime.rs`.
+- Put it behind a deployment feature flag.
+- **Migration:** existing scopes of the primary keep resolving, either through
+  a fallback lookup or a one-time rename. An upgrade must never make a DO's
+  data unreachable.
+- **Do not** copy IlyaGulya's approach of hashing only **non-primary** scripts'
+  classes (`.svc.<hash>`, `30f2a48`). Which script is primary changes with
+  deploy order (for example, the trial's `--no-router` mode), and that would
+  orphan data.
+
+**Decision D15.** Use a fallback lookup or a one-time scope migration for
+existing cells. Recommendation: fallback lookup for one release, then
+migrate.
+
+**Tests.**
+- Unit: scope derivation does not depend on which script is primary; the
+  fallback resolves old scopes.
+- Integration: port IlyaGulya's `same-class` case (router + A + B, both
+  exporting `UserAccount`; `/a` → `a:1`,`a:2`; `/b` → `b:110`,`b:120`). Then
+  swap which script is primary and check that the data is still there.
+- E2E/manual: deploy with two OAuth gatekeepers (for example GitHub and
+  Linear, without credentials); the node starts and both appear on the
+  Gatekeepers page.
+
 ### Tests
 
 **Unit:**
@@ -750,6 +1030,13 @@ callable. `ctx.exports.Cls({props})` returns a `cls` token.
 - HMAC tamper rejection
 - persistent-bit rejection
 - lazy failure for a missing script
+
+**Integration:** port IlyaGulya's store/restart/read pairs as conformance
+cases:
+- `/service-stub-store`
+- `/rpc-durable-class`
+- the sync-record DO class case (`transactionSync` KV storing a class and its
+  stubs)
 
 **Integration:** `storage-stubs/` cases with two scripts and the flag:
 - B returns `ctx.exports.Acc({props})`; A's DO stores it, `ctx.abort()`s,
@@ -807,9 +1094,16 @@ All isolates on a node share one process, so the host brokers capabilities.
     same gates as `CellJob::Rpc`, run under `__ctxRun(entry.ctx)`. It keeps the
     `entry.section` re-entry rule, so `blockConcurrencyWhile` doesn't
     deadlock.
-  - **stateless exports:** a job **pinned to that exact isolate**. The pool
-    needs targeted dispatch (`crates/logic/isolate.rs:231` places stateless
-    work freely today). It is refused if the exporting context has ended.
+  - **stateless exports:** a job **pinned to that exact isolate**.
+    - v0.6.2 already has `runtime::drive(slot, …)` (`runtime.rs:2161`) and
+      `Slot::affiliate` (`pool.rs:307`), so no new placement logic is needed.
+    - **N5:** affiliate first, then check `Slot::is_live()`. Otherwise the call
+      can enter a freed isolate.
+    - **Retiring isolates must still accept calls.** The pool retires a
+      session's isolate while its WebSocket session (and every browser
+      subscriber it holds) is still live; patcon saw subscribers drop about
+      30 s in (N12).
+    - The call is refused only if the exporting context has ended.
 - Outbound calls from a DO pass the output gate (`egress_gate_request`).
 
 **Lifetime.**
@@ -854,13 +1148,31 @@ Each is refused loudly.
 
 | M | Scope | Unblocks | Effort |
 | --- | --- | --- | --- |
-| 3.0 | The envelope, the reserved-key refusal, random CapIds, a `CapRegistry` skeleton, and pinned stateless dispatch. No behaviour change. | | 1 week |
-| 3.1 | Calls, args and returns for RpcTargets, functions, callable Proxies, re-passed stubs and `new RpcStub(obj)`. Covers stateless↔own DO, DO↔DO, and script↔script. | J1 subscribers, J3 `overseer.open`/`newChat`, trial failure 6 | 2-3 weeks |
-| 3.2 | Lifetime: release, dup, implicit disposal, break notices, importer death, the eviction pin, and `Symbol.dispose` callbacks across isolates. | J1 unsubscribe, `notifyClosed`, trial failure 8 | 1.5-2 weeks |
+| 3.0 | The envelope, the reserved-key refusal, random CapIds, a `CapRegistry` skeleton, and pinned stateless dispatch (N5). No behaviour change. | | 4-5 days |
+| 3.1 | Calls, args and returns for RpcTargets, functions, callable Proxies, re-passed stubs and `new RpcStub(obj)`. Covers stateless↔own DO, DO↔DO, script↔script, **and facet and Dynamic Worker call args (N3, boundaries E and F)**. | J1 subscribers, J3 `overseer.open`/`newChat`, trial failure 6 | 2-3 weeks |
+| 3.2 | Lifetime: release, dup (including N1's param duplication across isolates), implicit disposal, break notices, importer death, the eviction pin, and `Symbol.dispose` callbacks across isolates. | J1 unsubscribe, `notifyClosed`, trial failure 8 | 1.5-2 weeks |
 | 3.3 | Pipelining: a call on an RpcPromise or RpcProperty whose root is remote waits for the root, then forwards, keeping e-order. Wildcard-get Proxies (`GatekeeperLoopback`, `overseer.ts:10815`). | J5, J6 env calls; `observer-tracker.ts:258` | 3-5 days |
 
 In each milestone, remove the corresponding "cannot cross isolate boundaries
 yet" refusal in `harness.js`.
+
+**N3.** These must lift capabilities, and allow pipelined paths:
+- facet calls: `__rpcOut(args, false)` at `harness.js:2200`, pipelining
+  refused at `2197`
+- loader calls: `harness.js:3302`, pipelining refused at `3298`
+
+A celld facet stub (a Proxy over a plain object) must also lift as a
+capability wherever it is passed or returned, not only through `ctx.restore`.
+
+**Prior art.** Every fork solved part of this. **None can be merged**: see the
+prior-art security warning.
+
+| Milestone | Take / rework | Reference / reuse code |
+| --- | --- | --- |
+| 3.0 | Take royalcala `713f1a5` (affiliate then `is_live`, retiring allowed) | Lift `WorkerJob::StubRpc`/`begin_stub_rpc` and the reserved `__celld$` key refusal (`harness.js:4436` in the fork) from royalcala `674a9c4`. Use the dedicated `CellJob::StubRpc` shape of `64f8785`, **never** method-name multiplexing (`c6123d0`). |
+| 3.1 | Take royalcala `280897e` (facet and loader args lift) once capabilities are sound | From cnicolov `fcb1977`: the transactional lift (roll back transfers, routes and stream locks on failure), revive-once for aliased markers, the disposer snapshot through cloning, and the `CallOrder` + egress-gate wiring. From royalcala `2bd84cd`: the `__facetStubs`/Proxy-RpcTarget resolution. |
+| 3.2 | Take only the local `dup()` part of royalcala `874a2f2` | Reject its native `onRpcBroken` (D3). From IlyaGulya `779b7c9`: importer request-context adoption with implicit release, and a `/state` live-capability counter (expose this from `CapRegistry` as a metric). |
+| 3.3 | | 1.12 already covers DO-stub RpcPromises. |
 
 **Risks:**
 - **WebSocket-session contexts.** The workshop mints Cap'n Web stubs inside a
@@ -904,7 +1216,22 @@ Value kinds, each crossing every boundary:
 - a 33 MiB payload (refused)
 - a forged `__celld$cap` object (refused)
 
-Plus `examples/rpc-caps/` as a runnable example.
+Plus `examples/rpc-caps/` as a runnable example. Seed it from cnicolov's
+`examples/rpc-capabilities/` and `tests/rpc_capabilities.rs`.
+
+The matrix also includes:
+- facet and Dynamic Worker rows (N3)
+- params duplicated across isolates (N1)
+- a call into a retiring session isolate, and one into a freed isolate (N5)
+- port IlyaGulya's `/transient`, `/do-return-rpc`, `/facet-capability-arg`
+  and `/loader-do-only`
+
+**Security cases:** each forgery shape from the prior-art warning must be
+refused, without reproducing it as a working exploit:
+- a reserved-key marker in user data
+- a method name that looks like an internal op
+- a stale id after the cell is re-activated
+- a capability redeemed by an isolate other than its destination
 
 **Integration (adapter):** turn on `workshop-lifecycle`, `workshop-agent`
 (chat only), `workshop-presence` and `observer-*` in `status.json`.
@@ -959,12 +1286,33 @@ Calls into the facet carry RpcTargets both ways: the ApprovalQueue goes in, and
 sessions and slash-command providers come out. Those use Phase 3 over boundary
 E.
 
+**Prior art.** IlyaGulya `30f2a48` shows that a DurableObjectClass returned or
+relayed from another script works as a facet class (its `returned` and
+`relayed service DO class` cases). It uses `Generation::service_class_config`
+and `op_service_class_loader` to run the class.
+
+**Reference only:** it starts a standalone loader isolate per (script, class)
+in every receiving isolate and caches it forever. That means a cold compile
+per Overseer isolate, no pool accounting, and a conflict with v0.6.1's release
+of unreferenced loaded Workers. D8 resolves to `FacetHost::Script` on the
+script's cell pool instead.
+
+**N7: bring the AI shim's `toMarkdown` forward to this phase.** Without
+`WORKERS_AI`, the agent's `webFetch` of HTML crashes. That happens on the chat
+path (J3 and J6), not only in web search.
+- Wire up the `toMarkdown` half of 9.2 here, so manual chat testing isn't
+  blocked.
+- Don't copy patcon's app patch (`ead1d36`).
+
 ### Tests
 
 **Unit:**
 - `FacetHost::Script` resolution
 - the `ROOT_FACETS` record and its release on Stop and on Swap
 - slot `cells` accounting with a facet from another script
+
+**Integration:** port IlyaGulya's `/returned-do-class`, `/relayed-do-class`
+and `/facet-service-props-roundtrip`.
 
 **Integration:** `facets/cross-script`:
 - A's DO opens B's class as a facet.
@@ -1049,6 +1397,26 @@ From `api/restore.c++` and `server/factory/worker-factory.c++:959-1255`:
 - **Re-entrancy risk.** A replay triggered from the Overseer's own event must
   dispatch within the current turn, not queue behind it.
 
+**Prior art.**
+- **Skip royalcala `2bd84cd`'s restore.** Its `_cf_RESTORE` table design has
+  four problems:
+  - restored stubs can't be stored, because `__storedLift` has no case for
+    them;
+  - rows leak, because refcounts don't survive a restart;
+  - handles alias after `deleteAll`, because they come from `MAX(handle)+1`;
+  - facets and Dynamic Workers have no self-token.
+
+  Our `rst` tokens follow workerd instead. Reuse its `__ctxInstance` plumbing
+  and its synchronous stateless `[restore]`.
+- **Reference IlyaGulya `c79ef09`.** Its recipes replay only in the current
+  isolate, but its nested-recipe envelope for loaded workers
+  (`__celld$loaderCall`) is a useful shape for 5.1's forger path.
+- **Skip royalcala `c6a3e55` and `ef0d54d`** (patcon's async, live-only
+  restore). `c6a3e55` references `__tracing` before it is defined.
+- **Port IlyaGulya's restore cases with workerd expectations:**
+  `/persistent-restore`, `/nested-restore-forger`, and the store/restart/read
+  pairs for persistent, nested and switch.
+
 ### Tests
 
 **Unit:**
@@ -1107,6 +1475,14 @@ Deliver one `tail([event])` per invocation, with:
 
 Refuse `streamingTails`.
 
+**Prior art.**
+- **Take royalcala `2f10749`** (patcon `d35faa8`, adapted to v0.6.2): it adds
+  `TailReportState.rpc_method`, `WorkerJob::Rpc.tail_report` and
+  `__deliverTails`. Then add facet fetch, RPC and alarm events, and the
+  `streamingTails` refusal.
+- **Reference IlyaGulya `f62bf29`.** It delivers tails before the call
+  answers, which differs from workerd.
+
 **Tests.**
 - Unit: the event JSON for each kind.
 - Integration: `dynamic-workers/tails-rpc` and `tails-facet`, with the shape
@@ -1132,6 +1508,10 @@ costs a host hop per chunk.
 - A `WritableStream` crosses the same way in reverse.
 - Value streams keep the bridge.
 - Revived readables are internal byte streams (1.8).
+
+**Prior art.** royalcala `ef5e87c` carries streams as capabilities, one host
+round trip per chunk. Use it as a correctness baseline and reference only; the
+single-claim design above is the target, because packs reach 64 MiB.
 
 **Unblocks:**
 - `GadgetClient.export()` (`overseer.ts:12921`)
@@ -1181,6 +1561,26 @@ with "RPC capabilities cannot cross nodes yet" (D2).
   break its imports and release its exports. The incarnation id catches
   restarts.
 - **Pipelining.** Wire-level pipelining for calls on unanswered results.
+
+**Prior art.** IlyaGulya `b22c115`, `779b7c9` and `2a4a1d6` are a reference.
+
+| Adopt | Don't adopt |
+| --- | --- |
+| The identity triple: node, **process generation from the signed node lease** (use that as our incarnation, rather than inventing one), and id | HTTP-per-op transport (it breaks e-order) |
+| Resolving the origin node's address through the signed lease | Sequential ids |
+| `GONE` semantics for a restarted origin | Bumping `PROTOCOL_VERSION` |
+| Implicit remote release when the importing request context drops | |
+
+**Take IlyaGulya `6e6af49` at any time (N11).** It is an independent fleet
+fix that applies cleanly: `RemoteRouteRetry::failed` sets `blocked` for
+`NeverConnected` + redispatch. Also offer it upstream.
+
+Gate this phase on the `tests/fleet/` scripts imported in 0.6:
+- `ha-test.sh`: a returned RpcTarget called through another node while its
+  owner is killed
+- `fleet-test.sh`
+- the soak, with a `/call` capability load, so leaked capabilities show up in
+  the `/state` counter
 
 **Which hops cross nodes in Cloudflare OS:**
 - browser subscribers and `notifyClosed` going into the User or Overseer DO
