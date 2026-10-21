@@ -1,0 +1,11 @@
+# tests/conformance is its own pnpm root: the celld repository has no other
+# JavaScript workspace, and this lockfile governs only the runner's toolchain.
+
+# Reject versions published within the last 24 hours, as the starter does.
+minimumReleaseAge: 1440
+
+# workerd installs its platform binary and esbuild its native executable in
+# install scripts. Nothing else may run one.
+allowBuilds:
+  esbuild: true
+  workerd: true

@@ -1,0 +1,8 @@
+{
+  "workers": ["sockets"],
+  "xfail": "1.17",
+  "steps": [
+    {"ws": "/hibernatable", "send": ["a"], "close": 1000},
+    {"ws": "/accepted", "send": ["a"], "close": 1000}
+  ]
+}

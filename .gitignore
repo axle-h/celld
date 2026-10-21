@@ -4,3 +4,6 @@
 .dev.vars
 node_modules/
 package-lock.json
+
+# tests/conformance: per-run copies of the cases (kept when a case fails)
+/tests/conformance/.run/

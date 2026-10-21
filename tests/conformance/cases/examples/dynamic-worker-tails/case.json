@@ -1,0 +1,9 @@
+{
+  "workers": ["dynamic-worker-tails"],
+  "steps": [
+    {"path": "/"},
+    {"path": "/tails?count=1"},
+    {"path": "/"},
+    {"path": "/tails?count=2"}
+  ]
+}

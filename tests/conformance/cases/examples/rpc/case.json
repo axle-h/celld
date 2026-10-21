@@ -1,0 +1,11 @@
+{
+  "workers": ["rpc"],
+  "steps": [
+    {"path": "/"},
+    {"path": "/", "method": "POST"},
+    {"path": "/", "method": "POST"},
+    {"path": "/"},
+    {"restart": true},
+    {"path": "/"}
+  ]
+}

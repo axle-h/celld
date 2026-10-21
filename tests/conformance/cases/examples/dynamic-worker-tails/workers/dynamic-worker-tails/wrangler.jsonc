@@ -1,0 +1,12 @@
+{
+  "name": "dynamic-worker-tails",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "worker_loaders": [{ "binding": "LOADER" }],
+  // Not in the example: the tail handler's records go to this object so a
+  // later step can read them.
+  "durable_objects": {
+    "bindings": [{ "name": "TAIL_LOG", "class_name": "TailLog" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TailLog"] }]
+}

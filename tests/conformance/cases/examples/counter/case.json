@@ -1,0 +1,10 @@
+{
+  "workers": ["counter"],
+  "steps": [
+    {"path": "/?name=a"},
+    {"path": "/?name=a"},
+    {"path": "/?name=b"},
+    {"restart": true},
+    {"path": "/?name=a"}
+  ]
+}

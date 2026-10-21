@@ -1,0 +1,48 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": "Hello from a Dynamic Worker!\n"
+    },
+    {
+      "status": 200,
+      "body": [
+        {
+          "workerId": "hello-v1",
+          "outcome": "ok",
+          "level": "log",
+          "message": [
+            "hello from loaded code"
+          ]
+        }
+      ]
+    },
+    {
+      "status": 200,
+      "body": "Hello from a Dynamic Worker!\n"
+    },
+    {
+      "status": 200,
+      "body": [
+        {
+          "workerId": "hello-v1",
+          "outcome": "ok",
+          "level": "log",
+          "message": [
+            "hello from loaded code"
+          ]
+        },
+        {
+          "workerId": "hello-v1",
+          "outcome": "ok",
+          "level": "log",
+          "message": [
+            "hello from loaded code"
+          ]
+        }
+      ]
+    }
+  ]
+}

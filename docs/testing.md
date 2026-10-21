@@ -16,6 +16,7 @@ full system by fault injection on live fleets.
 We run the same Workers and Durable Objects programs on workerd, Cloudflare's
 production runtime, and on celld, and the outputs must match. workerd supplies
 the reference output, so the expected behavior does not depend on celld.
+The corpus in this repository is [`tests/conformance/`](../tests/conformance/README.md).
 
 Each new API adds fixtures to the corpus. We also port the workerd Durable
 Objects contract tests, its web-platform globals tests, and the upstream Web

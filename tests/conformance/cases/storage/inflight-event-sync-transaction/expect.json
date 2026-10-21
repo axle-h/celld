@@ -1,0 +1,40 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "tag": "b",
+            "seen": {
+              "a": "a",
+              "b": "b"
+            },
+            "caught": null
+          },
+          {
+            "tag": "a",
+            "seen": {
+              "a": "a",
+              "b": "b"
+            },
+            "caught": "a rolled back"
+          }
+        ],
+        "final": {
+          "a": null,
+          "b": null,
+          "order": [
+            "b:waiting",
+            "a:open",
+            "b:resumed",
+            "b:open",
+            "a:after-wait"
+          ]
+        }
+      }
+    }
+  ]
+}

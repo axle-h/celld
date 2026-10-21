@@ -1,0 +1,9 @@
+{
+  "workers": ["facets"],
+  "steps": [
+    {"path": "/"},
+    {"path": "/"},
+    {"restart": true},
+    {"path": "/"}
+  ]
+}

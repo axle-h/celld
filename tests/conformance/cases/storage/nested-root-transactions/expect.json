@@ -1,0 +1,94 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "outer": 1,
+        "inner": 2
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "caught": "inner failed",
+        "outer": 1,
+        "inner": null
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "caught": "outer failed",
+        "outer": null,
+        "inner": null
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "outer": 1,
+        "inner": 2
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "caught": "inner failed",
+        "outer": 1,
+        "thrown": null,
+        "rolledBack": null
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "caught": "outer failed",
+        "outer": null,
+        "inner": null
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "caught": "inner failed",
+        "outer": 1,
+        "inner": null
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "tag": "a",
+            "seen": {
+              "a": "a",
+              "b": null
+            },
+            "caught": "a rolled back"
+          },
+          {
+            "tag": "b",
+            "seen": {
+              "a": null,
+              "b": "b"
+            },
+            "caught": null
+          }
+        ],
+        "order": [
+          "a:open",
+          "a:after-wait",
+          "b:open",
+          "b:after-wait"
+        ],
+        "final": {
+          "a": null,
+          "b": "b"
+        }
+      }
+    }
+  ]
+}

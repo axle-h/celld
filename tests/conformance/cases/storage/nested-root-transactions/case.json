@@ -1,0 +1,13 @@
+{
+  "workers": ["store"],
+  "steps": [
+    {"path": "/nested-sync"},
+    {"path": "/nested-sync-rollback"},
+    {"path": "/nested-sync-outer-rollback"},
+    {"path": "/nested-async"},
+    {"path": "/nested-async-rollback"},
+    {"path": "/nested-async-outer-rollback"},
+    {"path": "/async-outer-sync-inner-rollback"},
+    {"path": "/concurrent"}
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "workers": ["store"],
+  "xfail": "1.14",
+  "steps": [{"path": "/sync"}]
+}

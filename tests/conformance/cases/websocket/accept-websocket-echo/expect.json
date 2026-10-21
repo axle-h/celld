@@ -1,0 +1,39 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 426,
+      "body": "websocket upgrade required"
+    },
+    {
+      "frames": [
+        "{\"echo\":\"a\",\"count\":1}",
+        "{\"echo\":\"b\",\"count\":2}"
+      ],
+      "close": {
+        "code": 1000,
+        "reason": "closed 1000"
+      }
+    },
+    {
+      "restart": true
+    },
+    {
+      "frames": [
+        "{\"echo\":\"c\",\"count\":3}"
+      ],
+      "close": {
+        "code": 4000,
+        "reason": "closed 4000"
+      }
+    },
+    {
+      "frames": [],
+      "close": {
+        "code": 4001,
+        "reason": "server closed"
+      }
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "count": 0
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "count": 1
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "count": 2
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "count": 2
+      }
+    },
+    {
+      "restart": true
+    },
+    {
+      "status": 200,
+      "body": {
+        "count": 2
+      }
+    }
+  ]
+}

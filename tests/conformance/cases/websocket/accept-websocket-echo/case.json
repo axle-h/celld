@@ -1,0 +1,10 @@
+{
+  "workers": ["echo"],
+  "steps": [
+    {"path": "/"},
+    {"ws": "/", "send": ["a", "b"], "close": 1000},
+    {"restart": true},
+    {"ws": "/", "send": ["c"], "close": 4000},
+    {"ws": "/", "send": ["bye"]}
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "sockets",
+  "main": "index.js",
+  // Before 2026-04-07, so web_socket_auto_reply_to_close is off.
+  "compatibility_date": "2026-01-01",
+  "durable_objects": { "bindings": [{ "name": "SOCKETS", "class_name": "Sockets" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sockets"] }]
+}

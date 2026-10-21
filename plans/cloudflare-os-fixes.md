@@ -252,7 +252,7 @@ What a fresh machine needs, as on the machine where this plan was written
 | Rust | 1.99 (no `rust-toolchain` file) | `cargo build --profile lab -p celld` for test loops; `--release` (fat LTO) only for releases. Measured 2026-10-21 (V8 comes prebuilt): cold `lab` build 1m02s, warm rebuild after a `dev.rs` edit 25s. The 19 clippy warnings Rust 1.99 raised in v0.6.2 code are fixed (0.3). `fetch_update` stays behind `#[allow(deprecated)]`: its replacement `try_update` needs Rust 1.95 and the crates' `rust-version` is 1.94.1. The Dockerfile and `release.yml` build with Rust 1.98.1, so lints must pass on both. |
 | Node.js | 26.3 (via nvm) | Runs the starter's TypeScript directly (`node celld/generate.ts`). |
 | pnpm | 11.17 (the starter pins 11.17) | `pnpm install` in the starter also installs the `cloudflare-os/` submodule workspace through a postinstall hook. |
-| esbuild | 0.28.x | `celld deploy` and `celld dev` need it. It isn't on `PATH`; `starter:celld/env.sh` sets `CELLD_ESBUILD` from the starter's `node_modules`. Do the same in `tests/conformance`. |
+| esbuild | 0.28.x | `celld deploy` and `celld dev` need it. It isn't on `PATH`; `starter:celld/env.sh` sets `CELLD_ESBUILD` from the starter's `node_modules`. `tests/conformance` pins esbuild 0.28.1 as a devDependency and uses its own copy. |
 | podman | 5.8 | Runs Azurite: `mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --loose`. MinIO images can't be pulled anonymously any more. |
 | Python 3 | 3.x | `starter:celld/azurite-container.py <name>` creates a blob container (a SharedKey-signed PUT). |
 | `gh` | any | Reading workerd's source for differential details: `gh api repos/cloudflare/workerd/contents/<path>?ref=<tag>`. |
@@ -337,12 +337,12 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | Order | Item | Status | Commit |
 | --- | --- | --- | --- |
 | 1 | 0.1 Multi-config `celld dev` | done | `11f383b` |
-| 2 | 0.3 Rust unit-test convention, clippy clean on Rust 1.99 | done | see log |
-| 3 | 0.2 Conformance corpus and runner, seed cases (incl. 1.14) | next | |
-| 4 | 0.6 CI | queued | |
+| 2 | 0.3 Rust unit-test convention, clippy clean on Rust 1.99 | done | `d20d9a6` |
+| 3 | 0.2 Conformance corpus and runner, seed cases | done | see log |
+| 4 | 0.6 CI | next | |
 | 5 | 0.4 Starter e2e harness, mock LLM, smoke, baseline | queued | |
 | 6 | Phase 0 gate evidence | queued | |
-| 7+ | Phase 1 in plan order (1.1-1.16), then 0.5 after 1.7 | queued | |
+| 7+ | Phase 1 in plan order (1.1-1.17), then 0.5 after 1.7 | queued | |
 
 ## Phase overview
 
@@ -443,7 +443,7 @@ tests/conformance/
   "xfail": "1.7",
   "steps": [
     {"path": "/run"},
-    {"ws": "/x", "send": ["a"], "expect": ["echo:a"], "close": 1000},
+    {"ws": "/x", "send": ["a"], "close": 1000},
     {"restart": true},
     {"otlp": {"expectSpans": ["chat", "execute_tool"]}}
   ],
@@ -472,19 +472,27 @@ default.
 - **`path`**: an HTTP request to the primary; the response JSON is the
   transcript.
 - **`ws`**: open a WebSocket, send frames, compare received frames and the
-  close code.
+  close code. The step is `{ws, send, close?, receive?}`. With `close`, the
+  client waits for `receive` frames (default: one per frame sent) and then
+  closes with that code. Without `close`, it waits for the server to close.
+  Received frames are recorded in `expect.json`. A refused upgrade fails the
+  step.
+- `path` takes optional `method`, `headers` and `body`.
 - **`restart`**: stop the runtime, keep its state, start it again, then
   continue.
   - celld: `POST /shutdown`, then the same `celld dev` command without
     `--clean`.
-  - workerd: re-create the harness with the same persistence directory. If
-    `createTestHarness` can't persist state across instances (check this
-    first), the case becomes `celld-only`, with that as its `reason`.
-- **`otlp`**: assert on spans captured by the runner's in-process OTLP/HTTP
+  - workerd: `createTestHarness` hard-codes `persist: false`, so the runner
+    calls `harness.update(sameOptions)`. Miniflare then restarts workerd over
+    the same storage directory: memory resets and DO storage survives.
+    `examples/counter` records an in-memory count, so a restart that does
+    nothing fails.
+- **`otlp`** (arrives with 1.2; the runner refuses it until then): assert on spans captured by the runner's in-process OTLP/HTTP
   receiver (`lib/otlp.mjs`). The runner sets `CELLD_OTEL` to it. No collector
   container is needed.
 
-**Multi-node (`nodes > 1`, always `celld-only`).**
+**Multi-node (`nodes > 1`, always `celld-only`).** Arrives with the first
+case that needs it; the runner refuses `nodes` and a step's `node` until then.
 - The runner starts Azurite in podman and creates a container through
   `starter:celld/azurite-container.py`, or a copy under `lib/`.
 - It runs `celld deploy` for each worker (primary last), then starts N
@@ -501,26 +509,36 @@ default.
 **How the runner works.**
 - **celld:** runs `target/<profile>/celld dev --no-watch --clean --port 0 -c …`
   in a temp copy of the case. It waits for the ready line (0.1), runs the
-  steps, diffs against `expect.json`, then sends `POST /shutdown` to the
-  internal listener.
+  steps, diffs against `expect.json`, then sends
+  `POST /shutdown?handoff=preserve` to the internal listener, as `dev.rs`
+  does. Temp copies live in the ignored `tests/conformance/.run/`, so Workers
+  resolve this package's `node_modules`. `env` applies to celld only.
 - **workerd:** runs the case through wrangler's `createTestHarness`, the API
   `cos:integration-tests/src/harness.ts` uses.
 - **`--update`** writes `expect.json` **from workerd only**, and only for
-  `differential` cases.
+  `differential` cases. It runs each case twice and refuses to record if the
+  transcripts differ.
 - **`--runtime=both`** diffs the two runtimes live.
 
 **workerd version.** Pin wrangler, and so workerd, in `package.json`, and
 record the resolved workerd version in each `expect.json` header.
-- The starter currently has two: 1.20261001.1 and 1.20261019.1.
-- Record which one wrangler 4.147.0 resolves to (`pnpm why workerd`).
+- wrangler 4.147.0 resolves a single workerd, **1.20261001.1**. A
+  differential case fails when the installed workerd differs from its
+  `expect.json` header.
+- **Known workerd behaviour to avoid in cases:** an event waiting on a timer
+  while another event holds `transaction()` or `blockConcurrencyWhile` and
+  awaits its own timer deadlocks workerd, which resets the object after 30 s.
+  celld completes.
 
 **Seed cases**, which pin current behaviour:
 - `examples/rpc` (same-isolate RPC)
 - `examples/facets`
 - `examples/dynamic-worker-tails`
 - `examples/counter`
-- `storage/nested-root-transactions` (see 1.14). Already fixed upstream, so
-  it is a first green case on both runtimes.
+- `storage/nested-root-transactions` (see 1.14), green on both runtimes
+- `storage/inflight-event-{async,sync}-transaction` (xfail until 1.14)
+- `websocket/accept-websocket-echo`, and `websocket/close-without-handler`
+  (xfail until 1.17)
 
 **Prior art.** IlyaGulya's `examples/cloudflare-os-compat/` is a 43-case
 `curl`-and-substring suite of Cloudflare OS primitives. Run
@@ -1272,22 +1290,31 @@ result.
   
   All diffed against workerd.
 
-### 1.14 Nested transactions on the root storage object (N8): already fixed, pin it
+### 1.14 Transactions on the root storage object (N8)
 
-**Status.** Already fixed upstream in v0.6.0.
-- `transactionSync` and `transaction()` called on the **root** storage object
-  inside an open transaction route into the open view. The owner is scoped by
-  `__io_context_id()` (`harness.js:1759-1780`, `1897-1911`; denoland/celld#226).
-- mohamedalichelbi `7221aa7` is a v0.3.0 fix that this supersedes. **Do not
-  port it.**
+**Status.** Nested transactions are already fixed upstream in v0.6.0, and
+`storage/nested-root-transactions` pins them on both runtimes: nested sync and
+async, inner-only rollback, an inner commit undone by an outer rollback, and
+two concurrent events (which both runtimes run one after the other; the order
+is in the transcript). mohamedalichelbi `7221aa7` is a v0.3.0 fix that this
+supersedes. **Do not port it.**
 
-**Work.** Add the conformance case `storage/nested-root-transactions` as a
-0.2 seed case. It covers:
-- nested sync
-- nested async
-- interleaved async calls from two events, each staying in its own
-  transaction
-- rollback of the inner transaction only
+**Problem (found by 0.2).** The fix scopes the open transaction to its owner
+event with `__io_context_id()` (`harness.js:1759-1780`, `1897-1911`;
+denoland/celld#226). workerd has no such scoping. When event b is already in
+flight and starts a transaction while event a's is open, workerd **joins** b
+to a's transaction: each sees the other's uncommitted writes, and a's rollback
+discards b's write. celld instead gives b a separate transaction that waits
+for a (async), or throws "cannot start a transaction within a transaction"
+(sync). `storage/inflight-event-{async,sync}-transaction` pin workerd's
+behaviour and are xfail. Replacing the owner check with `true` at both sites
+makes both XPASS.
+
+**Decision.** Match workerd (the reference), following the plan's rule: drop
+the owner scoping so an in-flight event joins the open transaction. Check
+that the nested and concurrent cases stay green.
+
+**Tests.** Remove `xfail` from both in-flight cases.
 
 ### 1.15 `process.env` and `node:process` (N9)
 
@@ -1339,6 +1366,25 @@ showed.
   test until it is classified.
 - Integration: a `deploy/` case where a refused flag stops the deploy, and one
   per honoured flag.
+
+### 1.17 Close replies on WebSockets with no close handler
+
+**Problem (found by 0.2).** celld always answers a peer's Close with an echo
+(`ws_registry.rs` ~1246). workerd 1.20261001.1 does not:
+- Hibernatable sockets never get an automatic reply. With no
+  `webSocketClose` handler, the client sees 1006.
+- Sockets accepted with `accept()` reply automatically only under
+  `web_socket_auto_reply_to_close` (enable date 2026-04-07, disabled by
+  `web_socket_manual_reply_to_close`). Before that date, the socket is
+  half-open until the Worker calls `close()`.
+
+**Design.** Match workerd: no automatic reply for hibernatable sockets, and
+for accepted sockets only when the flag is on. 1.16 classifies both flags as
+honoured.
+
+**Tests.** `websocket/close-without-handler` (compat date 2026-01-01) loses
+its `xfail`. Add the same case at a date after 2026-04-07 for the accepted
+socket.
 
 ### Phase 1 gate
 

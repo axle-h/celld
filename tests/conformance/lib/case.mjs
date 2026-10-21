@@ -1,0 +1,206 @@
+// Loads and validates a case directory. Every malformed field is an error that
+// names the case and the field: a case that quietly runs less than it says
+// would pin nothing.
+
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+
+const CASE_KEYS = new Set(["kind", "reason", "workers", "env", "nodes", "xfail", "steps", "normalize"]);
+const STEP_KEYS = {
+  path: new Set(["path", "method", "headers", "body"]),
+  ws: new Set(["ws", "send", "receive", "close"]),
+  restart: new Set(["restart"]),
+};
+const NORMALIZE_KEYS = new Set(["pattern", "replace", "why"]);
+
+export class CaseError extends Error {}
+
+/** Every case directory under `root`, as ids like `examples/rpc`, sorted. */
+export function findCases(root) {
+  const ids = [];
+  const walk = (dir) => {
+    if (existsSync(join(dir, "case.json"))) {
+      ids.push(relative(root, dir).split("\\").join("/"));
+      return;
+    }
+    for (const entry of readdirSync(dir).sort()) {
+      const path = join(dir, entry);
+      if (statSync(path).isDirectory()) walk(path);
+    }
+  };
+  walk(root);
+  return ids;
+}
+
+export function loadCase(root, id) {
+  const dir = join(root, id);
+  const fail = (message) => {
+    throw new CaseError(`${id}/case.json: ${message}`);
+  };
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(join(dir, "case.json"), "utf8"));
+  } catch (error) {
+    fail(`cannot be read as JSON: ${error.message}`);
+  }
+  if (!isObject(raw)) fail("must be a JSON object");
+  for (const key of Object.keys(raw)) {
+    if (!CASE_KEYS.has(key)) fail(`unknown key "${key}"`);
+  }
+
+  const kind = raw.kind ?? "differential";
+  if (kind !== "differential" && kind !== "celld-only") {
+    fail(`"kind" must be "differential" or "celld-only", not ${JSON.stringify(kind)}`);
+  }
+  if (kind === "celld-only" && !nonEmptyString(raw.reason)) {
+    fail(`a celld-only case needs a "reason" saying why workerd cannot run it`);
+  }
+  if (kind === "differential" && "reason" in raw) {
+    fail(`"reason" is only for celld-only cases`);
+  }
+
+  if (!Array.isArray(raw.workers) || raw.workers.length === 0) {
+    fail(`"workers" must be a non-empty array of worker directory names; the first is the primary`);
+  }
+  for (const name of raw.workers) {
+    if (!nonEmptyString(name) || !/^[A-Za-z0-9_-]+$/.test(name)) {
+      fail(`worker name ${JSON.stringify(name)} must be a plain directory name`);
+    }
+    if (!existsSync(join(dir, "workers", name, "wrangler.jsonc"))) {
+      fail(`worker "${name}" has no workers/${name}/wrangler.jsonc`);
+    }
+  }
+  if (new Set(raw.workers).size !== raw.workers.length) fail(`"workers" names a worker twice`);
+
+  const env = raw.env ?? {};
+  if (!isObject(env)) fail(`"env" must be an object of strings`);
+  for (const [name, value] of Object.entries(env)) {
+    if (!/^[A-Z_][A-Z0-9_]*$/i.test(name)) fail(`"env" name ${JSON.stringify(name)} is not an environment variable name`);
+    if (typeof value !== "string") fail(`"env.${name}" must be a string`);
+  }
+
+  if ("nodes" in raw) {
+    if (!Number.isInteger(raw.nodes) || raw.nodes < 1) fail(`"nodes" must be a positive integer`);
+    if (raw.nodes > 1) {
+      fail(
+        `"nodes": ${raw.nodes} is not supported yet. Multi-node cases (plan 0.2) arrive with the ` +
+          `first case that needs one; add the fleet bring-up to lib/ in that change`,
+      );
+    }
+  }
+
+  if ("xfail" in raw && !nonEmptyString(raw.xfail)) {
+    fail(`"xfail" must name the plan item that fixes the case, such as "1.7"`);
+  }
+
+  if (!Array.isArray(raw.steps) || raw.steps.length === 0) fail(`"steps" must be a non-empty array`);
+  const steps = raw.steps.map((step, index) => validateStep(step, (message) => fail(`steps[${index}]: ${message}`)));
+
+  const normalize = raw.normalize ?? [];
+  if (!Array.isArray(normalize)) fail(`"normalize" must be an array`);
+  const rules = normalize.map((rule, index) => {
+    const at = (message) => fail(`normalize[${index}]: ${message}`);
+    if (!isObject(rule)) at("must be an object");
+    for (const key of Object.keys(rule)) if (!NORMALIZE_KEYS.has(key)) at(`unknown key "${key}"`);
+    if (!nonEmptyString(rule.pattern)) at(`"pattern" must be a non-empty regular expression`);
+    if (typeof rule.replace !== "string") at(`"replace" must be a string`);
+    if (!nonEmptyString(rule.why)) at(`"why" must say which value is nondeterministic and why`);
+    let regex;
+    try {
+      regex = new RegExp(rule.pattern, "g");
+    } catch (error) {
+      at(`"pattern" is not a valid regular expression: ${error.message}`);
+    }
+    return { regex, replace: rule.replace };
+  });
+
+  const expectPath = join(dir, "expect.json");
+  const expected = existsSync(expectPath) ? readExpect(id, expectPath, kind) : null;
+
+  return {
+    id,
+    dir,
+    kind,
+    reason: raw.reason,
+    workers: raw.workers,
+    env,
+    xfail: raw.xfail,
+    steps,
+    normalize: rules,
+    expectPath,
+    expected,
+  };
+}
+
+function validateStep(step, fail) {
+  if (!isObject(step)) fail("must be an object");
+  if ("otlp" in step) {
+    fail(`the "otlp" step and its receiver (lib/otlp.mjs) arrive with plan item 1.2`);
+  }
+  if ("node" in step) {
+    fail(`"node" directs a step in a multi-node case, which is not supported yet (plan 0.2)`);
+  }
+  const kinds = Object.keys(STEP_KEYS).filter((kind) => kind in step);
+  if (kinds.length !== 1) fail(`must have exactly one of ${Object.keys(STEP_KEYS).map((k) => `"${k}"`).join(", ")}`);
+  const [kind] = kinds;
+  for (const key of Object.keys(step)) {
+    if (!STEP_KEYS[kind].has(key)) fail(`unknown key "${key}" in a "${kind}" step`);
+  }
+  switch (kind) {
+    case "path":
+      if (!nonEmptyString(step.path) || !step.path.startsWith("/")) fail(`"path" must start with "/"`);
+      if ("method" in step && !(typeof step.method === "string" && /^[A-Z]+$/.test(step.method))) fail(`"method" must be an upper-case HTTP method`);
+      if ("headers" in step) {
+        if (!isObject(step.headers)) fail(`"headers" must be an object of strings`);
+        for (const [name, value] of Object.entries(step.headers)) {
+          if (typeof value !== "string") fail(`"headers.${name}" must be a string`);
+        }
+      }
+      if ("body" in step && typeof step.body !== "string") fail(`"body" must be a string`);
+      if ("body" in step && ["GET", "HEAD"].includes(step.method ?? "GET")) fail(`a ${step.method ?? "GET"} request cannot have a "body"`);
+      return { kind, path: step.path, method: step.method ?? "GET", headers: step.headers ?? {}, body: step.body };
+    case "ws": {
+      if (!nonEmptyString(step.ws) || !step.ws.startsWith("/")) fail(`"ws" must start with "/"`);
+      const send = step.send ?? [];
+      if (!Array.isArray(send) || !send.every((frame) => typeof frame === "string")) {
+        fail(`"send" must be an array of text frames`);
+      }
+      // With "close", the client closes after "receive" frames (by default
+      // one per frame sent). Without it, the step waits for the server to
+      // close.
+      if (!("close" in step)) {
+        if ("receive" in step) fail(`"receive" needs "close"; without "close" the step waits for the server to close`);
+        return { kind, path: step.ws, send, receive: Infinity };
+      }
+      if (!(Number.isInteger(step.close) && (step.close === 1000 || (step.close >= 3000 && step.close <= 4999)))) {
+        fail(`"close" must be 1000 or an application code in 3000-4999`);
+      }
+      const receive = step.receive ?? send.length;
+      if (!Number.isInteger(receive) || receive < 0) fail(`"receive" must be a non-negative integer`);
+      return { kind, path: step.ws, send, receive, close: step.close };
+    }
+    case "restart":
+      if (step.restart !== true) fail(`"restart" must be true`);
+      return { kind };
+  }
+}
+
+function readExpect(id, path, kind) {
+  const fail = (message) => {
+    throw new CaseError(`${id}/expect.json: ${message}`);
+  };
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    fail(`cannot be read as JSON: ${error.message}`);
+  }
+  if (!isObject(raw) || !Array.isArray(raw.steps)) fail(`must be an object with a "steps" array`);
+  if (kind === "differential" && !nonEmptyString(raw.workerd)) {
+    fail(`a differential case's expectation must record the "workerd" version it came from; re-record it with --update`);
+  }
+  return raw;
+}
+
+const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const nonEmptyString = (value) => typeof value === "string" && value.trim() !== "";

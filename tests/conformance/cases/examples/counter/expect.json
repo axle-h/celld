@@ -1,0 +1,41 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "n": 1,
+        "sinceStart": 1,
+        "url": "http://origin.test/?name=a"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "n": 2,
+        "sinceStart": 2,
+        "url": "http://origin.test/?name=a"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "n": 1,
+        "sinceStart": 1,
+        "url": "http://origin.test/?name=b"
+      }
+    },
+    {
+      "restart": true
+    },
+    {
+      "status": 200,
+      "body": {
+        "n": 3,
+        "sinceStart": 1,
+        "url": "http://origin.test/?name=a"
+      }
+    }
+  ]
+}
