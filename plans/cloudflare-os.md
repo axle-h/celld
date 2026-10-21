@@ -5,9 +5,9 @@ celld fleet instead of workerd/Cloudflare, deployed from the fork of
 `cloudflare-os-starter` (`~/projects/cloudflare-os-starter`, upstream pinned
 as the `cloudflare-os` submodule).
 
-Status: assessment done from source reading against celld v0.6.2. A trial
-deployment follows; its failures are recorded in
-[cloudflare-os-trial.md](cloudflare-os-trial.md).
+Status: assessed from source against celld v0.6.2, then trial-deployed on
+2026-10-21. The trial reaches sign-up and the home page; every workspace path
+fails. Failures are recorded in [cloudflare-os-trial.md](cloudflare-os-trial.md).
 
 ## What Cloudflare OS deploys
 
@@ -45,7 +45,8 @@ through `ctx.exports`. All but router and error-reporter set
 ### Runtime blockers (break the core app)
 
 1. **RPC capabilities cannot cross isolates.** Each co-hosted script has its
-   own isolate, and `harness.js` rejects a stub, RpcTarget, or stream that
+   own isolate, and so does each Durable Object relative to its own script's
+   stateless handler (confirmed in the trial), and `harness.js` rejects a stub, RpcTarget, or stream that
    crosses one ("RPC stubs cannot cross isolate boundaries yet",
    "RPC streams cannot cross isolate boundaries yet"). Cloudflare OS passes
    them between Workers everywhere: gatekeepers return
@@ -110,4 +111,19 @@ supported keys and runs the build step first.
 3. `ctx.restore` / `[restore]`.
 4. Service-binding `props` (small; fixes a silent drop).
 5. `tracing` module, `tailStream`, `global_fetch_strictly_public`.
-6. A celld config generator for the starter, and non-Access sign-in.
+6. A celld config generator for the starter, and non-Access sign-in. Done
+   for the trial (`celld/` in the starter fork).
+
+Found in the trial (see [cloudflare-os-trial.md](cloudflare-os-trial.md)),
+each small next to item 1:
+
+- WebSocket responses returned through a service binding lose the upgrade
+  (a bug; blocks the router).
+- `ctx.exports` namespaces for classes declared only in migrations.
+- JSON `vars` and `rules[].fallthrough` in `celld deploy`.
+- `stub.onRpcBroken()`.
+- BYOB readers on platform streams.
+
+Item 1 now comes first without question: it blocks a Worker from passing
+any capability to its own Durable Objects, and that gates every workspace
+feature.
