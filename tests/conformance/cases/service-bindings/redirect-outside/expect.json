@@ -1,0 +1,44 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "follow": {
+          "status": 200,
+          "location": null,
+          "body": "{\"landed\":\"?from=bounce\"}"
+        },
+        "top": {
+          "status": 302,
+          "location": "/landed?from=bounce",
+          "body": "bounce"
+        },
+        "object": {
+          "status": 302,
+          "location": "/landed?from=bounce",
+          "body": "bounce"
+        },
+        "back": {
+          "status": 302,
+          "location": "/landed?from=bounce",
+          "body": "bounce"
+        },
+        "backNamed": {
+          "status": 302,
+          "location": "/landed?from=bounce",
+          "body": "bounce"
+        },
+        "loopback": {
+          "status": 302,
+          "location": "/landed?from=bounce",
+          "body": "bounce"
+        },
+        "loopbackProps": {
+          "status": 302,
+          "location": "/landed?from=bounce",
+          "body": "bounce"
+        }
+      }
+    }
+  ]
+}

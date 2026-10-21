@@ -7,7 +7,7 @@ import { join, relative } from "node:path";
 
 const CASE_KEYS = new Set(["kind", "reason", "workers", "env", "observability", "nodes", "xfail", "steps", "normalize"]);
 const STEP_KEYS = {
-  path: new Set(["path", "method", "headers", "body"]),
+  path: new Set(["path", "method", "headers", "body", "responseHeaders"]),
   ws: new Set(["ws", "send", "receive", "close"]),
   restart: new Set(["restart"]),
   otlp: new Set(["otlp"]),
@@ -170,7 +170,21 @@ function validateStep(step, fail) {
       }
       if ("body" in step && typeof step.body !== "string") fail(`"body" must be a string`);
       if ("body" in step && ["GET", "HEAD"].includes(step.method ?? "GET")) fail(`a ${step.method ?? "GET"} request cannot have a "body"`);
-      return { kind, path: step.path, method: step.method ?? "GET", headers: step.headers ?? {}, body: step.body };
+      if ("responseHeaders" in step) {
+        const names = step.responseHeaders;
+        if (!Array.isArray(names) || names.length === 0 || !names.every((name) => typeof name === "string" && /^[a-z0-9-]+$/.test(name))) {
+          fail(`"responseHeaders" must be a non-empty array of lower-case header names`);
+        }
+        if (new Set(names).size !== names.length) fail(`"responseHeaders" names a header twice`);
+      }
+      return {
+        kind,
+        path: step.path,
+        method: step.method ?? "GET",
+        headers: step.headers ?? {},
+        body: step.body,
+        responseHeaders: step.responseHeaders,
+      };
     case "ws": {
       if (!nonEmptyString(step.ws) || !step.ws.startsWith("/")) fail(`"ws" must start with "/"`);
       const send = step.send ?? [];

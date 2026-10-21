@@ -1,0 +1,103 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 302,
+      "headers": {
+        "location": "/landed?from=back"
+      },
+      "body": "back redirects"
+    },
+    {
+      "status": 302,
+      "headers": {
+        "location": "/landed?from=back-named"
+      },
+      "body": "back-named redirects"
+    },
+    {
+      "status": 302,
+      "headers": {
+        "location": "/landed?from=loopback"
+      },
+      "body": "loopback redirects"
+    },
+    {
+      "status": 302,
+      "headers": {
+        "location": "/landed?from=self"
+      },
+      "body": "self redirects"
+    },
+    {
+      "status": 302,
+      "headers": {
+        "location": "/landed?from=object"
+      },
+      "body": "object redirects"
+    },
+    {
+      "status": 302,
+      "headers": {
+        "location": "/landed?from=facet"
+      },
+      "body": "facet redirects"
+    },
+    {
+      "status": 302,
+      "headers": {
+        "location": "/landed?from=loader"
+      },
+      "body": "loader redirects"
+    },
+    {
+      "status": 200,
+      "body": {
+        "top": "manual",
+        "copies": {
+          "request": "manual",
+          "urlAndRequest": "manual",
+          "clone": "manual",
+          "overridden": "follow"
+        },
+        "back": {
+          "follow": "manual",
+          "manual": "manual"
+        },
+        "backNamed": {
+          "follow": "manual",
+          "manual": "manual"
+        },
+        "selfBinding": {
+          "follow": "manual",
+          "manual": "manual"
+        },
+        "loopbackDefault": {
+          "follow": "manual",
+          "manual": "manual"
+        },
+        "loopbackNamed": {
+          "follow": "manual",
+          "manual": "manual"
+        },
+        "loopbackProps": {
+          "follow": "manual",
+          "manual": "manual"
+        },
+        "object": {
+          "follow": "manual",
+          "manual": "manual"
+        },
+        "facet": {
+          "follow": "manual",
+          "manual": "manual"
+        },
+        "loader": {
+          "follow": "manual",
+          "manual": "manual"
+        }
+      }
+    }
+  ]
+}

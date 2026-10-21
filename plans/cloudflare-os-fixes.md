@@ -347,8 +347,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 7 | 1.1 `cloudflare:workers` exports, `restore` | done | `3ef548c` |
 | 8 | 1.2 `tracing` with OTLP export | done | `6e8b960` |
 | 9 | 1.3 `ctx.exports` for migrated classes (W4 removed) | done | `9d443f5` |
-| 10 | 1.4 service-binding `props`, refused keys | done | see log |
-| 11+ | Phase 1 in plan order (1.5-1.19), then 0.5 after 1.7 | queued | |
+| 10 | 1.4 service-binding `props`, refused keys | done | `7e8570d` |
+| 11 | 1.5 `redirect: "manual"` on incoming requests | done | see log |
+| 12+ | Phase 1 in plan order (1.6-1.20), then 0.5 after 1.7 | queued | |
 
 ## Phase overview
 
@@ -475,8 +476,9 @@ default.
   `--update` never touches these cases.
 
 **Steps.**
-- **`path`**: an HTTP request to the primary; the response JSON is the
-  transcript.
+- **`path`**: an HTTP request to the primary; the response status and body
+  (JSON when typed so) are the transcript, plus any headers named in
+  `responseHeaders`. The client doesn't follow redirects.
 - **`ws`**: open a WebSocket, send frames, compare received frames and the
   close code. The step is `{ws, send, close?, receive?}`. With `close`, the
   client waits for `receive` frames (default: one per frame sent) and then
@@ -1023,8 +1025,14 @@ requests, DO `__dispatchTo`, service-binding targets and entrypoint targets.
 
 **Tests.**
 - Integration: a `service-bindings/redirect` case. A front forwards `req` to a
-  back that returns 302, and the client sees the 302. The same holds for
-  `fetch(req)` to an outside URL.
+  back that returns 302, and the client sees the 302. It records `redirect`
+  as seen by every target: top-level, service binding, named entrypoint,
+  self binding, the three `ctx.exports` shapes, DO, facet and loader.
+- `fetch(req)` to an outside URL is the celld-only
+  `service-bindings/redirect-outside`: wrangler's harness follows redirects
+  in its Node outbound service, whatever the mode. It reaches the node's own
+  public listener over loopback, so 1.9 must keep it working (see 1.9).
+- Path steps gained `responseHeaders` to record headers such as `Location`.
 
 ### 1.6 Deploy configuration relaxations
 
@@ -1298,6 +1306,11 @@ not only ones that set the flag.
     refused
   - the internal listener refused even when allowlisted
   - `new WebSocket()` to a private address refused
+- The runner starts celld on `--port 0`, so cases that fetch the node's own
+  public listener (`service-bindings/redirect-outside`) need the runner to
+  allow that port, or a placeholder in `env`. Decide whether the node's own
+  public listener is always blocked; if it is, move such cases to a separate
+  Worker served elsewhere.
 - E2E/manual:
   - The trial's mock LLM needs `CELLD_FETCH_PRIVATE_ALLOW=127.0.0.1:11434`
     (add it to `env.sh`).
@@ -1519,6 +1532,25 @@ already does.
 
 **Tests.** Update the `tracing/otlp-export` transcript, which pins the new
 root today.
+
+### 1.20 Redirect handling (found by 1.5)
+
+Each one differs from workerd 1.20261001.1:
+- `fetch()` on a DO stub with the default `follow` returns the 302. workerd
+  follows it through the same stub. Loader entrypoint and facet fetch
+  likely share the path.
+- A service binding follows a redirect through the global `fetch`. workerd
+  follows it through the same Fetcher, so a relative `Location` goes back
+  to the service.
+- `redirect: "error"` is accepted. workerd throws `TypeError: Invalid
+  redirect value, must be one of "follow" or "manual" ("error" won't be
+  implemented since it does not make sense at the edge; use "manual" and
+  check the response status code).`
+- After a followed redirect, `response.url` is the original URL and
+  `redirected` is false. workerd gives the final URL and `true`.
+
+**Tests.** Differential cases for each, in `service-bindings/` and
+`fetch/`.
 
 ### Phase 1 gate
 

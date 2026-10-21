@@ -1,0 +1,8 @@
+{
+  "kind": "celld-only",
+  "reason": "wrangler's createTestHarness sends every global fetch() through a Node outboundService that calls globalThis.fetch(request.url, request), which follows redirects whatever mode the Worker set, so workerd's own behaviour (handleHttpResponse in api/http.c++ follows only Redirect::FOLLOW) can't be recorded. The expected transcript is workerd's: a forwarded incoming request has mode manual, so the 302 comes back.",
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/outside"}
+  ]
+}

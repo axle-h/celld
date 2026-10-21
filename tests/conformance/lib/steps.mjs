@@ -74,7 +74,11 @@ async function fetchStep(origin, step) {
       // diff shows it instead of the runner failing on it.
     }
   }
-  return { status: response.status, body };
+  if (step.responseHeaders === undefined) return { status: response.status, body };
+  // Only the headers the step names: the rest (date, server, content-length)
+  // differ between runtimes without meaning anything.
+  const headers = Object.fromEntries(step.responseHeaders.map((name) => [name, response.headers.get(name)]));
+  return { status: response.status, headers, body };
 }
 
 function webSocketStep(origin, step) {

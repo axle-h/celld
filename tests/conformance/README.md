@@ -56,6 +56,7 @@ nondeterministic case shows up when it is recorded. A case runs as it would unde
   "steps": [
     { "path": "/run" },
     { "path": "/items", "method": "POST", "headers": { "content-type": "text/plain" }, "body": "x" },
+    { "path": "/login", "responseHeaders": ["location"] },
     { "ws": "/socket", "send": ["a"], "close": 1000 },
     { "restart": true }
   ],
@@ -89,8 +90,10 @@ whose support hasn't landed yet: `nodes` greater than 1 or a step's `node`
 ### Steps
 
 - **`path`**: an HTTP request to the primary. `method`, `headers` and `body`
-  are optional. The transcript records the status and the body, parsed as
-  JSON when the response says it is JSON.
+  are optional. The client does not follow redirects. The transcript records
+  the status and the body, parsed as JSON when the response says it is JSON.
+  `responseHeaders` (lower-case names, such as `["location"]`) also records
+  those response headers, `null` when absent.
 - **`ws`**: opens a WebSocket and sends the `send` frames.
   - With `close`, the client waits for `receive` frames, or one frame per
     frame sent by default. It then closes with that code.

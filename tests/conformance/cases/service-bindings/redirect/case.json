@@ -1,0 +1,13 @@
+{
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/forward", "responseHeaders": ["location"]},
+    {"path": "/forward-named", "responseHeaders": ["location"]},
+    {"path": "/forward-loopback", "responseHeaders": ["location"]},
+    {"path": "/forward-self", "responseHeaders": ["location"]},
+    {"path": "/forward-object", "responseHeaders": ["location"]},
+    {"path": "/forward-facet", "responseHeaders": ["location"]},
+    {"path": "/forward-loader", "responseHeaders": ["location"]},
+    {"path": "/modes"}
+  ]
+}

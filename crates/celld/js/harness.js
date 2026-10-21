@@ -545,7 +545,11 @@ const __makeRequest = __celld.__makeRequest = (
   // celld cannot prove Cloudflare edge metadata, so the object stays empty.
   // In particular, no client-controlled header becomes a country or a colo;
   // the forwarded-authority trust flag does not establish geolocation trust.
-  method, body, __headersJson: headersJson, signal, cf: {},
+  // Every incoming request has redirect mode "manual", as in workerd
+  // (`ServiceWorkerGlobalScope::request`): a Worker that forwards the request
+  // it received then hands a redirect back to its own client instead of
+  // following it.
+  method, body, __headersJson: headersJson, signal, cf: {}, redirect: "manual",
   __celldIncomingSignal: incomingSignal,
 });
 const __fmt = (a) => a.map((x) => {
@@ -3135,7 +3139,8 @@ const __CROSS_ORIGIN_SENSITIVE_HEADERS = [
 // belongs to the caller, because the Location leaves through the caller's
 // ambient outbound policy rather than gaining the target service's authority.
 // Capture the replayable request state before dispatch: a same-isolate target
-// receives the Request itself and can consume or mutate it before it redirects.
+// takes over a stream body and can consume it before it redirects. A byte body
+// is copied to the target.
 const __serviceRedirectState = (req) => ({
   method: req.method,
   headers: req.headers.__celldHeaderList,
@@ -3571,12 +3576,14 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
       // aborted with "The client has disconnected" when the caller
       // abandons the call or cancels the response body; the caller's
       // own signal races the dispatch so an abandoned call rejects
-      // immediately instead of pinning on a hung target.
+      // immediately instead of pinning on a hung target. Its redirect mode
+      // is an incoming request's (see __makeRequest), not the caller's.
       const requestController = new AbortController();
       const dispatch = __dispatchEntrypointFetch(
         entrypoint ?? "default",
         new Request(req, {
           signal: requestController.signal,
+          redirect: "manual",
           __celldIncomingSignal: true,
         }),
         propsSc ?? null);
@@ -3597,9 +3604,13 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
       __cell.svcDepth = (__cell.svcDepth || 0) + 1;
       const ctx = __beginEvent();
       try {
+        // The target gets an incoming request's redirect mode (see
+        // __makeRequest), so it needs its own Request rather than the
+        // caller's.
+        const incoming = new Request(req, { redirect: "manual" });
         return __finishServiceFetch(
           await __ctxRun(undefined,
-            () => __cell.selfFetch(req, __cell.env, ctx)),
+            () => __cell.selfFetch(incoming, __cell.env, ctx)),
           req, redirectState);
       } finally {
         __cell.svcDepth--;

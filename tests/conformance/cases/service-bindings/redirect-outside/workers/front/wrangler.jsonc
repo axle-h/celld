@@ -1,0 +1,15 @@
+// Service bindings to another script's default export and named entrypoint,
+// and a Durable Object.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [
+    { "binding": "BACK", "service": "back" },
+    { "binding": "BACK_NAMED", "service": "back", "entrypoint": "Named" }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "OBJ", "class_name": "Obj" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Obj"] }]
+}
