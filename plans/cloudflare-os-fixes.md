@@ -249,7 +249,7 @@ What a fresh machine needs, as on the machine where this plan was written
 
 | Tool | Version seen | Notes |
 | --- | --- | --- |
-| Rust | 1.99 (no `rust-toolchain` file) | `cargo build --profile lab -p celld` for test loops; `--release` (fat LTO) only for releases. Record the cold and warm `lab` build times here after the first build. |
+| Rust | 1.99 (no `rust-toolchain` file) | `cargo build --profile lab -p celld` for test loops; `--release` (fat LTO) only for releases. Measured 2026-10-21 (V8 comes prebuilt): cold `lab` build 1m02s, warm rebuild after a `dev.rs` edit 25s. Rust 1.99 raises 19 clippy warnings in code from v0.6.2 (`fetch_update` deprecation, `needless_borrow`, `double_must_use`), and they must be fixed before CI (0.6) can run with `-D warnings`. |
 | Node.js | 26.3 (via nvm) | Runs the starter's TypeScript directly (`node celld/generate.ts`). |
 | pnpm | 11.17 (the starter pins 11.17) | `pnpm install` in the starter also installs the `cloudflare-os/` submodule workspace through a postinstall hook. |
 | esbuild | 0.28.x | `celld deploy` and `celld dev` need it. It isn't on `PATH`; `starter:celld/env.sh` sets `CELLD_ESBUILD` from the starter's `node_modules`. Do the same in `tests/conformance`. |

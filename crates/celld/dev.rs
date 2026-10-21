@@ -35,7 +35,9 @@ pub fn open_local_bucket(database: &Path) -> anyhow::Result<Bucket> {
 
 #[derive(Debug)]
 struct Options {
-    project: Option<PathBuf>,
+    /// The configs in command-line order. The first is the primary, as for
+    /// `wrangler dev -c`. Empty means the current directory.
+    configs: Vec<PathBuf>,
     clean: bool,
     stack: StackOptions,
 }
@@ -114,7 +116,7 @@ impl Console {
     fn new() -> Self {
         let force = std::env::var_os("FORCE_COLOR").is_some_and(|value| value != "0");
         let color =
-            std::env::var_os("NO_COLOR").is_none() && (force || std::io::stdout().is_terminal());
+            std::env::var_os("NO_COLOR").is_none() && (force || std::io::stderr().is_terminal());
         Self { color }
     }
 
@@ -166,24 +168,26 @@ impl Console {
 }
 
 struct ProjectWatcher {
-    project: PathBuf,
+    projects: Vec<PathBuf>,
     ignored: Vec<Pattern>,
     _watcher: notify::RecommendedWatcher,
     changes: mpsc::UnboundedReceiver<notify::Result<notify::Event>>,
 }
 
 impl ProjectWatcher {
-    fn new(project: &Path, ignored: Vec<Pattern>) -> anyhow::Result<Self> {
+    fn new(projects: &[PathBuf], ignored: Vec<Pattern>) -> anyhow::Result<Self> {
         let (sender, changes) = mpsc::unbounded_channel();
         let mut watcher = notify::recommended_watcher(move |event| {
             let _ = sender.send(event);
         })
         .context("create the project watcher")?;
-        watcher
-            .watch(project, RecursiveMode::Recursive)
-            .with_context(|| format!("watch the project directory {}", project.display()))?;
+        for project in watch_roots(projects) {
+            watcher
+                .watch(project, RecursiveMode::Recursive)
+                .with_context(|| format!("watch the project directory {}", project.display()))?;
+        }
         Ok(Self {
-            project: project.to_path_buf(),
+            projects: projects.to_vec(),
             ignored,
             _watcher: watcher,
             changes,
@@ -214,7 +218,7 @@ impl ProjectWatcher {
                 .await
                 .context("the project watcher stopped")?
             {
-                Ok(event) if relevant_project_event(&self.project, &event, &self.ignored) => {
+                Ok(event) if relevant_project_event(&self.projects, &event, &self.ignored) => {
                     return Ok(())
                 }
                 Ok(_) => {}
@@ -224,7 +228,27 @@ impl ProjectWatcher {
     }
 }
 
-fn relevant_project_event(project: &Path, event: &notify::Event, ignored: &[Pattern]) -> bool {
+/// The directories to watch recursively. A recursive watch already covers a
+/// project inside another one, or a second config in the same directory, and
+/// a second watch would only deliver each event twice.
+fn watch_roots(projects: &[PathBuf]) -> Vec<&PathBuf> {
+    projects
+        .iter()
+        .enumerate()
+        .filter(|(index, project)| {
+            !projects.iter().enumerate().any(|(other, outer)| {
+                project.starts_with(outer) && (outer != *project || other < *index)
+            })
+        })
+        .map(|(_, project)| project)
+        .collect()
+}
+
+fn relevant_project_event(
+    projects: &[PathBuf],
+    event: &notify::Event,
+    ignored: &[Pattern],
+) -> bool {
     // A read is not a change. The inotify backend reports `Access(Open(Any))`
     // for every file that the bundler and the deploy step read, so a rebuild
     // produces the events that request the next rebuild and the supervisor
@@ -235,10 +259,16 @@ fn relevant_project_event(project: &Path, event: &notify::Event, ignored: &[Patt
     if matches!(event.kind, notify::EventKind::Access(_)) {
         return false;
     }
-    event
-        .paths
-        .iter()
-        .any(|path| !ignored_project_path(project, path, ignored))
+    event.paths.iter().any(|path| {
+        // The ignore rules are relative to the project that owns the path,
+        // which is the innermost one when one project contains another. A
+        // path outside every project cannot be judged, so it rebuilds.
+        projects
+            .iter()
+            .filter(|project| path.starts_with(project))
+            .max_by_key(|project| project.components().count())
+            .is_none_or(|project| !ignored_project_path(project, path, ignored))
+    })
 }
 
 fn ignored_project_path(project: &Path, path: &Path, ignored: &[Pattern]) -> bool {
@@ -333,23 +363,29 @@ impl ShutdownSignals {
 pub fn print_help() -> anyhow::Result<()> {
     crate::cli_output::Output::new(crate::cli_output::Format::Text).help(
         &format!("celld dev — run an application with persistent local storage\n\n\
-USAGE:\n  celld dev [PROJECT] [--host IP] [--port PORT] [--logs] [--no-watch] [--clean]\n\n\
-PROJECT is a directory or a Wrangler config. It defaults to the current\n\
-directory. celld stores all local state in PROJECT/.celld/dev, and it keeps\n\
-that state across a restart. A configuration change does not migrate the\n\
-state, so a cell can keep a value that the new configuration rejects. Use\n\
---clean to start from an empty local state.\n\n\
-A .dev.vars file beside the config supplies Worker variables in dotenv form,\n\
-as for wrangler dev. Without one, .env and then .env.local supply them, and\n\
-an entry of these files that cannot be a binding is skipped with a warning.\n\
-The entries override the vars of the config.\n\n\
-OPTIONS:\n  --host IP              Worker listener host (default: 127.0.0.1)\n  --port PORT            Worker listener port (default: {DEFAULT_PORT})\n  --clean                Delete PROJECT/.celld/dev before the server starts\n  --logs                 Show the node warning and information logs\n  --no-watch             Do not rebuild when a project file changes\n  --watch-ignore PATTERN Ignore a project-relative glob; repeat as needed\n  -h, --help             Show this help"
+USAGE:\n  celld dev [PROJECT] [-c CONFIG]... [--host IP] [--port PORT] [--logs] [--no-watch] [--clean]\n\n\
+PROJECT and each -c CONFIG are a directory or a Wrangler config. Without\n\
+either, celld uses the current directory. Several run together, as with\n\
+wrangler dev -c. The first one named is the primary: it serves the Worker\n\
+listener, and the others serve through its service bindings.\n\n\
+celld stores all local state in the primary's .celld/dev, and it keeps that\n\
+state across a restart. A configuration change does not migrate the state,\n\
+so a cell can keep a value that the new configuration rejects. Use --clean\n\
+to start from an empty local state, also after removing a config.\n\n\
+A .dev.vars file beside each config supplies its Worker variables in dotenv\n\
+form, as for wrangler dev. Without one, .env and then .env.local supply\n\
+them, and an entry of these files that cannot be a binding is skipped with\n\
+a warning. The entries override the vars of that config only.\n\n\
+When the node is ready, and again after each rebuild, celld prints one JSON\n\
+line to stdout with the Worker and operator origins.\n\n\
+OPTIONS:\n  -c, --config PATH      A config or project directory; repeat as needed\n  --host IP              Worker listener host (default: 127.0.0.1)\n  --port PORT            Worker listener port (default: {DEFAULT_PORT}; 0 picks a free one)\n  --clean                Delete the primary's .celld/dev before the server starts\n  --logs                 Show the node warning and information logs\n  --no-watch             Do not rebuild when a project file changes\n  --watch-ignore PATTERN Ignore a project-relative glob; repeat as needed\n  -h, --help             Show this help"
         ),
     )
 }
 
 fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Options>> {
-    let mut project = None;
+    let mut configs = Vec::new();
+    let mut positional = false;
     let mut host = IpAddr::V4(Ipv4Addr::LOCALHOST);
     let mut port = DEFAULT_PORT;
     let mut clean = false;
@@ -363,6 +399,10 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
             "--clean" => clean = true,
             "--logs" => logs = true,
             "--no-watch" => watch = false,
+            "--config" | "-c" => {
+                let value = arguments.next().context("--config requires a value")?;
+                configs.push(PathBuf::from(value));
+            }
             "--watch-ignore" => {
                 let value = arguments
                     .next()
@@ -383,12 +423,12 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
                 port = value
                     .parse::<u16>()
                     .with_context(|| format!("invalid --port value {value:?}"))?;
-                if port == 0 {
-                    bail!("--port must be between 1 and 65535");
-                }
             }
             other if other.starts_with('-') => bail!("unknown argument for `celld dev`: {other}"),
-            value if project.is_none() => project = Some(PathBuf::from(value)),
+            value if !positional => {
+                positional = true;
+                configs.push(PathBuf::from(value));
+            }
             value => bail!("celld dev accepts one PROJECT, but also received {value:?}"),
         }
     }
@@ -396,7 +436,7 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
         bail!("--watch-ignore cannot be used with --no-watch");
     }
     Ok(Some(Options {
-        project,
+        configs,
         clean,
         stack: StackOptions {
             listener: SocketAddr::new(host, port),
@@ -413,16 +453,19 @@ pub async fn run(arguments: Vec<String>) -> anyhow::Result<()> {
         print_help()?;
         return Ok(());
     };
-    let config = deploy::resolve_config(options.project)?;
-    let config = std::fs::canonicalize(&config)
-        .with_context(|| format!("resolve Wrangler config {}", config.display()))?;
-    let project = config
-        .parent()
-        .context("the Wrangler config has no project directory")?;
+    let configs = resolve_configs(options.configs)?;
+    let project = project_directory(&configs[0])?;
     let state = DevState::for_project(project);
     let console = Console::new();
     console.header();
-    console.detail("Project", &config.display().to_string());
+    for (index, config) in configs.iter().enumerate() {
+        let primary = if index == 0 && configs.len() > 1 {
+            " (primary)"
+        } else {
+            ""
+        };
+        console.detail("Project", &format!("{}{primary}", config.display()));
+    }
     console.detail("State", &state.path().display().to_string());
     // The delete runs before the directory is recreated, and the console names
     // the outcome. A developer who reaches for this flag is already unsure
@@ -452,7 +495,7 @@ pub async fn run(arguments: Vec<String>) -> anyhow::Result<()> {
     );
     let store = open_store(state.path(), &console).await?;
     run_stack(
-        &config,
+        &configs,
         state.path(),
         options.stack,
         &project_hash,
@@ -460,6 +503,38 @@ pub async fn run(arguments: Vec<String>) -> anyhow::Result<()> {
         &console,
     )
     .await
+}
+
+/// The canonical config paths, the primary first. A config named twice, also
+/// as a directory and as the file in it, is refused: it would deploy one
+/// Worker twice, and the second copy would decide which one is primary.
+#[allow(clippy::disallowed_methods)] // Project resolution uses the operator's host filesystem.
+fn resolve_configs(given: Vec<PathBuf>) -> anyhow::Result<Vec<PathBuf>> {
+    let given = if given.is_empty() {
+        vec![None]
+    } else {
+        given.into_iter().map(Some).collect()
+    };
+    let mut configs: Vec<PathBuf> = Vec::with_capacity(given.len());
+    for path in given {
+        let config = deploy::resolve_config(path)?;
+        let config = std::fs::canonicalize(&config)
+            .with_context(|| format!("resolve Wrangler config {}", config.display()))?;
+        if configs.contains(&config) {
+            bail!(
+                "the Wrangler config {} is given more than once",
+                config.display()
+            );
+        }
+        configs.push(config);
+    }
+    Ok(configs)
+}
+
+fn project_directory(config: &Path) -> anyhow::Result<&Path> {
+    config
+        .parent()
+        .context("the Wrangler config has no project directory")
 }
 
 #[allow(clippy::disallowed_methods)] // Local development state is an operator-owned host path.
@@ -582,29 +657,63 @@ fn quoted_lines(value: &str, lines: &mut std::str::Lines<'_>) -> Option<String> 
     None
 }
 
-async fn deploy_project(config: &Path, store: &Store, logs: bool) -> anyhow::Result<()> {
+/// Build every config, then write them with the primary last. Only the
+/// primary's write moves the fleet pointer, which selects the application, so
+/// neither a failed build nor a failed write can select another Worker.
+async fn deploy_projects(configs: &[PathBuf], store: &Store, logs: bool) -> anyhow::Result<()> {
     let bucket = open_local_bucket(&store.database)?;
-    let built = deploy::build(&deploy::Options {
-        config: Some(config.to_path_buf()),
-        bucket: None,
-        endpoint: None,
-        region: None,
-        dry_run: false,
-        json: false,
-        vars: read_dev_vars(config)?,
-        local_images: true,
-    })?;
+    let mut builds: Vec<(&PathBuf, deploy::Built)> = Vec::with_capacity(configs.len());
+    for config in deploy_order(configs) {
+        let built = deploy::build(&deploy::Options {
+            config: Some(config.clone()),
+            bucket: None,
+            endpoint: None,
+            region: None,
+            dry_run: false,
+            json: false,
+            vars: read_dev_vars(config)?,
+            local_images: true,
+        })?;
+        // One name is one pointer, so a second config with the name would
+        // silently replace the first.
+        if let Some((other, _)) = builds
+            .iter()
+            .find(|(_, other)| other.script_name == built.script_name)
+        {
+            bail!(
+                "{} and {} both name the Worker {:?}",
+                other.display(),
+                config.display(),
+                built.script_name
+            );
+        }
+        builds.push((config, built));
+    }
     if logs {
-        built.report();
+        for (_, built) in &builds {
+            built.report();
+        }
     }
     crate::wake_format::ensure_ready(&bucket).await?;
-    deploy::write(&bucket, &built).await
+    let (primary, components) = builds
+        .split_last()
+        .expect("celld dev resolves at least one config");
+    for (_, built) in components {
+        deploy::write_component(&bucket, built).await?;
+    }
+    deploy::write(&bucket, &primary.1).await
+}
+
+/// The configs in write order: the primary, which is first on the command
+/// line, comes last.
+fn deploy_order(configs: &[PathBuf]) -> impl Iterator<Item = &PathBuf> {
+    configs.iter().skip(1).chain(configs.first())
 }
 
 async fn run_stack(
-    config: &Path,
+    configs: &[PathBuf],
     state: &Path,
-    options: StackOptions,
+    mut options: StackOptions,
     project_hash: &str,
     store: &Store,
     console: &Console,
@@ -614,16 +723,17 @@ async fn run_stack(
     // handler afterwards leaves the new node orphaned under the default Unix
     // signal action.
     let mut signals = ShutdownSignals::install()?;
-    let project = config
-        .parent()
-        .context("the Wrangler config has no project directory")?;
+    let projects = configs
+        .iter()
+        .map(|config| project_directory(config).map(Path::to_path_buf))
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let mut watcher = options
         .watch
-        .then(|| ProjectWatcher::new(project, options.watch_ignores))
+        .then(|| ProjectWatcher::new(&projects, std::mem::take(&mut options.watch_ignores)))
         .transpose()?;
 
     console.progress("building the application");
-    deploy_project(config, store, options.logs).await?;
+    deploy_projects(configs, store, options.logs).await?;
     let mut running = start_node(
         state,
         options.listener,
@@ -633,6 +743,10 @@ async fn run_stack(
         console,
     )
     .await?;
+    // A restart keeps the port that `--port 0` drew, so the origin in the
+    // first ready line stays valid for the whole session. Another process can
+    // take the port while the node restarts; that start then fails loudly.
+    options.listener = running.public;
 
     loop {
         match wait_for_node_event(&mut running.child, &mut signals, watcher.as_mut()).await? {
@@ -649,7 +763,7 @@ async fn run_stack(
             }
             NodeEvent::Reload => {
                 console.progress("change detected; rebuilding the application");
-                if let Err(error) = deploy_project(config, store, options.logs).await {
+                if let Err(error) = deploy_projects(configs, store, options.logs).await {
                     console.failure(&format!("reload failed: {error:#}"));
                     continue;
                 }
@@ -671,6 +785,7 @@ async fn run_stack(
 
 struct RunningNode {
     child: Child,
+    public: SocketAddr,
     internal: String,
     output: tokio::task::JoinHandle<()>,
 }
@@ -771,15 +886,22 @@ async fn start_node(
         .stdout
         .take()
         .expect("the local node was configured with piped output");
-    let (internal_tx, internal_rx) = oneshot::channel();
+    let (listeners_tx, listeners_rx) = oneshot::channel();
     let output_console = *console;
     let output = tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
-        let mut internal_tx = Some(internal_tx);
+        let mut listeners_tx = Some(listeners_tx);
+        // The node announces its Worker listener first, and then the
+        // operator listener. `--port 0` makes the first the only source of
+        // the Worker port.
+        let mut public = None;
         while let Ok(Some(line)) = lines.next_line().await {
+            if let Some(address) = public_address(&line) {
+                public.get_or_insert(address);
+            }
             if let Some(origin) = internal_origin(&line) {
-                if let Some(sender) = internal_tx.take() {
-                    let _ = sender.send(origin);
+                if let (Some(public), Some(sender)) = (public, listeners_tx.take()) {
+                    let _ = sender.send((public, origin));
                 }
             }
             if logs || line.contains(" ERROR ") {
@@ -787,32 +909,72 @@ async fn start_node(
             }
         }
     });
-    let internal = match tokio::time::timeout(Duration::from_secs(30), internal_rx).await {
-        Ok(Ok(internal)) => internal,
+    let (public, internal) = match tokio::time::timeout(Duration::from_secs(30), listeners_rx).await
+    {
+        Ok(Ok(listeners)) => listeners,
         result => {
             stop_child(&mut child, None).await;
             let _ = output.await;
             match result {
-                Err(_) => bail!("the local node did not announce its operator listener"),
+                Err(_) => {
+                    bail!("the local node did not announce its Worker and operator listeners")
+                }
                 Ok(Err(_)) => {
-                    bail!("the local node exited before it announced its operator listener")
+                    bail!(
+                        "the local node exited before it announced its Worker and operator \
+                         listeners"
+                    )
                 }
                 Ok(Ok(_)) => unreachable!(),
             }
         }
     };
 
-    if let Err(error) = wait_for_node(&mut child, listener).await {
+    if let Err(error) = wait_for_node(&mut child, public).await {
         stop_child(&mut child, Some(&internal)).await;
         let _ = output.await;
         return Err(error);
     }
-    console.ready(&format!("http://{listener}"));
+    console.ready(&format!("http://{public}"));
+    let announced = ready_line(public, &internal).and_then(|line| {
+        crate::cli_output::Output::new(crate::cli_output::Format::Json).line(format_args!("{line}"))
+    });
+    if let Err(error) = announced {
+        stop_child(&mut child, Some(&internal)).await;
+        let _ = output.await;
+        return Err(error);
+    }
     Ok(RunningNode {
         child,
+        public,
         internal,
         output,
     })
+}
+
+/// The stdout record that tells a test runner, or any other tool, where the
+/// node serves. The public origin is one a client can connect to, so an
+/// unspecified listener host becomes loopback.
+fn ready_line(public: SocketAddr, internal: &str) -> anyhow::Result<String> {
+    #[derive(serde::Serialize)]
+    struct Ready<'a> {
+        event: &'static str,
+        public: String,
+        internal: &'a str,
+    }
+    Ok(serde_json::to_string(&Ready {
+        event: "ready",
+        public: format!("http://{}", connectable(public)),
+        internal,
+    })?)
+}
+
+fn public_address(line: &str) -> Option<SocketAddr> {
+    line.strip_prefix("celld listening on ")?
+        .split_once(' ')?
+        .0
+        .parse()
+        .ok()
 }
 
 fn internal_origin(line: &str) -> Option<String> {
@@ -829,15 +991,7 @@ async fn wait_for_node(child: &mut Child, listener: SocketAddr) -> anyhow::Resul
         .connect_timeout(Duration::from_millis(200))
         .timeout(Duration::from_secs(1))
         .build()?;
-    let readiness_host = match listener.ip() {
-        IpAddr::V4(address) if address.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
-        IpAddr::V6(address) if address.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),
-        address => address,
-    };
-    let url = format!(
-        "http://{}/.well-known/celld/health",
-        SocketAddr::new(readiness_host, listener.port())
-    );
+    let url = format!("http://{}/.well-known/celld/health", connectable(listener));
     let mut last = "the node did not answer".to_string();
     for _ in 0..300 {
         if let Some(status) = child.try_wait().context("read the local node status")? {
@@ -851,6 +1005,16 @@ async fn wait_for_node(child: &mut Child, listener: SocketAddr) -> anyhow::Resul
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     bail!("the local celld node did not become ready: {last}")
+}
+
+/// `listener` with an unspecified host replaced by loopback of its family.
+fn connectable(listener: SocketAddr) -> SocketAddr {
+    let host = match listener.ip() {
+        IpAddr::V4(address) if address.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(address) if address.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        address => address,
+    };
+    SocketAddr::new(host, listener.port())
 }
 
 async fn wait_for_node_event(
@@ -914,5 +1078,298 @@ async fn stop_child(child: &mut Child, internal: Option<&str>) {
     let waited = tokio::time::timeout(Duration::from_secs(35), child.wait()).await;
     if waited.is_err() {
         let _ = child.kill().await;
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)] // Tests build throwaway projects on the host filesystem.
+mod tests {
+    use super::*;
+
+    fn arguments(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    fn configs(values: &[&str]) -> Vec<PathBuf> {
+        options_from_arguments(arguments(values))
+            .unwrap()
+            .unwrap()
+            .configs
+    }
+
+    fn project(root: &Path, name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let directory = root.join(name);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("wrangler.jsonc"), "{}").unwrap();
+        for (file, contents) in files {
+            std::fs::write(directory.join(file), contents).unwrap();
+        }
+        directory
+    }
+
+    #[test]
+    fn one_config_is_positional_or_flagged() {
+        assert_eq!(configs(&[]), Vec::<PathBuf>::new());
+        assert_eq!(configs(&["front"]), [PathBuf::from("front")]);
+        assert_eq!(configs(&["-c", "front"]), [PathBuf::from("front")]);
+        assert_eq!(configs(&["--config", "front"]), [PathBuf::from("front")]);
+    }
+
+    #[test]
+    fn several_configs_keep_command_line_order() {
+        assert_eq!(
+            configs(&["-c", "front", "-c", "back", "--config", "other"]),
+            ["front", "back", "other"].map(PathBuf::from)
+        );
+        assert_eq!(
+            configs(&["front", "-c", "back"]),
+            ["front", "back"].map(PathBuf::from)
+        );
+        assert_eq!(
+            configs(&["-c", "front", "back"]),
+            ["front", "back"].map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn a_second_positional_project_is_refused() {
+        let error = options_from_arguments(arguments(&["front", "back"])).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "celld dev accepts one PROJECT, but also received \"back\""
+        );
+        let error = options_from_arguments(arguments(&["-c"])).unwrap_err();
+        assert_eq!(error.to_string(), "--config requires a value");
+    }
+
+    #[test]
+    fn port_zero_is_accepted() {
+        let options = options_from_arguments(arguments(&["--port", "0"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(options.stack.listener.port(), 0);
+    }
+
+    #[test]
+    fn a_config_given_twice_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let front = project(root.path(), "front", &[]);
+        let error = resolve_configs(vec![front.clone(), front.join("wrangler.jsonc")]).unwrap_err();
+        let config = std::fs::canonicalize(front.join("wrangler.jsonc")).unwrap();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "the Wrangler config {} is given more than once",
+                config.display()
+            )
+        );
+    }
+
+    #[test]
+    fn configs_resolve_in_order() {
+        let root = tempfile::tempdir().unwrap();
+        let front = project(root.path(), "front", &[]);
+        let back = project(root.path(), "back", &[]);
+        let resolved = resolve_configs(vec![front.clone(), back.join("wrangler.jsonc")]).unwrap();
+        assert_eq!(
+            resolved,
+            [front, back].map(|directory| {
+                std::fs::canonicalize(directory.join("wrangler.jsonc")).unwrap()
+            })
+        );
+    }
+
+    #[test]
+    fn the_primary_deploys_last() {
+        let given = ["front", "back", "other"].map(PathBuf::from);
+        assert_eq!(
+            deploy_order(&given).collect::<Vec<_>>(),
+            [&given[1], &given[2], &given[0]]
+        );
+        let single = [PathBuf::from("front")];
+        assert_eq!(deploy_order(&single).collect::<Vec<_>>(), [&single[0]]);
+    }
+
+    /// The process runtime that the local store's I/O runs on. It can be
+    /// installed only once per process, so every test shares it.
+    fn host_runtime() -> &'static tokio::runtime::Runtime {
+        static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+        RUNTIME.get_or_init(|| {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            crate::asyncrt::set_host_handle(runtime.handle().clone());
+            runtime
+        })
+    }
+
+    #[test]
+    fn only_the_primary_selects_the_application() {
+        host_runtime().block_on(only_the_primary_selects_the_application_on_the_host());
+    }
+
+    async fn only_the_primary_selects_the_application_on_the_host() {
+        let root = tempfile::tempdir().unwrap();
+        let mut configs = Vec::new();
+        for name in ["front", "back"] {
+            let directory = root.path().join(name);
+            std::fs::create_dir_all(directory.join("public")).unwrap();
+            std::fs::write(directory.join("public/index.html"), name).unwrap();
+            let config = directory.join("wrangler.jsonc");
+            std::fs::write(
+                &config,
+                format!(
+                    r#"{{"name":"{name}","compatibility_date":"2026-09-04","assets":{{"directory":"public"}}}}"#
+                ),
+            )
+            .unwrap();
+            configs.push(config);
+        }
+        let store = Store {
+            database: root.path().join("objects.sqlite3"),
+        };
+        let bucket = open_local_bucket(&store.database).unwrap();
+        let script = |key: &'static str| {
+            let bucket = &bucket;
+            async move {
+                let (body, _) = bucket.get(key).await.unwrap()?;
+                let pointer: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                Some(pointer["script_name"].as_str().unwrap().to_string())
+            }
+        };
+
+        deploy_projects(&configs, &store, false).await.unwrap();
+        assert_eq!(
+            script("deploy/current.json").await.as_deref(),
+            Some("front")
+        );
+        assert_eq!(
+            script("deploy/back/current.json").await.as_deref(),
+            Some("back")
+        );
+
+        // A component write alone, as when the primary's write then fails,
+        // names the component but leaves the application selected.
+        let built = deploy::build(&deploy::Options {
+            config: Some(configs[1].clone()),
+            bucket: None,
+            endpoint: None,
+            region: None,
+            dry_run: false,
+            json: false,
+            vars: deploy::VarOverrides::None,
+            local_images: true,
+        })
+        .unwrap();
+        deploy::write_component(&bucket, &built).await.unwrap();
+        assert_eq!(
+            script("deploy/current.json").await.as_deref(),
+            Some("front")
+        );
+    }
+
+    #[test]
+    fn dotenv_files_stay_with_their_config() {
+        let root = tempfile::tempdir().unwrap();
+        let front = project(root.path(), "front", &[(".dev.vars", "TOKEN=front\n")]);
+        let back = project(
+            root.path(),
+            "back",
+            &[
+                (".env", "TOKEN=back\nOTHER=1\n"),
+                (".env.local", "OTHER=2\n"),
+            ],
+        );
+        let empty = project(root.path(), "empty", &[]);
+        let vars = |directory: &Path| read_dev_vars(&directory.join("wrangler.jsonc")).unwrap();
+        let entries = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        match vars(&front) {
+            deploy::VarOverrides::DevVars(found) => {
+                assert_eq!(found, entries(&[("TOKEN", "front")]))
+            }
+            _ => panic!("front reads its .dev.vars"),
+        }
+        match vars(&back) {
+            deploy::VarOverrides::DotEnv(found) => {
+                assert_eq!(found, entries(&[("TOKEN", "back"), ("OTHER", "2")]))
+            }
+            _ => panic!("back reads its dotenv files"),
+        }
+        match vars(&empty) {
+            deploy::VarOverrides::DotEnv(found) => assert!(found.is_empty()),
+            _ => panic!("a project without files has no overrides"),
+        }
+    }
+
+    #[test]
+    fn the_ready_line_names_connectable_origins() {
+        assert_eq!(
+            ready_line("127.0.0.1:43210".parse().unwrap(), "http://127.0.0.1:43211").unwrap(),
+            r#"{"event":"ready","public":"http://127.0.0.1:43210","internal":"http://127.0.0.1:43211"}"#
+        );
+        assert_eq!(
+            ready_line("0.0.0.0:80".parse().unwrap(), "http://127.0.0.1:1").unwrap(),
+            r#"{"event":"ready","public":"http://127.0.0.1:80","internal":"http://127.0.0.1:1"}"#
+        );
+        assert_eq!(
+            ready_line("[::]:80".parse().unwrap(), "http://127.0.0.1:1").unwrap(),
+            r#"{"event":"ready","public":"http://[::1]:80","internal":"http://127.0.0.1:1"}"#
+        );
+    }
+
+    #[test]
+    fn the_node_announcements_parse() {
+        assert_eq!(
+            public_address("celld listening on 127.0.0.1:43210 (ownership=local)"),
+            Some("127.0.0.1:43210".parse().unwrap())
+        );
+        assert_eq!(
+            public_address("celld internal listening on 127.0.0.1:1 (advertise=x)"),
+            None
+        );
+        assert_eq!(
+            internal_origin("celld internal listening on 127.0.0.1:43211 (advertise=x)"),
+            Some("http://127.0.0.1:43211".to_string())
+        );
+    }
+
+    #[test]
+    fn each_directory_is_watched_once() {
+        let projects = [
+            "/work/app",
+            "/work/app/workers/back",
+            "/work/other",
+            "/work/app",
+        ]
+        .map(PathBuf::from);
+        assert_eq!(watch_roots(&projects), [&projects[0], &projects[2]]);
+    }
+
+    #[test]
+    fn ignore_rules_follow_the_innermost_project() {
+        let outer = PathBuf::from("/work/app");
+        let inner = PathBuf::from("/work/app/workers/back");
+        let sibling = PathBuf::from("/work/other");
+        let projects = [outer.clone(), inner.clone(), sibling.clone()];
+        let ignored = [Pattern::new("generated/**").unwrap()];
+        let event = |path: PathBuf| {
+            notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
+                .add_path(path)
+        };
+        let relevant = |path: PathBuf| relevant_project_event(&projects, &event(path), &ignored);
+        assert!(relevant(outer.join("src/index.js")));
+        assert!(relevant(inner.join("index.js")));
+        assert!(relevant(sibling.join("index.js")));
+        assert!(!relevant(inner.join("generated/out.js")));
+        assert!(!relevant(sibling.join("node_modules/x/index.js")));
+        // `generated/**` is relative to the inner project, not the outer one.
+        assert!(relevant(outer.join("workers/generated/x.js")));
+        assert!(!relevant(outer.join("generated/x.js")));
+        let read = notify::Event::new(notify::EventKind::Access(notify::event::AccessKind::Any))
+            .add_path(outer.join("src/index.js"));
+        assert!(!relevant_project_event(&projects, &read, &ignored));
     }
 }

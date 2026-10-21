@@ -267,27 +267,48 @@ of each resident object.
 ## Develop an application locally
 
 ```sh
-celld dev [PROJECT_DIR_OR_CONFIG]
+celld dev [PROJECT_DIR_OR_CONFIG] [-c CONFIG]...
 ```
 
 The command starts a local object store, deploys the application, and runs
 one node. It does not need Docker or a cloud bucket. The Worker listener
 is `http://127.0.0.1:9876` by default.
 
+To run several Workers together, name each config with `-c`, as for
+`wrangler dev -c`. The first config named, positional or `-c`, is the
+primary: it serves the Worker listener, and the others serve through its
+service bindings. celld deploys every config, and the primary last. One
+config given twice stops the command, and two configs with the same Worker
+`name` fail the build. A Worker removed from the command line stays in the
+local state, so use `--clean` after removing a config.
+
 | flag | effect |
 | --- | --- |
-| `--port PORT` | The Worker listener port |
+| `-c`, `--config PATH` | A config or project directory. Repeatable |
+| `--port PORT` | The Worker listener port. `0` picks a free port, which the node keeps across rebuilds |
 | `--host ADDR` | The Worker listener interface. The operator listener stays on loopback |
 | `--logs` | Show the node warning and information logs |
-| `--clean` | Delete `.celld/dev` before the start |
+| `--clean` | Delete the primary's `.celld/dev` before the start |
 | `--watch-ignore GLOB` | Ignore one more project-relative glob. Repeatable. Not valid with `--no-watch` |
 | `--no-watch` | Disable automatic builds and restarts |
 
 Set `NO_COLOR` to disable color, or `FORCE_COLOR` to enable it when the
 output is not a terminal. `NO_COLOR` takes priority.
 
-The command reads `.dev.vars` beside the Wrangler configuration, as
-`wrangler dev` does. Without `.dev.vars`, it reads `.env` and then
+The console output goes to stderr. When the node is ready, and again after
+each rebuild, the command prints one JSON line to stdout:
+
+```json
+{"event":"ready","public":"http://127.0.0.1:9876","internal":"http://127.0.0.1:41234"}
+```
+
+`public` is the Worker listener, with loopback in place of an unspecified
+host. `internal` is the operator listener. Stop the command with SIGINT or
+SIGTERM; it then stops the node and keeps the local state.
+
+The command reads `.dev.vars` beside each Wrangler configuration, as
+`wrangler dev` does, and the entries apply to that configuration's Worker
+only. Without `.dev.vars`, it reads `.env` and then
 `.env.local`, which overrides `.env`. Each `NAME=value` entry becomes a
 Worker variable and overrides `vars`. A line can start with `export`, and
 a quoted value can span lines, for example a PEM key. Comments after a
@@ -297,17 +318,19 @@ or that collides with another binding; in `.dev.vars` such an entry stops
 the build. `celld deploy` does not read these files. Add `.dev.vars`,
 `.env`, `.env.local`, and `.celld/` to `.gitignore`.
 
-The command keeps the local state in `.celld/dev`, across restarts and
-configuration changes. celld does not migrate stored state, so a stored
+The command keeps the local state in the primary's `.celld/dev`, across
+restarts and configuration changes. celld does not migrate stored state, so a stored
 value from an earlier configuration can make the application fail with an
 error that looks unrelated. Use `--clean` to start from an empty state.
 `--clean` deletes nothing else under `.celld`.
 
-The command watches the project directory and rebuilds on a source,
+The command watches each project directory and rebuilds on a source,
 configuration, or dotenv change. The current application serves during the
 build, and a failed build does not replace it. The watcher ignores
 `.celld`, `.git`, `.wrangler`, `node_modules`, and `target` at each depth,
-and it does not watch files outside the project.
+and it does not watch files outside the projects. A `--watch-ignore` glob
+is relative to the project that contains the file, the innermost one when
+one project contains another.
 
 The local object store is not available to a fleet node or an operator
 subcommand; they need a supported cloud bucket.

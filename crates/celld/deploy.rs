@@ -879,6 +879,18 @@ async fn ensure_image_tar(bucket: &Bucket, image: &str) -> anyhow::Result<()> {
 }
 
 pub async fn write(bucket: &Bucket, built: &Built) -> anyhow::Result<()> {
+    let encoded = write_component(bucket, built).await?;
+    // The fleet-wide pointer is the sole application selector, so it moves
+    // last. A concurrent deploy must produce a loser, not a lost write.
+    put_pointer(bucket, "deploy/current.json", encoded).await
+}
+
+/// Write a deployment and its named pointer, which service bindings resolve,
+/// without selecting it as the application. `celld dev` writes the Workers
+/// other than its primary this way, so a failure part way through a
+/// multi-config deploy can never leave one of them selected. Returns the
+/// encoded pointer for [`write`] to publish.
+pub async fn write_component(bucket: &Bucket, built: &Built) -> anyhow::Result<Vec<u8>> {
     // Read every attachment before uploading immutable deployment objects.
     // A competing consumer is a deploy refusal, so it must not leave a new
     // version in the bucket that an operator can mistake for a published one.
@@ -934,17 +946,13 @@ pub async fn write(bucket: &Bucket, built: &Built) -> anyhow::Result<()> {
         rollout: Rollout { percent: 100 },
     };
     let encoded = serde_json::to_vec_pretty(&pointer)?;
-    // The named pointer resolves service-binding components; the fleet-wide
-    // one is the sole application selector, so it moves last. A concurrent
-    // deploy must produce a loser, not a lost write.
     put_pointer(
         bucket,
         &format!("deploy/{}/current.json", built.script_name),
         encoded.clone(),
     )
     .await?;
-    put_pointer(bucket, "deploy/current.json", encoded).await?;
-    Ok(())
+    Ok(encoded)
 }
 
 pub(crate) struct QueueAttachmentState {
