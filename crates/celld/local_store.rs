@@ -29,6 +29,9 @@ use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+/// The chunk size of a body this store streams, as a remote store's.
+const LOCAL_GET_CHUNK_BYTES: usize = 1 << 20;
+
 const STORE: &str = "celld development store";
 
 #[derive(Clone, Debug)]
@@ -272,8 +275,16 @@ impl ObjectStore for LocalStore {
             None => full,
         };
         let body = Bytes::from(object.body).slice(range.start as usize..range.end as usize);
+        // In chunks, as a remote store streams one: a reader that takes the
+        // body chunk by chunk then never holds it whole, which a Worker's
+        // isolate could not for a body past its memory budget.
+        let len = body.len();
+        let chunks = (0..len)
+            .step_by(LOCAL_GET_CHUNK_BYTES)
+            .map(|start| Ok(body.slice(start..(start + LOCAL_GET_CHUNK_BYTES).min(len))))
+            .collect::<Vec<_>>();
         Ok(GetResult {
-            payload: GetResultPayload::Stream(stream::once(async move { Ok(body) }).boxed()),
+            payload: GetResultPayload::Stream(stream::iter(chunks).boxed()),
             meta,
             range,
             attributes: decode_attributes(&object.attributes)?,

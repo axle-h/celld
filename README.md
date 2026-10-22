@@ -373,7 +373,15 @@ approximately 512 MB for 100,000.
 An isolate above 90% of this limit refuses a new hibernatable WebSocket, and
 it accepts again when the use of the heap falls under 90%.
 
-An isolate that reaches the limit is condemned, as on Cloudflare. The event
+The memory an isolate's buffers hold outside the heap (`ArrayBuffer`s, typed
+arrays, WebAssembly memory, and the bodies and other bytes celld hands it) has
+a budget of the same size; Cloudflare counts both in one 128 MB. Between
+turns, buffers the Worker has dropped can hold the budget's share past it
+until a collection, so an isolate can briefly hold its heap and twice the
+budget, about 384 MiB by default, besides the exceptions that
+[Limitations](docs/limitations.md#isolate-limits) lists.
+
+An isolate that reaches either limit is condemned, as on Cloudflare. The event
 running then fails with `Worker has exceeded memory limit.`, and so does every
 other event still running in the isolate. celld replaces the isolate, so the
 next request runs in a new one. Every Durable Object the isolate hosted

@@ -459,6 +459,9 @@ pub fn interval_at(start_ms: u64, period: Duration) -> Interval {
 pub enum OpOut {
     Str(String),
     Bytes(Vec<u8>),
+    /// Bytes whose memory the op already charged to the isolate, with the
+    /// charge, which the delivered buffer takes over.
+    Charged(Vec<u8>, Box<dyn std::any::Any + Send>),
 }
 
 impl From<String> for OpOut {

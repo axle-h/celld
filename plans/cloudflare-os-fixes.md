@@ -364,8 +364,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 24 | fix the workerd-side flake in `streams/byob-request-body` | done | `ed11b98` |
 | 25 | 1.15 `process.env` and `node:process` | done | `86c6418` |
 | 26 | 1.31 isolate limits during module load (security) | done | `9b0c9c1` |
-| 27 | 1.32 heap limit at request time (security) | done | see log |
-| 28 | 1.33 ArrayBuffer/Wasm memory limits (security) | next | |
+| 27 | 1.32 heap limit at request time (security) | done | `17b9c27` |
+| 28 | 1.33 ArrayBuffer memory limits (security) | done | see log |
+| 28b | 1.35 Wasm memory per isolate (security) | next | |
 | 29+ | Phase 1 in plan order (1.16-1.34), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
@@ -2143,6 +2144,40 @@ with 1.32's termination.
 **Tests.** Module-scope and request-time cases that exceed the limit with
 backing stores are refused, and the node stays healthy.
 
+**As built (done).**
+- Backing stores have a per-isolate budget as large as the heap limit,
+  separate from the heap (V8 can't share one safely), so an isolate holds at
+  most heap + budget at turn end. A counting allocator returns null past it,
+  so V8 throws `RangeError: Array buffer allocation failed`. A standing
+  refusal at turn or load end condemns the isolate (1.31/1.32 paths).
+- Host-created buffers (bodies, crypto, zlib, SQL blobs, bundle files) are
+  charged. A synchronous one past the budget is refused within the turn.
+- Whole-body reads are drained on the host, charged chunk by chunk, and
+  handed over zero-copy, so about 100 MB fits again. Concurrent reads may
+  reach 2× the budget between turns.
+- Wasm memory is counted at turn and load end through V8's external-memory
+  counter, and each memory is capped at the limit.
+- Measured: 40 × 64 MiB buffers went from loading at 2.5 GB to refused at
+  about 53 MiB. The zip-bomb loop went from 1.3 GB to refused at about
+  140 MiB. Pyodide peaks at about 37 MB external.
+- Bench within 1.5% of before. Case `limits/backing-stores`.
+### 1.35 Wasm memory per isolate (found by 1.33) — security
+
+**Problem (as narrowed by 1.33).** Wasm memory and resizable ArrayBuffers are
+counted only at turn and load end, through V8's external-memory counter. So
+within one turn:
+- several Wasm memories (each capped at the limit) reached about 1 GB RSS
+  before condemnation;
+- a resizable ArrayBuffer can grow to its `maxByteLength` (1 GiB measured).
+
+**Design.** Track the total per isolate: a harness wrapper around
+`WebAssembly.Memory` and `Instance` that sums exported and imported
+memories and their grows, or a V8 API if one exists in this version. Past the
+budget, refuse with V8's RangeError and condemn, as 1.33 does.
+
+**Tests.** Many Wasm memories at load and at request time are refused, and the
+node stays healthy.
+
 ### 1.34 Isolate limit follow-ups (found by 1.31)
 
 - Deployed Workers and DOs have no per-request CPU limit (only Dynamic
@@ -2152,6 +2187,7 @@ backing stores are refused, and the node stays healthy.
   namespace binding is still in its TDZ while top-level await is pending.
 - When 1.18 adds the "Failed to start Worker:" prefix, decide whether the two
   startup-limit errors get it too.
+- `Response`/`Request` have no `bytes()` method in celld; workerd has one.
 - A recorded facet whose host-side close fails (only warned) keeps its
   database open until the isolate drops.
 - The facet-of-a-Dynamic-Worker-class path under condemnation is covered only

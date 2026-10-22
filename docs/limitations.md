@@ -74,8 +74,34 @@ APIs, and Wrangler configuration.
   briefly hold a few GB more than the limit; a 1 GB array peaks at about
   2.2 GB of resident memory. celld frees a condemned isolate when its last
   event or Durable Object leaves it.
-- `ArrayBuffer` and WebAssembly memory is outside the V8 heap, and no limit
-  counts it, during the load or after it.
+- Memory outside the V8 heap has a budget of its own, as large as the heap
+  limit; Cloudflare counts both in one 128 MB. The budget counts
+  `ArrayBuffer`s, typed arrays, `SharedArrayBuffer`s, WebAssembly memory, and
+  the buffers celld hands a Worker: bodies, crypto and compression output,
+  SQL blobs, and bundle files. An allocation past it throws `RangeError:
+  Array buffer allocation failed`, after V8 has collected garbage, and
+  condemns the isolate as the heap limit does, even when the Worker catches
+  the error. A buffer the host hands over in a synchronous call, such as
+  `inflateSync()` or a SQL read, is refused the same way within the turn, so
+  a loop of such calls stops within one buffer.
+- A resizable `ArrayBuffer` and a WebAssembly memory grow outside the
+  allocator. celld counts them in the same budget, from V8's external memory,
+  when a turn or the load ends, so within one turn they can pass the budget
+  before the isolate is condemned: a resizable buffer up to its
+  `maxByteLength`, and each WebAssembly memory up to the heap limit, past
+  which `memory.grow()` fails with a `RangeError`.
+- The host gathers a body read whole in chunks, each charged to the budget as
+  it arrives. Buffers the Worker dropped still count until a collection,
+  which the host cannot ask for while it reads, so reads in flight may pass
+  the budget by as much again; the turn that takes a read over collects and
+  then condemns the isolate if it is still past the budget. An isolate can
+  therefore briefly hold its heap and twice the budget, about 384 MiB by
+  default.
+- Reading a body whole, with `arrayBuffer()`, `text()`, `json()` or
+  `blob()`, holds it once in the budget, so a body larger than the budget
+  fails the request and condemns the isolate. Stream a larger body instead.
+  After `arrayBuffer()` or `blob()` hands a body over, reading it again throws
+  `Body has already been used`, as in workerd.
 - A request has a CPU limit only when a Dynamic Worker sets `cpuMs`. See
   [Dynamic Workers](services/dynamic-workers.md#differences-from-cloudflare).
 

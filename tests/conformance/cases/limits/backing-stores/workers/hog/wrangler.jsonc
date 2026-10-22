@@ -1,0 +1,9 @@
+{
+  "name": "hog",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "bodies" }],
+  "durable_objects": { "bindings": [{ "name": "STORE", "class_name": "Store" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Store"] }]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "services": [
+    { "binding": "HOG", "service": "hog" },
+    { "binding": "OTHER", "service": "other" }
+  ]
+}

@@ -1526,6 +1526,41 @@ mod tests {
         assert_eq!(next, MEMORY_EXCEEDED);
     }
 
+    /// Backing stores past their budget at module scope fail the load as the
+    /// heap limit does, whether many buffers or one, caught or not.
+    #[test]
+    fn module_scope_buffers_past_the_budget_fail_the_load() {
+        for buffers in [
+            "const keep = []; for (let i = 0; i < 40; i++) keep.push(new Uint8Array(64 << 20));",
+            "globalThis.keep = new Uint8Array(512 << 20);",
+            "try { globalThis.keep = new ArrayBuffer(512 << 20); } catch {}",
+        ] {
+            assert_eq!(
+                load(&format!("{buffers}\n{HANDLER}"), &[]),
+                Err(STARTUP_MEMORY_EXCEEDED.to_string()),
+                "{buffers}"
+            );
+        }
+        assert_eq!(
+            load(
+                &format!("globalThis.keep = new Uint8Array(64 << 20);\n{HANDLER}"),
+                &[]
+            ),
+            Ok(())
+        );
+    }
+
+    /// After the load, a buffer past the budget condemns the isolate as the
+    /// heap limit does.
+    #[test]
+    fn a_buffer_past_the_budget_after_the_load_condemns_the_isolate() {
+        let (result, first, next, _) =
+            run_after_load("globalThis.keep = new Uint8Array(512 << 20); keep.length");
+        assert_eq!(result, None);
+        assert_eq!(first, MEMORY_EXCEEDED);
+        assert_eq!(next, MEMORY_EXCEEDED);
+    }
+
     /// A load past the startup CPU limit carries a type a loader can retry,
     /// whichever path took the termination; a throw at module scope does not.
     #[test]

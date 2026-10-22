@@ -1439,6 +1439,15 @@ fn resolve_res(tc: &mut v8::PinScope, id: u64, res: Result<asyncrt::OpOut, Strin
             let v = bytes_value(tc, b);
             r.resolve(tc, v);
         }
+        Ok(asyncrt::OpOut::Charged(b, charge)) => {
+            let charge = charge
+                .downcast::<BudgetReservation>()
+                .expect("an op charges with a BudgetReservation");
+            let len = b.len();
+            let buffer = host_array_buffer_charged(tc, b, *charge);
+            let v = v8::Uint8Array::new(tc, buffer, 0, len).unwrap();
+            r.resolve(tc, v.into());
+        }
         Err(e) => {
             let s = v8::String::new(tc, &e).unwrap();
             let ex = v8::Exception::error(tc, s);
@@ -1452,8 +1461,7 @@ fn bytes_value<'s>(scope: &mut v8::PinScope<'s, '_>, bytes: Vec<u8>) -> v8::Loca
     #[cfg(celld_internal_tests)]
     let input = bytes.as_ptr() as usize;
     let len = bytes.len();
-    let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
-    let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
+    let buffer = host_array_buffer(scope, bytes);
     #[cfg(celld_internal_tests)]
     record_bytes_value_allocation_for_test(
         input,
@@ -1818,6 +1826,9 @@ fn reject_reason(tc: &mut v8::PinScope, p: v8::Local<v8::Promise>) -> String {
     }
 }
 
+/// The size of a WebAssembly memory page.
+const WASM_PAGE_BYTES: usize = 64 * 1024;
+
 pub struct Engine;
 impl Engine {
     pub fn init() {
@@ -1828,6 +1839,15 @@ impl Engine {
         INIT.call_once(|| {
             #[cfg(celld_internal_tests)]
             v8::V8::set_flags_from_string("--expose-gc");
+            // A WebAssembly memory is reserved and grown by V8's page
+            // allocator, which neither the backing-store budget nor V8's
+            // external memory sees. Capping each memory at the isolate's
+            // limit is the bound V8 offers: `memory.grow` past it returns
+            // -1, and a module that asks for more fails to instantiate.
+            v8::V8::set_flags_from_string(&format!(
+                "--wasm-max-mem-pages={}",
+                v8_heap_limit_bytes() / WASM_PAGE_BYTES
+            ));
             // No `v8::icu::set_common_data_78` call: the rusty_v8 152 prebuilt
             // statically links the complete ICU data (full locale tables and
             // regex property-of-strings, e.g. /\p{RGI_Emoji}/v — verified
@@ -2388,6 +2408,430 @@ struct HeapLimitState {
     isolate: v8::IsolateHandle,
 }
 
+impl HeapLimitState {
+    /// Record that the isolate went past its memory limit: a load fails, and
+    /// anything else condemns the isolate.
+    fn exceed(&self) {
+        if self.loading.load(Ordering::Relaxed) {
+            self.load_exceeded.store(true, Ordering::Relaxed);
+        }
+        self.excessively_exceeded.store(true, Ordering::Relaxed);
+    }
+}
+
+/// The backing stores of one isolate: what its `ArrayBuffer`s, typed arrays
+/// and `SharedArrayBuffer`s hold outside the V8 heap, and the buffers the host
+/// hands it (bodies, crypto and zlib output, SQL blobs, bundle files). They
+/// have a budget of their own, as large as the heap limit, so an isolate holds
+/// at most twice its limit; Cloudflare counts both in one 128 MB.
+///
+/// V8 asks the isolate's allocator for every buffer JavaScript creates, and
+/// the allocator refuses one past the budget. V8 then collects garbage, asks
+/// again, and throws `RangeError: Array buffer allocation failed` when it is
+/// still refused. That condemns the isolate, as the heap limit does: a
+/// refusal still standing when the turn or the load ends
+/// (`backing_stores_refused`).
+struct BackingStoreBudget {
+    limit: usize,
+    used: AtomicUsize,
+    /// The last allocation was refused. The next one that fits clears it, so
+    /// a refusal that V8's garbage collection recovered from does not count.
+    refused: AtomicBool,
+    /// What `used` read after the last collection a host buffer forced
+    /// (`host_array_buffer`), which paces the next.
+    used_after_collection: AtomicUsize,
+}
+
+impl BackingStoreBudget {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            used: AtomicUsize::new(0),
+            refused: AtomicBool::new(false),
+            used_after_collection: AtomicUsize::new(0),
+        }
+    }
+
+    /// Charge an allocation if it fits.
+    // `try_update` needs Rust 1.95; this crate's MSRV is 1.94.1.
+    #[allow(deprecated)]
+    fn charge(&self, len: usize) -> bool {
+        let fits = self
+            .used
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                used.checked_add(len).filter(|total| *total <= self.limit)
+            })
+            .is_ok();
+        self.refused.store(!fits, Ordering::Relaxed);
+        fits
+    }
+
+    /// Charge memory the host is about to hold, if the total stays within
+    /// `ceiling`. Unlike `charge`, a success leaves a standing refusal alone:
+    /// it is not V8's retry of the allocation that was refused.
+    #[allow(deprecated)]
+    fn reserve(&self, len: usize, ceiling: usize) -> bool {
+        let fits = self
+            .used
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                used.checked_add(len).filter(|total| *total <= ceiling)
+            })
+            .is_ok();
+        if !fits {
+            self.refused.store(true, Ordering::Relaxed);
+        }
+        fits
+    }
+
+    /// Charge memory the host already holds. It cannot be refused, since
+    /// it exists either way. Past the budget, the turn's end collects
+    /// garbage and then condemns the isolate if it is still past
+    /// (`check_backing_stores`).
+    fn charge_host(&self, len: usize) {
+        self.used.fetch_add(len, Ordering::AcqRel);
+    }
+
+    /// Return a freed allocation. V8 can free on a background thread, and a
+    /// count that underflowed would admit everything after it.
+    #[allow(deprecated)]
+    fn release(&self, len: usize) {
+        let _ = self
+            .used
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                Some(used.saturating_sub(len))
+            });
+    }
+}
+
+/// The isolate's `ArrayBuffer::Allocator`: the C allocator, charged to the
+/// isolate's budget. The vtable's handle is an `Arc` the allocator owns.
+static BACKING_STORE_ALLOCATOR: v8::RustAllocatorVtable<BackingStoreBudget> =
+    v8::RustAllocatorVtable {
+        allocate: allocate_backing_store,
+        allocate_uninitialized: allocate_backing_store_uninitialized,
+        free: free_backing_store,
+        drop: drop_backing_store_budget,
+    };
+
+unsafe extern "C" fn allocate_backing_store(
+    budget: &BackingStoreBudget,
+    len: usize,
+) -> *mut std::ffi::c_void {
+    if !budget.charge(len) {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: calloc of at least one byte; a zero-length buffer still needs a
+    // distinct pointer for V8 to free.
+    let data = unsafe { libc::calloc(len.max(1), 1) };
+    if data.is_null() {
+        budget.release(len);
+    }
+    data
+}
+
+unsafe extern "C" fn allocate_backing_store_uninitialized(
+    budget: &BackingStoreBudget,
+    len: usize,
+) -> *mut std::ffi::c_void {
+    if !budget.charge(len) {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: as above, without zeroing, which V8 asked to skip.
+    let data = unsafe { libc::malloc(len.max(1)) };
+    if data.is_null() {
+        budget.release(len);
+    }
+    data
+}
+
+unsafe extern "C" fn free_backing_store(
+    budget: &BackingStoreBudget,
+    data: *mut std::ffi::c_void,
+    len: usize,
+) {
+    // SAFETY: `data` came from `allocate_backing_store*`, which used the C
+    // allocator.
+    unsafe { libc::free(data) };
+    budget.release(len);
+}
+
+unsafe extern "C" fn drop_backing_store_budget(budget: *const BackingStoreBudget) {
+    // SAFETY: the handle is the `Arc::into_raw` that `backing_store_allocator`
+    // gave V8, which calls this once, when the allocator goes.
+    drop(unsafe { Arc::from_raw(budget) });
+}
+
+#[cfg(test)]
+mod backing_store_budget_tests {
+    use super::*;
+
+    fn allocate(budget: &BackingStoreBudget, len: usize) -> *mut std::ffi::c_void {
+        // SAFETY: the vtable function with a live budget.
+        unsafe { allocate_backing_store(budget, len) }
+    }
+
+    fn free(budget: &BackingStoreBudget, data: *mut std::ffi::c_void, len: usize) {
+        // SAFETY: `data` came from `allocate` with `len`.
+        unsafe { free_backing_store(budget, data, len) }
+    }
+
+    /// Allocations are charged until they are freed, one past the budget is
+    /// refused and flags the refusal, and the next one that fits clears it.
+    #[test]
+    fn allocations_are_charged_refused_past_the_budget_and_released() {
+        let budget = BackingStoreBudget::new(100);
+        let first = allocate(&budget, 60);
+        assert!(!first.is_null());
+        assert_eq!(budget.used.load(Ordering::Relaxed), 60);
+        assert!(allocate(&budget, 41).is_null());
+        assert!(budget.refused.load(Ordering::Relaxed));
+        assert_eq!(budget.used.load(Ordering::Relaxed), 60);
+        // SAFETY: as `allocate`, without zeroing.
+        let second = unsafe { allocate_backing_store_uninitialized(&budget, 40) };
+        assert!(!second.is_null());
+        assert!(!budget.refused.load(Ordering::Relaxed));
+        assert_eq!(budget.used.load(Ordering::Relaxed), 100);
+        free(&budget, first, 60);
+        free(&budget, second, 40);
+        assert_eq!(budget.used.load(Ordering::Relaxed), 0);
+    }
+
+    /// V8 reallocates as a new allocation, a copy and a free, so the charge
+    /// moves from the old length to the new one, and holds both meanwhile.
+    #[test]
+    fn a_reallocation_moves_its_charge() {
+        let budget = BackingStoreBudget::new(100);
+        let old = allocate(&budget, 30);
+        let new = allocate(&budget, 70);
+        assert!(!new.is_null());
+        assert_eq!(budget.used.load(Ordering::Relaxed), 100);
+        free(&budget, old, 30);
+        assert_eq!(budget.used.load(Ordering::Relaxed), 70);
+        free(&budget, new, 70);
+    }
+
+    /// A zero-length buffer still gets a pointer V8 can free.
+    #[test]
+    fn a_zero_length_allocation_is_a_real_pointer() {
+        let budget = BackingStoreBudget::new(0);
+        let data = allocate(&budget, 0);
+        assert!(!data.is_null());
+        free(&budget, data, 0);
+        assert_eq!(budget.used.load(Ordering::Relaxed), 0);
+    }
+
+    /// A release larger than the charge cannot wrap the count around.
+    #[test]
+    fn a_release_never_underflows() {
+        let budget = BackingStoreBudget::new(100);
+        budget.charge_host(10);
+        budget.release(50);
+        assert_eq!(budget.used.load(Ordering::Relaxed), 0);
+        let data = allocate(&budget, 100);
+        assert!(!data.is_null());
+        free(&budget, data, 100);
+    }
+
+    /// Host memory is charged even past the budget, since it exists either
+    /// way; the turn's end judges it. A host reservation is refused past its
+    /// bounds and flags the refusal, and a later one that fits leaves the
+    /// flag standing.
+    #[test]
+    fn host_memory_is_charged_and_reservations_are_refused() {
+        let budget = Arc::new(BackingStoreBudget::new(100));
+        budget.charge_host(80);
+        budget.charge_host(40);
+        assert!(!budget.refused.load(Ordering::Relaxed));
+        assert_eq!(budget.used.load(Ordering::Relaxed), 120);
+        budget.release(120);
+        // A gathering alone must fit the budget.
+        let mut reservation = BudgetReservation::new(budget.clone());
+        assert!(reservation.grow(70));
+        assert!(!reservation.grow(40));
+        assert!(budget.refused.load(Ordering::Relaxed));
+        assert!(reservation.grow(30));
+        assert!(budget.refused.load(Ordering::Relaxed));
+        // With others it may pass the budget, up to twice it.
+        let mut other = BudgetReservation::new(budget.clone());
+        assert!(other.grow(100));
+        assert_eq!(budget.used.load(Ordering::Relaxed), 200);
+        let mut third = BudgetReservation::new(budget.clone());
+        assert!(!third.grow(1));
+        drop((reservation, other, third));
+        assert_eq!(budget.used.load(Ordering::Relaxed), 0);
+    }
+}
+
+/// An allocator for one isolate, charging `budget`.
+fn backing_store_allocator(budget: &Arc<BackingStoreBudget>) -> v8::UniqueRef<v8::Allocator> {
+    let handle = Arc::into_raw(budget.clone());
+    // SAFETY: the handle is a live `Arc` the vtable's `drop` releases, and
+    // the vtable's functions take it as `&BackingStoreBudget`.
+    unsafe { v8::new_rust_allocator(handle, &BACKING_STORE_ALLOCATOR) }
+}
+
+/// A buffer the host built, charged to the isolate's budget until V8 frees
+/// it.
+struct HostBackingStore {
+    bytes: Vec<u8>,
+    budget: Option<Arc<BackingStoreBudget>>,
+}
+
+impl Drop for HostBackingStore {
+    fn drop(&mut self) {
+        if let Some(budget) = &self.budget {
+            budget.release(self.bytes.len());
+        }
+    }
+}
+
+unsafe extern "C" fn drop_host_backing_store(
+    _data: *mut std::ffi::c_void,
+    _len: usize,
+    holder: *mut std::ffi::c_void,
+) {
+    // SAFETY: `holder` is the `Box::into_raw` of `host_array_buffer`, and V8
+    // calls this once.
+    drop(unsafe { Box::from_raw(holder as *mut HostBackingStore) });
+}
+
+/// Memory the host gathers for an isolate before handing it over, charged
+/// as it grows so the gathering cannot outgrow the budget on the host's side,
+/// where V8 would never see it. Dropped, it gives the charge back.
+struct BudgetReservation {
+    budget: Arc<BackingStoreBudget>,
+    len: usize,
+}
+
+impl BudgetReservation {
+    fn new(budget: Arc<BackingStoreBudget>) -> Self {
+        Self { budget, len: 0 }
+    }
+
+    /// Charge `more`, or refuse it, which condemns the isolate as one of
+    /// V8's refusals would. What this gathers alone must fit the budget. With
+    /// everything else the isolate holds it may pass the budget by as much
+    /// again, because dead buffers count until a collection, which the host
+    /// cannot ask for: the turn that takes the bytes over collects, and
+    /// condemns the isolate only if it is still past the budget then
+    /// (`check_backing_stores`). Every gathering together stays within
+    /// twice the budget.
+    fn grow(&mut self, more: usize) -> bool {
+        let limit = self.budget.limit;
+        let fits = self.len.checked_add(more).is_some_and(|len| len <= limit)
+            && self.budget.reserve(more, limit.saturating_mul(2));
+        if !fits {
+            self.budget.refused.store(true, Ordering::Relaxed);
+            return false;
+        }
+        self.len += more;
+        true
+    }
+}
+
+impl Drop for BudgetReservation {
+    fn drop(&mut self) {
+        self.budget.release(self.len);
+    }
+}
+
+/// `host_array_buffer` for bytes a reservation already charges, which the
+/// buffer takes over.
+fn host_array_buffer_charged<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    mut bytes: Vec<u8>,
+    charge: BudgetReservation,
+) -> v8::Local<'s, v8::ArrayBuffer> {
+    debug_assert_eq!(charge.len, bytes.len());
+    if bytes.is_empty() {
+        return v8::ArrayBuffer::new(scope, 0);
+    }
+    // The buffer releases what the reservation charged, once V8 frees it.
+    let budget = charge.budget.clone();
+    std::mem::forget(charge);
+    let len = bytes.len();
+    let data = bytes.as_mut_ptr() as *mut std::ffi::c_void;
+    let holder = Box::into_raw(Box::new(HostBackingStore {
+        bytes,
+        budget: Some(budget),
+    }));
+    // SAFETY: as in `host_array_buffer`.
+    let store = unsafe {
+        v8::ArrayBuffer::new_backing_store_from_ptr(
+            data,
+            len,
+            drop_host_backing_store,
+            holder as *mut std::ffi::c_void,
+        )
+    }
+    .make_shared();
+    v8::ArrayBuffer::with_backing_store(scope, &store)
+}
+
+/// Charge a host buffer of `len`, which exists already, or refuse it. Past
+/// the budget the isolate first collects, because buffers the Worker dropped
+/// count until a collection, but only once the budget has grown by an
+/// eighth since the last such collection: a Worker that streams near its
+/// budget would otherwise collect for every chunk. Still past it, the buffer
+/// is refused as V8 refuses one of its own: `RangeError: Array buffer
+/// allocation failed`, the isolate condemned, and the turn terminated, so a
+/// loop of synchronous host calls (an inflate, a SQL read, a hash) stops
+/// within one buffer. The buffer itself is still made, because the caller
+/// wraps it, and it exists already; nothing runs to use it.
+fn charge_host_buffer(scope: &mut v8::PinScope, budget: &BackingStoreBudget, len: usize) {
+    budget.charge_host(len);
+    let used = budget.used.load(Ordering::Acquire);
+    if used <= budget.limit {
+        return;
+    }
+    let collected = budget.used_after_collection.load(Ordering::Acquire);
+    if used.saturating_sub(collected) >= budget.limit / 8 {
+        scope.low_memory_notification();
+        let used = budget.used.load(Ordering::Acquire);
+        budget.used_after_collection.store(used, Ordering::Release);
+        if used <= budget.limit {
+            return;
+        }
+    }
+    budget.refused.store(true, Ordering::Relaxed);
+    let message = v8::String::new(scope, "Array buffer allocation failed").unwrap();
+    let exception = v8::Exception::range_error(scope, message);
+    scope.throw_exception(exception);
+    scope.terminate_execution();
+}
+
+/// Move `bytes` into an `ArrayBuffer` without copying, charged to this
+/// isolate's backing-store budget. Every buffer the host builds goes through
+/// here, not `ArrayBuffer::new`, whose allocation V8 treats as fatal when the
+/// budget refuses it.
+fn host_array_buffer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    mut bytes: Vec<u8>,
+) -> v8::Local<'s, v8::ArrayBuffer> {
+    if bytes.is_empty() {
+        return v8::ArrayBuffer::new(scope, 0);
+    }
+    let budget = scope.get_slot::<Arc<BackingStoreBudget>>().cloned();
+    if let Some(budget) = &budget {
+        charge_host_buffer(scope, budget, bytes.len());
+    }
+    let len = bytes.len();
+    let data = bytes.as_mut_ptr() as *mut std::ffi::c_void;
+    let holder = Box::into_raw(Box::new(HostBackingStore { bytes, budget }));
+    // SAFETY: `data` stays valid while `holder` owns the Vec, and the deleter
+    // frees `holder` once V8 is done with the store.
+    let store = unsafe {
+        v8::ArrayBuffer::new_backing_store_from_ptr(
+            data,
+            len,
+            drop_host_backing_store,
+            holder as *mut std::ffi::c_void,
+        )
+    }
+    .make_shared();
+    v8::ArrayBuffer::with_backing_store(scope, &store)
+}
+
 type SerializedPut = (String, Vec<u8>);
 type PendingPuts = HashMap<String, Vec<SerializedPut>>;
 
@@ -2879,13 +3323,75 @@ fn take_one_execution_termination(
 /// checks this before it enters the realm, and fails what it was given with
 /// `MEMORY_EXCEEDED` instead. A turn that keeps running there could retain
 /// more, take another extension, and answer for a Worker that is gone.
-fn heap_limit_reached(isolate: &v8::Isolate) -> bool {
-    isolate
-        .get_slot::<Arc<HeapLimitState>>()
-        .is_some_and(|heap| {
-            heap.excessively_exceeded.load(Ordering::Relaxed)
-                && !heap.loading.load(Ordering::Relaxed)
-        })
+fn heap_limit_reached(isolate: &mut v8::Isolate) -> bool {
+    fold_backing_store_refusal(isolate);
+    let Some(heap) = isolate.get_slot::<Arc<HeapLimitState>>().cloned() else {
+        return false;
+    };
+    if !heap.excessively_exceeded.load(Ordering::Relaxed) || heap.loading.load(Ordering::Relaxed) {
+        return false;
+    }
+    // The first to see it carries the condemnation out, whichever entry
+    // point that is: a refusal can come from outside a turn, so the turn
+    // that reached the limit is not always the one that notices.
+    if !heap.condemnation_handled.swap(true, Ordering::Relaxed) {
+        // The callback's termination can still be pending. Nothing runs here
+        // again, but the isolate is still entered to release its cells.
+        isolate.cancel_terminate_execution();
+        let used = isolate.get_heap_statistics().used_heap_size();
+        tracing::warn!(
+            event = "isolate_memory_exceeded",
+            limit_bytes = heap.limit,
+            used_bytes = used,
+            "isolate reached its memory limit; its events fail and it is replaced"
+        );
+        if let Some(slot) = crate::pool::current_slot() {
+            slot.condemn(MEMORY_EXCEEDED);
+        }
+    }
+    true
+}
+
+/// Count a backing-store allocation that stayed refused as the heap limit
+/// reached: the isolate is condemned the same way (`BackingStoreBudget`).
+fn fold_backing_store_refusal(isolate: &v8::Isolate) {
+    let refused = isolate
+        .get_slot::<Arc<BackingStoreBudget>>()
+        .is_some_and(|budget| budget.refused.load(Ordering::Relaxed));
+    if refused {
+        if let Some(heap) = isolate.get_slot::<Arc<HeapLimitState>>() {
+            heap.exceed();
+        }
+    }
+}
+
+/// Condemn an isolate whose backing stores are past the budget when a turn
+/// or the load ends. Two kinds get here rather than to the allocator's
+/// refusal: the buffers the host hands the isolate, which exist before they
+/// can be counted, and what V8 grows outside the allocator, a resizable
+/// `ArrayBuffer` and a WebAssembly memory, which only V8's external-memory
+/// counter sees. Buffers the Worker dropped count until a collection frees
+/// them, so one collection comes first, and only when past the budget: at
+/// most once a turn.
+fn check_backing_stores(isolate: &mut v8::Isolate) {
+    let Some(budget) = isolate.get_slot::<Arc<BackingStoreBudget>>().cloned() else {
+        return;
+    };
+    let past = |isolate: &mut v8::Isolate| {
+        // V8's counter, read without the cost of its full statistics.
+        let external =
+            usize::try_from(isolate.adjust_amount_of_external_allocated_memory(0)).unwrap_or(0);
+        external > budget.limit || budget.used.load(Ordering::Acquire) > budget.limit
+    };
+    if !past(isolate) {
+        return;
+    }
+    isolate.low_memory_notification();
+    if past(isolate) {
+        if let Some(heap) = isolate.get_slot::<Arc<HeapLimitState>>() {
+            heap.exceed();
+        }
+    }
 }
 
 /// Whether this isolate reached its heap limit. The first turn to see it
@@ -2894,6 +3400,7 @@ fn heap_limit_reached(isolate: &v8::Isolate) -> bool {
 /// the Durable Objects it hosts are reset with it: their storage can take no
 /// further operation, and their events fail as their turns come.
 fn over_memory_limit(scope: &mut v8::PinScope) -> bool {
+    fold_backing_store_refusal(scope);
     let Some(heap) = scope.get_slot::<Arc<HeapLimitState>>().cloned() else {
         return false;
     };
@@ -2901,25 +3408,7 @@ fn over_memory_limit(scope: &mut v8::PinScope) -> bool {
         return false;
     }
     // A load that reaches the limit fails as a whole and has no slot.
-    if heap.loading.load(Ordering::Relaxed)
-        || heap.condemnation_handled.swap(true, Ordering::Relaxed)
-    {
-        return true;
-    }
-    // The callback's termination can still be pending. Nothing runs here
-    // again, but the isolate is still entered to release its cells.
-    scope.cancel_terminate_execution();
-    let used = scope.get_heap_statistics().used_heap_size();
-    tracing::warn!(
-        event = "isolate_memory_exceeded",
-        limit_bytes = heap.limit,
-        used_bytes = used,
-        "isolate reached its heap limit; its events fail and it is replaced"
-    );
-    if let Some(slot) = crate::pool::current_slot() {
-        slot.condemn(MEMORY_EXCEEDED);
-    }
-    true
+    heap.loading.load(Ordering::Relaxed) || heap_limit_reached(scope)
 }
 
 /// Fail an event of a condemned isolate without running its JavaScript: the
@@ -2947,10 +3436,7 @@ extern "C" fn near_heap_limit(
     // A load fails, and anything else condemns the isolate: the turn that
     // reached the limit and every later one fail with `MEMORY_EXCEEDED`, and
     // the isolate is replaced.
-    if state.loading.load(Ordering::Relaxed) {
-        state.load_exceeded.store(true, Ordering::Relaxed);
-    }
-    state.excessively_exceeded.store(true, Ordering::Relaxed);
+    state.exceed();
     // Termination is only a request: V8 acts on it at the next interrupt
     // check, and the allocation that reached the limit must finish first or
     // V8 aborts the process. One allocation can be as large as V8's largest
@@ -4081,13 +4567,9 @@ fn trace_rider_buffer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rider: &crate::user_spans::TraceRider,
 ) -> Option<v8::Local<'s, v8::ArrayBuffer>> {
-    let length = rider.byte_len();
-    let buffer = v8::ArrayBuffer::new(scope, length);
-    let data = buffer.get_backing_store().data()?;
-    // SAFETY: a freshly created buffer of exactly this length, written
-    // before any JS can see it.
-    rider.write(unsafe { std::slice::from_raw_parts_mut(data.as_ptr() as *mut u8, length) });
-    Some(buffer)
+    let mut bytes = vec![0; rider.byte_len()];
+    rider.write(&mut bytes);
+    Some(host_array_buffer(scope, bytes))
 }
 
 /// The rider an ArrayBuffer holds, if it is one.
@@ -4272,7 +4754,7 @@ impl Worker {
             return (None, Vec::new());
         };
         let (mut locker, _cells) = inner.lock();
-        if heap_limit_reached(&locker) {
+        if heap_limit_reached(&mut locker) {
             job.fail(anyhow!(MEMORY_EXCEEDED));
             return (None, Vec::new());
         }
@@ -4359,7 +4841,7 @@ impl Worker {
             return Vec::new();
         };
         let (mut locker, _cells) = inner.lock();
-        if heap_limit_reached(&locker) {
+        if heap_limit_reached(&mut locker) {
             fail_condemned(entry, &inner.runtime_state);
             return Vec::new();
         }
@@ -4413,7 +4895,7 @@ impl Worker {
             return;
         };
         let (mut locker, _cells) = inner.lock();
-        if heap_limit_reached(&locker) {
+        if heap_limit_reached(&mut locker) {
             return;
         }
         v8::scope!(let hs, &mut *locker);
@@ -4436,7 +4918,7 @@ impl Worker {
             return Vec::new();
         };
         let (mut locker, _cells) = inner.lock();
-        if heap_limit_reached(&locker) {
+        if heap_limit_reached(&mut locker) {
             fail_condemned(entry, &inner.runtime_state);
             return Vec::new();
         }
@@ -4500,6 +4982,7 @@ impl Worker {
 fn finish_turn(tc: &mut v8::PinScope, entry: &mut InFlight) -> Vec<Op> {
     // Before anything settles: the turn that reached the heap limit, and any
     // later one, must not answer.
+    check_backing_stores(tc);
     if heap_limit_reached(tc) {
         let _ = take_execution_termination_in_context(tc, Some(&entry.context));
         let runtime_state = entry.runtime_state.clone();
@@ -6028,7 +6511,11 @@ impl Worker {
     pub fn load_config(config: Arc<WorkerConfig>) -> Result<Worker> {
         let script_name = config.script_name.as_str();
         let compat = config.compat;
-        let params = v8::CreateParams::default().heap_limits(0, v8_heap_limit_bytes());
+        let limit = v8_heap_limit_bytes();
+        let backing_stores = Arc::new(BackingStoreBudget::new(limit));
+        let params = v8::CreateParams::default()
+            .heap_limits(0, limit)
+            .array_buffer_allocator(backing_store_allocator(&backing_stores));
         let mut isolate = v8::Isolate::new(params);
         // Dynamic `import()` of builtin specifiers; per-import()-call only.
         isolate.set_host_import_module_dynamically_callback(host_import_module_dynamically);
@@ -6053,6 +6540,7 @@ impl Worker {
         let heap_limit_state_ptr =
             Arc::as_ptr(&heap_limit_state) as *mut HeapLimitState as *mut std::ffi::c_void;
         isolate.set_slot(heap_limit_state.clone());
+        isolate.set_slot(backing_stores);
         isolate.set_slot(runtime_state.clone());
         isolate.set_slot(Arc::new(ModuleRegistry::default()));
         isolate.set_slot(loader_owner.clone());
@@ -6068,6 +6556,10 @@ impl Worker {
         let startup = CpuWatchdog::startup(isolate.thread_safe_handle(), runtime_state.clone());
         let realm = Self::load_realm(&mut isolate, &config);
         drop(startup);
+        // While the load still counts as loading, so that memory past a
+        // budget fails the load rather than condemning the loaded isolate.
+        check_backing_stores(&mut isolate);
+        fold_backing_store_refusal(&isolate);
         heap_limit_state.loading.store(false, Ordering::Relaxed);
         if let Some(error) = startup_limit_exceeded(&heap_limit_state, &runtime_state) {
             return Err(error);
@@ -6420,7 +6912,7 @@ impl Worker {
             storage::refresh_embedded_root(cell, parent);
             return Ok(opening);
         }
-        if heap_limit_reached(&locker) {
+        if heap_limit_reached(&mut locker) {
             return Err(anyhow!(MEMORY_EXCEEDED));
         }
         v8::scope!(let hs, &mut *locker);
@@ -6521,7 +7013,7 @@ impl Worker {
 
     pub fn set_id_name(&mut self, scope: &str, name: &str) -> Result<()> {
         let (mut locker, _cells) = self.lock();
-        if heap_limit_reached(&locker) {
+        if heap_limit_reached(&mut locker) {
             return Err(anyhow!(MEMORY_EXCEEDED));
         }
         v8::scope!(let hs, &mut *locker);
@@ -6546,7 +7038,7 @@ impl Worker {
             return (None, Vec::new());
         };
         let (mut locker, _cells) = inner.lock();
-        if heap_limit_reached(&locker) {
+        if heap_limit_reached(&mut locker) {
             job.fail(anyhow!(MEMORY_EXCEEDED));
             return (None, Vec::new());
         }
@@ -6607,7 +7099,7 @@ impl Worker {
             return Vec::new();
         };
         let (mut locker, _cells) = inner.lock();
-        if heap_limit_reached(&locker) {
+        if heap_limit_reached(&mut locker) {
             fail_condemned(entry, &inner.runtime_state);
             return Vec::new();
         }
@@ -6635,7 +7127,7 @@ impl Worker {
             return Vec::new();
         };
         let (mut locker, _cells) = inner.lock();
-        if heap_limit_reached(&locker) {
+        if heap_limit_reached(&mut locker) {
             fail_condemned(entry, &inner.runtime_state);
             return Vec::new();
         }
@@ -7123,6 +7615,7 @@ ops! { OP_NAMES, install_op_functions,
         "__r2_mp_abort" => r2_ops::op_r2_mp_abort,
         "__asset_fetch" => op_asset_fetch,
         "__http_stream_read" => op_http_stream_read,
+        "__http_stream_read_all" => op_http_stream_read_all,
         "__http_stream_cancel" => op_http_stream_cancel,
         "__http_stream_tee" => op_http_stream_tee,
         "__response_stream_create" => op_response_stream_create,
@@ -9996,6 +10489,56 @@ fn op_http_stream_read(
     rv.set(promise_for(scope, id));
 }
 
+/// `__http_stream_read_all(id)` -> Promise<Uint8Array>: the rest of a host
+/// body stream as one buffer, read here rather than as one JavaScript chunk
+/// each, so reading a body whole holds it once. A body larger than the
+/// isolate's backing-store budget cannot be held whole: the read fails and
+/// condemns the isolate, as reading it chunk by chunk would.
+fn op_http_stream_read_all(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let stream_id = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
+    let Some(budget) = scope.get_slot::<Arc<BackingStoreBudget>>().cloned() else {
+        let message = v8::String::new(scope, "the isolate has no backing-store budget").unwrap();
+        let exception = v8::Exception::type_error(scope, message);
+        scope.throw_exception(exception);
+        return;
+    };
+    let service = http_stream_service();
+    let id = asyncrt::enqueue(async move {
+        // Each chunk is charged as it arrives, against the buffers the
+        // isolate holds and every other read in flight, and the delivered
+        // buffer takes the charge over.
+        let mut charge = BudgetReservation::new(budget);
+        let mut chunks = Vec::new();
+        let mut total = 0usize;
+        while let Some(chunk) = http_stream_read(service.clone(), stream_id).await? {
+            if !charge.grow(chunk.len()) {
+                service.cancel_source(stream_id);
+                return Err(MEMORY_EXCEEDED.to_string());
+            }
+            total += chunk.len();
+            chunks.push(chunk);
+        }
+        let body = if chunks.len() == 1 {
+            chunks.pop().expect("one chunk")
+        } else {
+            // One allocation of the whole, filled as each chunk is freed:
+            // its pages are touched only as they are copied, so the body is
+            // resident about once while it is joined.
+            let mut body = Vec::with_capacity(total);
+            for chunk in chunks {
+                body.extend_from_slice(&chunk);
+            }
+            body
+        };
+        Ok(asyncrt::OpOut::Charged(body, Box::new(charge)))
+    });
+    rv.set(promise_for(scope, id));
+}
+
 fn op_http_stream_tee(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -10576,14 +11119,7 @@ fn webcrypto_return_bytes(
     mut rv: v8::ReturnValue<v8::Value>,
     bytes: &[u8],
 ) {
-    let buffer = v8::ArrayBuffer::new(scope, bytes.len());
-    if !bytes.is_empty() {
-        let store = buffer.get_backing_store();
-        let destination = unsafe {
-            std::slice::from_raw_parts_mut(store.data().unwrap().as_ptr() as *mut u8, bytes.len())
-        };
-        destination.copy_from_slice(bytes);
-    }
+    let buffer = host_array_buffer(scope, bytes.to_vec());
     let view = v8::Uint8Array::new(scope, buffer, 0, bytes.len()).unwrap();
     rv.set(view.into());
 }
@@ -12398,6 +12934,7 @@ impl Drop for IoContext {
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<HeapLimitState>();
+    assert_send_sync::<BackingStoreBudget>();
     assert_send_sync::<ActorRuntimeState>();
     assert_send_sync::<ModuleRegistry>();
     assert_send_sync::<LoaderOwner>();
@@ -12618,8 +13155,7 @@ fn op_vfs_read_file(
     };
     // One copy into the V8 heap. The projected `Bytes` stays shared, so a
     // second read of the same module does not re-copy the config's source.
-    let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes.to_vec()).make_shared();
-    let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
+    let buffer = host_array_buffer(scope, bytes.to_vec());
     rv.set(buffer.into());
 }
 

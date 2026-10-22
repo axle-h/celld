@@ -607,13 +607,7 @@ fn sql_value_to_v8<'s>(
         // An ArrayBuffer, because that is what the `_decode` closure produced
         // from `{__celld_bytes: [...]}`. The bytes move into the backing store
         // without a copy, as `bytes_value` in `js.rs` does.
-        storage::SqlValue::Blob(bytes) => {
-            if bytes.is_empty() {
-                return v8::ArrayBuffer::new(scope, 0).into();
-            }
-            let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
-            v8::ArrayBuffer::with_backing_store(scope, &store).into()
-        }
+        storage::SqlValue::Blob(bytes) => super::host_array_buffer(scope, bytes).into(),
     }
 }
 pub(super) fn op_sql_cursor_close(

@@ -173,10 +173,39 @@ function __iterableBody(body) {
 }
 // Drain a Request/Response body stream, caching the result on the
 // instance so later consumers see the materialized bytes.
-async function __drainBody(target) {
+// Bodies drained into a buffer nothing else holds, which a whole-body read
+// can hand over instead of copying (`__handOverBody`).
+const __ownedBodies = new WeakSet();
+// Requests and responses whose drained buffer was handed over. Their body is
+// used: a later read throws, as in workerd, where it would otherwise see
+// what the reader did to the buffer.
+const __handedOverBodies = new WeakSet();
+const __BODY_USED =
+  "Body has already been used. It can only be used once. " +
+  "Use tee() first if you need to read it multiple times.";
+// The drained body as an ArrayBuffer the caller may keep, without a copy
+// when nothing else holds it, so a whole-body read holds the body once.
+const __handOverBody = (target, bytes) => {
+  if (!__ownedBodies.delete(bytes) ||
+      bytes.byteOffset !== 0 || bytes.byteLength !== bytes.buffer.byteLength)
+    return bytes.slice().buffer;
+  __handedOverBodies.add(target);
+  target._bodyBytes = new Uint8Array(0);
+  return bytes.buffer;
+};
+// The rest of a body stream, as one buffer nothing else holds. A host
+// stream is read whole by the host, so the body is held once rather than as
+// chunks and then a copy.
+async function __drainStream(stream) {
+  const id = __hostStreamId(stream);
+  if (id !== undefined && !stream.locked) {
+    // Locked as a read would lock it: the host reads it now.
+    stream.getReader();
+    return __http_stream_read_all(id);
+  }
   const chunks = [];
   let length = 0;
-  const reader = target.body.getReader();
+  const reader = stream.getReader();
   for (;;) {
     const result = await reader.read();
     if (result.done) break;
@@ -189,6 +218,11 @@ async function __drainBody(target) {
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
+  return bytes;
+}
+async function __drainBody(target) {
+  const bytes = await __drainStream(target.body);
+  __ownedBodies.add(bytes);
   target._bodyBytes = bytes;
   // text() memoizes into _body on demand. Decoding here charges every
   // binary passthrough the cost of a string it never reads.
@@ -521,6 +555,7 @@ globalThis.Response = class Response {
     return response;
   }
   async _consume() {
+    if (__handedOverBodies.has(this)) throw new TypeError(__BODY_USED);
     if (this._bodyBytes !== null) {
       if (this.body !== null && this.body._cancelled)
         throw new TypeError(
@@ -545,11 +580,11 @@ globalThis.Response = class Response {
   }
   async arrayBuffer() {
     this.bodyUsed = true;
-    return (await this._consume()).slice().buffer;
+    return __handOverBody(this, await this._consume());
   }
   async blob() {
-    return new Blob([await this.arrayBuffer()],
-      { type: this.headers.get("content-type") || "" });
+    return __celld.__blobOf(await this.arrayBuffer(),
+      this.headers.get("content-type") || "");
   }
   clone() {
     if (this.bodyUsed) throw new TypeError("Body has already been consumed");
@@ -692,6 +727,7 @@ globalThis.Request = class Request {
     this._headersInit = undefined;
   }
   async _consume() {
+    if (__handedOverBodies.has(this)) throw new TypeError(__BODY_USED);
     if (this._bodyBytes !== null) return this._bodyBytes;
     return __drainBody(this);
   }
@@ -711,11 +747,11 @@ globalThis.Request = class Request {
   }
   async arrayBuffer() {
     this.bodyUsed = true;
-    return (await this._consume()).slice().buffer;
+    return __handOverBody(this, await this._consume());
   }
   async blob() {
-    return new Blob([await this.arrayBuffer()],
-      { type: this.headers.get("content-type") || "" });
+    return __celld.__blobOf(await this.arrayBuffer(),
+      this.headers.get("content-type") || "");
   }
   clone() {
     if (this.bodyUsed) throw new TypeError("Body has already been consumed");
@@ -1062,24 +1098,7 @@ const __r2Bytes = (hex) => {
 };
 // Read a `ReadableStream` to one `Uint8Array`. Bodies drained this way
 // are the ones the caller asked to have whole.
-const __r2Drain = async (stream) => {
-  const reader = stream.getReader();
-  const chunks = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    total += value.length;
-  }
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, at);
-    at += chunk.length;
-  }
-  return out;
-};
+const __r2Drain = (stream) => __drainStream(stream);
 const __r2Ms = (value) => {
   if (value === undefined || value === null) return undefined;
   const ms = value instanceof Date ? value.getTime() : Number(value);
@@ -1227,7 +1246,7 @@ const __r2Object = (object, body) => {
   r2.bytes = drain;
   r2.text = async () => new TextDecoder().decode(await drain());
   r2.json = async () => JSON.parse(new TextDecoder().decode(await drain()));
-  r2.blob = async () => new Blob([await drain()]);
+  r2.blob = async () => __celld.__blobOf((await drain()).buffer, "");
   return r2;
 };
 // The write-side options every writing method shares, in the shape the
@@ -10807,6 +10826,18 @@ if (!globalThis.Blob) {
     get [Symbol.toStringTag]() { return "Blob"; }
   };
 }
+// A Blob of `buffer`, which the caller hands over: a body read whole that
+// nothing else holds, so it needs no copy. The type is normalised as the
+// constructor does.
+__celld.__blobOf = (buffer, type) => {
+  const blob = new Blob([], { type });
+  const bytes = new Uint8Array(buffer);
+  if (bytes.byteLength > 134217728)
+    throw new RangeError(`Blob size ${bytes.byteLength} exceeds limit 134217728`);
+  blob._bytes = bytes;
+  blob.size = bytes.byteLength;
+  return blob;
+};
 if (!globalThis.File) {
   // WebIDL-ish per Workerd: name is required, name/lastModified are
   // brand-checked prototype getters (enumerable, matching the
