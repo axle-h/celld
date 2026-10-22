@@ -351,8 +351,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 12 | 1.6 deploy configuration relaxations (W1-W3 removed) | done | see log |
 | 13 | 1.7 WebSocket through a service binding; router mode default | done | see log |
 | 14 | 1.21 part 1: host WebSocket owner map | done | `184054a` |
-| 14b | 1.21 part 2: harness private state, target grants | done | see log |
-| 15+ | 0.5, then Phase 1 in plan order (1.8-1.22), and the 1.4 props key-order follow-up | queued | |
+| 14b | 1.21 part 2: harness private state, target grants | done | `324563e` |
+| 15 | 0.5 integration adapter | done | starter `fb97f16` |
+| 16+ | Phase 1 in plan order (1.8-1.25), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -720,6 +721,30 @@ Exclude files that redeploy or need vendor fakes.
 After 1.9, `mock-upstream.ts` and the mock LLM are private addresses. The
 adapter, `starter:celld/env.sh` and `e2e.sh` must set
 `CELLD_FETCH_PRIVATE_ALLOW` for exactly their host:port entries.
+
+**As built (starter `fb97f16`).**
+- `celld/integration.sh` runs one multi-config `celld dev` per test file on
+  free ports. Redeploy is a restart without `--clean`. `--workerd` runs
+  upstream's harness as the reference.
+- **Network.** The suites hardcode `api.cloudflare.com` and GitHub hosts. So
+  instead of pointing the provider at the mock, a shim loaded before each
+  Worker's code sends global `fetch()` to `mock-upstream.ts`, which restores
+  `Location` and `content-length`. Unmatched requests get **500**, as under
+  wrangler, because `observer-reverification` asserts it. The adapter
+  bypasses celld's real outbound path (TLS, DNS, the 1.9 policy).
+- **`status.json`** has `passing`, `pending` (each with its first error and
+  plan mapping) and `excluded` (with reasons). The run fails on a
+  regression, a flake, an unhandled error or a killed run, and warns when a
+  pending suite's first error changes.
+- An adapter self-test runs first. Its `it.fails` cases pin 1.20 and 1.23.
+- **Today:** `workshop-user-directory` passes. All 35 pending suites fail on
+  trial failures 6, 7 and 9, and pass on workerd. A run takes about 60 s with
+  3 jobs.
+- **Excluded:**
+  - `github-hooks*` and `google-hooks-upgrade`: vendor fakes.
+  - `external-message-*`: a DO `script_name` binding (see Phase 9).
+  - `network-interceptor`, `mock-model` and `worker-inputs`: Node only.
+- **To do:** add `celld/integration.sh` to the nightly CI job (0.6).
 
 ### 0.6 CI (GitHub Actions on Alex's fork)
 
@@ -1705,6 +1730,23 @@ legitimate cross-event uses.
   backpressure (a `bufferedAmount` model) or a close on overflow (1009/1011),
   and make the 1.7 bridge propagate its pull-queue backpressure into it.
 
+### 1.23 `Response.clone()` on fetched bodies (found by 0.5)
+
+`clone()` on a fetched Response throws "Cannot clone a streaming response
+before consumption", and clones lose `url` and `redirected`. workerd tees the
+body and keeps both. The adapter self-test's `it.fails` pins it.
+
+### 1.24 Wrangler `alias` (found by 0.5)
+
+`celld deploy` refuses `alias`, which upstream's `bundleBlueprints` uses.
+Map it to esbuild's `alias`, as wrangler does.
+
+### 1.25 KV `preview_id` under `celld dev` (found by 0.5)
+
+`celld dev` requires a KV `id` and ignores `preview_id`, where `wrangler dev`
+uses `preview_id`. The comment at `deploy.rs:1678` ("`wrangler dev`, which
+celld does not run") is out of date.
+
 ### Phase 1 gate
 
 - All new conformance cases pass on both runtimes.
@@ -1713,7 +1755,8 @@ legitimate cross-event uses.
 - The browser shows the home page through the router.
 - Smoke S0, S1 and S10 pass. S3-S7 still fail, now only for the Phase 2/3
   reasons (S11 is clean of "Invalid reader mode" and "dropped a frame").
-- The 0.5 adapter boots.
+- `celld/integration.sh` passes: the self-test is green, there is no
+  regression, and no suite's first error is "Invalid reader mode".
 
 ---
 
@@ -2066,8 +2109,12 @@ refused, without reproducing it as a working exploit:
 - a stale id after the cell is re-activated
 - a capability redeemed by an isolate other than its destination
 
-**Integration (adapter):** turn on `workshop-lifecycle`, `workshop-agent`
-(chat only), `workshop-presence` and `observer-*` in `status.json`.
+**Integration (adapter):** move `workshop-lifecycle`, `workshop-agent`,
+`workshop-presence`, `observer-exclusion`, `observer-reverification`,
+`observer-role-scope` and `observer-scope-promotion` to `passing` in
+`status.json`. The observer suites also need Phase 2's account-stub storage.
+`workshop-sharing` and `workshop-blueprints` also need 1.8, and
+`workshop-blueprints` needs 1.24.
 
 **E2E/manual:**
 - Smoke S1, S3, S4 and S6 pass, and S11 is clean of "cannot cross isolate".
@@ -2454,6 +2501,9 @@ E and F hops never cross nodes.
   `generate.ts` maps `WORKERS_AI`/`AI` to it. It depends on `Blob` and
   `Response` crossing scripts over RPC (Phase 3). E2E/manual: the agent fetches
   `https://example.com` and gets Markdown; web search returns results.
+- **DO `script_name` bindings** (a DO class from another script) are refused.
+  Only upstream's fixture gatekeeper uses one. Decide whether to support it
+  (it fits 2.4 and Phase 4) or keep refusing it.
 - **Integration allowlist growth.** Triage the remaining
   `cos:integration-tests` files, and add vendor-host redirection so
   `github-fake`/`google-fake` can run.
