@@ -173,3 +173,27 @@ cell, so a node that loses its lease cannot modify the current state. This
 fencing protects storage consistency. It does not isolate hostile
 applications. See [what celld guarantees](guarantees.md) and
 [limitations](limitations.md).
+
+## WebSocket ownership
+
+The host records an owner for every WebSocket that JavaScript can act on:
+the request that opened it, or the Durable Object (or facet) whose event
+accepted, opened or bound it. The host takes the owner from the running
+event, never from a value the script passes, and allocates socket ids only
+as it registers a socket. Sending, closing, reading, attachments,
+auto-response timestamps and handing a socket on to another Worker act only
+on sockets that the running request or Durable Object owns. Another owner's
+socket fails with workerd's cross-request I/O error. Every event of a Durable
+Object is the same owner, so a hibernatable socket still works after the
+object wakes. `getWebSockets()`, `acceptWebSocket()` and the auto-response
+pair use the running event's Durable Object, and throw a `TypeError` outside
+one.
+
+A socket that another request uses while its own request still holds it
+throws the cross-request error, as in workerd. Once its request has ended,
+celld has closed the socket, and using it throws `InvalidStateError`
+instead, where workerd throws the cross-request error.
+
+The `{id, scope}` target that joins a Durable Object's socket, through
+`accept()` on a `stub.fetch` 101 or through a 101 response, still comes from
+JavaScript and is not checked yet; part 2 of plan item 1.21 adds that check.

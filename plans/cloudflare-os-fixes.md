@@ -350,7 +350,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 11 | 1.5 `redirect: "manual"` on incoming requests | done | `1ca26cd` |
 | 12 | 1.6 deploy configuration relaxations (W1-W3 removed) | done | see log |
 | 13 | 1.7 WebSocket through a service binding; router mode default | done | see log |
-| 14 | 1.21 WebSocket id ownership (security) | queued | |
+| 14 | 1.21 part 1: host WebSocket owner map | done | see log |
+| 14b | 1.21 part 2: harness private state, target grants | next | |
 | 15+ | 0.5, then Phase 1 in plan order (1.8-1.22), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
@@ -1607,19 +1608,67 @@ Each one differs from workerd 1.20261001.1:
 
 ### 1.21 WebSocket ids carry authority (found by 1.7) — security, next after 1.7
 
-**Problem.** The harness trusts writable properties on its WebSocket
-objects (`_id`, `_target`, `_peer`), and `op_ws_send`, `op_ws_next` and
-`op_ws_bind_target` check no ownership. A Worker, including a Dynamic
-Worker running model-written code, can set `ws._id = n` and read or send
-frames on any socket in the process, including other scripts' sockets.
+**Problem.** WebSocket ownership is decided by values that JS can set:
+- writable properties on WebSocket objects (`_id`, `_peer`, `_target`,
+  `_boundTarget`, and the other `_x` state);
+- the `WebSocket` constructor treating a numeric argument as an internal id
+  (workerd treats it as a URL);
+- `Response`'s `__wsTarget` init option and the `_wsTarget`, `tunnel` and
+  `server._id` values `__readResponse` trusts;
+- a writable `_scope` on DO `ctx`, which reaches `__ws_list`, accept and the
+  auto-response ops in a process-wide registry.
 
-**Design.** The host owns socket ids: every op checks that the id belongs to
-the current IoContext (or its cell), and refuses otherwise with workerd's
-cross-request I/O error. The harness keeps ids in private state (a WeakMap
-or private fields), not writable properties, and captures its primordials.
+The host ops in `js/websocket.rs` check no ownership. So a Worker, including
+a Dynamic Worker running model-written code, can reach sockets owned by
+other requests, cells and scripts.
 
-**Tests.** A celld-only case where a Worker (and a Dynamic Worker) forges an
-id and is refused; unit tests for each op's ownership check.
+**Design.**
+- **Host owner map.** `WsRegistry` maps each socket id to its owner
+  (`Request(handoff_request)` or `Cell(scope)`), taken from the running
+  event, as workerd's actor-wide IoContext does.
+- **Allocation.** Ids are allocated only inside the ops that register them
+  (no free `__ws_alloc`). Every op checks the owner and refuses otherwise
+  with workerd's cross-request I/O error. Ops that took a cell string from
+  JS use the running event's cell.
+- **Grants.** A Cell target handed to JS by `encode_http_response` becomes a
+  grant to the caller, released at retire. `__ws_bind_target` and
+  `read_response` accept only granted targets.
+- **Harness.** All socket state moves to private fields. The numeric
+  constructor path and the public `__wsTarget` init are removed. Primordials
+  are captured on these paths.
+
+**Tests.** Isolation tests that expect refusals: cross-request, cross-cell,
+cross-script, Dynamic Worker vs parent, hibernatable sockets. Plus unit
+tests for each op's ownership check, and regression coverage of the
+legitimate cross-event uses.
+
+**Part 1 (host owner map): done.** As built:
+- Ids are allocated only by the registering ops; `__ws_alloc` is gone.
+  `connect`/`upgrade` return `{id, ready}`. Pair ends have id 0 until
+  registered.
+- Every op checks the owner. An unknown id behaves as before (an unknown
+  non-zero id passed to accept is "WebSocket is not valid"); another owner's
+  socket gets the cross-request error.
+- connect, upgrade, bind, list, accept and the auto-response ops route by the
+  running event, never by a cell string from JS.
+- The owner entry lives until the last registration (the input queue) goes.
+  A `WsDialGuard` travels with each dial request, so an unrun dial leaks
+  nothing.
+- Cases: `websocket/socket-ids` (differential), `socket-ids-dial` and
+  `cross-request-socket` (celld-only).
+
+**Part 2 (next).**
+- Harness private state for every `_x` field, and captured primordials.
+- Remove the numeric `WebSocket` constructor path and the public
+  `__wsTarget` init.
+- Grants for `{id, scope}` targets in `op_ws_bind_target` and
+  `read_response`; these are still trusted from JS (docs/security.md says
+  so).
+- A DO `ctx` used during another cell's event should throw, as in workerd.
+- The socket object should carry its owner (as workerd's IoOwn does), so use
+  after the owning request has ended throws the cross-request error rather
+  than `InvalidStateError`.
+- Isolation cases: cross-script and Dynamic Worker vs parent.
 
 ### 1.22 WebSocket follow-ups (found by 1.7)
 
@@ -1631,6 +1680,9 @@ id and is refused; unit tests for each op's ownership check.
 - The Response constructor checks no status range except 101.
 - `close()` before `accept()` on a handoff socket is never sent.
 - The `globalOutbound` broker path for a 101 is untested.
+- A failed `new WebSocket(url)` dial fires `error` but never `close`:
+  `readyState` is set to CLOSED before `_dispatchClose`, which then returns
+  early.
 - Outbound frame channels (`outputs`) and the pre-upgrade `WsMeta.pending`
   buffer are unbounded for every socket. Add a per-socket byte budget with
   backpressure (a `bufferedAmount` model) or a close on overflow (1009/1011),

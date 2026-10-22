@@ -1,0 +1,9 @@
+{
+  "kind": "celld-only",
+  "reason": "the request that uses the saved socket is the Worker's fetch of its own origin, which workerd under the test harness cannot reach",
+  "env": {"CELLD_MAX_STATELESS_ISOLATES": "1"},
+  "workers": ["app"],
+  "steps": [
+    {"ws": "/save", "send": ["go"]}
+  ]
+}

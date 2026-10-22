@@ -19,28 +19,6 @@ pub(super) struct WsCapture {
     promise: Option<v8::Global<v8::Promise>>,
 }
 
-fn prepare_worker_websocket_handoff(id: u64) {
-    let (inbound, receiver) = ws_pull_channel();
-    ws_pull_register(id, receiver);
-    ws_register_outbound(id, "", None);
-    ws_track_request_socket(id);
-    let registry = ws_registry();
-    let replaced = registry.lock().unwrap().worker_handoffs.insert(id, inbound);
-    drop(replaced);
-}
-
-pub(super) fn transfer_worker_websocket_handoff(id: u64) -> Option<WorkerWebSocket> {
-    let inbound = ws_registry().lock().unwrap().worker_handoffs.remove(&id)?;
-    // The response now owns cleanup. Transfer the frame channel and request
-    // ownership together so request retirement cannot close a returned socket.
-    current_context()
-        .sockets
-        .lock()
-        .unwrap()
-        .retain(|opened| *opened != id);
-    Some(WorkerWebSocket::new(id, inbound))
-}
-
 /// workerd's text for an I/O object used from a request other than the one
 /// that created it.
 const CROSS_REQUEST_IO: &str = "Cannot perform I/O on behalf of a different request. I/O \
@@ -48,6 +26,106 @@ const CROSS_REQUEST_IO: &str = "Cannot perform I/O on behalf of a different requ
      of one request handler cannot be accessed from a different request's handler. This is \
      a limitation of Cloudflare Workers which allows us to improve overall performance. \
      (I/O type: WebSocket)";
+
+/// The refusal for a non-zero id that names no socket the running code
+/// could register again: it closed, or it was never allocated.
+const NOT_VALID: &str = "WebSocket is not valid";
+
+/// The owner of the sockets that code running in `context` allocates, and
+/// the only owner whose sockets it may use: the Durable Object or facet of
+/// the running cell event, or else the request.
+fn owner_of(context: &IoContext) -> WsOwner {
+    match current_cell_event(context) {
+        Some(frame) => WsOwner::Cell(frame.storage),
+        None => WsOwner::Request(context.handoff_request),
+    }
+}
+
+/// The scope of the running cell event, for the ops that act on a Durable
+/// Object's own sockets. JavaScript never names the cell: a scope it passed
+/// would reach another object's sockets.
+fn running_cell(context: &IoContext) -> Result<String, String> {
+    current_cell_event(context)
+        .map(|frame| frame.storage)
+        .ok_or_else(|| {
+            "Durable Object WebSocket state is available only while one of that Durable \
+             Object's own events runs"
+                .to_string()
+        })
+}
+
+fn throw_type_error(scope: &mut v8::PinScope, message: &str) {
+    let message = v8::String::new(scope, message).unwrap();
+    let exception = v8::Exception::type_error(scope, message);
+    scope.throw_exception(exception);
+}
+
+/// Whether `owner` may act on socket `id`. `Ok(false)` for an id that names
+/// no open socket, which the op treats as it treats a closed socket.
+/// Another owner's socket is refused with workerd's cross-request error.
+fn may_use(owner: &WsOwner, id: u64) -> Result<bool, String> {
+    match ws_access(id, owner) {
+        WsAccess::Owned => Ok(true),
+        WsAccess::Unknown => Ok(false),
+        WsAccess::Other => Err(CROSS_REQUEST_IO.to_string()),
+    }
+}
+
+/// The id an op registers a socket under: a new id that `owner` owns for 0,
+/// or `id` itself when `owner` owns it already.
+fn claim(owner: &WsOwner, id: u64) -> Result<u64, String> {
+    if id == 0 {
+        return Ok(ws_allocate(owner.clone()));
+    }
+    match ws_access(id, owner) {
+        WsAccess::Owned => Ok(id),
+        WsAccess::Unknown => Err(NOT_VALID.to_string()),
+        WsAccess::Other => Err(CROSS_REQUEST_IO.to_string()),
+    }
+}
+
+fn id_arg(scope: &mut v8::PinScope, args: &v8::FunctionCallbackArguments, index: i32) -> u64 {
+    args.get(index)
+        .to_integer(scope)
+        .map(|n| n.value() as u64)
+        .unwrap_or(0)
+}
+
+/// Register the server end of a pair that a Worker returns in a 101, which
+/// the host carries to the client. Returns its id.
+fn prepare_worker_websocket_handoff(context: &IoContext, id: u64) -> Result<u64, String> {
+    let id = claim(&owner_of(context), id)?;
+    let (inbound, receiver) = ws_pull_channel();
+    ws_pull_register(id, receiver);
+    ws_register_outbound(id, "", None);
+    ws_track_request_socket(context, id);
+    let registry = ws_registry();
+    let replaced = registry.lock().unwrap().worker_handoffs.insert(id, inbound);
+    drop(replaced);
+    Ok(id)
+}
+
+/// Take the frame channel of the socket `id` that `__readResponse` prepared,
+/// for the response that carries it. `Ok(None)` when there is none.
+pub(super) fn transfer_worker_websocket_handoff(
+    context: &IoContext,
+    id: u64,
+) -> Result<Option<WorkerWebSocket>, String> {
+    if !may_use(&owner_of(context), id)? {
+        return Ok(None);
+    }
+    let Some(inbound) = ws_registry().lock().unwrap().worker_handoffs.remove(&id) else {
+        return Ok(None);
+    };
+    // The response now owns cleanup. Transfer the frame channel and request
+    // ownership together so request retirement cannot close a returned socket.
+    context
+        .sockets
+        .lock()
+        .unwrap()
+        .retain(|opened| *opened != id);
+    Ok(Some(WorkerWebSocket::new(id, inbound)))
+}
 
 /// The message for a handed-over socket that cannot be used.
 fn handoff_refusal(refusal: WorkerHandoffRefusal) -> String {
@@ -66,7 +144,7 @@ fn handoff_refusal(refusal: WorkerHandoffRefusal) -> String {
 /// only that request adopt and take it, so a socket object that reached
 /// another request's hands, or a token another request learned, moves
 /// nothing.
-pub(super) fn take_request_worker_handoff(
+fn take_request_worker_handoff(
     context: &IoContext,
     token: &WorkerHandoffToken,
 ) -> std::result::Result<(WorkerWebSocket, u64), String> {
@@ -77,6 +155,18 @@ pub(super) fn take_request_worker_handoff(
         .unwrap()
         .retain(|owned| owned != token);
     Ok(taken)
+}
+
+/// Take a handed-over socket that `context`'s request adopted and now
+/// returns in its response. The caller's end the host chose at adoption was
+/// never registered, so its owner goes.
+pub(super) fn take_response_worker_handoff(
+    context: &IoContext,
+    token: &WorkerHandoffToken,
+) -> std::result::Result<WorkerWebSocket, String> {
+    let (socket, caller) = take_request_worker_handoff(context, token)?;
+    ws_unregister(caller);
+    Ok(socket)
 }
 
 /// `__ws_adopt_worker_handoff(token)`: give a socket that a subrequest's 101
@@ -92,7 +182,7 @@ pub(super) fn op_ws_adopt_worker_handoff(
     let token = WorkerHandoffToken::from(args.get(0).to_rust_string_lossy(scope));
     let context = event_context(scope);
     let caller =
-        match adopt_worker_handoff(&token, context.handoff_request) {
+        match adopt_worker_handoff(&token, context.handoff_request, owner_of(&context)) {
             Ok(caller) => caller,
             Err(WorkerHandoffRefusal::Gone) => return loader_throw(
                 scope,
@@ -115,13 +205,27 @@ fn take_for_accept(
 ) -> std::result::Result<WorkerWebSocket, String> {
     let (target, caller) = take_request_worker_handoff(context, token)?;
     if caller != id {
-        close_handed_over(target, 1011, "WebSocket is not valid", false);
-        return Err("WebSocket is not valid".to_string());
+        // Nothing registered the caller's end, and nothing will.
+        ws_unregister(caller);
+        close_handed_over(target, 1011, NOT_VALID, false);
+        return Err(NOT_VALID.to_string());
     }
     Ok(target)
 }
 
-/// `__ws_bind_worker_handoff(id, token, cell)`: `accept()` on a socket that a
+/// The handed-over socket that `accept()` on the caller's end `id` bridges
+/// to, when the running code owns `id`.
+fn take_for_bind(
+    context: &IoContext,
+    token: &WorkerHandoffToken,
+    id: u64,
+) -> std::result::Result<WorkerWebSocket, String> {
+    // An id that names no socket fails as one the host did not choose.
+    may_use(&owner_of(context), id)?;
+    take_for_accept(context, token, id)
+}
+
+/// `__ws_bind_worker_handoff(id, token)`: `accept()` on a socket that a
 /// subrequest's 101 handed to this request. The server end lives in another
 /// isolate, so the host carries both directions between it and this
 /// isolate's socket `id`.
@@ -130,20 +234,15 @@ pub(super) fn op_ws_bind_worker_handoff(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let id = args
-        .get(0)
-        .to_integer(scope)
-        .map(|n| n.value() as u64)
-        .unwrap_or(0);
+    let id = id_arg(scope, &args, 0);
     let token = WorkerHandoffToken::from(args.get(1).to_rust_string_lossy(scope));
-    // The caller's scope, empty for a Worker, exactly as `op_ws_bind_target`
-    // reads it.
-    let cell = args.get(2).to_rust_string_lossy(scope);
-    let facet = match dialing_facet(scope, &cell) {
-        Ok(facet) => facet,
+    let context = event_context(scope);
+    // The caller's own route, empty for a Worker.
+    let (cell, facet) = match dialing_route(&context) {
+        Ok(route) => route,
         Err(error) => return loader_throw(scope, &error),
     };
-    let target = match take_for_accept(&event_context(scope), &token, id) {
+    let target = match take_for_bind(&context, &token, id) {
         Ok(target) => target,
         Err(error) => return loader_throw(scope, &error),
     };
@@ -154,7 +253,7 @@ pub(super) fn op_ws_bind_worker_handoff(
     let (caller_pull, caller_queue) = ws_pull_channel();
     ws_pull_register(id, caller_queue);
     if cell.is_empty() {
-        ws_track_request_socket(id);
+        ws_track_request_socket(&context, id);
     }
     ws_register_outbound(id, &cell, facet);
     let (caller_tx, from_caller) = tokio::sync::mpsc::unbounded_channel();
@@ -199,9 +298,10 @@ pub(super) fn ws_close_request_sockets(opened: Vec<u64>) {
     }
 }
 
-/// Account a Worker socket to the request that opened it.
-fn ws_track_request_socket(id: u64) {
-    current_context().sockets.lock().unwrap().push(id);
+/// Account a Worker socket to the request that opened it, the request that
+/// owns it.
+fn ws_track_request_socket(context: &IoContext, id: u64) {
+    context.sockets.lock().unwrap().push(id);
 }
 
 pub(super) fn ws_capture_begin() {
@@ -370,141 +470,231 @@ fn ws_emit(context: &Arc<IoContext>, id: u64, out: WsOut) {
     });
 }
 
+/// Send or hold one frame on a socket that the code running in `context`
+/// owns. A socket that is not open drops the frame, as a closed one did.
+fn emit_as(context: &Arc<IoContext>, id: u64, out: WsOut) -> Result<(), String> {
+    if may_use(&owner_of(context), id)? {
+        ws_emit(context, id, out);
+    } else {
+        tracing::warn!(ws_id = id, "dropped a frame for a closed WebSocket");
+    }
+    Ok(())
+}
+
+fn emit_checked(scope: &mut v8::PinScope, id: u64, out: WsOut) {
+    if let Err(error) = emit_as(&event_context(scope), id, out) {
+        loader_throw(scope, &error);
+    }
+}
+
 pub(super) fn op_ws_send(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let id = args
-        .get(0)
-        .to_integer(scope)
-        .map(|n| n.value() as u64)
-        .unwrap_or(0);
+    let id = id_arg(scope, &args, 0);
     let data = args.get(1).to_rust_string_lossy(scope);
-    ws_emit(&event_context(scope), id, WsOut::Text(data));
+    emit_checked(scope, id, WsOut::Text(data));
 }
 pub(super) fn op_ws_send_binary(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let id = args
-        .get(0)
-        .to_integer(scope)
-        .map(|n| n.value() as u64)
-        .unwrap_or(0);
+    let id = id_arg(scope, &args, 0);
     let data = view_bytes(args.get(1)).unwrap_or_default();
-    ws_emit(&event_context(scope), id, WsOut::Binary(data));
+    emit_checked(scope, id, WsOut::Binary(data));
 }
 pub(super) fn op_ws_close(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let id = args
-        .get(0)
-        .to_integer(scope)
-        .map(|n| n.value() as u64)
-        .unwrap_or(0);
+    let id = id_arg(scope, &args, 0);
     let code = args.get(1).uint32_value(scope).unwrap_or(1000) as u16;
     let reason = args.get(2).to_rust_string_lossy(scope);
-    ws_emit(&event_context(scope), id, WsOut::Close(code, reason));
-}
-pub(super) fn op_ws_alloc(
-    scope: &mut v8::PinScope,
-    _args: v8::FunctionCallbackArguments,
-    mut rv: v8::ReturnValue<v8::Value>,
-) {
-    rv.set(v8::Number::new(scope, ws_next_id() as f64).into());
+    emit_checked(scope, id, WsOut::Close(code, reason));
 }
 
+/// `__ws_prepare_worker_handoff(id)`: register the server end of a pair that
+/// a Worker returns in a 101. An id of 0 allocates one. Returns the id.
 pub(super) fn op_ws_prepare_worker_handoff(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue<v8::Value>,
+    mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let id = args
-        .get(0)
-        .to_integer(scope)
-        .map(|n| n.value() as u64)
-        .unwrap_or(0);
-    prepare_worker_websocket_handoff(id);
+    let id = id_arg(scope, &args, 0);
+    match prepare_worker_websocket_handoff(&event_context(scope), id) {
+        Ok(id) => rv.set(v8::Number::new(scope, id as f64).into()),
+        Err(error) => loader_throw(scope, &error),
+    }
 }
-/// The facet record of an outbound socket that `cell` opens, when the running
-/// event belongs to a Durable Object facet.
+
+/// The route of a socket that the running code opens or binds: the scope of
+/// the running cell event, empty for a Worker, and the facet record when
+/// that cell is a Durable Object facet.
 ///
 /// A facet is not a cell. A socket that names the facet's scope as its cell
 /// starts an activation of a class that no Worker exports, so the upgrade
 /// fails with `RuntimeFailed`. The socket must route, register, and gate
-/// through the facet's root instead. The record comes from the frame that
-/// the host installed when the event started, not from `cell`, because the
-/// scope crosses application JavaScript.
-fn dialing_facet(scope: &mut v8::PinScope, cell: &str) -> Result<Option<FacetSocket>, String> {
-    if cell.is_empty() {
-        return Ok(None);
-    }
-    let Some(EgressFrame {
-        storage,
-        root: Some(root),
-        ..
-    }) = current_cell_event(&event_context(scope))
-    else {
-        return Ok(None);
+/// through the facet's root instead. Both come from the frame that the host
+/// installed when the event started, never from JavaScript.
+fn dialing_route(context: &IoContext) -> Result<(String, Option<FacetSocket>), String> {
+    let Some(EgressFrame { storage, root, .. }) = current_cell_event(context) else {
+        return Ok((String::new(), None));
     };
-    if storage != cell {
-        return Err(format!(
-            "websocket: the socket names {cell}, but the running Durable Object facet is {storage}"
-        ));
-    }
+    let Some(root) = root else {
+        return Ok((storage, None));
+    };
     let opening = storage::facet_opening(&storage).ok_or(
         "websocket: the Durable Object facet that opened this socket is no longer running",
     )?;
-    Ok(Some(FacetSocket {
+    let facet = FacetSocket {
         root: root.cell,
         stream: root.stream,
         epoch: root.epoch,
         opening,
-    }))
+    };
+    Ok((storage, Some(facet)))
 }
 
-/// `fetch(url, { headers: { Upgrade: "websocket" } })`. Returns a JSON
-/// envelope: either an upgraded socket, or the ordinary response a server sent
-/// instead, which the caller returns unchanged.
+/// What a dial asks the connector for, apart from the route and the id.
+struct Dial {
+    url: String,
+    protocols: Vec<String>,
+    headers: Vec<(String, String)>,
+    want_response: bool,
+    target: Option<WsTarget>,
+}
+
+type DialReply = tokio::sync::oneshot::Receiver<anyhow::Result<OutboundWsOpen>>;
+
+/// Allocate and register a socket that the code running in `context` opens,
+/// or binds to a Durable Object's socket, and hand it to the connector.
+///
+/// Returns the id, and the connector's answer unless no connector runs. In
+/// that case nothing stays registered for the id.
+fn start_dial(
+    context: &IoContext,
+    cell: String,
+    facet: Option<FacetSocket>,
+    dial: Dial,
+) -> (u64, Option<DialReply>) {
+    let id = ws_allocate(owner_of(context));
+    let bound = dial.target.is_some();
+    // A Worker socket, and every bound socket: the isolate polls it, so the
+    // queue registers here on the JS thread, before the first `__ws_next`.
+    let pull = (cell.is_empty() || bound).then(|| {
+        let (pull_tx, pull_rx) = ws_pull_channel();
+        ws_pull_register(id, pull_rx);
+        if cell.is_empty() {
+            ws_track_request_socket(context, id);
+        }
+        pull_tx
+    });
+    if bound {
+        // Registered here, on the JS thread, so a frame sent between this op
+        // and the pipe task buffers as a pending frame instead of being
+        // dropped for a socket the registry has never heard of. `accept()`
+        // opens the socket synchronously, so that window is reachable by an
+        // ordinary `send()`.
+        //
+        // The caller end's frames reach this isolate through its pull
+        // queue, so they never route by `cell`. The record still matters: a
+        // facet that stops closes its sockets by it, and this end would
+        // otherwise keep the other Durable Object's socket open after the
+        // facet is gone.
+        ws_register_outbound(id, &cell, facet.clone());
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let request = match dial.target {
+        // `scope` names the target, which keeps its own route.
+        Some(target) => OutboundWsReq {
+            scope: target.scope.clone(),
+            id,
+            url: String::new(),
+            protocols: Vec::new(),
+            pull,
+            headers: Vec::new(),
+            want_response: false,
+            target: Some(target),
+            facet: None,
+            reply: tx,
+            release: WsDialGuard::new(id),
+        },
+        None => OutboundWsReq {
+            scope: cell,
+            id,
+            url: dial.url,
+            protocols: dial.protocols,
+            pull,
+            headers: dial.headers,
+            want_response: dial.want_response,
+            target: None,
+            facet,
+            reply: tx,
+            release: WsDialGuard::new(id),
+        },
+    };
+    // A request that is never sent, or never run, drops its guard, which
+    // releases everything registered above.
+    let sent = outbound_ws_tx().is_some_and(|sender| sender.send(request).is_ok());
+    if !sent {
+        return (id, None);
+    }
+    (id, Some(rx))
+}
+
+/// `{ id, ready }` for a dial: the id the host chose, and its outcome.
+fn dialed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    id: u64,
+    ready: v8::Local<'s, v8::Value>,
+) -> v8::Local<'s, v8::Value> {
+    let object = v8::Object::new(scope);
+    let id_key = v8::String::new(scope, "id").unwrap();
+    let id_value = v8::Number::new(scope, id as f64);
+    // Own data properties, so a setter on `Object.prototype` sees neither.
+    object.create_data_property(scope, id_key.into(), id_value.into());
+    let ready_key = v8::String::new(scope, "ready").unwrap();
+    object.create_data_property(scope, ready_key.into(), ready);
+    object.into()
+}
+
+fn egress_refusal(scope: &mut v8::PinScope) -> Option<&'static str> {
+    match &actor_runtime_state(scope).egress {
+        EgressPolicy::Allow => None,
+        EgressPolicy::Deny => {
+            Some("This worker is not permitted to access the internet via global functions.")
+        }
+        EgressPolicy::Broker(_) => {
+            Some("A globalOutbound Fetcher cannot broker WebSockets in celld.")
+        }
+    }
+}
+
+/// `__ws_upgrade(url, headers)`: `fetch(url, { headers: { Upgrade:
+/// "websocket" } })`. Returns `{ id, ready }`, where `ready` resolves with a
+/// JSON envelope: either an upgraded socket, or the ordinary response a
+/// server sent instead, which the caller returns unchanged.
 pub(super) fn op_ws_upgrade(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    match &actor_runtime_state(scope).egress {
-        EgressPolicy::Allow => {}
-        EgressPolicy::Deny => {
-            return loader_throw(
-                scope,
-                "This worker is not permitted to access the internet via global functions.",
-            );
-        }
-        EgressPolicy::Broker(_) => {
-            return loader_throw(
-                scope,
-                "A globalOutbound Fetcher cannot broker WebSockets in celld.",
-            );
-        }
+    if let Some(refusal) = egress_refusal(scope) {
+        return loader_throw(scope, refusal);
     }
-    let id = args
-        .get(0)
-        .to_integer(scope)
-        .map(|n| n.value() as u64)
-        .unwrap_or(0);
-    let cell = args.get(1).to_rust_string_lossy(scope);
-    let facet = match dialing_facet(scope, &cell) {
-        Ok(facet) => facet,
+    let context = event_context(scope);
+    let (cell, facet) = match dialing_route(&context) {
+        Ok(route) => route,
         Err(error) => return loader_throw(scope, &error),
     };
-    let url = args.get(2).to_rust_string_lossy(scope);
+    let url = args.get(0).to_rust_string_lossy(scope);
     // The subprotocol list is read back out of these headers, so a silent
     // default opened the socket with no headers and no subprotocol at all.
     let headers: Vec<(String, String)> =
-        match serde_json::from_str(&args.get(3).to_rust_string_lossy(scope)) {
+        match serde_json::from_str(&args.get(1).to_rust_string_lossy(scope)) {
             Ok(headers) => headers,
             Err(error) => {
                 return loader_throw(
@@ -518,33 +708,22 @@ pub(super) fn op_ws_upgrade(
         .find(|(name, _)| name.eq_ignore_ascii_case("sec-websocket-protocol"))
         .map(|(_, value)| value.split(',').map(|p| p.trim().to_string()).collect())
         .unwrap_or_default();
-    let pull = cell.is_empty().then(|| {
-        let (pull_tx, pull_rx) = ws_pull_channel();
-        ws_pull_register(id, pull_rx);
-        ws_track_request_socket(id);
-        pull_tx
-    });
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let sent = outbound_ws_tx().is_some_and(|sender| {
-        sender
-            .send(OutboundWsReq {
-                scope: cell,
-                id,
-                url,
-                protocols,
-                pull,
-                headers,
-                want_response: true,
-                target: None,
-                facet,
-                reply: tx,
-            })
-            .is_ok()
-    });
+    let (id, rx) = start_dial(
+        &context,
+        cell,
+        facet,
+        Dial {
+            url,
+            protocols,
+            headers,
+            want_response: true,
+            target: None,
+        },
+    );
     let async_id = asyncrt::enqueue(async move {
-        if !sent {
+        let Some(rx) = rx else {
             return Err("no outbound WebSocket channel".into());
-        }
+        };
         let open = match rx.await {
             Ok(Ok(open)) => open,
             Ok(Err(error)) => return Err(format!("WebSocket upgrade failed: {error}")),
@@ -565,7 +744,18 @@ pub(super) fn op_ws_upgrade(
             .to_string(),
         })
     });
-    rv.set(promise_for(scope, async_id));
+    let ready = promise_for(scope, async_id);
+    let result = dialed(scope, id, ready);
+    rv.set(result);
+}
+
+/// The input queue that `__ws_next` on `id` reads, for its owner. `Ok(None)`
+/// for an id that names no open socket.
+fn next_queue(owner: &WsOwner, id: u64) -> Result<Option<WsPullQueue>, String> {
+    if !may_use(owner, id)? {
+        return Ok(None);
+    }
+    Ok(ws_pull().lock().unwrap().get(&id).cloned())
 }
 
 /// Await the next inbound event on an isolate-polled socket. Resolves with a
@@ -576,12 +766,11 @@ pub(super) fn op_ws_next(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let id = args
-        .get(0)
-        .to_integer(scope)
-        .map(|n| n.value() as u64)
-        .unwrap_or(0);
-    let queue = ws_pull().lock().unwrap().get(&id).cloned();
+    let id = id_arg(scope, &args, 0);
+    let queue = match next_queue(&owner_of(&event_context(scope)), id) {
+        Ok(queue) => queue,
+        Err(error) => return loader_throw(scope, &error),
+    };
     let async_id = asyncrt::enqueue_io_context(async move {
         let Some(queue) = queue else {
             return Ok(WsPull::Close(1006, "socket is not registered".into(), false).encode());
@@ -596,39 +785,24 @@ pub(super) fn op_ws_next(
     rv.set(promise_for(scope, async_id));
 }
 
+/// `__ws_connect(url, protocols)`: `new WebSocket(url, protocols)`. Returns
+/// `{ id, ready }`, where `ready` resolves with the chosen subprotocol.
 pub(super) fn op_ws_connect(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    match &actor_runtime_state(scope).egress {
-        EgressPolicy::Allow => {}
-        EgressPolicy::Deny => {
-            return loader_throw(
-                scope,
-                "This worker is not permitted to access the internet via global functions.",
-            );
-        }
-        EgressPolicy::Broker(_) => {
-            return loader_throw(
-                scope,
-                "A globalOutbound Fetcher cannot broker WebSockets in celld.",
-            );
-        }
+    if let Some(refusal) = egress_refusal(scope) {
+        return loader_throw(scope, refusal);
     }
-    let id = args
-        .get(0)
-        .to_integer(scope)
-        .map(|n| n.value() as u64)
-        .unwrap_or(0);
-    let cell = args.get(1).to_rust_string_lossy(scope);
-    let facet = match dialing_facet(scope, &cell) {
-        Ok(facet) => facet,
+    let context = event_context(scope);
+    let (cell, facet) = match dialing_route(&context) {
+        Ok(route) => route,
         Err(error) => return loader_throw(scope, &error),
     };
-    let url = args.get(2).to_rust_string_lossy(scope);
+    let url = args.get(0).to_rust_string_lossy(scope);
     let protocols: Vec<String> =
-        match serde_json::from_str(&args.get(3).to_rust_string_lossy(scope)) {
+        match serde_json::from_str(&args.get(1).to_rust_string_lossy(scope)) {
             Ok(protocols) => protocols,
             Err(error) => {
                 return loader_throw(
@@ -637,48 +811,40 @@ pub(super) fn op_ws_connect(
                 )
             }
         };
-    // No cell means a Worker socket: the isolate polls it, so register the
-    // queue here on the JS thread and track it against the running request.
-    let pull = cell.is_empty().then(|| {
-        let (pull_tx, pull_rx) = ws_pull_channel();
-        ws_pull_register(id, pull_rx);
-        ws_track_request_socket(id);
-        pull_tx
-    });
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let sent = outbound_ws_tx().is_some_and(|sender| {
-        sender
-            .send(OutboundWsReq {
-                scope: cell,
-                id,
-                url,
-                protocols,
-                pull,
-                headers: Vec::new(),
-                want_response: false,
-                target: None,
-                facet,
-                reply: tx,
-            })
-            .is_ok()
-    });
+    // No cell means a Worker socket: the isolate polls it, and it is tracked
+    // against the running request.
+    let (id, rx) = start_dial(
+        &context,
+        cell,
+        facet,
+        Dial {
+            url,
+            protocols,
+            headers: Vec::new(),
+            want_response: false,
+            target: None,
+        },
+    );
     let async_id = asyncrt::enqueue(async move {
-        if !sent {
+        let Some(rx) = rx else {
             return Err("no outbound WebSocket channel".into());
-        }
+        };
         match rx.await {
             Ok(Ok(open)) => Ok(open.protocol.unwrap_or_default()),
             Ok(Err(error)) => Err(format!("WebSocket connection failed: {error}")),
             Err(error) => Err(format!("WebSocket connector dropped: {error}")),
         }
     });
-    rv.set(promise_for(scope, async_id));
+    let ready = promise_for(scope, async_id);
+    let result = dialed(scope, id, ready);
+    rv.set(result);
 }
 
-/// Join this isolate's client socket to a Durable Object socket that a
-/// subrequest already upgraded. The cell end lives in another isolate, so
-/// the host carries each direction: it is the same route an external client
-/// takes, with a pull queue in place of a TCP connection.
+/// `__ws_bind_target(target)`: join this isolate's client socket to a
+/// Durable Object socket that a subrequest already upgraded. Returns the id
+/// of the client socket. The cell end lives in another isolate, so the host
+/// carries each direction: it is the same route an external client takes,
+/// with a pull queue in place of a TCP connection.
 ///
 /// Called from `accept()`, never from the upgrade itself. A Worker that
 /// passes the response straight back out never accepts the socket, and the
@@ -687,96 +853,53 @@ pub(super) fn op_ws_connect(
 pub(super) fn op_ws_bind_target(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue<v8::Value>,
+    mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let id = args
-        .get(0)
-        .to_integer(scope)
-        .map(|n| n.value() as u64)
-        .unwrap_or(0);
-    let Ok(target) = serde_json::from_str::<WsTarget>(&args.get(1).to_rust_string_lossy(scope))
+    let Ok(target) = serde_json::from_str::<WsTarget>(&args.get(0).to_rust_string_lossy(scope))
     else {
         return loader_throw(scope, "WebSocket target is not valid");
     };
-    // The caller's scope, which is empty for a Worker — the socket is
+    let context = event_context(scope);
+    // The caller's own route, which is empty for a Worker: the socket is
     // accounted against the isolate holding it, exactly as `op_ws_connect`
     // accounts an outbound one.
-    let cell = args.get(2).to_rust_string_lossy(scope);
-    // The caller end's frames reach this isolate through its pull queue, so
-    // they never route by `cell`. The record still matters: a facet that
-    // stops closes its sockets by it, and this end would otherwise keep the
-    // other Durable Object's socket open after the facet is gone.
-    let facet = match dialing_facet(scope, &cell) {
-        Ok(facet) => facet,
+    let (cell, facet) = match dialing_route(&context) {
+        Ok(route) => route,
         Err(error) => return loader_throw(scope, &error),
     };
-    let (pull_tx, pull_rx) = ws_pull_channel();
-    ws_pull_register(id, pull_rx);
-    if cell.is_empty() {
-        ws_track_request_socket(id);
-    }
-    // Registered here, on the JS thread, so a frame sent between this op and
-    // the pipe task buffers as a pending frame instead of being dropped for
-    // a socket the registry has never heard of. `accept()` opens the socket
-    // synchronously, so that window is reachable by an ordinary `send()`.
-    ws_register_outbound(id, &cell, facet);
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let sent = outbound_ws_tx().is_some_and(|sender| {
-        sender
-            .send(OutboundWsReq {
-                scope: target.scope.clone(),
-                id,
-                url: String::new(),
-                protocols: Vec::new(),
-                pull: Some(pull_tx),
-                headers: Vec::new(),
-                want_response: false,
-                target: Some(target),
-                // `scope` names the target, which keeps its own route.
-                facet: None,
-                reply: tx,
-            })
-            .is_ok()
-    });
+    let (id, rx) = start_dial(
+        &context,
+        cell,
+        facet,
+        Dial {
+            url: String::new(),
+            protocols: Vec::new(),
+            headers: Vec::new(),
+            want_response: false,
+            target: Some(target),
+        },
+    );
     // Nothing observes the outcome: the socket is already open, so there is
     // no handshake for JS to await. The task keeps the reply receiver alive
     // until the connector answers. A bind failure drops the pull sender, so
     // `op_ws_next` reports the caller socket as abnormally closed.
     asyncrt::enqueue(async move {
-        if !sent {
+        let Some(rx) = rx else {
             return Err::<String, String>("no outbound WebSocket channel".into());
-        }
+        };
         match rx.await {
             Ok(Ok(_)) => Ok(String::new()),
             Ok(Err(error)) => Err(format!("WebSocket bind failed: {error}")),
             Err(error) => Err(format!("WebSocket connector dropped: {error}")),
         }
     });
+    rv.set(v8::Number::new(scope, id as f64).into());
 }
-pub(super) fn op_ws_accept(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue<v8::Value>,
-) {
-    let id = args
-        .get(0)
-        .to_integer(scope)
-        .map(|n| n.value() as u64)
-        .unwrap_or(0);
-    let cell = args.get(1).to_rust_string_lossy(scope);
-    // Tags are how `state.getWebSockets(tag)` finds this socket again after a
-    // hibernation, so a silent default accepted the socket untagged and the
-    // Worker could not address it by tag; only a bare `getWebSockets()` still
-    // returned it.
-    let tags: Vec<String> = match serde_json::from_str(&args.get(2).to_rust_string_lossy(scope)) {
-        Ok(tags) => tags,
-        Err(error) => {
-            return loader_throw(
-                scope,
-                &format!("websocket: the tag list is not a JSON array: {error}"),
-            )
-        }
-    };
+
+/// Accept socket `id` (0 allocates one) as a hibernatable socket of `cell`,
+/// the running Durable Object. Returns its id.
+fn accept_hibernatable(cell: &str, id: u64, tags: Vec<String>) -> Result<u64, String> {
+    let id = claim(&WsOwner::Cell(cell.to_string()), id)?;
     let replaced_regular_scope = {
         let registry = ws_registry();
         let mut registry = registry.lock().unwrap();
@@ -788,12 +911,12 @@ pub(super) fn op_ws_accept(
         sockets
             .entry(id)
             .and_modify(|meta| {
-                meta.scope = cell.clone();
+                meta.scope = cell.to_string();
                 meta.hibernatable = true;
                 meta.tags = tags.clone();
             })
             .or_insert(WsMeta {
-                scope: cell.clone(),
+                scope: cell.to_string(),
                 hibernatable: true,
                 tags,
                 attachment: None,
@@ -807,25 +930,50 @@ pub(super) fn op_ws_accept(
         decrement_regular_ws(&scope);
     }
     tracing::info!(ws_id = id, scope = %cell, "accepted hibernatable WebSocket");
+    Ok(id)
 }
-pub(super) fn op_ws_accept_regular(
+
+/// `__ws_accept(id, tags)`: `ctx.acceptWebSocket(ws, tags)`. Returns the id.
+pub(super) fn op_ws_accept(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue<v8::Value>,
+    mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let id = args
-        .get(0)
-        .to_integer(scope)
-        .map(|n| n.value() as u64)
-        .unwrap_or(0);
-    let cell = args.get(1).to_rust_string_lossy(scope);
+    let id = id_arg(scope, &args, 0);
+    let cell = match running_cell(&event_context(scope)) {
+        Ok(cell) => cell,
+        Err(error) => return throw_type_error(scope, &error),
+    };
+    // Tags are how `state.getWebSockets(tag)` finds this socket again after a
+    // hibernation, so a silent default accepted the socket untagged and the
+    // Worker could not address it by tag; only a bare `getWebSockets()` still
+    // returned it.
+    let tags: Vec<String> = match serde_json::from_str(&args.get(1).to_rust_string_lossy(scope)) {
+        Ok(tags) => tags,
+        Err(error) => {
+            return loader_throw(
+                scope,
+                &format!("websocket: the tag list is not a JSON array: {error}"),
+            )
+        }
+    };
+    match accept_hibernatable(&cell, id, tags) {
+        Ok(id) => rv.set(v8::Number::new(scope, id as f64).into()),
+        Err(error) => loader_throw(scope, &error),
+    }
+}
+
+/// Register socket `id` (0 allocates one) as a regular socket of `cell`, the
+/// running Durable Object, which returns it in a 101. Returns its id.
+fn accept_regular(cell: &str, id: u64) -> Result<u64, String> {
+    let id = claim(&WsOwner::Cell(cell.to_string()), id)?;
     let inserted = {
         let registry = ws_registry();
         let mut registry = registry.lock().unwrap();
         let sockets = &mut registry.metadata;
         if let std::collections::hash_map::Entry::Vacant(entry) = sockets.entry(id) {
             entry.insert(WsMeta {
-                scope: cell.clone(),
+                scope: cell.to_string(),
                 hibernatable: false,
                 tags: Vec::new(),
                 attachment: None,
@@ -839,22 +987,31 @@ pub(super) fn op_ws_accept_regular(
         }
     };
     if inserted {
-        increment_regular_ws(&cell);
+        increment_regular_ws(cell);
     }
     tracing::info!(ws_id = id, scope = %cell, "accepted regular WebSocket");
+    Ok(id)
 }
-pub(super) fn op_ws_list(
+
+/// `__ws_accept_regular(id)`. Returns the id.
+pub(super) fn op_ws_accept_regular(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
-    let tag = args.get(1);
-    let tag = if tag.is_undefined() || tag.is_null() {
-        None
-    } else {
-        Some(tag.to_rust_string_lossy(scope))
+    let id = id_arg(scope, &args, 0);
+    let cell = match running_cell(&event_context(scope)) {
+        Ok(cell) => cell,
+        Err(error) => return throw_type_error(scope, &error),
     };
+    match accept_regular(&cell, id) {
+        Ok(id) => rv.set(v8::Number::new(scope, id as f64).into()),
+        Err(error) => loader_throw(scope, &error),
+    }
+}
+
+/// The hibernatable sockets of `cell`, as JSON rows.
+fn list_hibernatable(cell: &str, tag: Option<&str>) -> String {
     let rows = ws_registry()
         .lock()
         .unwrap()
@@ -863,7 +1020,7 @@ pub(super) fn op_ws_list(
         .filter(|(_, meta)| {
             meta.hibernatable
                 && meta.scope == cell
-                && tag.as_ref().is_none_or(|tag| meta.tags.contains(tag))
+                && tag.is_none_or(|tag| meta.tags.iter().any(|held| held == tag))
         })
         .map(|(id, meta)| {
             serde_json::json!({
@@ -873,54 +1030,89 @@ pub(super) fn op_ws_list(
             })
         })
         .collect::<Vec<_>>();
-    let json = serde_json::to_string(&rows).unwrap();
+    serde_json::to_string(&rows).unwrap()
+}
+
+/// `__ws_list(tag)`: `ctx.getWebSockets(tag)` for the running Durable Object.
+pub(super) fn op_ws_list(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let cell = match running_cell(&event_context(scope)) {
+        Ok(cell) => cell,
+        Err(error) => return throw_type_error(scope, &error),
+    };
+    let tag = args.get(0);
+    let tag = if tag.is_undefined() || tag.is_null() {
+        None
+    } else {
+        Some(tag.to_rust_string_lossy(scope))
+    };
+    let json = list_hibernatable(&cell, tag.as_deref());
     rv.set(v8::String::new(scope, &json).unwrap().into());
 }
+
+/// Store the serialized attachment of socket `id` for its owner.
+fn set_attachment(owner: &WsOwner, id: u64, attachment: Vec<u8>) -> Result<(), String> {
+    if !may_use(owner, id)? {
+        return Ok(());
+    }
+    if let Some(meta) = ws_registry().lock().unwrap().metadata.get_mut(&id) {
+        meta.attachment = Some(attachment);
+    }
+    Ok(())
+}
+
 pub(super) fn op_ws_attachment_set(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let id = args
-        .get(0)
-        .to_integer(scope)
-        .map(|n| n.value() as u64)
-        .unwrap_or(0);
+    let id = id_arg(scope, &args, 0);
     let Some(attachment) = view_bytes(args.get(1)) else {
-        let message = v8::String::new(scope, "__ws_attachment_set expects bytes").unwrap();
-        let exception = v8::Exception::type_error(scope, message);
-        scope.throw_exception(exception);
-        return;
+        return throw_type_error(scope, "__ws_attachment_set expects bytes");
     };
-    if let Some(meta) = ws_registry().lock().unwrap().metadata.get_mut(&id) {
-        meta.attachment = Some(attachment.to_vec());
+    let owner = owner_of(&event_context(scope));
+    if let Err(error) = set_attachment(&owner, id, attachment.to_vec()) {
+        loader_throw(scope, &error);
     }
 }
 
+/// `__ws_auto_response_set(request, response)` for the running Durable
+/// Object. A null request removes its pair.
 pub(super) fn op_ws_auto_response_set(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
-    let request = args.get(1);
+    let cell = match running_cell(&event_context(scope)) {
+        Ok(cell) => cell,
+        Err(error) => return throw_type_error(scope, &error),
+    };
+    let request = args.get(0);
     if request.is_null() || request.is_undefined() {
         ws_auto_responses().lock().unwrap().remove(&cell);
         return;
     }
     let request = request.to_rust_string_lossy(scope);
-    let response = args.get(2).to_rust_string_lossy(scope);
+    let response = args.get(1).to_rust_string_lossy(scope);
     ws_auto_responses()
         .lock()
         .unwrap()
         .insert(cell, (request, response));
 }
+
+/// `__ws_auto_response_get()` for the running Durable Object.
 pub(super) fn op_ws_auto_response_get(
     scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
+    _args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let cell = match running_cell(&event_context(scope)) {
+        Ok(cell) => cell,
+        Err(error) => return throw_type_error(scope, &error),
+    };
     let pair = ws_auto_responses().lock().unwrap().get(&cell).cloned();
     let json = match pair {
         Some((request, response)) => serde_json::to_string(&[request, response]).unwrap(),
@@ -928,25 +1120,30 @@ pub(super) fn op_ws_auto_response_get(
     };
     rv.set(v8::String::new(scope, &json).unwrap().into());
 }
+
+/// When the shell last auto-responded on socket `id`, for its owner.
+fn auto_response_ts(owner: &WsOwner, id: u64) -> Result<Option<f64>, String> {
+    if !may_use(owner, id)? {
+        return Ok(None);
+    }
+    Ok(ws_registry()
+        .lock()
+        .unwrap()
+        .metadata
+        .get(&id)
+        .and_then(|meta| meta.auto_response_at))
+}
+
 pub(super) fn op_ws_auto_response_ts(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let id = args
-        .get(0)
-        .to_integer(scope)
-        .map(|n| n.value() as u64)
-        .unwrap_or(0);
-    let stamped = ws_registry()
-        .lock()
-        .unwrap()
-        .metadata
-        .get(&id)
-        .and_then(|meta| meta.auto_response_at);
-    match stamped {
-        Some(ms) => rv.set(v8::Number::new(scope, ms).into()),
-        None => rv.set(v8::null(scope).into()),
+    let id = id_arg(scope, &args, 0);
+    match auto_response_ts(&owner_of(&event_context(scope)), id) {
+        Ok(Some(ms)) => rv.set(v8::Number::new(scope, ms).into()),
+        Ok(None) => rv.set(v8::null(scope).into()),
+        Err(error) => loader_throw(scope, &error),
     }
 }
 
@@ -959,7 +1156,8 @@ mod tests {
     /// `__hostResponseSocket` leaves one: returns its token and caller id.
     fn adopted_by(context: &IoContext, socket: WorkerWebSocket) -> (WorkerHandoffToken, u64) {
         let token = park_worker_handoff(socket, context.handoff_issuer(1)).unwrap();
-        let caller = adopt_worker_handoff(&token, context.handoff_request).unwrap();
+        let caller =
+            adopt_worker_handoff(&token, context.handoff_request, owner_of(context)).unwrap();
         context.worker_handoffs.lock().unwrap().push(token.clone());
         (token, caller)
     }
@@ -993,10 +1191,10 @@ mod tests {
             let other = IoContext::new();
             let token = park_worker_handoff(socket, caller.handoff_issuer(1)).unwrap();
             assert_eq!(
-                adopt_worker_handoff(&token, other.handoff_request),
+                adopt_worker_handoff(&token, other.handoff_request, owner_of(&other)),
                 Err(WorkerHandoffRefusal::OtherRequest)
             );
-            adopt_worker_handoff(&token, caller.handoff_request).unwrap();
+            adopt_worker_handoff(&token, caller.handoff_request, owner_of(&caller)).unwrap();
             caller.worker_handoffs.lock().unwrap().push(token.clone());
             assert_eq!(
                 take_request_worker_handoff(&other, &token).err().as_deref(),
@@ -1029,5 +1227,379 @@ mod tests {
             assert!(released(&queue).await);
             assert!(context.worker_handoffs.lock().unwrap().is_empty());
         });
+    }
+
+    /// A context running an event of the Durable Object `cell`, as
+    /// `start_cell_event` leaves one.
+    fn cell_context(cell: &str) -> Arc<IoContext> {
+        let context = IoContext::new();
+        context.egress.lock().unwrap().push(EgressFrame {
+            storage: cell.to_string(),
+            before: 0,
+            root: None,
+        });
+        context
+    }
+
+    /// A registered socket that `owner` owns, with the channel its frames
+    /// leave by.
+    fn owned_socket(owner: WsOwner) -> (u64, tokio::sync::mpsc::UnboundedReceiver<WsOut>) {
+        let id = ws_allocate(owner);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        ws_register(id, tx);
+        (id, rx)
+    }
+
+    fn cross_request() -> Option<String> {
+        Some(CROSS_REQUEST_IO.to_string())
+    }
+
+    #[test]
+    fn the_running_event_owns_what_it_allocates() {
+        let request = IoContext::new();
+        assert_eq!(
+            owner_of(&request),
+            WsOwner::Request(request.handoff_request)
+        );
+        assert!(running_cell(&request).is_err());
+        let cell = cell_context("cell-a");
+        assert_eq!(owner_of(&cell), WsOwner::Cell("cell-a".into()));
+        assert_eq!(running_cell(&cell).as_deref(), Ok("cell-a"));
+        // Every event of one Durable Object is the same owner.
+        assert_eq!(owner_of(&cell_context("cell-a")), owner_of(&cell));
+        assert_ne!(owner_of(&IoContext::new()), owner_of(&request));
+    }
+
+    #[test]
+    fn frames_leave_only_through_the_owners_socket() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let owner = IoContext::new();
+            let other = IoContext::new();
+            let cell = cell_context("cell-a");
+            let (id, mut frames) = owned_socket(owner_of(&owner));
+            let frames_to_send: [fn() -> WsOut; 3] = [
+                || WsOut::Text("text".into()),
+                || WsOut::Binary(vec![1, 2]),
+                || WsOut::Close(1000, "done".into()),
+            ];
+            for out in frames_to_send {
+                assert_eq!(emit_as(&other, id, out()).err(), cross_request());
+                assert_eq!(emit_as(&cell, id, out()).err(), cross_request());
+                emit_as(&owner, id, out()).unwrap();
+            }
+            assert!(matches!(frames.try_recv(), Ok(WsOut::Text(text)) if text == "text"));
+            assert!(matches!(frames.try_recv(), Ok(WsOut::Binary(bytes)) if bytes == [1, 2]));
+            assert!(matches!(frames.try_recv(), Ok(WsOut::Close(1000, _))));
+            assert!(frames.try_recv().is_err());
+            // An id that names no socket drops the frame, as a closed one did.
+            ws_unregister(id);
+            emit_as(&owner, id, WsOut::Text("late".into())).unwrap();
+            emit_as(&other, id, WsOut::Text("late".into())).unwrap();
+        });
+    }
+
+    #[test]
+    fn a_cells_socket_answers_in_its_later_events_only() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let first = cell_context("later-a");
+            let (id, mut frames) = owned_socket(owner_of(&first));
+            // A later event of the same Durable Object, as a hibernated
+            // socket's message wakes one. Sending from a cell event samples
+            // its storage, so the check is asked directly.
+            assert_eq!(may_use(&owner_of(&cell_context("later-a")), id), Ok(true));
+            assert_eq!(
+                emit_as(&cell_context("later-b"), id, WsOut::Text("x".into())).err(),
+                cross_request()
+            );
+            assert_eq!(
+                emit_as(&IoContext::new(), id, WsOut::Text("x".into())).err(),
+                cross_request()
+            );
+            assert!(frames.try_recv().is_err());
+            ws_unregister(id);
+        });
+    }
+
+    #[test]
+    fn next_reads_only_the_owners_queue() {
+        let owner = WsOwner::Cell("cell-a".into());
+        let id = ws_allocate(owner.clone());
+        let (_sender, queue) = ws_pull_channel();
+        ws_pull_register(id, queue);
+        assert!(next_queue(&owner, id).unwrap().is_some());
+        assert_eq!(
+            next_queue(&WsOwner::Cell("cell-b".into()), id).err(),
+            cross_request()
+        );
+        assert_eq!(
+            next_queue(&WsOwner::Request(u64::MAX), id).err(),
+            cross_request()
+        );
+        ws_pull_unregister(id);
+        // Gone: the pump reads a 1006, as it did.
+        assert!(next_queue(&owner, id).unwrap().is_none());
+        assert!(next_queue(&WsOwner::Request(u64::MAX), id)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn accepting_allocates_for_the_running_cell() {
+        let id = accept_hibernatable("accept-a", 0, vec!["tag".into()]).unwrap();
+        assert_eq!(ws_owner(id), Some(WsOwner::Cell("accept-a".into())));
+        // Its own cell accepts it again, in any event, and lists it.
+        assert_eq!(accept_hibernatable("accept-a", id, Vec::new()), Ok(id));
+        assert!(list_hibernatable("accept-a", None).contains(&format!("\"id\":{id}")));
+        assert!(!list_hibernatable("accept-b", None).contains(&format!("\"id\":{id}")));
+        // Another cell neither accepts it nor registers it as its own.
+        assert_eq!(
+            accept_hibernatable("accept-b", id, Vec::new()).err(),
+            cross_request()
+        );
+        assert_eq!(accept_regular("accept-b", id).err(), cross_request());
+        let regular = accept_regular("accept-a", 0).unwrap();
+        assert_eq!(ws_owner(regular), Some(WsOwner::Cell("accept-a".into())));
+        assert!(has_regular_websocket("accept-a"));
+        assert_eq!(accept_regular("accept-a", regular), Ok(regular));
+        assert_eq!(
+            accept_hibernatable("accept-b", regular, Vec::new()).err(),
+            cross_request()
+        );
+        // An id that names nothing is not a socket to register.
+        let unknown = ws_next_id();
+        assert_eq!(
+            accept_hibernatable("accept-a", unknown, Vec::new()).err(),
+            Some(NOT_VALID.to_string())
+        );
+        assert_eq!(
+            accept_regular("accept-a", unknown).err(),
+            Some(NOT_VALID.to_string())
+        );
+        assert_eq!(ws_owner(unknown), None);
+        ws_unregister(id);
+        ws_unregister(regular);
+        assert_eq!(ws_owner(id), None);
+        assert_eq!(ws_owner(regular), None);
+        assert!(!has_regular_websocket("accept-a"));
+    }
+
+    #[test]
+    fn attachments_and_auto_response_times_belong_to_the_cell() {
+        let owner = WsOwner::Cell("cell-a".into());
+        let id = accept_hibernatable("cell-a", 0, Vec::new()).unwrap();
+        ws_registry()
+            .lock()
+            .unwrap()
+            .metadata
+            .get_mut(&id)
+            .unwrap()
+            .auto_response_at = Some(42.0);
+        for stranger in [WsOwner::Cell("cell-b".into()), WsOwner::Request(u64::MAX)] {
+            assert_eq!(
+                set_attachment(&stranger, id, vec![9]).err(),
+                cross_request()
+            );
+            assert_eq!(auto_response_ts(&stranger, id).err(), cross_request());
+        }
+        let attachment = |id| {
+            ws_registry()
+                .lock()
+                .unwrap()
+                .metadata
+                .get(&id)
+                .and_then(|meta| meta.attachment.clone())
+        };
+        assert_eq!(attachment(id), None);
+        set_attachment(&owner, id, vec![1]).unwrap();
+        assert_eq!(attachment(id), Some(vec![1]));
+        assert_eq!(auto_response_ts(&owner, id), Ok(Some(42.0)));
+        ws_unregister(id);
+        set_attachment(&owner, id, vec![2]).unwrap();
+        assert_eq!(auto_response_ts(&owner, id), Ok(None));
+    }
+
+    #[test]
+    fn a_returned_pair_belongs_to_the_request_that_prepared_it() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let owner = IoContext::new();
+            let other = IoContext::new();
+            let id = prepare_worker_websocket_handoff(&owner, 0).unwrap();
+            assert_eq!(ws_owner(id), Some(owner_of(&owner)));
+            assert_eq!(*owner.sockets.lock().unwrap(), [id]);
+            assert_eq!(
+                prepare_worker_websocket_handoff(&other, id).err(),
+                cross_request()
+            );
+            assert_eq!(
+                transfer_worker_websocket_handoff(&other, id).err(),
+                cross_request()
+            );
+            assert_eq!(
+                transfer_worker_websocket_handoff(&cell_context("cell-a"), id).err(),
+                cross_request()
+            );
+            // Still the owner's, and still prepared.
+            let socket = transfer_worker_websocket_handoff(&owner, id)
+                .unwrap()
+                .expect("prepared");
+            assert!(owner.sockets.lock().unwrap().is_empty());
+            assert!(transfer_worker_websocket_handoff(&owner, id)
+                .unwrap()
+                .is_none());
+            // The response's socket releases every registration, the owner
+            // with them.
+            drop(socket);
+            assert_eq!(ws_owner(id), None);
+            assert!(transfer_worker_websocket_handoff(&other, id)
+                .unwrap()
+                .is_none());
+        });
+    }
+
+    #[test]
+    fn only_the_adopting_request_binds_its_end() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let (socket, queue) = worker_socket();
+            let context = IoContext::new();
+            let (token, caller) = adopted_by(&context, socket);
+            assert_eq!(ws_owner(caller), Some(owner_of(&context)));
+            for stranger in [IoContext::new(), cell_context("cell-a")] {
+                assert_eq!(
+                    take_for_bind(&stranger, &token, caller).err(),
+                    cross_request()
+                );
+            }
+            // Refused before anything moved: the socket waits for its owner.
+            assert!(queue.registered());
+            let target = take_for_bind(&context, &token, caller).unwrap();
+            assert_eq!(target.id(), queue.0);
+            assert_eq!(ws_owner(caller), Some(owner_of(&context)));
+            drop(target);
+            ws_unregister(caller);
+            assert_eq!(ws_owner(caller), None);
+        });
+    }
+
+    #[test]
+    fn a_caller_end_that_is_never_bound_leaves_no_owner() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            // Released when its request retires.
+            let (socket, _queue) = worker_socket();
+            let context = IoContext::new();
+            let (_, caller) = adopted_by(&context, socket);
+            context.close_sockets();
+            assert_eq!(ws_owner(caller), None);
+            // Returned in the request's response.
+            let (socket, _queue) = worker_socket();
+            let context = IoContext::new();
+            let (token, caller) = adopted_by(&context, socket);
+            let socket = take_response_worker_handoff(&context, &token).unwrap();
+            assert_eq!(ws_owner(caller), None);
+            drop(socket);
+            // Refused by an `accept()` under another id.
+            let (socket, _queue) = worker_socket();
+            let context = IoContext::new();
+            let (token, caller) = adopted_by(&context, socket);
+            assert!(take_for_accept(&context, &token, caller + 1).is_err());
+            assert_eq!(ws_owner(caller), None);
+        });
+    }
+
+    #[test]
+    fn the_owner_goes_with_the_last_registration() {
+        let id = ws_allocate(WsOwner::Request(u64::MAX));
+        ws_register_outbound(id, "", None);
+        let (_sender, queue) = ws_pull_channel();
+        ws_pull_register(id, queue);
+        // The request still reads the close waiting in the queue.
+        ws_unregister(id);
+        assert_eq!(ws_owner(id), Some(WsOwner::Request(u64::MAX)));
+        ws_pull_unregister(id);
+        assert_eq!(ws_owner(id), None);
+
+        // The other order.
+        let id = ws_allocate(WsOwner::Request(u64::MAX));
+        ws_register_outbound(id, "", None);
+        let (_sender, queue) = ws_pull_channel();
+        ws_pull_register(id, queue);
+        ws_pull_unregister(id);
+        assert_eq!(ws_owner(id), Some(WsOwner::Request(u64::MAX)));
+        ws_unregister(id);
+        assert_eq!(ws_owner(id), None);
+    }
+
+    #[test]
+    fn a_dial_that_never_reaches_the_connector_leaves_nothing() {
+        // Unit tests run no connector.
+        for (context, target) in [
+            (IoContext::new(), None),
+            (cell_context("cell-a"), None),
+            (
+                IoContext::new(),
+                Some(WsTarget {
+                    id: 1,
+                    scope: "cell-b".into(),
+                    tunnel: None,
+                }),
+            ),
+        ] {
+            let cell = running_cell(&context).unwrap_or_default();
+            let (id, reply) = start_dial(
+                &context,
+                cell,
+                None,
+                Dial {
+                    url: "ws://127.0.0.1:9/".into(),
+                    protocols: Vec::new(),
+                    headers: Vec::new(),
+                    want_response: false,
+                    target,
+                },
+            );
+            assert!(reply.is_none());
+            assert_eq!(ws_owner(id), None);
+            assert!(!ws_pull().lock().unwrap().contains_key(&id));
+            assert!(!ws_registry().lock().unwrap().metadata.contains_key(&id));
+        }
+    }
+
+    #[test]
+    fn a_failed_dial_releases_what_its_op_registered() {
+        let id = ws_allocate(WsOwner::Request(u64::MAX));
+        let (_sender, queue) = ws_pull_channel();
+        ws_pull_register(id, queue);
+        drop(WsDialGuard::new(id));
+        assert_eq!(ws_owner(id), None);
+        assert!(!ws_pull().lock().unwrap().contains_key(&id));
+
+        // A request that reached the connector's channel but that no task
+        // ran releases the socket as it drops.
+        let id = ws_allocate(WsOwner::Cell("dial-a".into()));
+        let (reply, _answer) = tokio::sync::oneshot::channel();
+        let request = OutboundWsReq {
+            scope: "dial-a".into(),
+            id,
+            url: "ws://127.0.0.1:9/".into(),
+            protocols: Vec::new(),
+            pull: None,
+            headers: Vec::new(),
+            want_response: false,
+            target: None,
+            facet: None,
+            reply,
+            release: WsDialGuard::new(id),
+        };
+        let (connector, queued) = tokio::sync::mpsc::unbounded_channel();
+        connector.send(request).ok().unwrap();
+        assert!(ws_owner(id).is_some());
+        drop(queued);
+        assert_eq!(ws_owner(id), None);
+
+        // A dial that registered keeps its socket.
+        let id = ws_allocate(WsOwner::Cell("cell-a".into()));
+        WsDialGuard::new(id).disarm();
+        assert_eq!(ws_owner(id), Some(WsOwner::Cell("cell-a".into())));
+        ws_unregister(id);
+        assert_eq!(ws_owner(id), None);
     }
 }

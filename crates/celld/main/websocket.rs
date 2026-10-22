@@ -477,8 +477,10 @@ async fn local_websocket_pipe(
     target: celld::js::WsTarget,
     pull: Option<celld::js::WsPullSender>,
     reply: tokio::sync::oneshot::Sender<anyhow::Result<celld::js::OutboundWsOpen>>,
+    release: celld::js::WsDialGuard,
 ) -> anyhow::Result<()> {
     let Some(pull) = pull else {
+        // `release` unregisters the caller's end, which the op registered.
         let _ = reply.send(Err(anyhow::anyhow!(
             "a bound WebSocket target needs an isolate queue"
         )));
@@ -493,6 +495,8 @@ async fn local_websocket_pipe(
     let (cell_tx, mut from_cell) = mpsc::unbounded_channel();
     celld::js::ws_register(id, caller_tx);
     celld::js::ws_register(target.id, cell_tx);
+    // The pipe's own exit unregisters both ends from here on.
+    release.disarm();
     let _ = reply.send(Ok(celld::js::OutboundWsOpen {
         protocol: None,
         declined: None,
@@ -569,9 +573,10 @@ pub(crate) async fn outbound_websocket_task(
         target,
         facet,
         reply,
+        release,
     } = request;
     if let Some(target) = target {
-        return local_websocket_pipe(app, id, target, pull, reply).await;
+        return local_websocket_pipe(app, id, target, pull, reply, release).await;
     }
     let sink = match pull {
         Some(pull) => OutboundWebSocketSink::Isolate(pull),
@@ -667,6 +672,8 @@ pub(crate) async fn outbound_websocket_task(
     let (outbound, mut outputs) = mpsc::unbounded_channel();
     sink.register(id);
     celld::js::ws_register(id, outbound);
+    // Every return before this point released what the op registered.
+    release.disarm();
     if let Err(error) = sink
         .open(id, protocol.as_deref().unwrap_or_default().to_string())
         .await

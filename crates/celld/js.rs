@@ -6733,7 +6733,6 @@ ops! { OP_NAMES, install_op_functions,
         "__ws_send" => websocket::op_ws_send,
         "__ws_send_binary" => websocket::op_ws_send_binary,
         "__ws_close" => websocket::op_ws_close,
-        "__ws_alloc" => websocket::op_ws_alloc,
         "__ws_prepare_worker_handoff" => websocket::op_ws_prepare_worker_handoff,
         "__ws_accept" => websocket::op_ws_accept,
         "__ws_accept_regular" => websocket::op_ws_accept_regular,
@@ -12855,7 +12854,8 @@ fn read_response(scope: &mut v8::PinScope, ret: v8::Local<v8::Value>) -> Result<
         None
     } else {
         Some(
-            websocket::transfer_worker_websocket_handoff(worker_id)
+            websocket::transfer_worker_websocket_handoff(&event_context(scope), worker_id)
+                .map_err(|error| anyhow!(error))?
                 .ok_or_else(|| anyhow!("Worker WebSocket {worker_id} has no frame handoff"))?,
         )
     };
@@ -12867,12 +12867,11 @@ fn read_response(scope: &mut v8::PinScope, ret: v8::Local<v8::Value>) -> Result<
         .filter(|value| value.is_string())
     {
         Some(token) => Some(
-            websocket::take_request_worker_handoff(
+            websocket::take_response_worker_handoff(
                 &event_context(scope),
                 &WorkerHandoffToken::from(token.to_rust_string_lossy(scope)),
             )
-            .map_err(|error| anyhow!(error))?
-            .0,
+            .map_err(|error| anyhow!(error))?,
         ),
         None => None,
     };

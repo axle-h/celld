@@ -1,0 +1,10 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/bind"},
+    {"ws": "/regular", "send": ["a", "b"], "close": 1000},
+    {"ws": "/hibernatable?tag=first", "send": ["list", "read", "attach", "read", "ping", "stamp"], "close": 1000},
+    {"restart": true},
+    {"ws": "/hibernatable?tag=second", "send": ["list", "read", "stamp", "ping", "stamp"], "close": 1000}
+  ]
+}

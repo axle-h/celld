@@ -760,18 +760,16 @@ globalThis.fetch = async (input, init) => {
 const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
   async (req) => {
   const scope = __currentActorScope();
-  const id = __ws_alloc();
-  const socket = __makeSocket(id);
+  // The host allocates the id as it registers the socket.
+  const socket = __makeSocket(0);
   socket._outbound = true;
   socket._polled = !scope;
   socket.url = req.url;
   socket.readyState = WebSocket.READY_STATE_CONNECTING;
-  __sockets.set(id, socket);
+  let id = 0;
   let raw;
   try {
-    raw = JSON.parse(await __ws_upgrade(
-      id,
-      scope,
+    const upgrade = __ws_upgrade(
       req.url,
       // The iterator, not the header list, unlike every other outbound
       // path. The handshake builder on the host side puts these into a
@@ -782,9 +780,13 @@ const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
       // what the peer must see. Moving this to the header list needs the
       // host to append instead, so it is a separate change.
       JSON.stringify(Array.from(req.headers)),
-    ));
+    );
+    id = upgrade.id;
+    socket._id = id;
+    __sockets.set(id, socket);
+    raw = JSON.parse(await upgrade.ready);
   } catch (error) {
-    __sockets.delete(id);
+    if (id !== 0) __sockets.delete(id);
     throw error;
   }
   if (!raw.upgraded) {
@@ -2841,7 +2843,7 @@ class DurableObjectState {
   }
   _ready() { return this._gate; }
   getWebSockets(tag) {
-    return JSON.parse(__ws_list(this._scope, tag)).map((row) => __socketFromRow(row));
+    return JSON.parse(__ws_list(tag)).map((row) => __socketFromRow(row));
   }
   getTags(ws) {
     if (!(ws instanceof WebSocket) || !ws._hibernatable) {
@@ -2856,13 +2858,17 @@ class DurableObjectState {
       throw new Error(
         "the isolate is near its V8 heap limit, so it refused a " +
         "WebSocket (see CELLD_V8_HEAP_LIMIT_MB)");
-    ws._target = { id: ws._id, scope: this._scope };
+    const accepted = Array.from(tags, String);
+    // A pair's ends share the id the host allocates as it registers them.
+    const id = __ws_accept(ws._id, JSON.stringify(accepted));
+    ws._id = id;
+    if (ws._peer) ws._peer._id = id;
+    ws._target = { id, scope: this._scope };
     if (ws._peer) ws._peer._target = ws._target;
     ws._hibernatable = true;
     if (ws._peer) ws._peer._hibernatable = true;
-    ws._tags = Array.from(tags, String);
-    __ws_accept(ws._id, this._scope, JSON.stringify(ws._tags));
-    __sockets.set(ws._id, ws);
+    ws._tags = accepted;
+    __sockets.set(id, ws);
   }
   _socket(id) {
     return __sockets.get(Number(id)) ||
@@ -2874,7 +2880,7 @@ class DurableObjectState {
   // shell -- a matched message is answered without waking this cell.
   setWebSocketAutoResponse(pair) {
     if (pair === undefined || pair === null) {
-      __ws_auto_response_set(this._scope, null, null);
+      __ws_auto_response_set(null, null);
       return;
     }
     if (!(pair instanceof WebSocketRequestResponsePair))
@@ -2897,10 +2903,10 @@ class DurableObjectState {
         `Response cannot be larger than ${max} bytes. ` +
         `A response of size ${responseSize} was provided.`,
       );
-    __ws_auto_response_set(this._scope, pair.request, pair.response);
+    __ws_auto_response_set(pair.request, pair.response);
   }
   getWebSocketAutoResponse() {
-    const pair = JSON.parse(__ws_auto_response_get(this._scope));
+    const pair = JSON.parse(__ws_auto_response_get());
     if (pair === null) return null;
     return new WebSocketRequestResponsePair(pair[0], pair[1]);
   }
@@ -5462,12 +5468,16 @@ const __dispatchTo = __celld.__dispatchTo = async (
         response.webSocket && !response.webSocket._target &&
         !__isHandoffSocket(response.webSocket)) {
       const socket = response.webSocket._peer;
+      if (socket && !socket._hibernatable) {
+        // A pair's ends share the id the host allocates as it registers them.
+        const id = __ws_accept_regular(socket._id);
+        socket._id = id;
+        response.webSocket._id = id;
+      }
       const target = { id: response.webSocket._id, scope };
       response.webSocket._target = target;
       if (socket) {
         socket._target = target;
-        if (!socket._hibernatable)
-          __ws_accept_regular(socket._id, scope);
         __sockets.set(socket._id, socket);
         socket._flushPending();
       }
@@ -10538,7 +10548,9 @@ globalThis.WebSocket = class WebSocket extends EventTarget {
     this._boundTarget = boundTarget;
     this._bound = false;
     this._pendingClose = null;
-    this._id = outbound ? __ws_alloc() : Number(id);
+    // An outbound socket's id comes from the host when it registers the
+    // socket: here for a dialed one, at `accept()` for a bound one.
+    this._id = outbound ? 0 : Number(id);
     this._attachment = undefined;
     this._target = null;
     this._accepted = false;
@@ -10605,8 +10617,10 @@ globalThis.WebSocket = class WebSocket extends EventTarget {
           "WebSocket Constructor: The subprotocols must be unique.",
           "SyntaxError");
       }
+      const dial = __ws_connect(id, JSON.stringify(requested));
+      this._id = dial.id;
       __sockets.set(this._id, this);
-      const connection = __ws_connect(this._id, scope, id, JSON.stringify(requested));
+      const connection = dial.ready;
       __registerWaitUntil(connection);
       if (this._polled) this._startPump();
       connection.then((protocol) => {
@@ -10710,11 +10724,7 @@ globalThis.WebSocket = class WebSocket extends EventTarget {
       // thread, so the first `__ws_next` cannot run ahead of it.
       if (this._boundTarget !== null && !this._bound) {
         this._bound = true;
-        __ws_bind_target(
-          this._id,
-          JSON.stringify(this._boundTarget),
-          __currentActorScope(),
-        );
+        this._id = __ws_bind_target(JSON.stringify(this._boundTarget));
       }
       const handoff = __ReflectApply(__WeakMapGet, __workerHandoffs, [this]);
       if (handoff !== undefined) {
@@ -10722,7 +10732,7 @@ globalThis.WebSocket = class WebSocket extends EventTarget {
         // bridges it to this socket. A refused bind throws and leaves the
         // socket as it was; a bound one no longer names the server end.
         const scope = __currentActorScope();
-        __ws_bind_worker_handoff(this._id, handoff, scope);
+        __ws_bind_worker_handoff(this._id, handoff);
         __ReflectApply(__WeakMapDelete, __workerHandoffs, [this]);
         __ReflectApply(__WeakSetAdd, __acceptedHandoffs, [this]);
         this.readyState = WebSocket.READY_STATE_OPEN;
@@ -10927,9 +10937,10 @@ globalThis.WebSocketRequestResponsePair =
     get response() { return this.#response; }
   };
 globalThis.WebSocketPair = function WebSocketPair() {
-  const id = __ws_alloc();
-  const client = __makeSocket(id);
-  const server = __makeSocket(id);
+  // Both ends take the id the host allocates when one of them is registered:
+  // accepted by a Durable Object, or returned by a Worker.
+  const client = __makeSocket(0);
+  const server = __makeSocket(0);
   client._peer = server;
   server._peer = client;
   // Indexed AND iterable: `const [client, server] = new WebSocketPair()` is
@@ -11669,11 +11680,12 @@ __celld.__readResponse = (r) => {
       !acceptedWebSocket) {
     const server = r.webSocket._peer;
     if (server && server._accepted) {
-      workerSocketId = server._id;
       // Install the host queue before the pump asks for its first frame. The
       // target marker makes sends use that queue instead of remaining in the
       // pair's pre-upgrade buffer.
-      __ws_prepare_worker_handoff(workerSocketId);
+      workerSocketId = __ws_prepare_worker_handoff(server._id);
+      server._id = workerSocketId;
+      r.webSocket._id = workerSocketId;
       server._target = { id: workerSocketId, scope: "" };
       server._polled = true;
       __sockets.set(workerSocketId, server);

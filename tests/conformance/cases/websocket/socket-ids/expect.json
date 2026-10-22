@@ -1,0 +1,50 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": "bind:101:regular:from-bind"
+    },
+    {
+      "frames": [
+        "regular:a",
+        "regular:b"
+      ],
+      "close": {
+        "code": 1000,
+        "reason": "regular closed"
+      }
+    },
+    {
+      "frames": [
+        "{\"tagged\":1,\"untagged\":0,\"tags\":[\"first\",\"shared\"]}",
+        "read:{\"tag\":\"first\",\"n\":1,\"when\":\"1970-01-01T00:00:00.000Z\"}",
+        "attached",
+        "read:{\"tag\":\"first\",\"n\":2}",
+        "pong",
+        "stamped:true"
+      ],
+      "close": {
+        "code": 1000,
+        "reason": "hibernatable closed"
+      }
+    },
+    {
+      "restart": true
+    },
+    {
+      "frames": [
+        "{\"tagged\":1,\"untagged\":0,\"tags\":[\"second\",\"shared\"]}",
+        "read:{\"tag\":\"second\",\"n\":1,\"when\":\"1970-01-01T00:00:00.000Z\"}",
+        "stamped:false",
+        "pong",
+        "stamped:true"
+      ],
+      "close": {
+        "code": 1000,
+        "reason": "hibernatable closed"
+      }
+    }
+  ]
+}

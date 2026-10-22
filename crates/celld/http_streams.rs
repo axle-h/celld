@@ -2162,8 +2162,12 @@ mod tests {
             // for its caller, and the caller's token names it.
             assert!(queue.registered());
             let token = crate::ws_registry::WorkerHandoffToken::from(token);
-            let caller =
-                crate::ws_registry::adopt_worker_handoff(&token, u64::MAX).expect("parked");
+            let caller = crate::ws_registry::adopt_worker_handoff(
+                &token,
+                u64::MAX,
+                crate::ws_registry::WsOwner::Request(u64::MAX),
+            )
+            .expect("parked");
             let (socket, taken_caller) =
                 crate::ws_registry::take_worker_handoff(&token, u64::MAX).expect("adopted");
             assert_eq!(socket.id(), queue.0);

@@ -1,0 +1,16 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": "dial:echo:from-dial"
+    },
+    {
+      "status": 200,
+      "body": "upgrade:101:echo:from-upgrade"
+    },
+    {
+      "status": 200,
+      "body": "object-dial:echo:from-object object-dial-again:echo:again"
+    }
+  ]
+}

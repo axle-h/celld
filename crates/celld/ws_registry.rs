@@ -37,6 +37,10 @@ pub struct OutboundWsReq {
     /// the facet's root and never names the facet as a cell.
     pub facet: Option<FacetSocket>,
     pub reply: tokio::sync::oneshot::Sender<Result<OutboundWsOpen>>,
+    /// Releases what the op registered for `id` unless the connector takes
+    /// the socket over and disarms it. It travels with the request, so a
+    /// request that no task ever runs releases the socket as it drops.
+    pub release: WsDialGuard,
 }
 
 /// The ordinary HTTP response a server sent instead of upgrading. `fetch()`
@@ -434,7 +438,7 @@ mod input_queue_private {
 
 /// One socket's inbound queue. Shared so an op can await it without holding
 /// the registry lock; one isolate polls a given socket serially.
-type WsPullQueue = Arc<tokio::sync::Mutex<WsPullReceiver>>;
+pub(crate) type WsPullQueue = Arc<tokio::sync::Mutex<WsPullReceiver>>;
 type WsPullRegistry = std::sync::Mutex<HashMap<u64, WsPullQueue>>;
 
 /// Inbound queues for isolate-polled sockets, keyed by wsId.
@@ -451,6 +455,16 @@ pub fn ws_pull_register(id: u64, rx: WsPullReceiver) {
 
 pub fn ws_pull_unregister(id: u64) {
     ws_pull().lock().unwrap().remove(&id);
+    // The owner goes with the last registration. A socket whose output side
+    // is still registered keeps it, so its own code can still close it.
+    let registry = ws_registry();
+    let mut registry = registry.lock().unwrap();
+    if !registry.outputs.contains_key(&id)
+        && !registry.metadata.contains_key(&id)
+        && !registry.worker_handoffs.contains_key(&id)
+    {
+        registry.owners.remove(&id);
+    }
 }
 
 /// The frame channel that a top-level Worker transfers with its 101 response.
@@ -857,18 +871,21 @@ fn close_generation_worker_handoffs_in(
 }
 
 /// Give a parked socket to the request that made the call, and choose the
-/// id of the caller's own end.
+/// id of the caller's own end, which `owner` (the code running that request)
+/// owns from here on.
 pub(crate) fn adopt_worker_handoff(
     token: &WorkerHandoffToken,
     request: u64,
+    owner: WsOwner,
 ) -> Result<u64, WorkerHandoffRefusal> {
     let caller = ws_next_id();
-    ws_registry()
-        .lock()
-        .unwrap()
+    let registry = ws_registry();
+    let mut registry = registry.lock().unwrap();
+    registry
         .worker_handoff_parks
-        .adopt(token, request, caller)
-        .map(|()| caller)
+        .adopt(token, request, caller)?;
+    registry.owners.insert(caller, owner);
+    Ok(caller)
 }
 
 /// Take an adopted socket, with its caller's id, for the caller's response
@@ -1005,7 +1022,9 @@ pub(crate) fn release_worker_handoff(token: &WorkerHandoffToken, request: u64) {
         .unwrap()
         .worker_handoff_parks
         .take_adopted(token, request);
-    if let Ok((socket, _)) = released {
+    if let Ok((socket, caller)) = released {
+        // Nothing registered the caller's end, which never left this request.
+        ws_unregister(caller);
         close_handed_over(socket, 1001, "request ended", true);
     }
 }
@@ -1074,6 +1093,34 @@ pub struct FacetSocket {
     /// that opening only, never a later one at the same scope.
     pub opening: u64,
 }
+/// Who may act on a socket through the ops that JavaScript calls.
+///
+/// An id is a counter that application code can read, write and guess, so
+/// the id alone grants nothing: each op asks whether the code running now
+/// owns the socket. The owner is taken from the running event when an op
+/// allocates the id, never from a value JavaScript passes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WsOwner {
+    /// A stateless request, by its `IoContext::handoff_request`. Its sockets
+    /// live and die with it, as on Cloudflare.
+    Request(u64),
+    /// A Durable Object, or a facet, by the scope its events store under.
+    /// Every event of that object is the owner, as workerd's actor-wide
+    /// IoContext is, so a hibernatable socket answers in later events.
+    Cell(String),
+}
+
+/// What the running code may do with a socket id.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum WsAccess {
+    /// The running code owns the socket.
+    Owned,
+    /// The id names no open socket: it was closed, or was never allocated.
+    Unknown,
+    /// Another request or Durable Object owns the socket.
+    Other,
+}
+
 #[derive(Default)]
 #[doc(hidden)]
 pub struct WsRegistry {
@@ -1082,6 +1129,11 @@ pub struct WsRegistry {
     pub(crate) worker_handoffs: HashMap<u64, WsPullSender>,
     /// Worker sockets on their way to the caller of a subrequest.
     worker_handoff_parks: WorkerHandoffs,
+    /// The owner of each socket that JavaScript can act on. Written only by
+    /// the ops that allocate an id, and removed with the socket's last
+    /// registration. A socket the host made for itself has none, so no op
+    /// reaches it.
+    pub(crate) owners: HashMap<u64, WsOwner>,
 }
 impl WsRegistry {
     #[doc(hidden)]
@@ -1292,6 +1344,29 @@ pub fn ws_next_id() -> u64 {
         .next_id
         .fetch_add(1, Ordering::Relaxed)
 }
+
+/// Allocate a socket id that `owner` owns. Only the ops that register a
+/// socket call this, so every id JavaScript holds has an owner.
+pub(crate) fn ws_allocate(owner: WsOwner) -> u64 {
+    let id = ws_next_id();
+    ws_registry().lock().unwrap().owners.insert(id, owner);
+    id
+}
+
+/// Whether `owner` may act on socket `id`.
+pub(crate) fn ws_access(id: u64, owner: &WsOwner) -> WsAccess {
+    match ws_registry().lock().unwrap().owners.get(&id) {
+        Some(recorded) if recorded == owner => WsAccess::Owned,
+        Some(_) => WsAccess::Other,
+        None => WsAccess::Unknown,
+    }
+}
+
+/// The recorded owner of socket `id`.
+#[cfg(test)]
+pub(crate) fn ws_owner(id: u64) -> Option<WsOwner> {
+    ws_registry().lock().unwrap().owners.get(&id).cloned()
+}
 pub fn ws_register(id: u64, tx: tokio::sync::mpsc::UnboundedSender<WsOut>) {
     ws_registry().lock().unwrap().register(id, tx);
 }
@@ -1306,6 +1381,7 @@ pub(crate) fn ws_register_hibernatable_for_test(
     let registry = ws_registry();
     let mut registry = registry.lock().unwrap();
     registry.register(id, tx);
+    registry.owners.insert(id, WsOwner::Cell(scope.to_string()));
     registry.metadata.insert(
         id,
         WsMeta {
@@ -1345,10 +1421,54 @@ pub fn ws_register_outbound(id: u64, scope: &str, facet: Option<FacetSocket>) {
         increment_regular_ws(scope);
     }
 }
+/// Remove a socket's output registration and metadata. Its owner goes too,
+/// unless its input queue is still registered: the request that polls the
+/// socket must still be able to read the close waiting there, and
+/// `ws_pull_unregister` removes the owner with the queue.
 pub fn ws_unregister(id: u64) {
     let meta = ws_registry().lock().unwrap().unregister(id);
+    // Neither this nor `ws_pull_unregister` holds both locks at once. Each
+    // removes its own registration before it looks at the other's, so
+    // whichever runs second removes the owner.
+    if !ws_pull().lock().unwrap().contains_key(&id) {
+        ws_registry().lock().unwrap().owners.remove(&id);
+    }
     if let Some(meta) = meta.filter(|meta| !meta.hibernatable) {
         decrement_regular_ws(&meta.scope);
+    }
+}
+
+/// Releases a dialed or bound socket that never opened.
+///
+/// The op that started the dial allocated the id and registered what the
+/// isolate needs before the handshake: its owner, a Worker socket's input
+/// queue, and a bound socket's output registration. A dial that fails, or
+/// that no connector task ever runs, must take those back, or a Durable
+/// Object's failed dials would leave owners behind for as long as the
+/// instance runs. The op creates it before it sends the request, and the
+/// task disarms it once the socket is registered; from there the task's own
+/// exits unregister it.
+pub struct WsDialGuard {
+    id: u64,
+    armed: bool,
+}
+
+impl WsDialGuard {
+    pub fn new(id: u64) -> Self {
+        Self { id, armed: true }
+    }
+
+    pub fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for WsDialGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            ws_pull_unregister(self.id);
+            ws_unregister(self.id);
+        }
     }
 }
 

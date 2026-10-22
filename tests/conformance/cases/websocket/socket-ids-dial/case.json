@@ -1,0 +1,10 @@
+{
+  "kind": "celld-only",
+  "reason": "a Worker that dials its own origin; workerd under the test harness cannot reach it, so websocket/socket-ids covers the rest differentially",
+  "workers": ["app"],
+  "steps": [
+    {"path": "/dial"},
+    {"path": "/upgrade"},
+    {"path": "/object-dial"}
+  ]
+}
