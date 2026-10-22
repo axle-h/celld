@@ -1,0 +1,18 @@
+{
+  "kind": "celld-only",
+  "reason": "workerd sends its spans to Miniflare's collector, which the runner cannot read; this pins that each RPC path joins the caller's trace",
+  "observability": true,
+  "workers": ["caller", "callee"],
+  "steps": [
+    {"path": "/service"},
+    {"otlp": {"spans": ["celld.fetch", "around-service", "celld.fetch", "in-service"]}},
+    {"path": "/loader"},
+    {"otlp": {"spans": ["celld.fetch", "around-loader", "celld.fetch", "in-loader"]}},
+    {"path": "/loader-fetch"},
+    {"otlp": {"spans": ["celld.fetch", "around-loader-fetch", "celld.fetch", "in-loader-fetch", "celld.fetch", "in-loader-fetch"]}},
+    {"path": "/facet"},
+    {"otlp": {"spans": ["celld.fetch", "around-host", "celld.rpc", "around-facet", "celld.rpc", "in-facet"]}},
+    {"path": "/loopback"},
+    {"otlp": {"spans": ["celld.fetch", "around-loopback", "in-loopback"]}}
+  ]
+}

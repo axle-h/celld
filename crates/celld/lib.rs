@@ -261,6 +261,9 @@ pub enum WorkerJob {
         props: Vec<u8>,
         invocation_limits: Option<WorkerInvocationLimits>,
         reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<u8>>>,
+        /// The calling handler's trace context, read by the host at the call
+        /// site, so the invocation joins the caller's trace.
+        parent: Option<telemetry::TraceContext>,
     },
     Queue {
         queued_at: std::time::Instant,

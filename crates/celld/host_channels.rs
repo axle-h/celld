@@ -125,6 +125,8 @@ pub struct SvcRpcReq {
     pub props: Vec<u8>,
     pub operation: crate::WorkerRpcOperation,
     pub reply: tokio::sync::oneshot::Sender<Result<Vec<u8>>>,
+    /// The calling handler's trace context, as on `DoCallReq`.
+    pub parent: Option<crate::telemetry::TraceContext>,
 }
 pub(crate) static SVC_RPC_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<SvcRpcReq>> =
     OnceLock::new();
@@ -189,6 +191,8 @@ pub struct RpcCallReq {
     pub method: String,
     pub args: RpcData,
     pub reply: tokio::sync::oneshot::Sender<Result<RpcData>>,
+    /// The calling handler's trace context, as on `DoCallReq`.
+    pub parent: Option<crate::telemetry::TraceContext>,
 }
 pub(crate) static RPC_CALL_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<RpcCallReq>> =
     OnceLock::new();

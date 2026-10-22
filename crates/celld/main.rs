@@ -1157,6 +1157,7 @@ async fn dispatch_do_call(app: AppHandle, call: DoCallReq) {
             };
             let scope = &call.scope;
             let request_id = call.request_id;
+            let parent = call.parent;
             let deliver_abort_to_handler = call.deliver_abort_to_handler;
             let cancel = &mut call.cancel;
             let body_guard = &mut call.body_guard;
@@ -1201,6 +1202,7 @@ async fn dispatch_do_call(app: AppHandle, call: DoCallReq) {
                         name: name.clone(),
                         request_id,
                         capacity_handoff: epoch == 0,
+                        parent,
                     };
                     let attempt_body = match body {
                         celld::js::RequestBody::Bytes(bytes) => {
@@ -1424,6 +1426,7 @@ async fn dispatch_rpc_call(app: AppHandle, call: RpcCallReq) {
         method,
         args,
         reply,
+        parent,
     } = call;
     let result = async {
         anyhow::ensure!(
@@ -1445,7 +1448,7 @@ async fn dispatch_rpc_call(app: AppHandle, call: RpcCallReq) {
                             app.runtime
                                 .as_ref()
                                 .context("no cell runtime")?
-                                .rpc(scope, name, method, args, local_request_id)
+                                .rpc(scope, name, method, args, local_request_id, parent)
                                 .await
                         })
                         .await;
@@ -1487,6 +1490,7 @@ async fn dispatch_rpc_call(app: AppHandle, call: RpcCallReq) {
                     name.as_deref(),
                     &method,
                     &args,
+                    parent.as_ref(),
                 )
                 .await;
                 // Classify failures before response decoding. An explicit stale
@@ -1959,8 +1963,8 @@ async fn dispatch_cell_fetch(
         reply,
         // An ingress call has no caller in this process to be ordered against.
         order: None,
-        // Cross-node trace propagation is not available here, so a direct-DO
-        // ingress starts without a remote parent.
+        // No handler made this call, so there is no context to carry: a
+        // direct-DO ingress starts without a parent.
         parent: None,
     });
     if !accepted {
@@ -2003,6 +2007,8 @@ pub(crate) struct ForwardedFetch {
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) request_id: Option<celld::js::RequestId>,
     pub(crate) capacity_handoff: bool,
+    /// The caller's trace context, from the tunnel's control header.
+    pub(crate) parent: Option<celld::telemetry::TraceContext>,
 }
 
 pub(crate) enum ForwardedFetchOutcome {
@@ -2035,6 +2041,7 @@ pub(crate) async fn dispatch_forwarded_fetch(
         headers,
         request_id,
         capacity_handoff,
+        parent,
     } = fetch;
     let _request_body_guard = celld::js::RequestBodyGuard::of(&request_body);
     let preserve_representation_length = method.eq_ignore_ascii_case("HEAD");
@@ -2083,10 +2090,9 @@ pub(crate) async fn dispatch_forwarded_fetch(
                                 body: request_body,
                                 headers,
                                 request_id,
-                                // A peer's call has no caller in this process, and the
-                                // peer protocol does not carry trace context.
+                                // A peer's call has no caller in this process.
                                 order: None,
-                                parent: None,
+                                parent,
                             },
                             None,
                         )
@@ -2276,13 +2282,24 @@ async fn internal_abort(request: Request<Incoming>, app: AppHandle, path: String
     peer_response(result)
 }
 
-pub(crate) async fn dispatch_forwarded_rpc(
-    app: AppHandle,
-    scope: String,
-    name: Option<String>,
-    rpc_method: String,
-    args: celld::js::RpcData,
-) -> HttpReply {
+/// An RPC a peer forwarded through the tunnel.
+pub(crate) struct ForwardedRpc {
+    pub(crate) scope: String,
+    pub(crate) name: Option<String>,
+    pub(crate) method: String,
+    pub(crate) args: celld::js::RpcData,
+    /// The caller's trace context, from the tunnel's control header.
+    pub(crate) parent: Option<celld::telemetry::TraceContext>,
+}
+
+pub(crate) async fn dispatch_forwarded_rpc(app: AppHandle, call: ForwardedRpc) -> HttpReply {
+    let ForwardedRpc {
+        scope,
+        name,
+        method: rpc_method,
+        args,
+        parent,
+    } = call;
     let result = match app.request(scope.clone()).await {
         Ok(Routed {
             request,
@@ -2294,7 +2311,7 @@ pub(crate) async fn dispatch_forwarded_rpc(
                 return peer_response(response(StatusCode::SERVICE_UNAVAILABLE, "no cell runtime"));
             };
             let completed = local
-                .run(runtime.rpc(scope, name, rpc_method, args, local_request_id))
+                .run(runtime.rpc(scope, name, rpc_method, args, local_request_id, parent))
                 .await;
             match completed.result {
                 Ok(outcome) => Ok(outcome.data),
@@ -2487,6 +2504,7 @@ async fn dispatch_service_rpc(app: AppHandle, call: SvcRpcReq) {
                     call.entrypoint,
                     call.props,
                     call.operation,
+                    call.parent,
                 )
                 .await
         }

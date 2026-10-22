@@ -369,8 +369,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 28b | 1.35 Wasm and resizable growth within a turn (security) | done | `5ff3e96` |
 | 29 | 1.16 compatibility-flag audit | done | `2fe3f0d`, starter `779b1e2` |
 | 30 | 1.17 close replies on WebSockets; half-open sockets end on disconnect | done | `4d139d5` |
-| 31 | 1.18 Worker Loader startup error text | done | see log |
-| 32+ | Phase 1 in plan order (1.19-1.30, 1.34, 1.36-1.40), and the 1.4 props key-order follow-up | queued | |
+| 31 | 1.18 Worker Loader startup error text | done | `fc845db` |
+| 32 | 1.19 trace context across RPC and the peer tunnel | done | see log |
+| 33+ | Phase 1 in plan order (1.20-1.30, 1.34, 1.36-1.40), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -911,8 +912,8 @@ come through as `undefined`.
   and workflow), **not** `=== tracing`; a DO's `ctx` has none, as in workerd.
 - The active span is a key in the AsyncLocalStorage frame. `enterSpan` and
   `startActiveSpan` also put the span's rider in CPED's trace slot, so logs,
-  outbound fetches and DO `fetch()` inside the span are its children. A DO
-  RPC call starts a new trace (see 1.19).
+  outbound fetches and DO `fetch()` inside the span are its children. RPC
+  calls across isolates join the trace too since 1.19.
 - `enterSpan` ends the span on sync return or throw, or when a returned
   promise settles. The returned promise always settles, even when it
   settles in another request's turn.
@@ -2137,6 +2138,85 @@ already does.
 
 **Tests.** Update the `tracing/otlp-export` transcript, which pins the new
 root today.
+
+**As built.**
+- **What arrived before.** Every RPC path that crosses an isolate was
+  checked. DO stub RPC (`__rpc_call`) started a new root, on one node and
+  across nodes. Service-binding RPC to another script's entrypoint
+  (`__svc_rpc`) did too. A loaded Worker (Worker Loader) was never traced,
+  for `fetch()` or RPC: its drive had no telemetry, so its spans were
+  dropped and `isTraced` was `false`. Facet RPC (`__facet_rpc`) already
+  joined the caller's trace. Same-isolate calls (`ctx.exports` entrypoints
+  served in the caller's isolate) cross no isolate and keep the caller's
+  context already.
+- **Design.** The host reads the caller's context from CPED at the call
+  site, as `__do_call` does, and carries it as `parent`: on `RpcCallReq` →
+  `dispatch_rpc_call` → `RuntimeManager::rpc` → `drive_cell`, on
+  `SvcRpcReq` → `rpc_service` → `WorkerJob::Rpc`, and on the loader's
+  `WorkerJob::Rpc`. A stateless drive joins a `WorkerJob::Rpc`'s parent with
+  `child_of`, as a cell event does, so the caller's sampling decision
+  stands. A loaded Worker's drive gets `telemetry::identity()` (node and
+  region, `Some` only while telemetry is on), so its invocations, `fetch()`
+  included, are traced like a service target's.
+- **Unsampled requests.** A root the sampler rejected used to have no
+  context at all, so its callees decided afresh: under a ratio of 0.1, about
+  one callee in ten of an unsampled request exported an orphan root. With
+  telemetry on, `start_trace` now always answers a context, with `sampled`
+  clear when rejected, so the rider is installed and every path (DO fetch
+  and RPC, entrypoint, loader and facet RPC, outbound `fetch()`, the tunnel)
+  carries the decision. The cost is one rider per turn for an unsampled
+  request while telemetry is on. The runner can't set the sampler, and a
+  callee's fresh decision is random, so a unit test pins it
+  (`telemetry::tests::an_unsampled_root_propagates_its_decision`).
+- **Cross-node.** The plan assumed DO `fetch()` already crossed nodes with
+  its context. It didn't: the peer tunnel carried none, for fetch or RPC.
+  The tunnel now has an `x-cells-traceparent` control header, written by
+  node A from the host's context, for both kinds. It is in
+  `CONTROL_HEADERS`, so an application header of that name is dropped in
+  both directions, as the other control headers are.
+- **Tunnel version 6.** An older peer would pass the new header to the
+  application, so `TUNNEL_VERSION` is 6 and versions 5 and 6 refuse each
+  other. Deployments are fresh, so there is no multi-version acceptance; a
+  rolling update to this release is impossible, and `docs/README.md`
+  "Upgrade notes" says to stop every node first. A node that dials a peer on
+  the other version fails that call at once (`TunnelVersionMismatch`,
+  classified ambiguous, so no retry) and logs
+  `peer_tunnel_version_mismatch` once per peer and version, with both
+  versions. Its 426 now carries its own version; a version-5 peer reports
+  none, which the log names as "5 or older".
+- **Remote parents.** `TraceContext` has a `remote` flag, set only for a
+  context that arrived from another process (the tunnel header, or an
+  ingress `traceparent`). A cell span's `celld.parent_remote` is now `true`
+  under a parent on another node; it was always `false`.
+- **Trust.** The context comes from the host at the call site, never from
+  the caller's arguments or headers, so a caller can only make the callee a
+  child of its own current span. A service-binding `fetch()` already lets a
+  caller name any trace through a `traceparent` header, so RPC adds nothing
+  a caller could not do before. Tunnel headers come from authenticated
+  peers. No context reaches JS in the callee, but a callee's outbound
+  `fetch()` sends a `traceparent` with the caller's trace id, a loaded
+  Worker's included. That is kept: a W3C trace id is a correlation
+  identifier, not a secret, and the caller's own outbound `fetch()` sends it
+  too.
+- **Not changed.** A service-binding `fetch()` and a loaded Worker's
+  `fetch()` still carry no host context: their targets join a trace only
+  through a `traceparent` header the caller sends, as before.
+- **Tests.**
+  - `tracing/otlp-export`: `/object` now shows `celld.rpc` under
+    `around-call`.
+  - New `tracing/rpc-context` (celld-only, two workers): service-binding
+    RPC, loader RPC and facet RPC (from a DO RPC event), each inside a
+    custom span, each callee's invocation span a child of it; a same-isolate
+    `ctx.exports` call, whose span nests directly; and a loaded Worker's
+    `fetch()`, traced (`isTraced` true), a root of its own without a header
+    and a remote child of an application-set `traceparent`.
+  - Unit (`peer_tunnel::tests`): node A writes the context into fetch and
+    RPC inner requests as a remote parent and drops an application's copy;
+    node B strips it from the application's headers and hands it to the
+    `ForwardedFetch` and `ForwardedRpc` it dispatches; a malformed value is
+    ignored. The conformance runner can't run two nodes, so cross-node is
+    covered here only. `telemetry::tests` pin the unsampled decision.
+  - Docs: `docs/telemetry.md`, `docs/README.md` (upgrade note).
 
 ### 1.20 Redirect handling (found by 1.5)
 

@@ -135,7 +135,8 @@ impl RequestCancellationLifetime {
 
     /// Drive a fully built fetch job, such as a loaded Worker's, with this
     /// lifetime. The job's request id is overwritten from the lifetime, so the
-    /// caller cannot pair an abort publisher with a different request.
+    /// caller cannot pair an abort publisher with a different request. No
+    /// runtime dispatched it, so it is traced whenever telemetry is on.
     pub(crate) fn drive_fetch_job(
         self: Arc<Self>,
         slot: Arc<crate::pool::Slot>,
@@ -148,7 +149,7 @@ impl RequestCancellationLifetime {
             job,
             cancellation: RequestCancellationGuard::shared(self),
         };
-        drive_affiliated(slot.affiliate(), job, None)
+        drive_affiliated(slot.affiliate(), job, crate::telemetry::identity())
     }
 }
 
@@ -1064,12 +1065,13 @@ impl RuntimeManager {
         entrypoint: String,
         props: Vec<u8>,
         operation: crate::WorkerRpcOperation,
+        parent: Option<crate::telemetry::TraceContext>,
     ) -> anyhow::Result<Vec<u8>> {
         let generation = self.generation_by_id(generation);
         generation
             .service(script)
             .ok_or_else(|| anyhow!("no service Worker for script {script}"))?
-            .rpc(entrypoint, props, operation)
+            .rpc(entrypoint, props, operation, parent)
             .await
     }
 
@@ -1830,8 +1832,14 @@ impl RuntimeManager {
             protocol,
             reply,
         };
-        self.cell_event(&cell, job, receive, "cell isolate dropped WebSocket open")
-            .await
+        self.cell_event(
+            &cell,
+            job,
+            None,
+            receive,
+            "cell isolate dropped WebSocket open",
+        )
+        .await
     }
 
     /// Run `webSocketOpen` in the facet `scope` that dialed `ws_id`. A write
@@ -1863,6 +1871,8 @@ impl RuntimeManager {
         .map(|_| ())
     }
 
+    /// Run a Durable Object RPC method. `parent` is the caller's trace
+    /// context, so the event's span joins the caller's trace.
     pub async fn rpc(
         &self,
         cell: String,
@@ -1870,6 +1880,7 @@ impl RuntimeManager {
         method: String,
         args: js::RpcData,
         request_id: Option<js::RequestId>,
+        parent: Option<crate::telemetry::TraceContext>,
     ) -> anyhow::Result<js::RpcOutcome> {
         let (reply, receive) = tokio::sync::oneshot::channel();
         let job = CellJob::Rpc {
@@ -1880,8 +1891,14 @@ impl RuntimeManager {
             args,
             reply,
         };
-        self.cell_event(&cell, job, receive, "cell isolate dropped RPC result")
-            .await
+        self.cell_event(
+            &cell,
+            job,
+            parent,
+            receive,
+            "cell isolate dropped RPC result",
+        )
+        .await
     }
 
     pub async fn ws_message(
@@ -1903,6 +1920,7 @@ impl RuntimeManager {
         self.cell_event(
             &cell,
             job,
+            None,
             receive,
             "cell isolate dropped WebSocket message",
         )
@@ -1929,8 +1947,14 @@ impl RuntimeManager {
             was_clean,
             reply,
         };
-        self.cell_event(&cell, job, receive, "cell isolate dropped WebSocket close")
-            .await
+        self.cell_event(
+            &cell,
+            job,
+            None,
+            receive,
+            "cell isolate dropped WebSocket close",
+        )
+        .await
     }
 
     /// Run `webSocketMessage` in the facet `scope` that accepted `ws_id`.
@@ -2025,7 +2049,7 @@ impl RuntimeManager {
             None => self.cell_isolate(&facet.root)?,
         };
         // No alarm reporter: a facet cannot set an alarm.
-        run_cell_event(isolate, job, None, receive, dropped).await
+        run_cell_event(isolate, job, None, None, receive, dropped).await
     }
 
     /// The isolate a published cell's events run in.
@@ -2087,6 +2111,7 @@ impl RuntimeManager {
         &self,
         cell: &str,
         job: CellJob,
+        parent: Option<crate::telemetry::TraceContext>,
         receive: tokio::sync::oneshot::Receiver<anyhow::Result<T>>,
         dropped: &'static str,
     ) -> anyhow::Result<T> {
@@ -2095,6 +2120,7 @@ impl RuntimeManager {
             isolate,
             job,
             Some(self.alarm_reporter.clone()),
+            parent,
             receive,
             dropped,
         )
@@ -2108,10 +2134,11 @@ async fn run_cell_event<T>(
     isolate: crate::pool::Affiliation,
     job: CellJob,
     report: Option<AlarmReporter>,
+    parent: Option<crate::telemetry::TraceContext>,
     receive: tokio::sync::oneshot::Receiver<anyhow::Result<T>>,
     dropped: &'static str,
 ) -> anyhow::Result<T> {
-    tokio::spawn(drive_cell(isolate, job, report, None));
+    tokio::spawn(drive_cell(isolate, job, report, parent));
     receive.await.context(dropped)?
 }
 
@@ -2143,6 +2170,15 @@ pub(crate) fn restored_alarm_for_test(
 ) -> Option<celld_logic::RestoredAlarm> {
     let persisted = crate::storage::persisted_alarm(&path.to_string_lossy(), cell, None);
     restored_alarm_from_persisted(cell, persisted, |_| covered)
+}
+
+/// The calling handler's trace context, which the host read at an RPC call
+/// site. The caller's sampling decision stands, as for a cell event.
+fn caller_parent(job: &crate::WorkerJob) -> Option<crate::telemetry::TraceContext> {
+    match job {
+        crate::WorkerJob::Rpc { parent, .. } => *parent,
+        _ => None,
+    }
 }
 
 /// The caller's trace context, when the ingress request carried one.
@@ -2250,16 +2286,23 @@ async fn drive_affiliated_inner(
 ) {
     let slot = affiliation.slot().clone();
     // One sampling decision per request, shared by the SERVER span and
-    // the turn context the handler's console/fetch children inherit. A
+    // the turn context the handler's console/fetch children inherit. An
+    // RPC caller's context joins its trace, as a cell event does. A
     // caller's traceparent is honored per the spec: ids adopted either
     // way, its sampled flag deciding only under a parentbased sampler.
-    let remote = telemetry.as_ref().and_then(|_| inbound_parent(&job));
-    let trace = telemetry
-        .as_ref()
-        .and_then(|_| crate::telemetry::start_trace_with_parent(remote.as_ref()));
+    let (parent, trace) = match telemetry.as_ref().and(caller_parent(&job)) {
+        Some(caller) => (Some(caller), crate::telemetry::child_of(&caller)),
+        None => {
+            let remote = telemetry.as_ref().and_then(|_| inbound_parent(&job));
+            let trace = telemetry
+                .as_ref()
+                .and_then(|_| crate::telemetry::start_trace_with_parent(remote.as_ref()));
+            (remote.map(crate::telemetry::ParentContext::context), trace)
+        }
+    };
     let recording = trace.and_then(crate::telemetry::TraceContext::recording_ids);
     let mut timing = telemetry.map(|(node, region)| {
-        StatelessTiming::start(&job, slot.id, node, region, recording, remote)
+        StatelessTiming::start(&job, slot.id, node, region, recording, parent)
     });
     // Admission created `affiliation` before returning the isolate. It stays
     // here for the request's whole life, so maintenance cannot free the heap
@@ -2652,8 +2695,9 @@ struct StatelessTiming {
     /// Sampled at creation: `None` is off or unsampled, and nothing more
     /// is ever built for this request.
     trace: Option<crate::telemetry::TraceIds>,
-    /// The caller's span, when the request arrived with a traceparent.
-    remote_parent: Option<crate::telemetry::ParentContext>,
+    /// The caller's span: an RPC caller's, or the one a request's
+    /// traceparent named.
+    parent: Option<crate::telemetry::TraceContext>,
     /// Why the handler failed, read from the entry when it was answered.
     failure: Option<String>,
     span_name: &'static str,
@@ -2669,7 +2713,7 @@ impl StatelessTiming {
         node: Arc<str>,
         region: Arc<str>,
         trace: Option<crate::telemetry::TraceIds>,
-        remote_parent: Option<crate::telemetry::ParentContext>,
+        parent: Option<crate::telemetry::TraceContext>,
     ) -> Self {
         let (queued_at, request_id, span_name, span_kind) = match job {
             crate::WorkerJob::Fetch {
@@ -2704,7 +2748,7 @@ impl StatelessTiming {
             admitted: Instant::now(),
             emitted: false,
             trace,
-            remote_parent,
+            parent,
             failure: None,
             span_name,
             span_kind,
@@ -2732,8 +2776,8 @@ impl StatelessTiming {
             span.set_outcome(self.failure.is_none(), self.failure.clone());
             span.request_id = self.request_id.map(js::request_id_string);
             span.isolate = Some(self.isolate as u64);
-            span.parent_span_id = self.remote_parent.map(|parent| parent.span_id);
-            span.parent_remote = self.remote_parent.map(|_| true);
+            span.parent_span_id = self.parent.map(|parent| parent.span_id);
+            span.parent_remote = self.parent.map(|parent| parent.remote);
             span.queue_wait_us =
                 Some(self.admitted.duration_since(self.queued_at).as_micros() as i64);
             if let Some(spans) = &self.spans {
@@ -2960,6 +3004,7 @@ impl StatelessRuntime {
         entrypoint: String,
         props: Vec<u8>,
         operation: crate::WorkerRpcOperation,
+        parent: Option<crate::telemetry::TraceContext>,
     ) -> anyhow::Result<Vec<u8>> {
         self.dispatch(StatelessVerb::Rpc, move |reply| crate::WorkerJob::Rpc {
             entrypoint,
@@ -2967,6 +3012,7 @@ impl StatelessRuntime {
             props,
             invocation_limits: None,
             reply,
+            parent,
         })
         .await
     }
@@ -3647,7 +3693,7 @@ async fn drive_cell_inner(
         );
         span.cell = Some(cell);
         span.parent_span_id = parent.map(|parent| parent.span_id);
-        span.parent_remote = parent.map(|_| false);
+        span.parent_remote = parent.map(|parent| parent.remote);
         if let Some(spans) = &spans {
             spans.merge(&mut span);
         }

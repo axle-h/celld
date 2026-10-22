@@ -9,7 +9,8 @@
 //! never runs, `start_trace` finds no globals and answers `None`, and no
 //! event is ever built.
 //! Sampling is decided at trace creation for the same reason — an
-//! unsampled request builds nothing.
+//! unsampled request records nothing, and carries only its context with
+//! the flag clear, so what it calls inherits the decision.
 //!
 //! The hot path never blocks. `record` is a `try_send`; a full channel
 //! increments a drop counter. Under saturation celld sheds telemetry,
@@ -25,6 +26,7 @@ use std::borrow::Cow;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -243,6 +245,9 @@ pub struct TraceContext {
     pub trace_id: [u8; 16],
     pub span_id: [u8; 8],
     pub sampled: bool,
+    /// The context arrived from another process: a peer node's tunnel or a
+    /// caller's traceparent. A span parented on it is a remote child.
+    pub remote: bool,
 }
 
 impl TraceContext {
@@ -262,6 +267,18 @@ pub struct ParentContext {
     pub trace_id: [u8; 16],
     pub span_id: [u8; 8],
     pub sampled: bool,
+}
+
+impl ParentContext {
+    /// The caller's context, for a span parented on it.
+    pub fn context(self) -> TraceContext {
+        TraceContext {
+            trace_id: self.trace_id,
+            span_id: self.span_id,
+            sampled: self.sampled,
+            remote: true,
+        }
+    }
 }
 
 /// Parse a W3C `traceparent` value. Anything malformed is `None`, and the
@@ -588,6 +605,8 @@ struct Telemetry {
     dropped: AtomicU64,
     sampler: Sampler,
     parent_based: bool,
+    /// This node and its region, for `identity`.
+    identity: (Arc<str>, Arc<str>),
 }
 
 #[derive(Clone, Copy)]
@@ -628,31 +647,47 @@ pub fn active() -> bool {
     TELEMETRY.get().is_some()
 }
 
-/// Decide a new root trace at its creation. `None` means off or unsampled,
-/// and the caller builds nothing at all.
+/// This node and its region while telemetry is on: what a drive needs to
+/// trace an invocation that no runtime dispatched, such as a loaded
+/// Worker's.
+pub fn identity() -> Option<(Arc<str>, Arc<str>)> {
+    TELEMETRY.get().map(|telemetry| telemetry.identity.clone())
+}
+
+/// Decide a new root trace at its creation. `None` means telemetry is off.
 pub fn start_trace() -> Option<TraceContext> {
     start_trace_with_parent(None)
 }
 
 /// Decide a trace at its creation, under a foreign parent when the
-/// caller sent one. A rejected foreign parent remains present for W3C
-/// propagation, but a rejected root remains absent to preserve the cheap path.
+/// caller sent one. A rejected trace, root or foreign, remains present with
+/// its flag clear: what the request calls inherits the decision instead of
+/// deciding afresh and exporting an orphan root.
 pub fn start_trace_with_parent(parent: Option<&ParentContext>) -> Option<TraceContext> {
     let telemetry = TELEMETRY.get()?;
-    let (trace_id, sampled) = decide_with_sampler(
+    Some(new_trace(
         telemetry.parent_based,
         telemetry.sampler,
         parent,
         rand::random(),
-    );
-    if !sampled && parent.is_none() {
-        return None;
-    }
-    Some(TraceContext {
+        rand::random(),
+    ))
+}
+
+fn new_trace(
+    parent_based: bool,
+    sampler: Sampler,
+    parent: Option<&ParentContext>,
+    fresh: [u8; 16],
+    span_id: [u8; 8],
+) -> TraceContext {
+    let (trace_id, sampled) = decide_with_sampler(parent_based, sampler, parent, fresh);
+    TraceContext {
         trace_id,
-        span_id: rand::random(),
+        span_id,
         sampled,
-    })
+        remote: false,
+    }
 }
 
 /// The sampling decision, pure so the semantics are testable: adopt the
@@ -703,6 +738,7 @@ pub fn child_of(parent: &TraceContext) -> Option<TraceContext> {
         trace_id: parent.trace_id,
         span_id: rand::random(),
         sampled: parent.sampled,
+        remote: false,
     })
 }
 
@@ -712,6 +748,7 @@ pub fn child_context(parent: &TraceContext) -> TraceContext {
         trace_id: parent.trace_id,
         span_id: rand::random(),
         sampled: parent.sampled,
+        remote: false,
     }
 }
 
@@ -817,6 +854,7 @@ pub fn init(
         dropped: AtomicU64::new(0),
         sampler: Sampler::from_ratio(config.sample_ratio),
         parent_based: config.parent_based,
+        identity: (node.as_str().into(), region.as_str().into()),
     };
     if TELEMETRY.set(telemetry).is_err() {
         panic!("telemetry initialized twice");
@@ -1479,6 +1517,35 @@ pub fn encode_logs(logs: &[Log], node: &str, region: &str) -> anyhow::Result<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A root the sampler rejects is still a context, and everything below
+    /// it keeps the decision: a child in this process, and a callee on
+    /// another node or behind a `traceparent`. None of them records.
+    #[test]
+    fn an_unsampled_root_propagates_its_decision() {
+        // A trace id whose head is zero passes every ratio above zero, so a
+        // callee that decided afresh on it would record.
+        let mut fresh = [0; 16];
+        fresh[15] = 1;
+        let root = new_trace(false, Sampler::AlwaysOff, None, fresh, [1; 8]);
+        assert!(!root.sampled);
+        assert!(root.recording_ids().is_none());
+        let child = child_context(&root);
+        assert_eq!((child.trace_id, child.sampled), (root.trace_id, false));
+        assert!(child.recording_ids().is_none());
+        let header = traceparent(&child);
+        assert!(header.ends_with("-00"), "{header}");
+        let remote = parse_traceparent(&header).unwrap().context();
+        assert_eq!((remote.trace_id, remote.sampled), (root.trace_id, false));
+        assert!(child_context(&remote).recording_ids().is_none());
+    }
+
+    #[test]
+    fn a_sampled_root_records() {
+        let root = new_trace(false, Sampler::AlwaysOn, None, [1; 16], [1; 8]);
+        assert!(root.recording_ids().is_some());
+        assert!(child_context(&root).recording_ids().is_some());
+    }
 
     #[test]
     fn custom_span_data_lands_in_the_json_columns() {

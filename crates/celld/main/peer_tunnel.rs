@@ -9,9 +9,9 @@
 //! interprets the inner bytes, so the headers the cell must receive
 //! byte-faithful (`Host`, `Content-Length`, `Upgrade`) are data here, not
 //! metadata. Per-call control (scope, cell name, request id, capacity
-//! handoff) rides `x-cells-*` headers on the inner request; node A overwrites
-//! and node B strips them, so the reserved names cannot be smuggled by an
-//! application in either direction.
+//! handoff, the caller's trace context) rides `x-cells-*` headers on the
+//! inner request; node A overwrites and node B strips them, so the reserved
+//! names cannot be smuggled by an application in either direction.
 //!
 //! Idle tunnels are pooled per peer and reused for sequential calls — plain
 //! h1 keep-alive inside the tunnel, never multiplexing. Without reuse every
@@ -38,18 +38,28 @@ use super::*;
 use celld::js::HttpChunkStream;
 
 pub(crate) const TUNNEL_PROTOCOL: &str = "celld-tunnel";
-pub(crate) const TUNNEL_VERSION: &str = "5";
+pub(crate) const TUNNEL_VERSION: &str = "6";
 pub(crate) const VERSION_HEADER: &str = "x-cells-tunnel-version";
 pub(crate) const KIND_HEADER: &str = "x-cells-tunnel-kind";
 pub(crate) const SCOPE_HEADER: &str = "x-cells-scope";
 pub(crate) const NAME_HEADER: &str = "x-cells-do-name";
 pub(crate) const REQUEST_ID_HEADER: &str = "x-cells-request-id";
 pub(crate) const HANDOFF_HEADER: &str = "x-cells-capacity-handoff";
+/// The calling handler's trace context, in `traceparent` form. Node A writes
+/// it from the context the host read at the call site, never from the
+/// application's headers, so a cell joins its caller's trace on any node.
+pub(crate) const TRACE_HEADER: &str = "x-cells-traceparent";
 
 /// The inner headers node A owns. A overwrites them on the way in and B
 /// strips them on the way out, so an application header with a reserved name
 /// is dropped rather than obeyed.
-const CONTROL_HEADERS: [&str; 4] = [SCOPE_HEADER, NAME_HEADER, REQUEST_ID_HEADER, HANDOFF_HEADER];
+const CONTROL_HEADERS: [&str; 5] = [
+    SCOPE_HEADER,
+    NAME_HEADER,
+    REQUEST_ID_HEADER,
+    HANDOFF_HEADER,
+    TRACE_HEADER,
+];
 
 enum TunnelKind {
     Do,
@@ -63,6 +73,144 @@ pub(crate) struct TunnelControl {
     pub(crate) name: Option<String>,
     pub(crate) request_id: Option<celld::js::RequestId>,
     pub(crate) capacity_handoff: bool,
+    pub(crate) parent: Option<celld::telemetry::TraceContext>,
+}
+
+/// The caller's trace context from an inner request, as a remote parent.
+/// A malformed value is ignored, as an ingress `traceparent` is.
+fn trace_parent(headers: &hyper::HeaderMap) -> Option<celld::telemetry::TraceContext> {
+    headers
+        .get(TRACE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(celld::telemetry::parse_traceparent)
+        .map(celld::telemetry::ParentContext::context)
+}
+
+/// Node B: the control fields of an inner fetch. `None` when the scope is
+/// missing or malformed.
+fn tunnel_control(headers: &hyper::HeaderMap) -> Option<TunnelControl> {
+    let scope = headers
+        .get(SCOPE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+        .filter(|scope| celld_logic::cell::valid_cell_scope(scope))?;
+    Some(TunnelControl {
+        scope,
+        name: headers
+            .get(NAME_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+        request_id: headers
+            .get(REQUEST_ID_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(celld::js::parse_request_id),
+        capacity_handoff: headers.get(HANDOFF_HEADER).is_some(),
+        parent: trace_parent(headers),
+    })
+}
+
+/// Node B: the inner request's headers without node A's control headers,
+/// which are the application's to receive.
+fn application_headers(headers: &hyper::HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| !CONTROL_HEADERS.contains(&name.as_str()))
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+impl TunnelControl {
+    /// The cell and the call node B dispatches for an inner fetch.
+    fn into_fetch(
+        self,
+        url: String,
+        method: String,
+        headers: Vec<(String, String)>,
+    ) -> (String, ForwardedFetch) {
+        let fetch = ForwardedFetch {
+            name: self.name,
+            url,
+            method,
+            headers,
+            request_id: self.request_id,
+            capacity_handoff: self.capacity_handoff,
+            parent: self.parent,
+        };
+        (self.scope, fetch)
+    }
+}
+
+/// Node B: an inner RPC's control fields, checked before its body is read.
+struct RpcHead {
+    scope: String,
+    name: Option<String>,
+    method: String,
+    structured: bool,
+    parent: Option<celld::telemetry::TraceContext>,
+}
+
+impl RpcHead {
+    fn parse(headers: &hyper::HeaderMap) -> Result<RpcHead, Box<HttpReply>> {
+        let Some(scope) = headers
+            .get(SCOPE_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+            .filter(|scope| celld_logic::cell::valid_cell_scope(scope))
+        else {
+            return Err(Box::new(peer_response(malformed_scope())));
+        };
+        let Some(method) = headers
+            .get(METHOD_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+        else {
+            return Err(Box::new(peer_response(response(
+                StatusCode::BAD_REQUEST,
+                "RPC method header is missing",
+            ))));
+        };
+        Ok(RpcHead {
+            scope,
+            name: headers
+                .get(NAME_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string),
+            method,
+            structured: headers
+                .get(hyper::header::CONTENT_TYPE)
+                .is_some_and(|value| value.as_bytes() == b"application/octet-stream"),
+            parent: trace_parent(headers),
+        })
+    }
+
+    /// The call, with the arguments in the encoding the caller named.
+    fn with_body(self, body: Bytes) -> Result<ForwardedRpc, Box<HttpReply>> {
+        let args = if self.structured {
+            celld::js::RpcData::V8(body)
+        } else {
+            match String::from_utf8(body.to_vec()) {
+                Ok(json) => celld::js::RpcData::Json(json),
+                Err(_) => {
+                    return Err(Box::new(peer_response(response(
+                        StatusCode::BAD_REQUEST,
+                        "JSON RPC arguments are not UTF-8",
+                    ))));
+                }
+            }
+        };
+        Ok(ForwardedRpc {
+            scope: self.scope,
+            name: self.name,
+            method: self.method,
+            args,
+            parent: self.parent,
+        })
+    }
 }
 
 pub(crate) fn is_tunnel_request(request: &Request<Incoming>) -> bool {
@@ -110,10 +258,17 @@ pub(crate) fn accept(mut request: Request<Incoming>, app: AppHandle) -> HttpRepl
         .get(VERSION_HEADER)
         .is_none_or(|value| value.as_bytes() != TUNNEL_VERSION.as_bytes())
     {
-        return peer_response(response(
+        // The reply names this node's version, so the dialer can say which
+        // two versions met.
+        let mut refused = response(
             StatusCode::UPGRADE_REQUIRED,
             "peer tunnel version is incompatible",
-        ));
+        );
+        refused.headers_mut().insert(
+            hyper::header::HeaderName::from_static(VERSION_HEADER),
+            hyper::header::HeaderValue::from_static(TUNNEL_VERSION),
+        );
+        return peer_response(refused);
     }
     let kind = match headers
         .get(KIND_HEADER)
@@ -160,28 +315,8 @@ async fn serve_do(upgraded: hyper::upgrade::Upgraded, app: AppHandle) {
     let service = service_fn(move |mut inner: Request<Incoming>| {
         let app = app.clone();
         async move {
-            let Some(scope) = inner
-                .headers()
-                .get(SCOPE_HEADER)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_string)
-                .filter(|scope| celld_logic::cell::valid_cell_scope(scope))
-            else {
+            let Some(control) = tunnel_control(inner.headers()) else {
                 return Ok::<_, Infallible>(peer_response(malformed_scope()));
-            };
-            let control = TunnelControl {
-                scope,
-                name: inner
-                    .headers()
-                    .get(NAME_HEADER)
-                    .and_then(|value| value.to_str().ok())
-                    .map(str::to_string),
-                request_id: inner
-                    .headers()
-                    .get(REQUEST_ID_HEADER)
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(celld::js::parse_request_id),
-                capacity_handoff: inner.headers().get(HANDOFF_HEADER).is_some(),
             };
             // A tunneled upgrade is the client's own handshake, so the
             // owner answers it directly: fastwebsockets computes the 101
@@ -202,17 +337,7 @@ async fn serve_do(upgraded: hyper::upgrade::Upgraded, app: AppHandle) {
                 None
             };
             let (parts, body) = inner.into_parts();
-            let headers = parts
-                .headers
-                .iter()
-                .filter(|(name, _)| !CONTROL_HEADERS.contains(&name.as_str()))
-                .filter_map(|(name, value)| {
-                    value
-                        .to_str()
-                        .ok()
-                        .map(|value| (name.as_str().to_string(), value.to_string()))
-                })
-                .collect();
+            let headers = application_headers(&parts.headers);
             // Streaming by construction: the inner body is handed to the
             // isolate as a stream whatever its size, bounded the way the
             // enveloped path bounded its frame.
@@ -233,15 +358,9 @@ async fn serve_do(upgraded: hyper::upgrade::Upgraded, app: AppHandle) {
                 }
             };
             let body = celld::js::RequestBody::Stream(stream_id);
-            let fetch = ForwardedFetch {
-                name: control.name,
-                url: parts.uri.to_string(),
-                method: parts.method.to_string(),
-                headers,
-                request_id: control.request_id,
-                capacity_handoff: control.capacity_handoff,
-            };
-            let outcome = dispatch_forwarded_fetch(app.clone(), control.scope, fetch, body).await;
+            let (scope, fetch) =
+                control.into_fetch(parts.uri.to_string(), parts.method.to_string(), headers);
+            let outcome = dispatch_forwarded_fetch(app.clone(), scope, fetch, body).await;
             let (target, worker_headers) = match outcome {
                 ForwardedFetchOutcome::Reply(reply) => return Ok(reply),
                 ForwardedFetchOutcome::WebSocket { target, headers } => (target, headers),
@@ -318,6 +437,52 @@ impl std::fmt::Display for StaleTunnelRoute {
 
 impl std::error::Error for StaleTunnelRoute {}
 
+/// The peer speaks another tunnel version. Versions never mix in a fleet:
+/// every node stops before the new version starts (docs/README.md, "Upgrade
+/// notes"). The attempt is not a stale route, so it fails at once.
+#[derive(Debug)]
+pub(crate) struct TunnelVersionMismatch {
+    node: String,
+    /// The peer's version, which a node before version 6 does not report.
+    theirs: Option<String>,
+}
+
+impl std::fmt::Display for TunnelVersionMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "peer {} speaks tunnel version {}, and this node speaks {TUNNEL_VERSION}; \
+             stop every node before starting a new version",
+            self.node,
+            self.theirs.as_deref().unwrap_or("5 or older"),
+        )
+    }
+}
+
+impl std::error::Error for TunnelVersionMismatch {}
+
+/// Report a version mismatch once per peer and version, so a mixed fleet is
+/// loud in the log without a line per call.
+fn report_version_mismatch(mismatch: &TunnelVersionMismatch) {
+    /// The (peer, peer version) pairs already logged.
+    type Reported = std::collections::HashSet<(String, Option<String>)>;
+    static REPORTED: std::sync::OnceLock<std::sync::Mutex<Reported>> = std::sync::OnceLock::new();
+    let first = REPORTED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .insert((mismatch.node.clone(), mismatch.theirs.clone()));
+    if first {
+        tracing::error!(
+            event = "peer_tunnel_version_mismatch",
+            peer = %mismatch.node,
+            peer_version = mismatch.theirs.as_deref().unwrap_or("5 or older"),
+            version = TUNNEL_VERSION,
+            "{mismatch}"
+        );
+    }
+}
+
 /// Who node A dials and how it proves itself. One borrow carries the
 /// client, the fleet key, and the routed peer's address and name through
 /// an attempt.
@@ -381,6 +546,18 @@ async fn establish(peer: &Peer<'_>, kind: &'static str) -> anyhow::Result<Tunnel
     {
         return Err(StaleTunnelRoute.into());
     }
+    if response.status() == reqwest::StatusCode::UPGRADE_REQUIRED {
+        let mismatch = TunnelVersionMismatch {
+            node: peer.node.to_string(),
+            theirs: response
+                .headers()
+                .get(VERSION_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string),
+        };
+        report_version_mismatch(&mismatch);
+        return Err(mismatch.into());
+    }
     anyhow::ensure!(
         response.status() == reqwest::StatusCode::SWITCHING_PROTOCOLS,
         "tunnel establishment answered {}",
@@ -422,6 +599,9 @@ fn inner_request(
     }
     if control.capacity_handoff {
         inner = inner.header(HANDOFF_HEADER, "1");
+    }
+    if let Some(parent) = &control.parent {
+        inner = inner.header(TRACE_HEADER, celld::telemetry::traceparent(parent));
     }
     Ok(inner.body(body)?)
 }
@@ -549,34 +729,9 @@ async fn serve_rpc(upgraded: hyper::upgrade::Upgraded, app: AppHandle) {
     let service = service_fn(move |inner: Request<Incoming>| {
         let app = app.clone();
         async move {
-            let Some(scope) = inner
-                .headers()
-                .get(SCOPE_HEADER)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_string)
-                .filter(|scope| celld_logic::cell::valid_cell_scope(scope))
-            else {
-                return Ok::<_, Infallible>(peer_response(malformed_scope()));
-            };
-            let name = inner
-                .headers()
-                .get(NAME_HEADER)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_string);
-            let structured = inner
-                .headers()
-                .get(hyper::header::CONTENT_TYPE)
-                .is_some_and(|value| value.as_bytes() == b"application/octet-stream");
-            let Some(method) = inner
-                .headers()
-                .get(METHOD_HEADER)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_string)
-            else {
-                return Ok::<_, Infallible>(peer_response(response(
-                    StatusCode::BAD_REQUEST,
-                    "RPC method header is missing",
-                )));
+            let head = match RpcHead::parse(inner.headers()) {
+                Ok(head) => head,
+                Err(refusal) => return Ok::<_, Infallible>(*refusal),
             };
             let body =
                 match collect_limited_body(inner.into_body(), MAX_PEER_FORWARD_BODY_BYTES).await {
@@ -585,21 +740,11 @@ async fn serve_rpc(upgraded: hyper::upgrade::Upgraded, app: AppHandle) {
                         return Ok(peer_response(body_read_error("tunnel RPC", error)));
                     }
                 };
-            let args = if structured {
-                celld::js::RpcData::V8(body)
-            } else {
-                match String::from_utf8(body.to_vec()) {
-                    Ok(json) => celld::js::RpcData::Json(json),
-                    Err(_) => {
-                        return Ok(peer_response(response(
-                            StatusCode::BAD_REQUEST,
-                            "JSON RPC arguments are not UTF-8",
-                        )));
-                    }
-                }
+            let call = match head.with_body(body) {
+                Ok(call) => call,
+                Err(refusal) => return Ok(*refusal),
             };
-            let reply = dispatch_forwarded_rpc(app, scope, name, method, args).await;
-            Ok(reply)
+            Ok(dispatch_forwarded_rpc(app, call).await)
         }
     });
     let _ = hyper::server::conn::http1::Builder::new()
@@ -614,6 +759,7 @@ pub(crate) async fn rpc(
     name: Option<&str>,
     method: &str,
     args: &celld::js::RpcData,
+    parent: Option<&celld::telemetry::TraceContext>,
 ) -> anyhow::Result<Response<PooledResponseBody>> {
     let (content_type, payload) = match args {
         celld::js::RpcData::Json(json) => ("application/json", Bytes::from(json.clone())),
@@ -622,21 +768,33 @@ pub(crate) async fn rpc(
     send_inner(
         peer,
         "rpc",
-        |body| {
-            let mut inner = Request::builder()
-                .method("POST")
-                .uri("/")
-                .header(SCOPE_HEADER, scope)
-                .header(METHOD_HEADER, method)
-                .header(hyper::header::CONTENT_TYPE, content_type);
-            if let Some(name) = name {
-                inner = inner.header(NAME_HEADER, name);
-            }
-            Ok(inner.body(body)?)
-        },
+        |body| rpc_inner_request(scope, name, method, content_type, parent, body),
         celld::js::RequestBody::Bytes(payload),
     )
     .await
+}
+
+fn rpc_inner_request(
+    scope: &str,
+    name: Option<&str>,
+    method: &str,
+    content_type: &str,
+    parent: Option<&celld::telemetry::TraceContext>,
+    body: TunnelBody,
+) -> anyhow::Result<Request<TunnelBody>> {
+    let mut inner = Request::builder()
+        .method("POST")
+        .uri("/")
+        .header(SCOPE_HEADER, scope)
+        .header(METHOD_HEADER, method)
+        .header(hyper::header::CONTENT_TYPE, content_type);
+    if let Some(name) = name {
+        inner = inner.header(NAME_HEADER, name);
+    }
+    if let Some(parent) = parent {
+        inner = inner.header(TRACE_HEADER, celld::telemetry::traceparent(parent));
+    }
+    Ok(inner.body(body)?)
 }
 
 /// The owner half of a tunneled WebSocket 101, parked until the caller's own
@@ -777,4 +935,169 @@ pub(crate) fn response_stream(body: PooledResponseBody) -> HttpChunkStream {
 #[cfg(all(test, celld_internal_tests))]
 mod private_tests {
     include!(env!("CELLD_CONFORMANCE_PEER_TUNNEL_TESTS"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CALLER: celld::telemetry::TraceContext = celld::telemetry::TraceContext {
+        trace_id: [7; 16],
+        span_id: [9; 8],
+        sampled: true,
+        remote: false,
+    };
+
+    fn control(parent: Option<celld::telemetry::TraceContext>) -> TunnelControl {
+        TunnelControl {
+            scope: "Object:00".to_string(),
+            name: None,
+            request_id: None,
+            capacity_handoff: false,
+            parent,
+        }
+    }
+
+    fn arrived(request: &Request<TunnelBody>) -> celld::telemetry::TraceContext {
+        trace_parent(request.headers()).expect("the trace context crosses the tunnel")
+    }
+
+    /// The ids, the sampling decision and whether the parent is remote.
+    fn fields(context: celld::telemetry::TraceContext) -> ([u8; 16], [u8; 8], bool, bool) {
+        (
+            context.trace_id,
+            context.span_id,
+            context.sampled,
+            context.remote,
+        )
+    }
+
+    #[test]
+    fn a_fetch_carries_the_callers_trace_context_as_a_remote_parent() {
+        let request = inner_request(
+            &control(Some(CALLER)),
+            "http://object/",
+            "GET",
+            &[],
+            full_body(Bytes::new()),
+        )
+        .unwrap();
+        assert_eq!(
+            fields(arrived(&request)),
+            (CALLER.trace_id, CALLER.span_id, true, true)
+        );
+    }
+
+    #[test]
+    fn an_rpc_carries_the_callers_trace_context_as_a_remote_parent() {
+        let unsampled = celld::telemetry::TraceContext {
+            sampled: false,
+            ..CALLER
+        };
+        let request = rpc_inner_request(
+            "Object:00",
+            None,
+            "call",
+            "application/octet-stream",
+            Some(&unsampled),
+            full_body(Bytes::new()),
+        )
+        .unwrap();
+        assert_eq!(
+            fields(arrived(&request)),
+            (CALLER.trace_id, CALLER.span_id, false, true)
+        );
+    }
+
+    /// The header is node A's: an application's own copy is dropped, so a
+    /// Worker cannot choose the trace its callee's spans join.
+    #[test]
+    fn an_application_header_cannot_set_the_trace_context() {
+        let forged = vec![(
+            TRACE_HEADER.to_string(),
+            "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01".to_string(),
+        )];
+        let request = inner_request(
+            &control(None),
+            "http://object/",
+            "GET",
+            &forged,
+            full_body(Bytes::new()),
+        )
+        .unwrap();
+        assert!(request.headers().get(TRACE_HEADER).is_none());
+        let request = inner_request(
+            &control(Some(CALLER)),
+            "http://object/",
+            "GET",
+            &forged,
+            full_body(Bytes::new()),
+        )
+        .unwrap();
+        assert_eq!(request.headers().get_all(TRACE_HEADER).iter().count(), 1);
+        assert_eq!(arrived(&request).trace_id, CALLER.trace_id);
+    }
+
+    /// Node B hands node A's context to the fetch it dispatches, and keeps
+    /// the control header from the application.
+    #[test]
+    fn node_b_dispatches_a_fetch_under_the_callers_context() {
+        let request = inner_request(
+            &control(Some(CALLER)),
+            "http://object/",
+            "GET",
+            &[("x-app".to_string(), "kept".to_string())],
+            full_body(Bytes::new()),
+        )
+        .unwrap();
+        let headers = application_headers(request.headers());
+        assert!(headers.iter().all(|(name, _)| name != TRACE_HEADER));
+        assert!(headers.contains(&("x-app".to_string(), "kept".to_string())));
+        let (scope, fetch) = tunnel_control(request.headers())
+            .expect("a well-formed control")
+            .into_fetch("http://object/".to_string(), "GET".to_string(), headers);
+        assert_eq!(scope, "Object:00");
+        assert_eq!(
+            fields(fetch.parent.expect("the parent reaches dispatch")),
+            (CALLER.trace_id, CALLER.span_id, true, true)
+        );
+    }
+
+    #[test]
+    fn node_b_dispatches_an_rpc_under_the_callers_context() {
+        let request = rpc_inner_request(
+            "Object:00",
+            Some("name"),
+            "call",
+            "application/octet-stream",
+            Some(&CALLER),
+            full_body(Bytes::new()),
+        )
+        .unwrap();
+        let Ok(head) = RpcHead::parse(request.headers()) else {
+            panic!("a well-formed RPC head");
+        };
+        let Ok(call) = head.with_body(Bytes::from_static(b"args")) else {
+            panic!("structured arguments");
+        };
+        assert_eq!(
+            (
+                call.scope.as_str(),
+                call.name.as_deref(),
+                call.method.as_str()
+            ),
+            ("Object:00", Some("name"), "call")
+        );
+        assert_eq!(
+            fields(call.parent.expect("the parent reaches dispatch")),
+            (CALLER.trace_id, CALLER.span_id, true, true)
+        );
+    }
+
+    #[test]
+    fn a_malformed_trace_context_is_ignored() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(TRACE_HEADER, "not a traceparent".parse().unwrap());
+        assert!(trace_parent(&headers).is_none());
+    }
 }

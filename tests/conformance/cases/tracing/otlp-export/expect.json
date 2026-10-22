@@ -169,23 +169,26 @@
             "children": [
               {
                 "name": "around-call",
-                "kind": "internal"
-              }
-            ]
-          },
-          {
-            "name": "celld.rpc",
-            "kind": "internal",
-            "attributes": {
-              "celld.cell": "Exported:10c78bf6e13ed0fe6fc228164f2eb7c8206ea40d0dc72d396f4de999a2ab25ba"
-            },
-            "children": [
-              {
-                "name": "in-object",
                 "kind": "internal",
-                "attributes": {
-                  "side": "object"
-                }
+                "children": [
+                  {
+                    "name": "celld.rpc",
+                    "kind": "internal",
+                    "attributes": {
+                      "celld.cell": "Exported:10c78bf6e13ed0fe6fc228164f2eb7c8206ea40d0dc72d396f4de999a2ab25ba",
+                      "celld.parent_remote": false
+                    },
+                    "children": [
+                      {
+                        "name": "in-object",
+                        "kind": "internal",
+                        "attributes": {
+                          "side": "object"
+                        }
+                      }
+                    ]
+                  }
+                ]
               }
             ]
           }

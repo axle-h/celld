@@ -4269,9 +4269,9 @@ pub struct InFlight {
     /// The alarm bookkeeping this entry still owes, if it is one.
     alarm: Option<AlarmClaim>,
     started: Instant,
-    /// The propagation context for this entry. A rejected foreign context
-    /// stays here with `sampled` clear, so continuations can forward it
-    /// without treating it as permission to record spans or logs.
+    /// The propagation context for this entry. A rejected context stays
+    /// here with `sampled` clear, so continuations can forward it without
+    /// treating it as permission to record spans or logs.
     trace: Option<crate::telemetry::TraceContext>,
     /// Why the event failed, captured for the span's `error` so a query sees
     /// the reason, not only that it failed. This also records an output-gate
@@ -4929,13 +4929,13 @@ fn set_cped(
 /// is the exactness `console.log` correlation needs: a continuation
 /// belonging to a *different* entry that runs during this turn's
 /// microtask checkpoint carries its own context, not this turn's. The
-/// layout is `user_spans::TraceRider`'s in one ArrayBuffer. Sampled contexts
-/// pay the existing cost, and only a rejected foreign context adds this cost
-/// to an unsampled request.
+/// layout is `user_spans::TraceRider`'s in one ArrayBuffer. With telemetry
+/// on, an unsampled request pays this cost too, so what it calls inherits
+/// its decision.
 ///
 /// Returns the previous slot value *only when a trace was installed*; the
-/// caller restores it before releasing the isolate. An untraced turn does not
-/// install the trace rider. A cell event separately installs its `IoContext`
+/// caller restores it before releasing the isolate. With telemetry off a
+/// turn does not install the trace rider. A cell event separately installs its `IoContext`
 /// token, so V8 can attribute a continuation that runs during another event's
 /// checkpoint.
 fn install_trace<'s>(
@@ -5091,7 +5091,7 @@ fn current_reaction_or_untracked_io_context(scope: &mut v8::PinScope) -> Option<
 /// The trace context current at this exact point of JS execution, read
 /// from CPED — the running turn's, or the running continuation's if V8
 /// restored one. `None` when telemetry is off or execution is outside an
-/// entry. An unsampled foreign context remains present with its flag clear.
+/// entry. An unsampled context remains present with its flag clear.
 pub(crate) fn current_trace_context(
     scope: &mut v8::PinScope,
 ) -> Option<crate::telemetry::TraceContext> {
@@ -5569,6 +5569,8 @@ fn begin<'s>(
             props,
             invocation_limits,
             reply,
+            // The drive installed the trace this context joined.
+            parent: _,
         } => {
             return begin_entrypoint_rpc(
                 tc,
@@ -8486,6 +8488,7 @@ fn op_svc_rpc(
         props,
         operation,
         reply: tx,
+        parent: current_trace_context(scope),
     };
     let id = asyncrt::enqueue(async move {
         gated_channel_send(gate, &SVC_RPC_TX, request, "no service binding channel").await?;
@@ -9606,6 +9609,7 @@ fn op_loader_rpc(
         .get(&id)
         .map(|entry| entry.loaded.clone());
     let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Service);
+    let parent = current_trace_context(scope);
     let async_id = asyncrt::enqueue(async move {
         // The same rule as `op_loader_fetch`: the call carries cell state.
         await_egress_gate(gate).await?;
@@ -9621,8 +9625,13 @@ fn op_loader_rpc(
             props,
             invocation_limits,
             reply,
+            parent,
         };
-        let driving = tokio::spawn(crate::runtime::drive(slot, job, None));
+        let driving = tokio::spawn(crate::runtime::drive(
+            slot,
+            job,
+            crate::telemetry::identity(),
+        ));
         match receive.await {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(error)) => Err(format!("{error}")),
@@ -10716,6 +10725,7 @@ fn op_rpc_call(
         method,
         args,
         reply: tx,
+        parent: current_trace_context(scope),
     };
     let id = asyncrt::enqueue(async move {
         gated_channel_send(gate, &RPC_CALL_TX, request, "no RPC channel").await?;

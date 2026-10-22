@@ -34,9 +34,9 @@ collector base URL in `CELLD_OTEL`, or keep `CELLD_OTEL=1` for the bucket.
 
 ## What celld records
 
-celld records a span for each stateless Worker request, each cell event (a
-fetch, an alarm, an RPC, a WebSocket message), each outbound `fetch()`, and
-each cell start. A span carries the request id, the cell, the isolate, the
+celld records a span for each stateless Worker request (a loaded Worker's
+included), each cell event (a fetch, an alarm, an RPC, a WebSocket
+message), each outbound `fetch()`, and each cell start. A span carries the request id, the cell, the isolate, the
 queue wait, the outbound URL and status, and the known durability facts.
 
 Each `console.log` line becomes a log record with the trace id and span id of
@@ -55,16 +55,24 @@ Log files from earlier celld versions have no severity columns. Read a mix of
 versions with `union_by_name = true`.
 
 celld reads the W3C `traceparent` header on incoming requests and sends it on
-outbound `fetch()`. A malformed header starts a new trace. A Worker's
-`fetch()` to a Durable Object stays in one trace. A Durable Object RPC call
-starts a new trace.
+outbound `fetch()`. A malformed header starts a new trace. A Worker's call to
+a Durable Object, by `fetch()` or RPC, stays in one trace on any node. So does
+an RPC call to another script's entrypoint, to a loaded Worker or to a facet.
+A `fetch()` through a service binding or to a loaded Worker carries no
+context of its own: its target joins the caller's trace only through a
+`traceparent` header the caller sends.
+
+A loaded Worker's outbound `fetch()` sends a `traceparent` with the trace id
+of the request that called it, as that request's own outbound `fetch()` does.
+A trace id correlates spans; it is not a secret.
 
 The sampler decides at the start of a request, and an unsampled request
 records nothing. A ratio of `0` records no traces and `1` records all. An
-intermediate ratio makes the same trace-id decision on each node. celld keeps
-a valid incoming context that the sampler rejects: an outbound `fetch()` or
-Durable Object call keeps the trace id, uses a new span id, and keeps the
-sampled flag clear.
+intermediate ratio makes the same trace-id decision on each node. Everything
+an unsampled request calls inherits the decision, whether the sampler
+rejected a new trace or a valid incoming context: an outbound `fetch()`, a
+Durable Object call or an RPC call keeps the trace id, uses a new span id,
+and keeps the sampled flag clear, so the callee records nothing either.
 
 Under load, telemetry sheds before requests do, and celld counts what it
 sheds. celld records no metrics yet.
@@ -80,8 +88,8 @@ A Worker's own spans, from `tracing` in `cloudflare:workers` or
   event's span. Its kind is internal.
 - Inside `enterSpan` and `startActiveSpan`, the span is the parent of what the
   callback does: `console.log` lines carry its span id, and an outbound
-  `fetch()` or a Durable Object `fetch()` is its child. A Durable Object RPC
-  call starts a new trace, as it does outside a span.
+  `fetch()`, a Durable Object call and an RPC call to an entrypoint, a loaded
+  Worker or a facet are its children.
 - The span's attributes are exported as OTLP attributes, after celld's own.
   Each key appears once: celld's value wins, and a Worker's attribute under a
   `celld.` key is dropped.

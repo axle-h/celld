@@ -1,0 +1,218 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": "worked"
+    },
+    {
+      "otlp": {
+        "spans": [
+          {
+            "name": "celld.fetch",
+            "kind": "server",
+            "children": [
+              {
+                "name": "around-service",
+                "kind": "internal",
+                "children": [
+                  {
+                    "name": "celld.fetch",
+                    "kind": "server",
+                    "attributes": {
+                      "celld.parent_remote": false
+                    },
+                    "children": [
+                      {
+                        "name": "in-service",
+                        "kind": "internal",
+                        "attributes": {
+                          "side": "service"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": "ran"
+    },
+    {
+      "otlp": {
+        "spans": [
+          {
+            "name": "celld.fetch",
+            "kind": "server",
+            "children": [
+              {
+                "name": "around-loader",
+                "kind": "internal",
+                "children": [
+                  {
+                    "name": "celld.fetch",
+                    "kind": "server",
+                    "attributes": {
+                      "celld.parent_remote": false
+                    },
+                    "children": [
+                      {
+                        "name": "in-loader",
+                        "kind": "internal",
+                        "attributes": {
+                          "side": "loader"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "own": "true",
+        "app": "true"
+      }
+    },
+    {
+      "otlp": {
+        "spans": [
+          {
+            "name": "celld.fetch",
+            "kind": "server",
+            "attributes": {
+              "celld.parent_remote": true
+            },
+            "parent": "remote",
+            "children": [
+              {
+                "name": "in-loader-fetch",
+                "kind": "internal"
+              }
+            ]
+          },
+          {
+            "name": "celld.fetch",
+            "kind": "server",
+            "children": [
+              {
+                "name": "around-loader-fetch",
+                "kind": "internal"
+              }
+            ]
+          },
+          {
+            "name": "celld.fetch",
+            "kind": "server",
+            "children": [
+              {
+                "name": "in-loader-fetch",
+                "kind": "internal"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": "pinged"
+    },
+    {
+      "otlp": {
+        "spans": [
+          {
+            "name": "celld.cell_startup",
+            "kind": "internal",
+            "attributes": {
+              "celld.cell": "Host:a48b8e93f733e6b29b1a2542e37088529b2abbaa9e76919e1b9a80cb0c9985c9"
+            }
+          },
+          {
+            "name": "celld.fetch",
+            "kind": "server",
+            "children": [
+              {
+                "name": "celld.rpc",
+                "kind": "internal",
+                "attributes": {
+                  "celld.cell": "Host:a48b8e93f733e6b29b1a2542e37088529b2abbaa9e76919e1b9a80cb0c9985c9",
+                  "celld.parent_remote": false
+                },
+                "children": [
+                  {
+                    "name": "around-host",
+                    "kind": "internal",
+                    "children": [
+                      {
+                        "name": "around-facet",
+                        "kind": "internal",
+                        "children": [
+                          {
+                            "name": "celld.rpc",
+                            "kind": "internal",
+                            "attributes": {
+                              "celld.cell": "App:46af4a99b13e863afee12f45befa9e3fde936452d615b18275efc5a3a0403b28",
+                              "celld.parent_remote": false
+                            },
+                            "children": [
+                              {
+                                "name": "in-facet",
+                                "kind": "internal",
+                                "attributes": {
+                                  "side": "facet"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": "looped"
+    },
+    {
+      "otlp": {
+        "spans": [
+          {
+            "name": "celld.fetch",
+            "kind": "server",
+            "children": [
+              {
+                "name": "around-loopback",
+                "kind": "internal",
+                "children": [
+                  {
+                    "name": "in-loopback",
+                    "kind": "internal",
+                    "attributes": {
+                      "side": "loopback"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

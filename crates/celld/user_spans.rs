@@ -136,6 +136,7 @@ impl TraceRider {
             trace_id: self.trace_id,
             span_id: self.span_id,
             sampled: self.sampled,
+            remote: false,
         }
     }
 }
