@@ -30,6 +30,7 @@ static_source!(
     "node_diagnostics_channel.js"
 );
 static_source!(NODE_STREAM_SOURCE, "node_stream.js");
+static_source!(NODE_ZLIB_SOURCE, "node_zlib.js");
 static_source!(
     IDENTITY_TRANSFORM_STREAM_SOURCE,
     "identity_transform_stream.js"
@@ -56,6 +57,7 @@ static INTERNAL_MODULE_SOURCES: &[(&str, &v8::OneByteConst)] = &[
         &NODE_DIAGNOSTICS_CHANNEL_SOURCE,
     ),
     ("node_stream.js", &NODE_STREAM_SOURCE),
+    ("node_zlib.js", &NODE_ZLIB_SOURCE),
     (
         "identity_transform_stream.js",
         &IDENTITY_TRANSFORM_STREAM_SOURCE,
@@ -380,6 +382,11 @@ const LAZY_MODULES: &[LazyModule] = &[
         source: &NODE_EVENTS_SOURCE,
     },
     LazyModule {
+        specs: &["zlib", "node:zlib"],
+        global: "__zlibModule",
+        source: &NODE_ZLIB_SOURCE,
+    },
+    LazyModule {
         specs: &["os", "node:os"],
         global: "__osModule",
         source: &NODE_OS_SOURCE,
@@ -540,7 +547,6 @@ fn eager_module_global(spec: &str) -> Option<&'static str> {
     Some(match spec {
         "fs" | "node:fs" => "__fs",
         "fs/promises" | "node:fs/promises" => "__fsPromises",
-        "zlib" | "node:zlib" => "__zlibModule",
         _ => return None,
     })
 }

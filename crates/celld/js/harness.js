@@ -10278,7 +10278,7 @@ if (!globalThis.AbortSignal) {
       this.__celldHost = __rpcNoClone;
     }
     throwIfAborted() { if (this.aborted) throw this.reason; }
-    static abort(reason = new DOMException("This operation was aborted", "AbortError")) {
+    static abort(reason = new DOMException("The operation was aborted", "AbortError")) {
       const c = new AbortController(); c.abort(reason); return c.signal;
     }
     static timeout(ms) {
@@ -10313,7 +10313,7 @@ if (!globalThis.AbortSignal) {
   });
   globalThis.AbortController = class AbortController {
     constructor() { this.signal = new AbortSignal(__abortBrand); }
-    abort(reason = new DOMException("This operation was aborted", "AbortError")) {
+    abort(reason = new DOMException("The operation was aborted", "AbortError")) {
       __abortSignal(this.signal, reason);
     }
   };
@@ -11421,10 +11421,53 @@ if (!globalThis.navigator) globalThis.navigator = {
 };
 if (!globalThis.queueMicrotask)
   globalThis.queueMicrotask = (f) => Promise.resolve().then(f);
-if (!globalThis.scheduler)
+// workerd's `Scheduler` (src/workerd/api/basics.h) has `wait` alone. Its
+// arguments convert as JSG converts them, and a bad one rejects rather than
+// throws, because the method returns a promise. An abort rejects with the
+// signal's reason itself; workerd's rejection is a copy rebuilt from the
+// reason's name and message (docs/cloudflare-compat.md).
+if (!globalThis.scheduler) {
+  const AbortSignal_ = globalThis.AbortSignal;
   globalThis.scheduler = {
-    wait: (ms) => new Promise((resolve) => setTimeout(resolve, Number(ms) || 0)),
+    wait(delay, options) {
+      const argumentCount = arguments.length;
+      return new Promise((resolve, reject) => {
+        if (argumentCount === 0)
+          throw new TypeError(
+            "Failed to execute 'wait' on 'Scheduler': parameter 1 is not of type 'number'.");
+        const ms = +delay;
+        let signal;
+        if (options !== undefined && options !== null) {
+          if (typeof options !== "object" && typeof options !== "function")
+            throw new TypeError(
+              "Failed to execute 'wait' on 'Scheduler': parameter 2 is not of type 'WaitOptions'.");
+          signal = options.signal;
+          if (signal !== undefined && !(signal instanceof AbortSignal_))
+            throw new TypeError(
+              "Incorrect type for the 'signal' field on 'WaitOptions': " +
+              "the provided value is not of type 'AbortSignal'.");
+        }
+        if (signal === undefined) {
+          setTimeout(resolve, ms);
+          return;
+        }
+        if (signal.aborted) {
+          reject(signal.reason);
+          return;
+        }
+        const onAbort = () => {
+          clearTimeout(id);
+          reject(signal.reason);
+        };
+        const id = setTimeout(() => {
+          signal.removeEventListener("abort", onAbort);
+          resolve();
+        }, ms);
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+    },
   };
+}
 if (!globalThis.structuredClone) {
   const hostBrand = Symbol("Cells.structuredCloneHost");
   const deserializers = {
@@ -11529,25 +11572,6 @@ if (!globalThis.structuredClone) {
 }
 // Web Crypto is installed after the rest of the harness so it can use
 // DOMException, structuredClone, and Buffer.
-// `Buffer` is read at call time, which materializes the lazy global.
-const __zlibSync = (mode, data) =>
-  Buffer.from(__zlib(mode, Buffer.from(data)));
-__celld.__zlibModule = {
-  constants: {
-    Z_NO_FLUSH: 0,
-    Z_PARTIAL_FLUSH: 1,
-    Z_SYNC_FLUSH: 2,
-    Z_FULL_FLUSH: 3,
-    Z_FINISH: 4,
-    Z_BLOCK: 5,
-  },
-  gzipSync: (data, _options) => __zlibSync("gzip", data),
-  gunzipSync: (data, _options) => __zlibSync("gunzip", data),
-  deflateSync: (data, _options) => __zlibSync("deflate", data),
-  inflateSync: (data, _options) => __zlibSync("inflate", data),
-  deflateRawSync: (data, _options) => __zlibSync("deflateRaw", data),
-  inflateRawSync: (data, _options) => __zlibSync("inflateRaw", data),
-};
 // A Node dependency reads a `process` field at module scope and passes it
 // straight to something that rejects `undefined` -- `dirname(process.execPath)`
 // is one such case. Workerd defines every field

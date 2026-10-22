@@ -1,0 +1,492 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "present": [
+          "function",
+          "function",
+          "function",
+          "function",
+          "function",
+          "function"
+        ],
+        "toHex": [
+          "fbffbf00017e",
+          "",
+          "bf00"
+        ],
+        "toBase64": {
+          "plain": "+/+/AAF+",
+          "base64url": "-_-_AAF-",
+          "omitPadding": [
+            "+w",
+            "+/8",
+            "+/+/",
+            "+/+/AA"
+          ],
+          "padded": [
+            "+w==",
+            "+/8=",
+            "+/+/",
+            "+/+/AA=="
+          ],
+          "urlUnpadded": "-_-_AA",
+          "empty": "",
+          "badAlphabet": {
+            "error": {
+              "name": "TypeError",
+              "message": "invalid option hex"
+            }
+          },
+          "optionsNotObject": {
+            "error": {
+              "name": "TypeError",
+              "message": "invalid_argument"
+            }
+          },
+          "detached": {
+            "error": {
+              "name": "TypeError",
+              "message": "Cannot perform Uint8Array.prototype.toBase64 on a detached or out-of-bounds ArrayBuffer"
+            }
+          }
+        },
+        "fromHex": {
+          "lower": {
+            "value": [
+              251,
+              255,
+              191,
+              0,
+              1,
+              126
+            ]
+          },
+          "upper": {
+            "value": [
+              251,
+              255,
+              191
+            ]
+          },
+          "empty": {
+            "value": []
+          },
+          "odd": {
+            "error": {
+              "name": "SyntaxError",
+              "message": "Input string must contain hex characters in even length"
+            }
+          },
+          "badDigit": {
+            "error": {
+              "name": "SyntaxError",
+              "message": "Input string must contain hex characters in even length"
+            }
+          },
+          "whitespace": {
+            "error": {
+              "name": "SyntaxError",
+              "message": "Input string must contain hex characters in even length"
+            }
+          },
+          "notString": {
+            "error": {
+              "name": "TypeError",
+              "message": "input argument must be a string"
+            }
+          }
+        },
+        "fromBase64": {
+          "plain": {
+            "value": [
+              251,
+              255,
+              191,
+              0,
+              1,
+              126
+            ]
+          },
+          "base64url": {
+            "value": [
+              251,
+              255,
+              191,
+              0,
+              1,
+              126
+            ]
+          },
+          "urlCharsInBase64": {
+            "error": {
+              "name": "SyntaxError",
+              "message": "Found a character that cannot be part of a valid base64 string."
+            }
+          },
+          "base64CharsInUrl": {
+            "error": {
+              "name": "SyntaxError",
+              "message": "Found a character that cannot be part of a valid base64 string."
+            }
+          },
+          "whitespace": {
+            "value": [
+              251,
+              255,
+              191,
+              0,
+              1,
+              126
+            ]
+          },
+          "loose": [
+            {
+              "value": [
+                1
+              ]
+            },
+            {
+              "value": [
+                1
+              ]
+            },
+            {
+              "value": [
+                1,
+                2
+              ]
+            },
+            {
+              "value": [
+                1,
+                2
+              ]
+            },
+            {
+              "error": {
+                "name": "SyntaxError",
+                "message": "Found a character that cannot be part of a valid base64 string."
+              }
+            },
+            {
+              "value": [
+                1
+              ]
+            }
+          ],
+          "strict": [
+            {
+              "error": {
+                "name": "SyntaxError",
+                "message": "The base64 input terminates with a single character, excluding padding (=)."
+              }
+            },
+            {
+              "value": [
+                1
+              ]
+            },
+            {
+              "value": [
+                1,
+                2
+              ]
+            },
+            {
+              "error": {
+                "name": "SyntaxError",
+                "message": "The base64 input terminates with non-zero padding bits."
+              }
+            },
+            {
+              "error": {
+                "name": "SyntaxError",
+                "message": "The base64 input terminates with non-zero padding bits."
+              }
+            }
+          ],
+          "stopBeforePartial": [
+            {
+              "value": []
+            },
+            {
+              "value": [
+                1,
+                2,
+                3
+              ]
+            },
+            {
+              "value": [
+                1,
+                2,
+                3
+              ]
+            },
+            {
+              "value": [
+                1,
+                2,
+                3,
+                4
+              ]
+            },
+            {
+              "value": [
+                1,
+                2,
+                3
+              ]
+            }
+          ],
+          "badLastChunkHandling": {
+            "error": {
+              "name": "TypeError",
+              "message": "invalid option lenient"
+            }
+          },
+          "badAlphabet": {
+            "error": {
+              "name": "TypeError",
+              "message": "invalid option hex"
+            }
+          },
+          "badCharacter": {
+            "error": {
+              "name": "SyntaxError",
+              "message": "Found a character that cannot be part of a valid base64 string."
+            }
+          },
+          "trailingAfterPadding": {
+            "error": {
+              "name": "SyntaxError",
+              "message": "Found a character that cannot be part of a valid base64 string."
+            }
+          },
+          "notString": {
+            "error": {
+              "name": "TypeError",
+              "message": "input argument must be a string"
+            }
+          }
+        },
+        "setFromHex": {
+          "fits": {
+            "result": {
+              "value": {
+                "read": 4,
+                "written": 2
+              }
+            },
+            "target": [
+              1,
+              2,
+              238,
+              238
+            ]
+          },
+          "exact": {
+            "result": {
+              "value": {
+                "read": 8,
+                "written": 4
+              }
+            },
+            "target": [
+              1,
+              2,
+              3,
+              4
+            ]
+          },
+          "partial": {
+            "result": {
+              "value": {
+                "read": 4,
+                "written": 2
+              }
+            },
+            "target": [
+              1,
+              2
+            ]
+          },
+          "badDigitAfterValid": {
+            "result": {
+              "error": {
+                "name": "SyntaxError",
+                "message": "Input string must contain hex characters in even length"
+              }
+            },
+            "target": [
+              1,
+              2,
+              238,
+              238
+            ]
+          },
+          "odd": {
+            "result": {
+              "error": {
+                "name": "SyntaxError",
+                "message": "Input string must contain hex characters in even length"
+              }
+            },
+            "target": [
+              238,
+              238,
+              238,
+              238
+            ]
+          }
+        },
+        "setFromBase64": {
+          "fits": {
+            "result": {
+              "value": {
+                "read": 4,
+                "written": 3
+              }
+            },
+            "target": [
+              1,
+              2,
+              3,
+              238
+            ]
+          },
+          "exact": {
+            "result": {
+              "value": {
+                "read": 8,
+                "written": 4
+              }
+            },
+            "target": [
+              1,
+              2,
+              3,
+              4
+            ]
+          },
+          "partial": {
+            "result": {
+              "value": {
+                "read": 4,
+                "written": 3
+              }
+            },
+            "target": [
+              1,
+              2,
+              3,
+              238
+            ]
+          },
+          "partialChunk": {
+            "result": {
+              "value": {
+                "read": 4,
+                "written": 3
+              }
+            },
+            "target": [
+              1,
+              2,
+              3,
+              238,
+              238
+            ]
+          },
+          "base64url": {
+            "result": {
+              "value": {
+                "read": 3,
+                "written": 2
+              }
+            },
+            "target": [
+              251,
+              255,
+              238,
+              238
+            ]
+          },
+          "stopBeforePartial": {
+            "result": {
+              "value": {
+                "read": 4,
+                "written": 3
+              }
+            },
+            "target": [
+              1,
+              2,
+              3,
+              238,
+              238,
+              238,
+              238,
+              238
+            ]
+          },
+          "strictBadPadding": {
+            "result": {
+              "error": {
+                "name": "SyntaxError",
+                "message": "The base64 input terminates with a single character, excluding padding (=)."
+              }
+            },
+            "target": [
+              238,
+              238,
+              238,
+              238
+            ]
+          },
+          "badCharacter": {
+            "result": {
+              "error": {
+                "name": "SyntaxError",
+                "message": "Found a character that cannot be part of a valid base64 string."
+              }
+            },
+            "target": [
+              1,
+              2,
+              3,
+              238,
+              238,
+              238,
+              238,
+              238
+            ]
+          },
+          "emptyTarget": {
+            "result": {
+              "value": {
+                "read": 0,
+                "written": 0
+              }
+            },
+            "target": []
+          }
+        },
+        "onOtherTypedArrays": {
+          "error": {
+            "name": "TypeError",
+            "message": "Method Uint8Array.prototype.toHex called on incompatible receiver undefined"
+          }
+        },
+        "onSubclass": {
+          "isUint8Array": true,
+          "hex": "0102"
+        }
+      }
+    }
+  ]
+}

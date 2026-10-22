@@ -355,8 +355,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 15 | 0.5 integration adapter | done | starter `fb97f16` |
 | 16 | 1.8 BYOB readers on platform streams | done | `e8e6459` |
 | 17 | 1.9 egress policy (part A), node-address always-block (part B) | done | `36b5b0f`, `5e33fe2` |
-| 18 | 1.27 container ownership (security) | done | see log |
-| 19+ | Phase 1 in plan order (1.10-1.26), and the 1.4 props key-order follow-up | queued | |
+| 18 | 1.27 container ownership (security) | done | `f55c069` |
+| 19 | 1.10 small built-in fixes | done | see log |
+| 20+ | Phase 1 in plan order (1.11-1.26), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -1450,6 +1451,38 @@ not only ones that set the flag.
 - **`node:zlib`:** add the level `constants` (`git-codec.ts:98` uses
   `Z_BEST_SPEED`). Honour `level`. Honour `maxOutputLength`, or throw on it.
 - **`scheduler.wait({signal})`:** implement the signal, or throw on it.
+
+**As built (done).**
+- V8 already had the base64/hex methods, with workerd's messages; a case pins
+  them.
+- `scheduler.wait` honours the signal and rejects with the reason itself
+  (workerd rebuilds a copy; documented). The default abort reason is now
+  workerd's "The operation was aborted".
+- `node:zlib` is a lazy module:
+  - workerd's 172 constants and its export list. Unimplemented names
+    (callback forms, `create*`, classes, `unzip`, `crc32`, Brotli, Zstd) are
+    refusing stubs.
+  - `level` and `maxOutputLength` are honoured (workerd's 40 KiB growth and
+    "Memory limit exceeded"), with a 128 MiB default output cap and input
+    under 128 MiB.
+  - Options are validated in workerd's order with its messages.
+  - `windowBits`/`memLevel`/`strategy`/`finishFlush`/`dictionary`/`info`
+    throw "not implemented in celld".
+- celld's own gzip header parser decodes every member, capped at 65,536 per
+  call. Decode errors carry zlib's messages.
+- Also fixed: truncated streams returned partial data, and gunzip read only
+  the first member.
+- **Follow-ups:**
+  - `node:timers/promises` timers reject with the bare reason; workerd uses
+    `AbortError({cause})` and validates options.
+  - Corrupt deflate data gives "Zlib error" where workerd gives zlib's
+    reason.
+  - `CompressionStream("gzip")` writes OS byte 255.
+  - A namespace import of `node:zlib` binds 34 constants that workerd puts
+    only on the default export.
+  - Model the `nodejs_zlib` flag in 1.16.
+  - `streams/byob-request-body` occasionally gets "Network connection lost"
+    from workerd (a harness flake to watch in nightly).
 
 ### 1.11 Method lookup on get-only Proxies (N2)
 

@@ -1,0 +1,74 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "inflate": {
+          "whole": {
+            "ok": 35000
+          },
+          "noChecksum": {
+            "error": "Error: unexpected end of file"
+          },
+          "half": {
+            "error": "Error: unexpected end of file"
+          },
+          "empty": {
+            "error": "Error: unexpected end of file"
+          },
+          "badChecksum": {
+            "error": "Error: incorrect data check"
+          },
+          "badHeader": {
+            "error": "Error: incorrect header check"
+          },
+          "trailing": {
+            "ok": 35000
+          }
+        },
+        "inflateRaw": {
+          "whole": {
+            "ok": 35000
+          },
+          "half": {
+            "error": "Error: unexpected end of file"
+          },
+          "empty": {
+            "error": "Error: unexpected end of file"
+          },
+          "trailing": {
+            "ok": 35000
+          }
+        },
+        "gunzip": {
+          "whole": {
+            "ok": 35000
+          },
+          "noTrailer": {
+            "error": "Error: unexpected end of file"
+          },
+          "half": {
+            "error": "Error: unexpected end of file"
+          },
+          "empty": {
+            "error": "Error: unexpected end of file"
+          },
+          "badChecksum": {
+            "error": "Error: incorrect data check"
+          },
+          "twoMembers": {
+            "ok": 70000
+          },
+          "zeroPadding": {
+            "ok": 35000
+          },
+          "trailingGarbage": {
+            "error": "Error: incorrect header check"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,310 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "global": {
+          "keys": [
+            "wait"
+          ],
+          "yield": "undefined",
+          "plain": {
+            "resolved": null
+          },
+          "noOptions": {
+            "resolved": null
+          },
+          "emptyOptions": {
+            "resolved": null
+          },
+          "unknownOption": {
+            "resolved": null
+          },
+          "undefinedSignal": {
+            "resolved": null
+          },
+          "unabortedSignal": {
+            "resolved": null
+          },
+          "preAborted": {
+            "rejected": {
+              "name": "Error",
+              "message": "before",
+              "code": null
+            }
+          },
+          "preAbortedPrompt": true,
+          "preAbortedDefault": {
+            "rejected": {
+              "name": "AbortError",
+              "message": "The operation was aborted",
+              "code": 20
+            }
+          },
+          "preAbortedController": {
+            "rejected": {
+              "name": "AbortError",
+              "message": "The operation was aborted",
+              "code": 20
+            }
+          },
+          "abortedDuring": {
+            "rejected": {
+              "name": "RangeError",
+              "message": "during",
+              "code": null
+            }
+          },
+          "abortedDuringPrompt": true,
+          "timeoutSignal": {
+            "rejected": {
+              "name": "TimeoutError",
+              "message": "The operation was aborted due to timeout",
+              "code": 23
+            }
+          },
+          "anySignal": {
+            "rejected": {
+              "name": "TypeError",
+              "message": "any",
+              "code": null
+            }
+          },
+          "anyPreAborted": {
+            "rejected": {
+              "name": "Error",
+              "message": "pre",
+              "code": null
+            }
+          },
+          "abortedAfter": {
+            "resolved": null
+          },
+          "shared": [
+            {
+              "rejected": {
+                "name": "Error",
+                "message": "shared",
+                "code": null
+              }
+            },
+            {
+              "rejected": {
+                "name": "Error",
+                "message": "shared",
+                "code": null
+              }
+            }
+          ],
+          "invalid": {
+            "signalNotAbortSignal": {
+              "rejected": {
+                "name": "TypeError",
+                "message": "Incorrect type for the 'signal' field on 'WaitOptions': the provided value is not of type 'AbortSignal'.",
+                "code": null
+              }
+            },
+            "signalNull": {
+              "rejected": {
+                "name": "TypeError",
+                "message": "Incorrect type for the 'signal' field on 'WaitOptions': the provided value is not of type 'AbortSignal'.",
+                "code": null
+              }
+            },
+            "optionsNull": {
+              "resolved": null
+            },
+            "optionsString": {
+              "rejected": {
+                "name": "TypeError",
+                "message": "Failed to execute 'wait' on 'Scheduler': parameter 2 is not of type 'WaitOptions'.",
+                "code": null
+              }
+            },
+            "delayString": {
+              "resolved": null
+            },
+            "delayNotNumeric": {
+              "resolved": null
+            },
+            "delayObject": {
+              "resolved": null
+            },
+            "delayUndefined": {
+              "resolved": null
+            },
+            "delayMissing": {
+              "rejected": {
+                "name": "TypeError",
+                "message": "Failed to execute 'wait' on 'Scheduler': parameter 1 is not of type 'number'.",
+                "code": null
+              }
+            },
+            "delayNaN": {
+              "resolved": null
+            },
+            "delayNegative": {
+              "resolved": null
+            }
+          }
+        },
+        "nodeTimersPromises": {
+          "yield": {
+            "resolved": null
+          },
+          "detachedWait": {
+            "threw": {
+              "name": "TypeError",
+              "message": "Cannot read properties of undefined (reading 'Symbol(kScheduler)')",
+              "code": null
+            }
+          },
+          "detachedYield": {
+            "threw": {
+              "name": "TypeError",
+              "message": "Value of \"this\" must be of type Scheduler",
+              "code": "ERR_INVALID_THIS"
+            }
+          },
+          "plain": {
+            "resolved": null
+          },
+          "noOptions": {
+            "resolved": null
+          },
+          "emptyOptions": {
+            "resolved": null
+          },
+          "unknownOption": {
+            "resolved": null
+          },
+          "undefinedSignal": {
+            "resolved": null
+          },
+          "unabortedSignal": {
+            "resolved": null
+          },
+          "preAborted": {
+            "rejected": {
+              "name": "Error",
+              "message": "before",
+              "code": null
+            }
+          },
+          "preAbortedPrompt": true,
+          "preAbortedDefault": {
+            "rejected": {
+              "name": "AbortError",
+              "message": "The operation was aborted",
+              "code": 20
+            }
+          },
+          "preAbortedController": {
+            "rejected": {
+              "name": "AbortError",
+              "message": "The operation was aborted",
+              "code": 20
+            }
+          },
+          "abortedDuring": {
+            "rejected": {
+              "name": "RangeError",
+              "message": "during",
+              "code": null
+            }
+          },
+          "abortedDuringPrompt": true,
+          "timeoutSignal": {
+            "rejected": {
+              "name": "TimeoutError",
+              "message": "The operation was aborted due to timeout",
+              "code": 23
+            }
+          },
+          "anySignal": {
+            "rejected": {
+              "name": "TypeError",
+              "message": "any",
+              "code": null
+            }
+          },
+          "anyPreAborted": {
+            "rejected": {
+              "name": "Error",
+              "message": "pre",
+              "code": null
+            }
+          },
+          "abortedAfter": {
+            "resolved": null
+          },
+          "shared": [
+            {
+              "rejected": {
+                "name": "Error",
+                "message": "shared",
+                "code": null
+              }
+            },
+            {
+              "rejected": {
+                "name": "Error",
+                "message": "shared",
+                "code": null
+              }
+            }
+          ],
+          "invalid": {
+            "signalNotAbortSignal": {
+              "rejected": {
+                "name": "TypeError",
+                "message": "Incorrect type for the 'signal' field on 'WaitOptions': the provided value is not of type 'AbortSignal'.",
+                "code": null
+              }
+            },
+            "signalNull": {
+              "rejected": {
+                "name": "TypeError",
+                "message": "Incorrect type for the 'signal' field on 'WaitOptions': the provided value is not of type 'AbortSignal'.",
+                "code": null
+              }
+            },
+            "optionsNull": {
+              "resolved": null
+            },
+            "optionsString": {
+              "rejected": {
+                "name": "TypeError",
+                "message": "Failed to execute 'wait' on 'Scheduler': parameter 2 is not of type 'WaitOptions'.",
+                "code": null
+              }
+            },
+            "delayString": {
+              "resolved": null
+            },
+            "delayNotNumeric": {
+              "resolved": null
+            },
+            "delayObject": {
+              "resolved": null
+            },
+            "delayUndefined": {
+              "resolved": null
+            },
+            "delayMissing": {
+              "resolved": null
+            },
+            "delayNaN": {
+              "resolved": null
+            },
+            "delayNegative": {
+              "resolved": null
+            }
+          }
+        }
+      }
+    }
+  ]
+}

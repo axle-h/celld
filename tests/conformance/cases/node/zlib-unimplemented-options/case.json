@@ -1,0 +1,8 @@
+{
+  "kind": "celld-only",
+  "reason": "workerd implements every zlib option; this pins how celld refuses the ones that would change the output and that it does not implement",
+  "workers": ["app"],
+  "steps": [
+    {"path": "/run"}
+  ]
+}

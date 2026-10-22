@@ -1,0 +1,9 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/constants"},
+    {"path": "/levels"},
+    {"path": "/max-output-length"},
+    {"path": "/options"}
+  ]
+}

@@ -222,6 +222,13 @@ The `tail` and `email` handlers are unavailable.
 Both clocks advance at an I/O boundary and stay fixed during JavaScript
 execution.
 
+`scheduler.wait(ms, { signal })` honours its signal: an abort rejects the
+wait, and an already-aborted signal rejects it at once. celld rejects with
+the signal's reason itself. workerd rejects with a copy rebuilt from the
+reason's name and message, so there a reason that is not an `Error`, such as
+a string, arrives as an `Error`. `scheduler` in `node:timers/promises` calls
+the global `scheduler.wait`, as on workerd.
+
 ### [Node.js compatibility](https://developers.cloudflare.com/workers/runtime-apis/nodejs/)
 
 - celld implements `node:assert`, `node:async_hooks`, `node:buffer`,
@@ -232,7 +239,33 @@ execution.
   ciphers, RSA-PSS, or DSA signatures and key generation.
 - `KeyObject.toCryptoKey()` applies the requested algorithm, extractability,
   and usages to an asymmetric key.
-- `node:zlib` implements only the synchronous gzip and deflate functions.
+- `node:zlib` implements the synchronous functions `deflateSync`,
+  `inflateSync`, `gzipSync`, `gunzipSync`, `deflateRawSync` and
+  `inflateRawSync`, with workerd's `constants` and `codes`. Every other
+  export of workerd's `node:zlib` exists, with the type it has there, but
+  throws `node:zlib.<name> is not implemented in celld` when called: the
+  callback forms, the `create*` functions and stream classes, `unzip`,
+  `unzipSync`, `crc32`, Brotli and Zstandard. A namespace import also binds
+  the Zstandard constants and `BROTLI_PARAM_SIZE_HINT`, which workerd puts
+  only on the default export.
+  - `level` and `maxOutputLength` are honoured. Output is capped at 128 MiB
+    by default, so an inflate bomb fails with `RangeError: Memory limit
+    exceeded`, and a `maxOutputLength` fails exactly where it fails on
+    workerd, which grows its output buffer in 40 KiB steps.
+  - `chunkSize` and `flush` are checked and, as in workerd's synchronous
+    path, change nothing.
+  - These throw: `windowBits` other than 15 (inflate and gunzip also accept
+    0, which reads the window size from the stream), `memLevel` other than
+    8, `strategy` other than `Z_DEFAULT_STRATEGY`, `finishFlush` other than
+    `Z_FINISH`, `dictionary`, and `info`.
+  - `gunzipSync` decodes at most 65,536 gzip members in one call and throws
+    beyond that, so input of empty members cannot hold the thread for long.
+    BGZF, the common multi-member format, needs 2,048 members for 128 MiB.
+  - The compressed bytes come from miniz_oxide rather than zlib. They are
+    valid streams that any inflater reads, but they differ from workerd's
+    bytes. Decoding errors carry zlib's messages, except that corrupt
+    deflate data reports workerd's fallback, `Zlib error`, rather than
+    zlib's specific reason.
 - `node:fs` provides `access`, `mkdir`, `realpath`, `stat`, `lstat`, and
   `readFile`. It exposes an empty, request-local `/tmp` and a read-only
   `/bundle` that contains the Worker modules.

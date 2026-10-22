@@ -1,0 +1,102 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "windowBits": {
+          "deflate": {
+            "error": "Error: node:zlib option 'windowBits' is not implemented in celld beyond its default, 15 (received 9)"
+          },
+          "gzip": {
+            "error": "Error: node:zlib option 'windowBits' is not implemented in celld beyond its default, 15 (received 14)"
+          },
+          "inflate": {
+            "error": "Error: node:zlib option 'windowBits' is not implemented in celld beyond its default, 15 (received 12)"
+          },
+          "inflateHeader": {
+            "ok": true
+          },
+          "inflateRawHeader": {
+            "error": "RangeError: The value of \"options.windowBits\" is out of range. It must be >= 8 and <= 15. Received 0"
+          },
+          "default": {
+            "ok": true
+          },
+          "outOfRange": {
+            "error": "RangeError: The value of \"options.windowBits\" is out of range. It must be >= 8 and <= 15. Received 7"
+          }
+        },
+        "memLevel": {
+          "nine": {
+            "error": "Error: node:zlib option 'memLevel' is not implemented in celld beyond its default, 8 (received 9)"
+          },
+          "default": {
+            "ok": true
+          },
+          "outOfRange": {
+            "error": "RangeError: The value of \"options.memLevel\" is out of range. It must be >= 1 and <= 9. Received 0"
+          }
+        },
+        "strategy": {
+          "rle": {
+            "error": "Error: node:zlib option 'strategy' is not implemented in celld beyond its default, 0 (received 3)"
+          },
+          "huffmanOnly": {
+            "error": "Error: node:zlib option 'strategy' is not implemented in celld beyond its default, 0 (received 2)"
+          },
+          "default": {
+            "ok": true
+          }
+        },
+        "finishFlush": {
+          "sync": {
+            "error": "Error: node:zlib option 'finishFlush' is not implemented in celld beyond its default, 4 (received 2)"
+          },
+          "default": {
+            "ok": true
+          }
+        },
+        "dictionary": {
+          "error": "Error: node:zlib option 'dictionary' is not implemented in celld"
+        },
+        "info": {
+          "error": "Error: node:zlib option 'info' is not implemented in celld"
+        },
+        "infoFalse": {
+          "ok": true
+        },
+        "exports": {
+          "createGzip": {
+            "error": "Error: node:zlib.createGzip is not implemented in celld"
+          },
+          "Gzip": {
+            "error": "Error: node:zlib.Gzip is not implemented in celld"
+          },
+          "gzip": {
+            "error": "Error: node:zlib.gzip is not implemented in celld"
+          },
+          "unzipSync": {
+            "error": "Error: node:zlib.unzipSync is not implemented in celld"
+          },
+          "crc32": {
+            "error": "Error: node:zlib.crc32 is not implemented in celld"
+          },
+          "brotliCompressSync": {
+            "error": "Error: node:zlib.brotliCompressSync is not implemented in celld"
+          },
+          "zstdDecompress": {
+            "error": "Error: node:zlib.zstdDecompress is not implemented in celld"
+          }
+        },
+        "gzipMembers": {
+          "atCap": {
+            "ok": true
+          },
+          "overCap": {
+            "error": "Error: gzip input has more than 65536 members, which celld does not decode in one call"
+          }
+        }
+      }
+    }
+  ]
+}
