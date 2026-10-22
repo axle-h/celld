@@ -1,0 +1,23 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": null,
+      "ended": false
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "close",
+          4000,
+          2
+        ]
+      ]
+    }
+  ]
+}

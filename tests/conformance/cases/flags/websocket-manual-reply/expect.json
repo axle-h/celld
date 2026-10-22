@@ -1,0 +1,256 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 4001,
+        "reason": "4000 seen in readyState 2"
+      }
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 4001,
+        "reason": "1005 seen in readyState 2"
+      }
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 4002,
+        "reason": "4000 seen in readyState 2, later"
+      }
+    },
+    {
+      "frames": [
+        "echo:a",
+        "bye from readyState 2"
+      ],
+      "close": {
+        "code": 4008,
+        "reason": "4000 sent"
+      },
+      "ended": true
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 1005,
+        "reason": ""
+      }
+    },
+    {
+      "frames": [],
+      "close": {
+        "code": 1005,
+        "reason": ""
+      }
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 4003,
+        "reason": "4000 seen in readyState 2"
+      }
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 4000,
+        "reason": ""
+      }
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 1005,
+        "reason": ""
+      }
+    },
+    {
+      "frames": [
+        "front:echo:a"
+      ],
+      "close": {
+        "code": 4021,
+        "reason": "front relayed 4022 back saw 4000 front saw 4000"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "after": 2,
+        "reply": [
+          4022,
+          "back saw 4030 caller closes",
+          true,
+          3
+        ],
+        "end": 3
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "after": 2,
+        "reply": [
+          4005,
+          "4030 seen in readyState 2",
+          true,
+          3
+        ],
+        "end": 3
+      }
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "a after close()",
+          2
+        ],
+        [
+          "b close",
+          4010,
+          "a closes",
+          true,
+          2
+        ],
+        [
+          "b after its close()",
+          3
+        ],
+        [
+          "a close",
+          4011,
+          "b replies",
+          true,
+          3
+        ],
+        [
+          "end",
+          3,
+          3
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "a after close()",
+          2
+        ],
+        [
+          "b close",
+          4010,
+          "a closes",
+          true,
+          2
+        ],
+        [
+          "b after its close()",
+          2
+        ],
+        [
+          "end",
+          2,
+          2
+        ]
+      ]
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 4005,
+        "reason": "4000 seen in readyState 2"
+      }
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 4006,
+        "reason": "4000 seen in readyState 2, later"
+      }
+    },
+    {
+      "frames": [
+        "echo:a",
+        "bye from readyState 2"
+      ],
+      "close": {
+        "code": 4007,
+        "reason": "4000 sent"
+      },
+      "ended": true
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 1006,
+        "reason": ""
+      }
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "/do/now",
+          4030,
+          2
+        ],
+        [
+          "/do/now",
+          4000,
+          2
+        ],
+        [
+          "/do/later",
+          4000,
+          2
+        ],
+        [
+          "/do/send",
+          4000,
+          2
+        ],
+        [
+          "/do/hibernatable",
+          4000,
+          2
+        ]
+      ]
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 1006,
+        "reason": ""
+      }
+    }
+  ]
+}

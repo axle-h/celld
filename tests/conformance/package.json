@@ -9,7 +9,8 @@
   "imports": {
     "#byob": "./lib/worker/byob.js",
     "#params-dup": "./lib/worker/params-dup.js",
-    "#process-env": "./lib/worker/process-env.js"
+    "#process-env": "./lib/worker/process-env.js",
+    "#ws-close-reply": "./lib/worker/ws-close-reply.js"
   },
   "scripts": {
     "test": "node run.mjs --runtime=both",

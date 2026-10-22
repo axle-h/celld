@@ -4821,10 +4821,10 @@ impl InFlight {
         let mut ops = Vec::with_capacity(handed.len());
         for (id, future, lifetime) in handed {
             self.ops.insert(id);
-            if lifetime == asyncrt::OpLifetime::IoContext {
+            if lifetime.keeps_io_context() {
                 self.io_context_ops.insert(id);
             }
-            if lifetime == asyncrt::OpLifetime::Unrefed {
+            if lifetime.unrefed() {
                 self.unrefed_ops.insert(id);
             }
             ops.push((id, future));
@@ -5513,10 +5513,10 @@ fn adopt(entry: &mut InFlight) -> Vec<Op> {
             continue;
         }
         entry.ops.insert(id);
-        if lifetime == asyncrt::OpLifetime::IoContext {
+        if lifetime.keeps_io_context() {
             entry.io_context_ops.insert(id);
         }
-        if lifetime == asyncrt::OpLifetime::Unrefed {
+        if lifetime.unrefed() {
             entry.unrefed_ops.insert(id);
         }
         ops.push((id, future));
@@ -7885,6 +7885,7 @@ ops! { OP_NAMES, install_op_functions,
         "__ws_adopt_worker_handoff" => websocket::op_ws_adopt_worker_handoff,
         "__ws_bind_worker_handoff" => websocket::op_ws_bind_worker_handoff,
         "__ws_next" => websocket::op_ws_next,
+        "__ws_half_open" => websocket::op_ws_half_open,
         "__ws_upgrade" => websocket::op_ws_upgrade,
         "__hr_create" => html_rewriter::op_hr_create,
         "__hr_write" => html_rewriter::op_hr_write,
@@ -12495,6 +12496,10 @@ pub struct IoContext {
     /// a service-binding dispatch or a Durable Object call gets a context of
     /// its own rather than a frame inside this one.
     sockets: Mutex<Vec<u64>>,
+    /// Worker sockets this request returned in a response. They outlive its
+    /// retirement, and [`IoContext::drop`] releases them: once the request
+    /// is gone, nothing can send on them again.
+    returned_sockets: Mutex<Vec<u64>>,
     /// Worker sockets that a subrequest's 101 handed to this request and that
     /// it has neither returned nor accepted yet. Retiring releases them, so a
     /// response the request dropped does not keep the other isolate's socket.
@@ -12799,6 +12804,7 @@ impl IoContext {
             events: Mutex::new(IoEventState::default()),
             vfs: OnceLock::new(),
             sockets: Mutex::new(Vec::new()),
+            returned_sockets: Mutex::new(Vec::new()),
             worker_handoffs: Mutex::new(Vec::new()),
             handoff_request: next_handoff_request(),
             ws_retired: WsCallerRetired::default(),
@@ -12837,6 +12843,7 @@ impl IoContext {
             events: Mutex::new(IoEventState::default()),
             vfs: OnceLock::new(),
             sockets: Mutex::new(Vec::new()),
+            returned_sockets: Mutex::new(Vec::new()),
             worker_handoffs: Mutex::new(Vec::new()),
             handoff_request: next_handoff_request(),
             ws_retired: WsCallerRetired::default(),
@@ -13313,6 +13320,7 @@ impl Drop for IoContext {
         // can leave a process-wide input gate active after it is gone.
         let _ = abandon_context_input_gates(self);
         self.close_sockets();
+        ws_release_returned(std::mem::take(self.returned_sockets.get_mut().unwrap()));
         let mut claims = self
             .body_streams
             .get_mut()

@@ -8,6 +8,7 @@
     "rpc_params_transfer_stubs",
     "delete_all_preserves_alarm",
     "no_websocket_standard_binary_type",
+    "web_socket_manual_reply_to_close",
     "allow_irrevocable_stub_storage",
     "disallow_importable_env",
     "service_binding_extra_handlers",

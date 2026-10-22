@@ -2,7 +2,9 @@
 // one entry per step, in the shape expect.json stores.
 
 import { request as httpRequest } from "node:http";
-import { createServer } from "node:net";
+import { randomBytes } from "node:crypto";
+import { connect, createServer } from "node:net";
+import { BINARY, CLOSE, PING, PONG, TEXT, closePayload, encodeFrame, frameReader, isFragment, readClose } from "./ws-frames.mjs";
 
 const STEP_TIMEOUT_MS = 30_000;
 
@@ -159,6 +161,7 @@ function httpFetch(url, { method = "GET", headers = {}, body, signal }) {
 }
 
 function webSocketStep(origin, step) {
+  if (step.raw) return rawWebSocketStep(origin, step);
   const url = new URL(step.path, origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return new Promise((resolve, reject) => {
@@ -182,7 +185,7 @@ function webSocketStep(origin, step) {
       finish(null, new Error(`timed out waiting ${waiting}; received ${JSON.stringify(frames)}`));
     }, STEP_TIMEOUT_MS);
     const closeIfDone = () => {
-      if (frames.length >= step.receive) socket.close(step.close);
+      if (frames.length >= step.receive) socket.close(step.close ?? undefined);
     };
     let opened = false;
     socket.addEventListener("open", () => {
@@ -209,6 +212,86 @@ function webSocketStep(origin, step) {
         const result = { frames, close: { code: event.code, reason: event.reason } };
         finish(step.protocols === undefined ? result : { protocol: socket.protocol, ...result });
       }
+    });
+  });
+}
+
+// A `ws` step with "raw" or "shutdown": a raw socket, because Node's
+// WebSocket drops frames that arrive after its own Close and cannot shut
+// down its side of the connection. After its Close the client keeps reading
+// (and with "shutdown" sends FIN), and waits up to RAW_WAIT_MS for the server
+// to end the connection. The transcript records every frame (binary as
+// `{"binary": "<base64>"}`; a fragment fails the step), the server's Close
+// (null without one), and whether the server ended the connection.
+const RAW_WAIT_MS = 3000;
+
+function rawWebSocketStep(origin, step) {
+  const url = new URL(step.path, origin);
+  return new Promise((resolve, reject) => {
+    const socket = connect(Number(url.port), url.hostname);
+    const key = randomBytes(16).toString("base64");
+    const frames = [];
+    let reply = null;
+    let upgraded = false;
+    let closing = false;
+    let head = Buffer.alloc(0);
+    const reader = frameReader();
+    let timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`timed out waiting for ${step.receive} frames; received ${JSON.stringify(frames)}`));
+    }, STEP_TIMEOUT_MS);
+    const closeIfDone = () => {
+      if (closing || frames.length < step.receive) return;
+      closing = true;
+      socket.write(encodeFrame(CLOSE, closePayload(step.close), true));
+      if (step.shutdown) socket.end();
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        socket.destroy();
+        resolve({ frames, close: reply, ended: false });
+      }, RAW_WAIT_MS);
+    };
+    const onFrames = (chunk) => {
+      for (const frame of reader.push(chunk)) {
+        if (isFragment(frame)) {
+          clearTimeout(timer);
+          socket.destroy();
+          return reject(new Error("the server sent a fragmented message, which the raw client does not reassemble"));
+        }
+        if (frame.opcode === TEXT) frames.push(frame.payload.toString());
+        else if (frame.opcode === BINARY) frames.push({ binary: frame.payload.toString("base64") });
+        else if (frame.opcode === CLOSE && reply === null) reply = readClose(frame.payload);
+        else if (frame.opcode === PING) socket.write(encodeFrame(PONG, frame.payload, true));
+      }
+      closeIfDone();
+    };
+    socket.on("connect", () => {
+      socket.write(
+        `GET ${url.pathname}${url.search} HTTP/1.1\r\nHost: ${url.host}\r\nUpgrade: websocket\r\n` +
+          `Connection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`,
+      );
+    });
+    socket.on("data", (chunk) => {
+      if (upgraded) return onFrames(chunk);
+      head = Buffer.concat([head, chunk]);
+      const end = head.indexOf("\r\n\r\n");
+      if (end < 0) return;
+      const status = head.subarray(0, head.indexOf("\r\n")).toString();
+      if (!/^HTTP\/1\.1 101 /.test(status)) {
+        clearTimeout(timer);
+        socket.destroy();
+        return reject(new Error("the server did not accept the WebSocket upgrade"));
+      }
+      upgraded = true;
+      for (const frame of step.send) socket.write(encodeFrame(TEXT, frame, true));
+      onFrames(head.subarray(end + 4));
+    });
+    socket.on("error", () => {});
+    socket.on("close", () => {
+      clearTimeout(timer);
+      if (!upgraded) return reject(new Error("the connection ended before the upgrade"));
+      if (!closing) return reject(new Error(`the server ended the connection; received ${JSON.stringify(frames)}`));
+      resolve({ frames, close: reply, ended: true });
     });
   });
 }

@@ -268,6 +268,13 @@ pub struct Compat {
     /// arrives as a `Blob`, per the WHATWG default. Without it `binaryType` is
     /// `"arraybuffer"`.
     pub websocket_standard_binary_type: bool,
+    /// `web_socket_auto_reply_to_close` (off =
+    /// `web_socket_manual_reply_to_close`, default on for dates >=
+    /// 2026-04-07): a socket accepted with `accept()` answers its peer's
+    /// Close with the same code and reason before its close event fires.
+    /// Without it the socket stays half-open until the Worker calls
+    /// `close()` (Workerd web-socket.c++ LegacyWebSocketAdapter::readLoop).
+    pub web_socket_auto_reply_to_close: bool,
     /// `queues_json_messages` (off = `no_queues_json_messages`, default on for
     /// dates >= 2024-03-18): queue bodies default to JSON; older deployments
     /// retain the V8 structured-clone default.
@@ -313,6 +320,7 @@ impl Compat {
             service_binding_extra_handlers: flags.get(f::SERVICE_BINDING_EXTRA_HANDLERS),
             sqlite_vec: flags.get(f::SQLITE_VEC),
             websocket_standard_binary_type: flags.get(f::WEBSOCKET_STANDARD_BINARY_TYPE),
+            web_socket_auto_reply_to_close: flags.get(f::WEB_SOCKET_AUTO_REPLY_TO_CLOSE),
             queue_json_messages: flags.get(f::QUEUES_JSON_MESSAGES),
             allow_irrevocable_stub_storage: flags.get(f::ALLOW_IRREVOCABLE_STUB_STORAGE),
             disallow_importable_env: flags.get(f::DISALLOW_IMPORTABLE_ENV),

@@ -188,11 +188,13 @@ pub(super) fn transfer_worker_websocket_handoff(
     };
     // The response now owns cleanup. Transfer the frame channel and request
     // ownership together so request retirement cannot close a returned socket.
+    // The request's end still ends what it can send.
     context
         .sockets
         .lock()
         .unwrap()
         .retain(|opened| *opened != id);
+    context.returned_sockets.lock().unwrap().push(id);
     Ok(Some(WorkerWebSocket::new(id, inbound)))
 }
 
@@ -352,8 +354,14 @@ pub(super) fn ws_close_request_sockets(opened: Vec<u64>) {
         drop(handoff);
         // A socket whose remote already hung up has no output sender left,
         // and that is the ordinary case rather than an error. `ws_emit` logs
-        // a dropped frame for an unknown id, so ask before sending.
-        let open = ws_registry().lock().unwrap().outputs.contains_key(&id);
+        // a dropped frame for an unknown id, so ask before sending. One whose
+        // peer's Close is still unanswered ends without a Close, as workerd
+        // drops it.
+        let open = {
+            let registry = ws_registry();
+            let registry = registry.lock().unwrap();
+            registry.outputs.contains_key(&id) && !registry.peer_closed.contains(&id)
+        };
         if open {
             // The event's own end, run by its turn: the owner is the context.
             ws_emit(
@@ -556,7 +564,7 @@ fn emit_as(context: &Arc<IoContext>, id: u64, out: WsOut) -> Result<(), String> 
     if may_use(&owner_of(context), id)? {
         ws_emit(context, id, out);
     } else {
-        tracing::warn!(ws_id = id, "dropped a frame for a closed WebSocket");
+        log_dropped_frame(&ws_registry().lock().unwrap(), id);
     }
     Ok(())
 }
@@ -879,6 +887,43 @@ pub(super) fn op_ws_next(
             .await
             .unwrap_or_else(|| WsPull::Close(1006, String::new(), false))
             .encode())
+    });
+    rv.set(promise_for(scope, async_id));
+}
+
+/// `__ws_half_open(id)`: the peer of the isolate-polled socket `id` closed,
+/// and the socket has not replied. Resolves once it sends its Close, or once
+/// the socket goes. It holds no sender of the socket's channel, so it never
+/// keeps the connection task waiting.
+///
+/// Until then the request keeps its other work running, as workerd keeps a
+/// request whose WebSocket is still open, so a timer that will call
+/// `close()` still fires. This alone does not keep the request: with
+/// nothing else to do it ends, and the socket ends without a reply, as
+/// workerd drops it.
+pub(super) fn op_ws_half_open(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let id = id_arg(scope, &args, 0);
+    let (ended, until_ended) = tokio::sync::oneshot::channel::<()>();
+    match may_use(&owner_of(&event_context(scope)), id) {
+        Ok(true) => {
+            let registry = ws_registry();
+            let mut registry = registry.lock().unwrap();
+            // A socket with no output left has nothing to wait for.
+            if registry.outputs.contains_key(&id) {
+                registry.half_open.insert(id, ended);
+            }
+        }
+        Ok(false) => {}
+        Err(error) => return loader_throw(scope, &error),
+    }
+    let async_id = asyncrt::enqueue_io_context_unrefed(async move {
+        // The registry drops the sender to end the wait.
+        let _ = until_ended.await;
+        Ok(String::new())
     });
     rv.set(promise_for(scope, async_id));
 }

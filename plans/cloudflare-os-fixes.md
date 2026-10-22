@@ -367,8 +367,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 27 | 1.32 heap limit at request time (security) | done | `17b9c27` |
 | 28 | 1.33 ArrayBuffer memory limits (security) | done | `cede9c5` |
 | 28b | 1.35 Wasm and resizable growth within a turn (security) | done | `5ff3e96` |
-| 29 | 1.16 compatibility-flag audit | done | see log; starter adapter drops `experimental` |
-| 30+ | Phase 1 in plan order (1.17-1.30, 1.34, 1.36, 1.37), and the 1.4 props key-order follow-up | queued | |
+| 29 | 1.16 compatibility-flag audit | done | `2fe3f0d`, starter `779b1e2` |
+| 30 | 1.17 close replies on WebSockets; half-open sockets end on disconnect | done | see log |
+| 31+ | Phase 1 in plan order (1.18-1.30, 1.34, 1.36, 1.37), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -1868,6 +1869,68 @@ disable name, now refused) to honoured.
 "dropped a frame" lines. Add the same case at a date after 2026-04-07 for the accepted
 socket.
 
+**As built (done).**
+- `web_socket_auto_reply_to_close` and `web_socket_manual_reply_to_close` are
+  honoured. The harness tracks each direction's Close. A socket that is not
+  half-open replies to its peer's Close with the same code and reason before
+  its close event fires (1005 as an empty Close, as kj writes it), so it is
+  CLOSED then and a later `close()` does nothing. A half-open one is CLOSING
+  until the Worker calls `close()`, and can still `send()` until then.
+  `accept({allowHalfOpen})` chooses for one socket. A same-isolate pair now
+  models the handshake too: the end that closes first is CLOSING, and its
+  close event fires with the reply. A hibernatable socket is CLOSING in
+  `webSocketClose`. `close()` without a code sends an empty Close (1005),
+  as workerd does; it used to send 1000. `close()` accepts workerd's codes
+  outside pedantic WPT mode (1000-4999 except 1004, 1005, 1006 and 1015,
+  converted as an int) with workerd's error texts, and `send()` after
+  `close()` throws workerd's TypeError.
+- The host no longer echoes a Close anywhere. A client's socket (stateless
+  or Durable Object), a dialed one (`set_auto_close(false)`), a
+  `stub.fetch` pipe and the handoff bridge all deliver the Close and then
+  carry the application's reply. The bridge waits for the reply whichever
+  side closes first. A hibernatable socket never replies by itself, so a
+  `webSocketClose` that does not close leaves its client with 1006.
+- While a socket waits for the reply, the host keeps reading its transport
+  (`write_until_close`), so a peer that disconnects ends the socket and
+  releases the object's residency. A reply already on its way still goes
+  out for up to 1 s after the peer's side ends, so it reaches a peer that
+  only shut down its side and does not land on a socket that is gone. A
+  socket whose application's Close crossed the peer's does not wait at
+  all. A frame sent later still, to a socket that ended after its peer's
+  Close, is logged at debug level (a bounded list of such ids), not as a
+  lost frame. There is no wall-clock bound while the
+  peer stays connected. A failed close dispatch reached no handler, so the
+  socket ends at once (1006), as workerd disconnects the sockets of an
+  object that broke. A `stub.fetch` pipe ends its wait when either side's
+  socket goes or the caller's request ends, and when the object closes
+  first it takes the caller's reply for up to 10 s, as the bridge does.
+- **Decision:** a half-open socket that the isolate polls registers an op
+  with a new lifetime, `IoContextUnrefed`. It keeps the request's other
+  work running, so a timer that will call `close()` fires, but it cannot
+  keep the request by itself. When the request ends, `IoContext::drop`
+  releases the sockets it returned (`ws_release_returned`), and the
+  connection ends without a Close, as workerd drops it. A dialed socket's
+  retirement skips its 1001 once the peer has closed (`ws_peer_closed`).
+- Cases: `flags/websocket-auto-reply` and `flags/websocket-manual-reply`
+  (one shared Worker, `#ws-close-reply`: stateless, Durable Object,
+  `allowHalfOpen`, relay, both caller paths, pairs, hibernatable, `send()`
+  while half-open, Closes without a status both ways), the two former
+  xfails, `websocket/dialed-close-reply` (celld-only: the runner's upstream
+  now speaks WebSocket and records the reply a dialed socket sends),
+  `websocket/half-open-disconnect` (celld-only), and
+  `flags/compatibility-flags` reports the flag. `/close-errors` pins the
+  `close()` and `send()` errors. The runner gained `"close": null` and raw
+  `ws` steps (`"raw"`, `"shutdown"`) that read after the client's Close,
+  record binary frames, and fail on a fragmented message. Before this change both flag cases failed (the manual
+  flag was refused at deploy). S11 shows no "dropped a frame" lines. Host
+  unit tests cover the reply wait, the transport watch, crossing Closes,
+  the pipe, and the bounded list of ended sockets.
+- Found: a server-end socket a Worker or Durable Object closes first is
+  CLOSED at once and never fires the close event for the peer's reply
+  (`websocket/server-close-event`), and a half-open socket ends when the
+  peer shuts down its side, where workerd keeps it
+  (`websocket/half-open-shutdown`). Both documented, as 1.22 xfails.
+
 ### 1.18 Worker Loader startup error text
 
 **Problem (found by 1.1).** A Dynamic Worker that fails to start reports
@@ -2003,6 +2066,15 @@ legitimate cross-event uses.
 - The Response constructor checks no status range except 101.
 - `close()` before `accept()` on a handoff socket is never sent.
 - The `globalOutbound` broker path for a 101 is untested.
+- A server-end socket that a Worker or Durable Object closes first is
+  CLOSED at once, and its close event never fires: the host stops reading
+  at the application's Close. workerd keeps it CLOSING until the peer's
+  reply and then fires the event (`websocket/server-close-event`, found by
+  1.17).
+- A half-open socket ends when the peer shuts down its side of the
+  connection (FIN) while still reading; workerd keeps it until it writes
+  (`websocket/half-open-shutdown`, found by 1.17). celld cannot tell that
+  from a peer that went away without writing; a write probe could.
 - ~~A failed `new WebSocket(url)` dial fires `error` but never `close`~~:
   fixed in 1.9.
 - Outbound frame channels (`outputs`) and the pre-upgrade `WsMeta.pending`

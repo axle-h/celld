@@ -7,7 +7,7 @@
 use crate::asyncrt;
 use crate::engine_api::WsTarget;
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -408,14 +408,14 @@ impl WsPullSender {
     /// A reader looks its queue up by socket id for each pull, so removing
     /// the registration while frames wait in it loses them. A sender that
     /// ends a socket waits here first.
-    pub(crate) async fn drained(&self) {
+    pub async fn drained(&self) {
         let tx = self.state.lock().unwrap().tx.clone();
         tx.closed().await;
     }
 }
 
 impl WsPullReceiver {
-    pub(crate) async fn recv(&mut self) -> Option<WsPull> {
+    pub async fn recv(&mut self) -> Option<WsPull> {
         let queued = self.rx.recv().await?;
         let QueuedWsPull { frame, _charge } = queued;
         if matches!(&frame, WsPull::Close(..)) {
@@ -916,8 +916,8 @@ pub(crate) fn take_worker_handoff(
 
 /// How one direction of a bridge ended.
 enum BridgeLeg {
-    /// A Close passed through, with its code.
-    Closed(u16, String),
+    /// A Close passed through.
+    Closed,
     /// The sending side's registration went away without a Close.
     SourceGone,
     /// The receiving side stopped reading.
@@ -938,8 +938,8 @@ async fn carry_bridge_leg(
             Some(WsOut::Text(text)) => WsPull::Text(text),
             Some(WsOut::Binary(bytes)) => WsPull::Binary(bytes),
             Some(WsOut::Close(code, reason)) => {
-                let _ = to.send_close(code, reason.clone(), true);
-                return BridgeLeg::Closed(code, reason);
+                let _ = to.send_close(code, reason, true);
+                return BridgeLeg::Closed;
             }
             None => return BridgeLeg::SourceGone,
         };
@@ -966,14 +966,11 @@ pub(crate) struct WorkerHandoffBridge {
 /// the usual 1 MiB budget, and each runs on its own.
 ///
 /// A Close from either side reaches the other with the same code and reason.
-/// The caller's Close is a question that the server end answers, so the
-/// bridge waits up to [`WORKER_BRIDGE_CLOSE_TIMEOUT`] for that reply before
-/// it closes the caller abnormally. The server end that closes first cannot
-/// observe a reply: celld marks a server socket closed as it sends its Close
-/// (plan item 1.17), and a caller's socket ignores `close()` once it is
-/// closed. So the bridge ends the server end's queue at once. A side that
-/// goes away without a Close closes the other with 1006, which reports an
-/// error there.
+/// A Close is a question that the other side answers, automatically or when
+/// its Worker calls `close()`, so the bridge waits up to
+/// [`WORKER_BRIDGE_CLOSE_TIMEOUT`] for that reply before it closes the side
+/// that asked abnormally. A side that goes away without a Close closes the
+/// other with 1006, which reports an error there.
 ///
 /// Ends with both queues terminated and both sockets unregistered.
 pub(crate) async fn bridge_worker_handoff(bridge: WorkerHandoffBridge) {
@@ -998,15 +995,15 @@ async fn bridge_worker_handoff_within(
         tokio::pin!(to_target, to_caller);
         crate::asyncrt::select! {
             leg = &mut to_target => {
-                if let BridgeLeg::Closed(..) = leg {
-                    // The server end answers the caller's Close. Its handler
-                    // chooses the reason, so wait for it.
+                if let BridgeLeg::Closed = leg {
+                    // The server end answers the caller's Close.
                     let _ = asyncrt::timeout(close_timeout, &mut to_caller).await;
                 }
             }
             leg = &mut to_caller => {
-                if let BridgeLeg::Closed(code, reason) = leg {
-                    let _ = target_pull.send_close(code, reason, true);
+                if let BridgeLeg::Closed = leg {
+                    // The caller answers the server end's Close.
+                    let _ = asyncrt::timeout(close_timeout, &mut to_target).await;
                 }
             }
         }
@@ -1150,6 +1147,50 @@ pub struct WsRegistry {
     /// Durable Object sockets that a response handed to a caller. See
     /// [`ws_grant`].
     grants: WsGrants,
+    /// Sockets whose peer's Close arrived, so the owner's only frame left to
+    /// send is its reply. See [`ws_peer_closed`].
+    pub(crate) peer_closed: HashSet<u64>,
+    /// Returned Worker sockets whose request has ended, so nothing can send
+    /// on them again. See [`ws_release_returned`].
+    released: HashSet<u64>,
+    /// Half-open sockets an isolate polls, each with the signal that ends
+    /// its `__ws_half_open` op: dropped when the socket's Close is sent or
+    /// the socket goes.
+    pub(crate) half_open: HashMap<u64, tokio::sync::oneshot::Sender<()>>,
+    /// Sockets that ended after their peer's Close, newest last. See
+    /// [`ws_ended_after_peer_close`].
+    ended_after_peer_close: EndedSockets,
+}
+
+/// The ids of sockets that ended after their peer's Close, so that a frame
+/// their application sends late (a `close()` or `send()` on a half-open
+/// socket after its peer left) is expected rather than a lost frame worth a
+/// warning. Bounded: the oldest ids go first, and a frame for one of them is
+/// reported as any other lost frame is.
+#[derive(Default)]
+struct EndedSockets {
+    ids: HashSet<u64>,
+    order: std::collections::VecDeque<u64>,
+}
+
+impl EndedSockets {
+    const LIMIT: usize = 4096;
+
+    fn insert(&mut self, id: u64) {
+        if !self.ids.insert(id) {
+            return;
+        }
+        self.order.push_back(id);
+        if self.order.len() > Self::LIMIT {
+            if let Some(oldest) = self.order.pop_front() {
+                self.ids.remove(&oldest);
+            }
+        }
+    }
+
+    fn contains(&self, id: u64) -> bool {
+        self.ids.contains(&id)
+    }
 }
 
 /// How long a Durable Object socket that a 101 handed to a caller stays
@@ -1306,11 +1347,19 @@ impl WsRegistry {
                 let _ = tx.send(pending);
             }
         }
+        // The owner is gone: the receiver reads what it sent and then the
+        // end of the channel.
+        if self.released.contains(&id) {
+            return;
+        }
         self.outputs.insert(id, tx);
     }
 
     fn unregister(&mut self, id: u64) -> Option<WsMeta> {
         self.outputs.remove(&id);
+        self.peer_closed.remove(&id);
+        self.released.remove(&id);
+        self.half_open.remove(&id);
         // A grant of this socket names nothing any more.
         self.grants.target_gone(id);
         self.metadata.remove(&id)
@@ -1318,6 +1367,9 @@ impl WsRegistry {
 
     #[doc(hidden)]
     pub fn emit(&mut self, id: u64, out: WsOut) {
+        if matches!(out, WsOut::Close(..)) {
+            self.half_open.remove(&id);
+        }
         if let Some(tx) = self.outputs.get(&id) {
             tracing::debug!(ws_id = id, "queued outbound WebSocket frame");
             let _ = tx.send(out);
@@ -1325,9 +1377,7 @@ impl WsRegistry {
             tracing::debug!(ws_id = id, "buffered pre-upgrade WebSocket frame");
             meta.pending.push(out);
         } else {
-            // The socket is gone and the frame has nowhere to go. Silence here
-            // is what made a held frame indistinguishable from a sent one.
-            tracing::warn!(ws_id = id, "dropped a frame for a closed WebSocket");
+            log_dropped_frame(self, id);
         }
     }
 }
@@ -2173,9 +2223,9 @@ impl Drop for WsFlushGuard {
 /// Wait until no flush holds frames for `id` any more.
 ///
 /// The socket's own teardown calls this. Closing reads the handler's output
-/// with a non-blocking drain and, finding none, answers the peer with the
-/// protocol echo of the close the peer itself sent -- so a close frame still
-/// behind the gate is not merely late, it is replaced. The wait is bounded by
+/// with a non-blocking drain, and a hibernatable socket whose handler sent
+/// nothing ends without a reply -- so a close frame still behind the gate is
+/// not merely late, it is lost, and the peer sees 1006. The wait is bounded by
 /// the gate: a cell with no barrier answers at once, a barrier settles when
 /// its proof does, and an unprovable one still resolves the flush through its
 /// fail-closed arm.
@@ -2219,6 +2269,73 @@ fn emit_frames(
 /// barrier release cannot overtake an earlier frame on the same socket.
 pub fn ws_emit_batch(frames: impl Into<WsBatch>) {
     frames.into().release(Ok(()));
+}
+
+/// Report a frame for socket `id` that has nowhere to go.
+///
+/// The socket is gone. Silence here is what made a held frame
+/// indistinguishable from a sent one, so a drop is a warning, except for a
+/// socket that ended after its peer's Close: its application may still
+/// answer late, and that answer has no one left to reach.
+pub(crate) fn log_dropped_frame(registry: &WsRegistry, id: u64) {
+    if registry.ended_after_peer_close.contains(id) {
+        tracing::debug!(
+            ws_id = id,
+            "dropped a frame for a socket whose peer closed first"
+        );
+    } else {
+        tracing::warn!(ws_id = id, "dropped a frame for a closed WebSocket");
+    }
+}
+
+/// Socket `id`, whose peer sent its Close first, has ended: what its
+/// application sends from now on is expected to go nowhere.
+pub fn ws_ended_after_peer_close(id: u64) {
+    ws_registry()
+        .lock()
+        .unwrap()
+        .ended_after_peer_close
+        .insert(id);
+}
+
+/// Whether `id` is a hibernatable socket, one `acceptWebSocket()` took.
+pub fn ws_is_hibernatable(id: u64) -> bool {
+    ws_registry()
+        .lock()
+        .unwrap()
+        .metadata
+        .get(&id)
+        .is_some_and(|meta| meta.hibernatable)
+}
+
+/// The peer of socket `id` sent its Close, and the socket is waiting for its
+/// owner's reply. A request that retires then ends the connection without a
+/// Close of its own, as workerd drops the socket of an ended request.
+pub fn ws_peer_closed(id: u64) {
+    ws_registry().lock().unwrap().peer_closed.insert(id);
+}
+
+/// The request that returned these Worker sockets in its response has ended.
+///
+/// A returned socket outlives its request's retirement, because its pump
+/// keeps the request's operations running until the peer closes. Once the
+/// request is gone, nothing can send on the socket again, and a socket left
+/// half-open by its peer's Close must end: its output channel ends, and a
+/// connection task that registers it later finds it ended too.
+pub(crate) fn ws_release_returned(ids: Vec<u64>) {
+    if ids.is_empty() {
+        return;
+    }
+    let registry = ws_registry();
+    let mut registry = registry.lock().unwrap();
+    for id in ids {
+        // A socket that already went has no registration left to end.
+        if registry.owners.contains_key(&id) {
+            registry.outputs.remove(&id);
+            registry.half_open.remove(&id);
+            registry.released.insert(id);
+        }
+    }
 }
 
 /// Close one socket. A forced generation swap closes the regular and
@@ -2664,7 +2781,7 @@ pub(crate) mod tests {
                 matches!(bridge.caller.recv().await, Some(WsPull::Binary(bytes)) if bytes == [1, 2])
             );
             // The server end closes first: the caller sees its code, and the
-            // server end's queue ends with the same Close.
+            // server end sees the caller's reply.
             bridge
                 .to_bridge_from_target
                 .send(WsOut::Close(4001, "bye".into()))
@@ -2673,7 +2790,47 @@ pub(crate) mod tests {
                 close_of(bridge.caller.recv().await),
                 Some((4001, "bye".into(), true))
             );
-            assert_eq!(bridge.target.next_close().await, Some((4001, "bye".into())));
+            bridge
+                .to_bridge_from_caller
+                .send(WsOut::Close(4002, "bye too".into()))
+                .unwrap();
+            assert_eq!(
+                bridge.target.next_close().await,
+                Some((4002, "bye too".into()))
+            );
+            bridge.done.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn ended_sockets_keep_the_newest_ids() {
+        let mut ended = EndedSockets::default();
+        for id in 0..=EndedSockets::LIMIT as u64 {
+            ended.insert(id);
+        }
+        ended.insert(5);
+        assert!(!ended.contains(0), "the oldest id goes");
+        assert!(ended.contains(1) && ended.contains(EndedSockets::LIMIT as u64));
+        assert_eq!(ended.order.len(), EndedSockets::LIMIT);
+    }
+
+    #[test]
+    fn a_server_close_with_no_reply_ends_in_1006() {
+        asyncrt::test_host_runtime().block_on(async {
+            let mut bridge = start_bridge(Duration::from_millis(50));
+            bridge
+                .to_bridge_from_target
+                .send(WsOut::Close(4001, "bye".into()))
+                .unwrap();
+            assert_eq!(
+                close_of(bridge.caller.recv().await),
+                Some((4001, "bye".into(), true))
+            );
+            // The caller never answers.
+            assert_eq!(
+                bridge.target.next_close().await,
+                Some((1006, String::new()))
+            );
             bridge.done.await.unwrap();
         });
     }

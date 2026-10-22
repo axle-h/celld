@@ -1,0 +1,114 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "event": [
+          4050,
+          "upstream closes",
+          3
+        ],
+        "log": {
+          "received": [],
+          "reply": {
+            "code": 4050,
+            "reason": "upstream closes"
+          },
+          "ended": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "event": [
+          1005,
+          "",
+          3
+        ],
+        "log": {
+          "received": [],
+          "reply": {
+            "code": 1005,
+            "reason": ""
+          },
+          "ended": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "event": [
+          4051,
+          "",
+          2
+        ],
+        "log": {
+          "received": [],
+          "reply": {
+            "code": 4052,
+            "reason": "worker replies"
+          },
+          "ended": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "event": [
+          4053,
+          "",
+          2
+        ],
+        "log": {
+          "received": [
+            "half-open message"
+          ],
+          "reply": {
+            "code": 4054,
+            "reason": "after a message"
+          },
+          "ended": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "event": [
+          1005,
+          "",
+          2
+        ],
+        "log": {
+          "received": [],
+          "reply": {
+            "code": 1005,
+            "reason": ""
+          },
+          "ended": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "event": [
+          4055,
+          "",
+          2
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "received": [],
+        "reply": null,
+        "ended": true
+      }
+    }
+  ]
+}

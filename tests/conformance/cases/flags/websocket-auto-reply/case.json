@@ -1,0 +1,26 @@
+{
+  "workers": ["sockets", "back"],
+  "steps": [
+    {"ws": "/accepted", "send": ["a"], "close": 4000},
+    {"ws": "/accepted", "send": ["a"], "close": null},
+    {"ws": "/now", "send": ["a"], "close": 4000},
+    {"ws": "/later", "send": ["a"], "close": 4000},
+    {"ws": "/send", "send": ["a"], "close": 4000, "raw": true},
+    {"ws": "/no-code", "send": ["a"], "close": 4000},
+    {"ws": "/server-no-code", "send": ["a"]},
+    {"ws": "/half-open", "send": ["a"], "close": 4000},
+    {"ws": "/no-half-open", "send": ["a"], "close": 4000},
+    {"ws": "/relay", "send": ["a"], "close": 4000},
+    {"path": "/caller/back"},
+    {"path": "/caller/do"},
+    {"path": "/close-errors"},
+    {"path": "/pair/reply"},
+    {"path": "/pair/silent"},
+    {"ws": "/do/now", "send": ["a"], "close": 4000},
+    {"ws": "/do/later", "send": ["a"], "close": 4000},
+    {"ws": "/do/send", "send": ["a"], "close": 4000, "raw": true},
+    {"ws": "/do/silent", "send": ["a"], "close": 4000, "shutdown": true},
+    {"ws": "/do/hibernatable", "send": ["a"], "close": 4000},
+    {"path": "/do/seen"}
+  ]
+}

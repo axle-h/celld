@@ -1167,6 +1167,7 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
          c.compat.jsRpc = {};\n\
          c.compat.fetcherGetPutDelete = {};\n\
          c.compat.websocketStandardBinaryType = {};\n\
+         c.compat.webSocketAutoReplyToClose = {};\n\
          c.compat.queueJsonMessages = {};\n\
          c.compat.allowIrrevocableStubStorage = {};\n\
          c.compat.disallowImportableEnv = {};\n\
@@ -1176,6 +1177,7 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
         compat.js_rpc,
         compat.fetcher_get_put_delete,
         compat.websocket_standard_binary_type,
+        compat.web_socket_auto_reply_to_close,
         compat.queue_json_messages,
         compat.allow_irrevocable_stub_storage,
         compat.disallow_importable_env,

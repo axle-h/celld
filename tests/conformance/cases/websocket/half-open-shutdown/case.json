@@ -1,0 +1,8 @@
+{
+  "workers": ["sockets"],
+  "xfail": "1.22",
+  "steps": [
+    {"ws": "/", "send": ["a"], "close": 4000, "shutdown": true},
+    {"path": "/seen"}
+  ]
+}

@@ -178,9 +178,9 @@ The `tail` and `email` handlers are unavailable.
 - A request can hold at most 64 such sockets that it has not returned or
   accepted. The call that would return one more throws, and that socket closes
   with code 1011.
-- A socket accepted from such a response forwards a Close the Worker sends
-  and waits 10 seconds for the other side's reply. The Worker then sees code
-  1006.
+- A socket accepted from such a response carries a Close from either side
+  and waits 10 seconds for the other side's reply. Without one, the side
+  that sent the Close then sees code 1006.
 - A Worker response with status 101 and no WebSocket fails with status 500,
   and `new Response(null, { status: 101 })` throws workerd's `RangeError`. A
   `fetch()` without `Upgrade: websocket` that a server answers with 101 throws
@@ -196,6 +196,18 @@ The `tail` and `email` handlers are unavailable.
   If the owner connection fails between frames before a Close, the ingress sends
   code 1012. If a frame is incomplete, the ingress closes the transport instead.
 - `acceptWebSocket()` throws above 90 percent of the V8 heap limit.
+- The server end of a socket, the end a Worker or Durable Object returned in
+  a 101 or accepted with `acceptWebSocket()`, is CLOSED at once when it
+  closes first, and fires no close event for the peer's reply. In workerd it
+  is CLOSING until the reply arrives, and its close event then fires. A
+  client end (a dialed socket, one taken from a subrequest's 101, or one end
+  of a `WebSocketPair` that holds both) is CLOSING until the reply, as in
+  workerd.
+- A half-open socket, whose peer sent its Close and has no reply yet, ends
+  within a second of the peer's side of the connection ending, even if the
+  peer still reads; a reply sent in that second still goes out. workerd
+  reads nothing after the Close, so it keeps such a connection until it
+  writes to it.
 - A response with a WebSocket to a request without `Upgrade: websocket` fails,
   as in workerd. A Durable Object's `stub.fetch()` call then rejects, and an
   HTTP client receives status 500. The server end of the socket receives a close
@@ -400,6 +412,15 @@ celld follows these flags and the dates that turn them on:
   (on from 2026-03-17): a WebSocket's `binaryType` starts as `"blob"`, and a
   binary message arrives as a `Blob`. Otherwise it starts as
   `"arraybuffer"`.
+- `web_socket_auto_reply_to_close` and `web_socket_manual_reply_to_close`
+  (on from 2026-04-07): a WebSocket accepted with `accept()`, or dialed,
+  answers its peer's Close with the same code and reason before its close
+  event fires, and is CLOSED then. Otherwise it is CLOSING until the Worker
+  calls `close()`, and can still send until then; a request that ends first
+  drops the connection, so the peer sees 1006. `accept({ allowHalfOpen })`
+  chooses for one socket. A hibernatable socket never replies by itself, and
+  is CLOSING in `webSocketClose`. A peer's Close without a status is
+  answered with an empty Close, which `close()` without a code also sends.
 - `assets_navigation_prefers_asset_serving` and
   `assets_navigation_has_no_effect` (on from 2025-04-01); see
   [Static assets](services/static-assets.md).
@@ -478,7 +499,6 @@ behaves as these flags select:
 - `writable_stream_spec_compliant_writer`: a WritableStream writer follows the Streams Standard on release.
 - `no_encoder_stream_spec_compliant_backpressure`: TextEncoderStream and TextDecoderStream accept a write before their readable side is read.
 - `workflows_preserve_non_retryable_error_message`: a NonRetryableError keeps its message and name.
-- `web_socket_auto_reply_to_close`: an accepted WebSocket replies to a Close and is CLOSED when its close event fires.
 - `resizable_array_buffer_in_blob`: Blob accepts a resizable ArrayBuffer.
 - `diagnostics_channel_has_subscribers_getter`: diagnostics_channel's hasSubscribers is a getter.
 - `workflows_disable_fast_engine_creation`: Workflow create() without an id names the instance with a random UUID.
@@ -514,7 +534,7 @@ These flags do not apply to celld:
 `celld deploy` refuses these flags, and the Worker Loader refuses them in a
 Dynamic Worker's code. celld always behaves as the flag named after each:
 
-- `formdata_parser_converts_files_to_strings` (as formdata_parser_supports_files), `fetch_treats_unknown_protocols_as_http` (as fetch_refuses_unknown_protocols), `durable_object_fetch_allows_relative_url` (as durable_object_fetch_requires_full_url), `streams_byob_reader_does_not_detach_buffer` (as streams_byob_reader_detaches_buffer), `streams_disable_constructors` (as streams_enable_constructors), `url_original` (as url_standard), `no_global_navigator` (as global_navigator), `do_not_capture_async_api_throws` (as capture_async_api_throws), `r2_internal_beta_bindings` (as r2_public_beta_bindings), `substitute_null_on_type_error` (as dont_substitute_null_on_type_error), `transformstream_disable_standard_constructor` (as transformstream_enable_standard_constructor), `response_redirect_url_original` (as response_redirect_url_standard), `no_http_headers_getsetcookie` (as http_headers_getsetcookie), `cf_botmanagement_default` (as no_cf_botmanagement_default), `no_urlsearchparams_delete_has_value_arg` (as urlsearchparams_delete_has_value_arg), `no_strict_compression_checks` (as strict_compression_checks), `no_strict_crypto_checks` (as strict_crypto_checks), `no_crypto_preserve_public_exponent` (as crypto_preserve_public_exponent), `global_importscripts` (as no_global_importscripts), `no_unwrap_custom_thenables` (as unwrap_custom_thenables), `no_rpc` (as rpc), `internal_stream_byob_return_undefined` (as internal_stream_byob_return_view), `fetch_legacy_url` (as fetch_standard_url), `ignore_custom_ports` (as allow_custom_ports), `no_upper_case_all_http_methods` (as upper_case_all_http_methods), `urlpattern_original` (as urlpattern_standard), `disable_weak_ref` (as enable_weak_ref), `disable_navigator_language` (as enable_navigator_language), `disallow_eval_during_startup` (as allow_eval_during_startup), `disable_request_signal` (as enable_request_signal), `no_set_event_target_this` (as set_event_target_this), `no_expose_global_message_channel` (as expose_global_message_channel), `retain_authorization_on_cross_origin_redirect` (as strip_authorization_on_cross_origin_redirect), `disable_ctx_exports` (as enable_ctx_exports), `do_not_strip_bom_in_read_all_text` (as strip_bom_in_read_all_text), `disable_text_decoder_replace_surrogates` (as text_decoder_replace_surrogates), `no_containers_pid_namespace` (as containers_pid_namespace), `disable_text_decoder_cjk_decoder` (as text_decoder_cjk_decoder), `no_websocket_close_reason_byte_limit` (as websocket_close_reason_byte_limit), `no_writable_stream_spec_compliant_writer` (as writable_stream_spec_compliant_writer), `workflows_replace_non_retryable_error_message` (as workflows_preserve_non_retryable_error_message), `web_socket_manual_reply_to_close` (as web_socket_auto_reply_to_close), `no_diagnostics_channel_has_subscribers_getter` (as diagnostics_channel_has_subscribers_getter).
+- `formdata_parser_converts_files_to_strings` (as formdata_parser_supports_files), `fetch_treats_unknown_protocols_as_http` (as fetch_refuses_unknown_protocols), `durable_object_fetch_allows_relative_url` (as durable_object_fetch_requires_full_url), `streams_byob_reader_does_not_detach_buffer` (as streams_byob_reader_detaches_buffer), `streams_disable_constructors` (as streams_enable_constructors), `url_original` (as url_standard), `no_global_navigator` (as global_navigator), `do_not_capture_async_api_throws` (as capture_async_api_throws), `r2_internal_beta_bindings` (as r2_public_beta_bindings), `substitute_null_on_type_error` (as dont_substitute_null_on_type_error), `transformstream_disable_standard_constructor` (as transformstream_enable_standard_constructor), `response_redirect_url_original` (as response_redirect_url_standard), `no_http_headers_getsetcookie` (as http_headers_getsetcookie), `cf_botmanagement_default` (as no_cf_botmanagement_default), `no_urlsearchparams_delete_has_value_arg` (as urlsearchparams_delete_has_value_arg), `no_strict_compression_checks` (as strict_compression_checks), `no_strict_crypto_checks` (as strict_crypto_checks), `no_crypto_preserve_public_exponent` (as crypto_preserve_public_exponent), `global_importscripts` (as no_global_importscripts), `no_unwrap_custom_thenables` (as unwrap_custom_thenables), `no_rpc` (as rpc), `internal_stream_byob_return_undefined` (as internal_stream_byob_return_view), `fetch_legacy_url` (as fetch_standard_url), `ignore_custom_ports` (as allow_custom_ports), `no_upper_case_all_http_methods` (as upper_case_all_http_methods), `urlpattern_original` (as urlpattern_standard), `disable_weak_ref` (as enable_weak_ref), `disable_navigator_language` (as enable_navigator_language), `disallow_eval_during_startup` (as allow_eval_during_startup), `disable_request_signal` (as enable_request_signal), `no_set_event_target_this` (as set_event_target_this), `no_expose_global_message_channel` (as expose_global_message_channel), `retain_authorization_on_cross_origin_redirect` (as strip_authorization_on_cross_origin_redirect), `disable_ctx_exports` (as enable_ctx_exports), `do_not_strip_bom_in_read_all_text` (as strip_bom_in_read_all_text), `disable_text_decoder_replace_surrogates` (as text_decoder_replace_surrogates), `no_containers_pid_namespace` (as containers_pid_namespace), `disable_text_decoder_cjk_decoder` (as text_decoder_cjk_decoder), `no_websocket_close_reason_byte_limit` (as websocket_close_reason_byte_limit), `no_writable_stream_spec_compliant_writer` (as writable_stream_spec_compliant_writer), `workflows_replace_non_retryable_error_message` (as workflows_preserve_non_retryable_error_message), `no_diagnostics_channel_has_subscribers_getter` (as diagnostics_channel_has_subscribers_getter).
 
 celld lacks the behaviour these flags select:
 
@@ -588,7 +608,7 @@ behaves as before the date:
 Before these dates Cloudflare gives a Worker the behaviour without the
 flag. celld behaves as from the date:
 
-- `formdata_parser_supports_files` (2021-11-03), `fetch_refuses_unknown_protocols` (2021-11-10), `durable_object_fetch_requires_full_url` (2021-11-10), `streams_byob_reader_detaches_buffer` (2021-11-10), `streams_enable_constructors` (2022-11-30), `url_standard` (2022-10-31), `global_navigator` (2022-03-21), `capture_async_api_throws` (2022-10-31), `dont_substitute_null_on_type_error` (2022-06-01), `transformstream_enable_standard_constructor` (2022-11-30), `r2_list_honor_include` (2022-08-04), `response_redirect_url_standard` (2023-03-14), `http_headers_getsetcookie` (2023-03-01), `no_cf_botmanagement_default` (2023-08-01), `urlsearchparams_delete_has_value_arg` (2023-07-01), `strict_compression_checks` (2023-08-01), `strict_crypto_checks` (2023-08-01), `crypto_preserve_public_exponent` (2023-12-01), `no_global_importscripts` (2024-03-04), `unwrap_custom_thenables` (2024-04-01), `rpc` (2024-04-03), `internal_stream_byob_return_view` (2024-05-13), `fetch_standard_url` (2024-06-03), `allow_custom_ports` (2024-09-02), `upper_case_all_http_methods` (2024-10-14), `urlpattern_standard` (2025-05-01), `enable_weak_ref` (2025-05-05), `enable_navigator_language` (2025-05-19), `allow_eval_during_startup` (2025-06-01), `set_event_target_this` (2025-08-01), `expose_global_message_channel` (2025-08-15), `strip_authorization_on_cross_origin_redirect` (2025-09-01), `enable_ctx_exports` (2025-11-17), `strip_bom_in_read_all_text` (2026-01-13), `text_decoder_replace_surrogates` (2026-02-24), `containers_pid_namespace` (2026-04-01), `text_decoder_cjk_decoder` (2026-03-03), `websocket_close_reason_byte_limit` (2026-03-03), `writable_stream_spec_compliant_writer` (2026-03-24), `workflows_preserve_non_retryable_error_message` (2026-05-14), `web_socket_auto_reply_to_close` (2026-04-07), `diagnostics_channel_has_subscribers_getter` (2026-05-19).
+- `formdata_parser_supports_files` (2021-11-03), `fetch_refuses_unknown_protocols` (2021-11-10), `durable_object_fetch_requires_full_url` (2021-11-10), `streams_byob_reader_detaches_buffer` (2021-11-10), `streams_enable_constructors` (2022-11-30), `url_standard` (2022-10-31), `global_navigator` (2022-03-21), `capture_async_api_throws` (2022-10-31), `dont_substitute_null_on_type_error` (2022-06-01), `transformstream_enable_standard_constructor` (2022-11-30), `r2_list_honor_include` (2022-08-04), `response_redirect_url_standard` (2023-03-14), `http_headers_getsetcookie` (2023-03-01), `no_cf_botmanagement_default` (2023-08-01), `urlsearchparams_delete_has_value_arg` (2023-07-01), `strict_compression_checks` (2023-08-01), `strict_crypto_checks` (2023-08-01), `crypto_preserve_public_exponent` (2023-12-01), `no_global_importscripts` (2024-03-04), `unwrap_custom_thenables` (2024-04-01), `rpc` (2024-04-03), `internal_stream_byob_return_view` (2024-05-13), `fetch_standard_url` (2024-06-03), `allow_custom_ports` (2024-09-02), `upper_case_all_http_methods` (2024-10-14), `urlpattern_standard` (2025-05-01), `enable_weak_ref` (2025-05-05), `enable_navigator_language` (2025-05-19), `allow_eval_during_startup` (2025-06-01), `set_event_target_this` (2025-08-01), `expose_global_message_channel` (2025-08-15), `strip_authorization_on_cross_origin_redirect` (2025-09-01), `enable_ctx_exports` (2025-11-17), `strip_bom_in_read_all_text` (2026-01-13), `text_decoder_replace_surrogates` (2026-02-24), `containers_pid_namespace` (2026-04-01), `text_decoder_cjk_decoder` (2026-03-03), `websocket_close_reason_byte_limit` (2026-03-03), `writable_stream_spec_compliant_writer` (2026-03-24), `workflows_preserve_non_retryable_error_message` (2026-05-14), `diagnostics_channel_has_subscribers_getter` (2026-05-19).
 
 #### Whatever the date
 

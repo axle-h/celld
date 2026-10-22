@@ -1,0 +1,7 @@
+{
+  "name": "sockets",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "durable_objects": { "bindings": [{ "name": "SOCKETS", "class_name": "Sockets" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sockets"] }]
+}

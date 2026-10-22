@@ -16,6 +16,7 @@ const HONOURED = [
   "rpc_params_dup_stubs",
   "delete_all_deletes_alarm",
   "websocket_standard_binary_type",
+  "web_socket_auto_reply_to_close",
   "python_workers",
   "python_workers_20250116",
   "python_no_global_handlers",
@@ -37,7 +38,6 @@ const ALWAYS_ON = [
   "enable_ctx_exports",
   "strip_bom_in_read_all_text",
   "websocket_close_reason_byte_limit",
-  "web_socket_auto_reply_to_close",
 ];
 
 export function report() {

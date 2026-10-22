@@ -17,9 +17,8 @@
 // - /rpc-response: that Durable Object returns the 101 over RPC.
 // - /bare-101: a 101 with no WebSocket.
 //
-// Every step closes from the server side, `back` or the relay. A client's
-// Close is answered at celld's connection before any close listener runs
-// (plan item 1.17), so service-bindings/ws-101-client-close holds those steps.
+// Every step closes from the server side, `back` or the relay.
+// service-bindings/ws-101-client-close has the closes a client starts.
 import { DurableObject } from "cloudflare:workers";
 import { serve } from "../../shared.js";
 
@@ -44,8 +43,8 @@ function dynamicWorker(env) {
 //   to `back`, and `relay-close:<code>` makes `name` close `back` with that
 //   code. Any other client frame goes to `back` unchanged.
 // - A Close from either side closes the other with the same code, and every
-//   Close is answered by a listener rather than by the automatic reply (plan
-//   item 1.17).
+//   Close is answered by a listener: before 2026-04-07 nothing replies
+//   automatically (web_socket_auto_reply_to_close).
 // The 101 carries `back`'s headers, so a subprotocol `back` selected reaches
 // the client.
 function relay(response, name) {

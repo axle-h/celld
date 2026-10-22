@@ -6536,7 +6536,9 @@ const __wsStub = (wsId) => ({
     else
       __ws_send(wsId, String(data));
   },
-  close: (code = 1000, reason = "") => __ws_close(wsId, code, reason),
+  // Without a code, an empty Close, as `WebSocket.close()` sends.
+  close: (code, reason = "") =>
+    __ws_close(wsId, code === undefined ? 1005 : code, reason),
 });
 __celld.__wsOpen = async (scope, wsId, protocol) => {
   const actorEvent = __beginActorEvent(scope);
@@ -6595,8 +6597,12 @@ __celld.__wsClosed = async (scope, wsId, code, reason, wasClean) => {
         socket,
         new Error(reason ? `WebSocket closed abnormally: ${reason}` : "WebSocket closed abnormally"),
       ));
-    else if (typeof inst.webSocketClose === "function")
+    else if (typeof inst.webSocketClose === "function") {
+      // The peer's Close arrived: CLOSING until the handler replies, as in
+      // workerd.
+      if (__wsIsSocket(socket)) __wsReceivedClose(socket);
       await inst.__celldState._untilReset(inst.webSocketClose(socket, code, reason, wasClean));
+    }
   } finally {
     __endActorEvent(actorEvent);
   }
@@ -11580,6 +11586,9 @@ let __wsState;
 let __wsIsSocket;
 let __wsDispatchMessage;
 let __wsDispatchClose;
+// A hibernatable socket's peer sent its Close, which `webSocketClose`
+// answers: the socket is CLOSING until it does.
+let __wsReceivedClose;
 let __wsStartPump;
 let __wsFlushPending;
 let __wsCheckOwner;
@@ -11632,6 +11641,12 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
     __wsDispatchMessage = (socket, data) => socket.#dispatchMessage(data);
     __wsDispatchClose = (socket, code, reason, wasClean) =>
       socket.#dispatchClose(code, reason, wasClean);
+    __wsReceivedClose = (socket) => {
+      const s = socket.#s;
+      if (s.closedIncoming || s.readyState === __WS_CLOSED) return;
+      s.closedIncoming = true;
+      s.readyState = s.closedOutgoing ? __WS_CLOSED : __WS_CLOSING;
+    };
     __wsStartPump = (socket) => socket.#startPump();
     __wsFlushPending = (socket) => socket.#flushPending();
     __wsCheckOwner = (socket) => socket.#checkOwner();
@@ -11694,6 +11709,15 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       // Such a socket once accepted, which a response can no longer carry.
       handoffAccepted: false,
       readyState: init.readyState ?? (outbound ? __WS_CONNECTING : __WS_OPEN),
+      // Whether this end has sent its Close, and received its peer's. Each
+      // direction closes on its own, as in workerd: an end that has one but
+      // not the other is CLOSING.
+      closedOutgoing: false,
+      closedIncoming: false,
+      // Whether a Close from the peer leaves this end half-open until the
+      // Worker calls close(), rather than replying at once
+      // (`web_socket_auto_reply_to_close`, or `accept({allowHalfOpen})`).
+      allowHalfOpen: !__cell.compat?.webSocketAutoReplyToClose,
       binaryType: __cell.compat?.websocketStandardBinaryType ? "blob" : "arraybuffer",
       // A server-side socket has no URL, and reports null rather than an
       // empty string -- workerd's inspect output pins this. A socket that
@@ -11866,12 +11890,17 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       }
     }
   }
-  accept() {
+  accept(options) {
     const s = this.#s;
     this.#checkOwner();
     if (s.returned)
       throw new TypeError(
         "Can't accept() WebSocket that was already used in a response.");
+    // workerd reads the option only on the first accept().
+    if (!s.accepted && options !== undefined && options !== null) {
+      const allowHalfOpen = options.allowHalfOpen;
+      if (allowHalfOpen !== undefined) s.allowHalfOpen = !!allowHalfOpen;
+    }
     const peer = s.peer;
     // A pair used directly, without being returned through a 101 response,
     // still has to carry frames once both ends are accepted. celld only
@@ -11931,7 +11960,11 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
   send(data) {
     const s = this.#s;
     this.#checkOwner();
-    if (s.readyState !== __WS_OPEN)
+    // As in workerd, a socket sends until it has sent its own Close: a
+    // half-open one, whose peer's Close arrived, still can.
+    if (s.closedOutgoing)
+      throw new TypeError("Can't call WebSocket send() after close().");
+    if (s.readyState !== __WS_OPEN && !(s.readyState === __WS_CLOSING && s.closedIncoming))
       throw new DOMException("WebSocket is not open", "InvalidStateError");
     const binary = data instanceof ArrayBuffer || ArrayBuffer.isView(data);
     const text = binary ? null : String(data);
@@ -11959,35 +11992,50 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       __ws_send(s.id, text);
     }
   }
-  close(code = 1000, reason = "") {
+  close(code, reason) {
     const s = this.#s;
     this.#checkOwner();
-    // WHATWG: an application may send 1000 or 3000-4999. Everything else is
-    // reserved for the protocol itself.
-    const wanted = Number(code);
-    if (wanted !== 1000 && !(wanted >= 3000 && wanted <= 4999)) {
-      throw new DOMException(
-        `WebSocket close code ${code} is not permitted`,
-        "InvalidAccessError");
+    // workerd outside its pedantic WPT mode, which celld does not implement:
+    // any code from 1000 to 4999, except the four RFC 6455 reserves for
+    // reporting and forbids on the wire. The code converts as an int.
+    if (code !== undefined) {
+      code = Number(code) | 0;
+      if (code < 1000 || code >= 5000 || code === 1004 || code === 1005 ||
+          code === 1006 || code === 1015) {
+        throw new DOMException(
+          `Invalid WebSocket close code: ${code}.`, "InvalidAccessError");
+      }
     }
     // RFC 6455 5.5: the close frame body is at most 125 bytes, two of which
     // are the code. Measured in UTF-8, so a multibyte reason can exceed the
     // cap at well under 123 characters.
-    if (new TextEncoder().encode(String(reason)).length > 123) {
-      throw new DOMException(
-        "WebSocket close reason must not exceed 123 bytes",
-        "SyntaxError");
+    if (reason !== undefined) {
+      reason = String(reason);
+      if (new TextEncoder().encode(reason).length > 123) {
+        throw new DOMException(
+          "WebSocket close reason must not be longer than 123 bytes when UTF-8 encoded.",
+          "SyntaxError");
+      }
     }
-    // Outbound sockets follow the WebSocket spec: closing a closed socket is a
-    // no-op. Inbound sockets must NOT take that shortcut -- a Durable Object
-    // answers a peer-initiated close from inside `webSocketClose`, by which
-    // point `#dispatchClose` has already marked this side closed, and its
-    // reply carries the reason the client is entitled to see.
-    if (s.outbound && s.readyState === __WS_CLOSED) {
+    // Without a code, the Close carries no status, which workerd sends as an
+    // empty Close (1005), and so it cannot carry a reason either.
+    if (code === undefined) {
+      if (reason !== undefined)
+        throw new DOMException(
+          "If you specify a WebSocket close reason, you must also specify a code.",
+          "InvalidAccessError");
+      code = 1005;
+    }
+    if (reason === undefined) reason = "";
+    // A second close() does nothing, as in workerd, and neither does one on
+    // a socket that has ended. A half-open socket, whose peer's Close has
+    // arrived, still sends its own: that reply is the one the peer sees.
+    if (s.closedOutgoing || s.readyState === __WS_CLOSED) {
       return;
     }
     const connecting = s.readyState === __WS_CONNECTING;
-    s.readyState = __WS_CLOSING;
+    s.closedOutgoing = true;
+    s.readyState = s.closedIncoming ? __WS_CLOSED : __WS_CLOSING;
     if (s.outbound && connecting) {
       s.pendingClose = [code, reason];
       return;
@@ -11996,17 +12044,34 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       __ws_close(s.id, code, reason);
       return;
     }
-    s.readyState = __WS_CLOSED;
     if (s.loopback) {
+      // CLOSING until the peer's reply arrives.
       const peer = s.loopback;
       queueMicrotask(() => peer.#dispatchClose(code, reason, true));
       return;
     }
+    // The host does not report the peer's reply to a Close this end sent
+    // first, so the socket is CLOSED at once.
+    s.readyState = __WS_CLOSED;
     if (s.accepted && !s.target) {
       s.pending.push(["close", code, reason]);
       return;
     }
     __ws_close(s.id, code, reason);
+  }
+  // Send a Close without close()'s checks: the automatic reply, which
+  // carries the code and reason the peer sent, 1005 (an empty Close) among
+  // them.
+  #sendClose(code, reason) {
+    const s = this.#s;
+    if (s.loopback) {
+      const peer = s.loopback;
+      queueMicrotask(() => peer.#dispatchClose(code, reason, true));
+    } else if (!s.outbound && s.accepted && !s.target) {
+      s.pending.push(["close", code, reason]);
+    } else {
+      __ws_close(s.id, code, reason);
+    }
   }
   #flushPending() {
     const s = this.#s;
@@ -12043,10 +12108,24 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
     event._trust();
     this.dispatchEvent(event);
   }
+  // The peer's Close arrived, or the connection ended without one
+  // (`wasClean` false). Unless the socket is half-open, it replies with the
+  // same code and reason before its close event fires, so it is CLOSED
+  // then; a half-open one is CLOSING until the Worker calls close().
+  // Workerd web-socket.c++ LegacyWebSocketAdapter::readLoop.
   #dispatchClose(code, reason, wasClean) {
     const s = this.#s;
-    if (s.readyState === __WS_CLOSED) return;
-    s.readyState = __WS_CLOSED;
+    if (s.readyState === __WS_CLOSED || s.closedIncoming) return;
+    s.closedIncoming = true;
+    if (wasClean && !s.allowHalfOpen && !s.closedOutgoing) {
+      s.closedOutgoing = true;
+      this.#sendClose(code, reason);
+    }
+    s.readyState = s.closedOutgoing || !wasClean ? __WS_CLOSED : __WS_CLOSING;
+    // A half-open socket this isolate polls keeps its request's other work
+    // running until it replies, as an open one does, but does not keep the
+    // request by itself.
+    if (s.readyState === __WS_CLOSING && s.polled && s.id !== 0) __ws_half_open(s.id);
     __socketDelete(s.id);
     // An abnormal closure fires `error` before `close`. Code written against
     // the standard onerror never ran otherwise, which matters most for an

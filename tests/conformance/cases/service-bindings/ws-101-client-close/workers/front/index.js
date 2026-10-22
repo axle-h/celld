@@ -1,11 +1,7 @@
 // A client closes a WebSocket that `back` answered through a service binding.
-// The reply the client sees is the one the Workers' close listeners chose.
-//
-// celld answers a client's Close at the connection with an echo before any
-// listener runs (plan item 1.17), so the client sees the right code and an
-// empty reason. That is the same for a socket the primary returns itself, so
-// service-bindings/ws-101 closes from the server side and this case keeps
-// the client-initiated close until 1.17 lands.
+// The reply the client sees is the one the Workers' close listeners chose:
+// before 2026-04-07 no socket replies automatically
+// (web_socket_auto_reply_to_close).
 //
 // - /pass: `return env.BACK.fetch(request)`.
 // - /accept: the front accepts the socket and relays it through its own

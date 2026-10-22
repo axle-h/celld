@@ -20,6 +20,7 @@
           "rpc_params_dup_stubs": true,
           "delete_all_deletes_alarm": true,
           "websocket_standard_binary_type": true,
+          "web_socket_auto_reply_to_close": true,
           "python_workers": false,
           "python_workers_20250116": false,
           "python_no_global_handlers": true,
@@ -37,8 +38,7 @@
           "upper_case_all_http_methods": true,
           "enable_ctx_exports": true,
           "strip_bom_in_read_all_text": true,
-          "websocket_close_reason_byte_limit": true,
-          "web_socket_auto_reply_to_close": true
+          "websocket_close_reason_byte_limit": true
         },
         "prototype": null,
         "sealed": true,
@@ -71,6 +71,7 @@
           "rpc_params_dup_stubs": true,
           "delete_all_deletes_alarm": false,
           "websocket_standard_binary_type": false,
+          "web_socket_auto_reply_to_close": false,
           "python_workers": false,
           "python_workers_20250116": false,
           "python_no_global_handlers": false,
@@ -88,8 +89,7 @@
           "upper_case_all_http_methods": true,
           "enable_ctx_exports": false,
           "strip_bom_in_read_all_text": false,
-          "websocket_close_reason_byte_limit": false,
-          "web_socket_auto_reply_to_close": false
+          "websocket_close_reason_byte_limit": false
         },
         "prototype": null,
         "sealed": true,
@@ -122,6 +122,7 @@
           "rpc_params_dup_stubs": false,
           "delete_all_deletes_alarm": false,
           "websocket_standard_binary_type": false,
+          "web_socket_auto_reply_to_close": false,
           "python_workers": false,
           "python_workers_20250116": false,
           "python_no_global_handlers": true,
@@ -139,8 +140,7 @@
           "upper_case_all_http_methods": true,
           "enable_ctx_exports": true,
           "strip_bom_in_read_all_text": true,
-          "websocket_close_reason_byte_limit": true,
-          "web_socket_auto_reply_to_close": true
+          "websocket_close_reason_byte_limit": true
         },
         "prototype": null,
         "sealed": true,

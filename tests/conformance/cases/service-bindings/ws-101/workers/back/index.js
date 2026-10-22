@@ -3,8 +3,8 @@
 // binding, so the socket is held in this script's isolate, not the front's.
 //
 // Every socket has a close listener that answers the peer's Close with the
-// same code, so the transcript never depends on the automatic close reply
-// (plan item 1.17).
+// same code: before 2026-04-07 nothing replies automatically
+// (web_socket_auto_reply_to_close).
 import { serve } from "../../shared.js";
 
 export default {

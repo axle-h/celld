@@ -9,7 +9,7 @@ import { REQUIREMENTS } from "./requirements.mjs";
 const CASE_KEYS = new Set(["kind", "reason", "workers", "env", "upstream", "observability", "nodes", "xfail", "requires", "steps", "normalize"]);
 const STEP_KEYS = {
   path: new Set(["path", "method", "headers", "body", "chunked", "responseHeaders"]),
-  ws: new Set(["ws", "send", "receive", "close", "protocols"]),
+  ws: new Set(["ws", "send", "receive", "close", "protocols", "raw", "shutdown"]),
   restart: new Set(["restart"]),
   otlp: new Set(["otlp"]),
   deploy: new Set(["deploy", "args"]),
@@ -261,14 +261,25 @@ function validateStep(step, fail) {
       // close.
       if (!("close" in step)) {
         if ("receive" in step) fail(`"receive" needs "close"; without "close" the step waits for the server to close`);
+        if ("raw" in step || "shutdown" in step) fail(`"raw" and "shutdown" need "close"`);
         return { kind, path: step.ws, send, receive: Infinity, protocols };
       }
-      if (!(Number.isInteger(step.close) && (step.close === 1000 || (step.close >= 3000 && step.close <= 4999)))) {
-        fail(`"close" must be 1000 or an application code in 3000-4999`);
+      // null closes with no status code (an empty Close, 1005 at the server).
+      if (!(step.close === null || (Number.isInteger(step.close) && (step.close === 1000 || (step.close >= 3000 && step.close <= 4999))))) {
+        fail(`"close" must be null, 1000 or an application code in 3000-4999`);
       }
+      // A raw client keeps reading after its Close, so the transcript also
+      // has what the server sends before its reply, and whether the server
+      // then ended the connection. With "shutdown" it also shuts down its
+      // side of the connection after its Close.
+      const shutdown = step.shutdown ?? false;
+      if (typeof shutdown !== "boolean") fail(`"shutdown" must be a boolean`);
+      if (typeof (step.raw ?? false) !== "boolean") fail(`"raw" must be a boolean`);
+      const raw = (step.raw ?? false) || shutdown;
+      if (raw && protocols !== undefined) fail(`"raw" and "shutdown" cannot be used with "protocols"`);
       const receive = step.receive ?? send.length;
       if (!Number.isInteger(receive) || receive < 0) fail(`"receive" must be a non-negative integer`);
-      return { kind, path: step.ws, send, receive, close: step.close, protocols };
+      return { kind, path: step.ws, send, receive, close: step.close, protocols, raw, shutdown };
     }
     case "restart":
       if (step.restart !== true) fail(`"restart" must be true`);

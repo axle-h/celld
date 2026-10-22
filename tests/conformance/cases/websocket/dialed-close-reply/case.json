@@ -1,0 +1,16 @@
+{
+  "kind": "celld-only",
+  "reason": "the Worker dials a WebSocket server on a private address, the runner's upstream, which only celld's egress policy can allow; the upstream's record of the reply is what the case checks",
+  "workers": ["auto", "manual"],
+  "env": { "CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}" },
+  "upstream": true,
+  "steps": [
+    {"path": "/auto/dial?port=${UPSTREAM_PORT}&id=a1&code=4050&reason=upstream%20closes&reply=now"},
+    {"path": "/auto/dial?port=${UPSTREAM_PORT}&id=a2&reply=now"},
+    {"path": "/manual/dial?port=${UPSTREAM_PORT}&id=m1&code=4051&reply=now"},
+    {"path": "/manual/dial?port=${UPSTREAM_PORT}&id=m2&code=4053&reply=send"},
+    {"path": "/manual/dial?port=${UPSTREAM_PORT}&id=m3&reply=no-code"},
+    {"path": "/manual/dial?port=${UPSTREAM_PORT}&id=m4&code=4055&reply=none"},
+    {"path": "/manual/log?port=${UPSTREAM_PORT}&id=m4"}
+  ]
+}

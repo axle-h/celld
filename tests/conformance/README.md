@@ -53,9 +53,11 @@ nondeterministic case shows up when it is recorded. A case runs as it would unde
 `imports`: `#byob` is `lib/worker/byob.js`, the BYOB reader checks the
 `streams/byob-*` cases share, and `#params-dup` is `lib/worker/params-dup.js`,
 the stub-ownership checks the `rpc/params-dup*` cases run under different
-compatibility dates and flags, and `#process-env` is
+compatibility dates and flags, `#process-env` is
 `lib/worker/process-env.js`, the `process.env` report each
-`node/process-env` Worker gives under its own date and flags.
+`node/process-env` Worker gives under its own date and flags, and
+`#ws-close-reply` is `lib/worker/ws-close-reply.js`, the WebSocket close
+replies the `flags/websocket-*-reply` cases check under different flags.
 
 ```json
 {
@@ -88,7 +90,10 @@ compatibility dates and flags, and `#process-env` is
   listens on two loopback ports. `/bounce` answers 302 to
   `/landed?from=bounce`, `/landed` answers `{"landed": <query>}`,
   `/redirect?to=<url>` answers 302 to that URL, and every other path answers
-  `upstream`. celld's egress policy refuses loopback, so a case that fetches
+  `upstream`. A WebSocket upgrade to `/ws/close-first?id=<id>` (with optional
+  `code` and `reason`) sends the server's Close at once and records the
+  reply, which `/ws/log?id=<id>` answers as JSON once the connection ends.
+  celld's egress policy refuses loopback, so a case that fetches
   the upstream on celld allows it in `env`, as in
   `"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}"`.
 - Placeholders name the ports the runner picks for a run, in `env` values and
@@ -148,6 +153,18 @@ whose support hasn't landed yet: `nodes` greater than 1 or a step's `node`
   - Without `close`, the step waits for the server to close.
   - `protocols` (optional) offers those subprotocols, and the transcript
     then also records the one the server selected as `protocol`.
+
+  - `"close": null` closes with no status code, an empty Close, which the
+    server reads as 1005.
+  - `"raw": true` uses a raw socket that keeps reading after the client's
+    Close, because Node's WebSocket drops frames that arrive after it. It
+    records binary frames as Node's does, and fails the step on a fragmented
+    message. The transcript then also has the frames the server sent before
+    its reply,
+    its Close (`null` without one), and `ended`: whether the server ended
+    the connection within 3 s. `"shutdown": true` also shuts down the
+    client's side of the connection (FIN) after its Close. Neither takes
+    `protocols`.
 
   The transcript records the frames received and the close code and reason.
   A text frame is recorded as a string, and a binary frame as

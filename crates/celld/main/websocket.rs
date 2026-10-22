@@ -505,6 +505,7 @@ async fn local_websocket_pipe(
     // entry here: the isolate that sent it has already told the cell's own
     // handler, and telling it again would be a second `webSocketClose`.
     let mut caller_close: Option<(u16, String)> = None;
+    let mut cell_closed = false;
     loop {
         celld::asyncrt::select! {
             frame = from_caller.recv() => match frame {
@@ -540,6 +541,7 @@ async fn local_websocket_pipe(
                 }
                 Some(celld::js::WsOut::Close(code, reason)) => {
                     let _ = pull.send_close(code, reason, true);
+                    cell_closed = true;
                     break;
                 }
                 None => break,
@@ -547,13 +549,113 @@ async fn local_websocket_pipe(
         }
     }
     if let Some((code, reason)) = caller_close {
-        let _ = dispatch_ws_closed(&app, &socket, target.id, code, reason, true).await;
+        // A dispatch that failed reached no handler that could reply.
+        if dispatch_ws_closed(&app, &socket, target.id, code, reason, true)
+            .await
+            .is_ok()
+        {
+            let hibernatable = celld::js::ws_is_hibernatable(target.id);
+            // Bounded and skipped on a draining node, for the reasons
+            // `websocket_task` gives.
+            let flushed = async {
+                if !app.is_draining() {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        celld::js::ws_await_flushes(target.id),
+                    )
+                    .await;
+                }
+            };
+            carry_cell_reply(
+                hibernatable,
+                flushed,
+                &pull,
+                &mut from_cell,
+                &mut from_caller,
+            )
+            .await;
+        }
+        celld::js::ws_ended_after_peer_close(target.id);
+    } else if cell_closed {
+        await_caller_reply(&mut from_caller, celld::js::WORKER_BRIDGE_CLOSE_TIMEOUT).await;
     }
     app.websocket_closed(socket.cell().to_string(), target.id);
     celld::js::ws_unregister(target.id);
     celld::js::ws_unregister(id);
     celld::js::ws_pull_unregister(id);
     Ok(())
+}
+
+/// Carry the cell's reply to a Close the caller sent through a
+/// `local_websocket_pipe`, as `websocket_task` writes it to a client.
+///
+/// A hibernatable socket replies only from its `webSocketClose` handler,
+/// whose output may still be behind the output gate until `flushed`. An
+/// accepted one replied during its close event unless it is half-open, and
+/// then the Durable Object may close it later. The wait also ends when the
+/// object's socket goes, when the caller stops reading, or when the caller's
+/// request ends and takes its socket with it, so neither side pins the
+/// other. Without a reply, the caller's queue ends without a Close, which it
+/// reports as 1006.
+async fn carry_cell_reply(
+    hibernatable: bool,
+    flushed: impl std::future::Future<Output = ()>,
+    pull: &celld::js::WsPullSender,
+    from_cell: &mut mpsc::UnboundedReceiver<celld::js::WsOut>,
+    from_caller: &mut mpsc::UnboundedReceiver<celld::js::WsOut>,
+) {
+    // Whether the pipe carries on after `frame`.
+    let forward = |frame| async move {
+        match frame {
+            celld::js::WsOut::Text(text) => pull.send(celld::js::WsPull::Text(text)).await.is_ok(),
+            celld::js::WsOut::Binary(bytes) => {
+                pull.send(celld::js::WsPull::Binary(bytes)).await.is_ok()
+            }
+            celld::js::WsOut::Close(code, reason) => {
+                let _ = pull.send_close(code, reason, true);
+                false
+            }
+        }
+    };
+    if hibernatable {
+        flushed.await;
+        while let Ok(frame) = from_cell.try_recv() {
+            if !forward(frame).await {
+                return;
+            }
+        }
+        return;
+    }
+    loop {
+        celld::asyncrt::select! {
+            frame = from_cell.recv() => match frame {
+                Some(frame) => if !forward(frame).await { return },
+                None => return,
+            },
+            // The caller has sent its Close, so nothing it sends now is a
+            // frame to carry; its channel ending means its request ended.
+            frame = from_caller.recv() => if frame.is_none() { return },
+            () = pull.drained() => return,
+        }
+    }
+}
+
+/// Wait up to `timeout` for the caller's reply to a Close the cell sent
+/// first through a `local_websocket_pipe`, so the reply lands on a socket
+/// that is still registered. The cell's socket already reported itself
+/// CLOSED, so the reply goes no further.
+async fn await_caller_reply(
+    from_caller: &mut mpsc::UnboundedReceiver<celld::js::WsOut>,
+    timeout: std::time::Duration,
+) {
+    let _ = tokio::time::timeout(timeout, async {
+        while let Some(frame) = from_caller.recv().await {
+            if matches!(frame, celld::js::WsOut::Close(..)) {
+                return;
+            }
+        }
+    })
+    .await;
 }
 
 pub(crate) async fn outbound_websocket_task(
@@ -664,7 +766,9 @@ pub(crate) async fn outbound_websocket_task(
             return Ok(());
         }
     };
-    let socket = connection.socket;
+    let mut socket = connection.socket;
+    // The Worker's socket answers the peer's Close, as an accepted one does.
+    socket.set_auto_close(false);
     let protocol = connection
         .headers
         .get(SEC_WEBSOCKET_PROTOCOL)
@@ -707,19 +811,32 @@ pub(crate) async fn outbound_websocket_task(
         return Ok(());
     }
 
-    // Ping and Close are answered by the reader's auto-pong and auto-close, as
-    // the previous client library also did unprompted. The pump writes those
-    // replies on the same socket, so nothing about that changes here.
-    let (close, _writer) = {
+    // Ping is answered by the reader's auto-pong, as the previous client
+    // library also did unprompted. A Close is the Worker's to answer.
+    let Pumped {
+        close,
+        writer,
+        reader,
+    } = {
         let sink = &sink;
-        pump_cell_socket(socket, &mut outputs, true, move |data| {
+        pump_socket(socket, &mut outputs, true, move |data| {
             sink.message(id, data)
         })
         .await
     };
-    let _ = sink
+    if reader.is_some() {
+        celld::js::ws_peer_closed(id);
+    }
+    let delivered = sink
         .closed(id, close.state.0, close.state.1, close.state.2)
         .await;
+    // A Close the Worker never received leaves nobody to reply.
+    if let (Some(reader), Ok(())) = (reader, delivered) {
+        write_until_close(&writer, &mut outputs, reader).await;
+    }
+    if close.initiator == CloseInitiator::Peer {
+        celld::js::ws_ended_after_peer_close(id);
+    }
     celld::js::ws_unregister(id);
     Ok(())
 }
@@ -752,6 +869,10 @@ fn websocket_close_details(payload: &[u8]) -> (u16, String) {
 type SocketWriter<S> =
     std::sync::Arc<tokio::sync::Mutex<fastwebsockets::WebSocketWrite<tokio::io::WriteHalf<S>>>>;
 
+/// The read half of a cell socket, which the pump hands back after the peer's
+/// Close so the transport is still watched while the reply is pending.
+type SocketReader<S> = fastwebsockets::FragmentCollectorRead<tokio::io::ReadHalf<S>>;
+
 /// Close details: the code, the reason, and whether the close was clean.
 type CloseState = (u16, String, bool);
 
@@ -777,23 +898,76 @@ where
     let frame = match out {
         celld::js::WsOut::Text(text) => Frame::text(text.into_bytes().into()),
         celld::js::WsOut::Binary(data) => Frame::binary(data.into()),
+        // 1005 names a Close without a status, which cannot carry a reason:
+        // the automatic reply to such a Close is empty, as kj writes it.
+        celld::js::WsOut::Close(1005, _) => Frame::close_raw(Vec::new().into()),
         celld::js::WsOut::Close(code, reason) => Frame::close(code, reason.as_bytes()),
     };
     ws.lock().await.write_frame(frame).await.is_ok() && keep_open
 }
 
-async fn echo_websocket_close<S>(
+/// Write what the application sends after its peer's Close, until its own
+/// Close or until nothing can send on the socket any more.
+///
+/// A socket whose peer closed first replies with a Close of its own: at once
+/// when the Worker's socket replies automatically
+/// (`web_socket_auto_reply_to_close`), or when the Worker calls `close()` on
+/// a half-open one. Frames it sends before then still go out, as workerd
+/// sends them. When the socket's owner goes away without a Close, the
+/// connection ends without one and the peer sees 1006.
+///
+/// The transport is read meanwhile: a peer that disconnects ends the wait,
+/// after [`REPLY_AFTER_PEER_LEFT`] at most, so a half-open socket lives as
+/// long as its connection and never past it.
+async fn write_until_close<S>(
     writer: &SocketWriter<S>,
-    close: &CloseState,
-    application_sent_close: bool,
+    outputs: &mut mpsc::UnboundedReceiver<celld::js::WsOut>,
+    mut reader: SocketReader<S>,
 ) where
-    S: tokio::io::AsyncWrite + Unpin,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    if let Some(code) =
-        celld_logic::schedule::websocket_echo_close(close.0, close.2, application_sent_close)
-    {
-        let _ = write_ws_out(writer, celld::js::WsOut::Close(code, close.1.clone())).await;
+    let write = async {
+        while let Some(output) = outputs.recv().await {
+            if !write_ws_out(writer, output).await {
+                return;
+            }
+        }
+    };
+    let mut write = std::pin::pin!(write);
+    let transport = until_transport_ends(&mut reader, writer);
+    celld::asyncrt::select! {
+        () = &mut write => return,
+        () = transport => {}
     }
+    // The peer's side ended. A reply already on its way still goes out, as
+    // workerd writes it to a peer that only shut down its side, and does not
+    // land on a socket that is gone; a peer that went away fails the write
+    // at once. Nothing waits longer than that for a peer that has left.
+    let _ = tokio::time::timeout(REPLY_AFTER_PEER_LEFT, write).await;
+}
+
+/// How long a socket whose peer's side of the connection ended still takes
+/// a reply that is already on its way.
+const REPLY_AFTER_PEER_LEFT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Read a socket whose peer already sent its Close until the connection
+/// ends. A frame after the Close breaks the protocol and is ignored; a Ping
+/// is still answered.
+async fn until_transport_ends<S>(reader: &mut SocketReader<S>, writer: &SocketWriter<S>)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use fastwebsockets::{Frame as WsFrame, Payload};
+    let mut obligated = |frame: WsFrame<'_>| {
+        let reply = WsFrame::new(
+            frame.fin,
+            frame.opcode,
+            None,
+            Payload::Owned(frame.payload.to_vec()),
+        );
+        async move { writer.lock().await.write_frame(reply).await }
+    };
+    while reader.read_frame(&mut obligated).await.is_ok() {}
 }
 
 /// Carry frames between a socket and the cell behind it until one side stops.
@@ -812,23 +986,50 @@ async fn echo_websocket_close<S>(
 /// instead of being dropped, because dropping it can leave a partial frame on
 /// the socket.
 ///
-/// The caller sets `auto_close` and `auto_pong` on the socket before the pump
-/// runs, and the pump keeps that choice: an automatic reply is written on the
-/// same socket, exactly as the unsplit collector wrote it.
+/// The reader answers a Ping with a Pong on the same socket, exactly as the
+/// unsplit collector wrote it. Every caller turns `auto_close` off: the
+/// application answers a Close, not the reader.
 ///
 /// `outbound_close_is_clean` reports a close that the application sends as the
-/// close state of the socket. The local path leaves that false, because it
-/// answers an unclean end with its own protocol echo after the pump returns.
-/// The initiator remains separate because only a peer close needs that echo.
+/// close state of the socket. The local path leaves that false, because the
+/// pump never reads the peer's reply to it. The initiator remains separate
+/// because only a peer close leaves the application a reply to send.
 ///
 /// The returned writer is still live, so the caller can write the close frames
 /// that follow.
+#[cfg(all(test, celld_internal_tests))]
 async fn pump_cell_socket<S, F, Fut>(
     socket: fastwebsockets::WebSocket<S>,
     outputs: &mut mpsc::UnboundedReceiver<celld::js::WsOut>,
     outbound_close_is_clean: bool,
-    mut inbound: F,
+    inbound: F,
 ) -> (PumpClose, SocketWriter<S>)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    F: FnMut(celld::js::WsIn) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>>,
+{
+    let pumped = pump_socket(socket, outputs, outbound_close_is_clean, inbound).await;
+    (pumped.close, pumped.writer)
+}
+
+/// What [`pump_socket`] leaves: how the socket closed, the live writer, and
+/// the reader when the peer's Close ended the pump before the application
+/// sent its own, so the caller can keep reading the transport while it waits
+/// for the application's reply.
+struct Pumped<S> {
+    close: PumpClose,
+    writer: SocketWriter<S>,
+    reader: Option<SocketReader<S>>,
+}
+
+/// [`pump_cell_socket`], keeping the reader after the peer's Close.
+async fn pump_socket<S, F, Fut>(
+    socket: fastwebsockets::WebSocket<S>,
+    outputs: &mut mpsc::UnboundedReceiver<celld::js::WsOut>,
+    outbound_close_is_clean: bool,
+    mut inbound: F,
+) -> Pumped<S>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     F: FnMut(celld::js::WsIn) -> Fut,
@@ -837,9 +1038,10 @@ where
     use fastwebsockets::{FragmentCollectorRead, Frame as WsFrame, OpCode, Payload};
 
     let (reader, writer) = socket.split(tokio::io::split);
-    let mut reader = FragmentCollectorRead::new(reader);
+    let mut reader: SocketReader<S> = FragmentCollectorRead::new(reader);
     let writer: SocketWriter<S> = std::sync::Arc::new(tokio::sync::Mutex::new(writer));
 
+    let mut app_closed = false;
     let mut close = PumpClose {
         state: (1006, String::new(), false),
         initiator: CloseInitiator::Transport,
@@ -851,8 +1053,8 @@ where
             let writer = obligated_writer.clone();
             // The reply borrows the reader's buffer, and the write outlives the
             // callback, so the payload is copied out. The reader builds a pong
-            // or a close echo unmasked, and `write_frame` masks it if the role
-            // needs it, exactly as the unsplit collector did.
+            // unmasked, and `write_frame` masks it if the role needs it,
+            // exactly as the unsplit collector did.
             let reply = WsFrame::new(
                 frame.fin,
                 frame.opcode,
@@ -926,7 +1128,9 @@ where
                 // Stop the writer between frames rather than dropping it, so a
                 // frame it started reaches the socket whole.
                 let _ = stop_writer.send(());
-                let _ = write.await;
+                // A write already under way when the stop came finishes, and
+                // may be the application's own Close, crossing the peer's.
+                app_closed = write.await.is_some();
             }
             result = &mut write => {
                 if let Some(details) = result { close = details; }
@@ -935,7 +1139,16 @@ where
             }
         }
     }
-    (close, writer)
+    // Only a read that ended at the peer's Close left the reader between
+    // frames; a read the writer's end dropped may have stopped mid-frame. A
+    // socket whose application already sent its Close has replied, so it has
+    // nothing to wait for.
+    let reader = (close.initiator == CloseInitiator::Peer && !app_closed).then_some(reader);
+    Pumped {
+        close,
+        writer,
+        reader,
+    }
 }
 
 /// Carry a client socket into the top-level Worker request that returned it.
@@ -955,7 +1168,11 @@ async fn worker_websocket_task<S>(
     let inbound = worker.inbound();
     let (outbound, mut outputs) = mpsc::unbounded_channel();
     celld::js::ws_register(id, outbound);
-    let (close, writer) = pump_cell_socket(socket, &mut outputs, true, move |data| {
+    let Pumped {
+        close,
+        writer,
+        reader,
+    } = pump_socket(socket, &mut outputs, true, move |data| {
         let inbound = inbound.clone();
         async move {
             inbound
@@ -965,12 +1182,16 @@ async fn worker_websocket_task<S>(
         }
     })
     .await;
-    if close.initiator == CloseInitiator::Peer {
-        echo_websocket_close(&writer, &close.state, false).await;
-    }
-    let _ = worker
+    let delivered = worker
         .inbound()
         .send_close(close.state.0, close.state.1, close.state.2);
+    // A Close the Worker never received leaves nobody to reply.
+    if let (Some(reader), Ok(())) = (reader, delivered) {
+        write_until_close(&writer, &mut outputs, reader).await;
+    }
+    if close.initiator == CloseInitiator::Peer {
+        celld::js::ws_ended_after_peer_close(id);
+    }
 }
 
 pub(super) async fn websocket_task<S>(
@@ -984,19 +1205,23 @@ pub(super) async fn websocket_task<S>(
     let route = SocketRoute::of(&target);
     let (outbound, mut outputs) = mpsc::unbounded_channel();
     celld::js::ws_register(target.id, outbound);
-    // A close the cell sends does not become the close state here: the echo
-    // below decides what the peer observes, so the pump must not claim the
-    // close was clean.
-    let (close, writer) = {
+    // A close the cell sends first does not become the close state here: the
+    // pump stops reading there and never sees the peer's reply, so it must
+    // not claim the close was clean.
+    let Pumped {
+        close,
+        writer,
+        reader,
+    } = {
         let app = &app;
         let route = &route;
         let id = target.id;
-        pump_cell_socket(socket, &mut outputs, false, move |data| {
+        pump_socket(socket, &mut outputs, false, move |data| {
             dispatch_ws_message(app, route, id, data)
         })
         .await
     };
-    if let Err(error) = dispatch_ws_closed(
+    let dispatched = dispatch_ws_closed(
         &app,
         &route,
         target.id,
@@ -1004,8 +1229,8 @@ pub(super) async fn websocket_task<S>(
         close.state.1.clone(),
         close.state.2,
     )
-    .await
-    {
+    .await;
+    if let Err(error) = &dispatched {
         tracing::warn!(
             %error,
             scope = %target.scope,
@@ -1014,16 +1239,15 @@ pub(super) async fn websocket_task<S>(
         );
     }
 
-    // The close handler is allowed to choose the response code and reason.
-    // Its output is queued while dispatch_ws_closed drives V8, so flush it
-    // before unregistering the socket or considering a protocol-level echo.
+    // The close handler chooses the reply. Its output is queued while
+    // dispatch_ws_closed drives V8, so flush it before unregistering the
+    // socket.
     //
     // Its output can also still be behind the output gate: the handler may
     // read, and what it reads can belong to a write another request has not
-    // proved durable yet. The drain below does not block, so a frame still in
-    // flight leaves `handler_sent_close` false and the peer is answered with
-    // the echo of its own close -- a clean close carrying the wrong reason,
-    // which is indistinguishable from the handler choosing it.
+    // proved durable yet. The drain below does not block, so a hibernatable
+    // socket's Close still in flight would be lost, and its peer would see
+    // 1006 instead of the reply the handler chose.
     //
     // Bounded, and skipped outright on a draining node. The drain loop polls
     // the gate calls it already dispatched but never receives a new one: it
@@ -1033,8 +1257,8 @@ pub(super) async fn websocket_task<S>(
     // bound covers the same park reached the other way: `is_draining` is read
     // once, and shutdown can begin between that read and the wait. Giving up
     // costs the reason the handler chose, never a frame the gate has not
-    // cleared -- the drain below still finds nothing, the echo still answers
-    // the peer, and a frame released later lands on a socket that is gone.
+    // cleared -- the drain below finds nothing, and a frame released later
+    // lands on a socket that is gone.
     if !app.is_draining() {
         let waited = tokio::time::timeout(
             std::time::Duration::from_secs(5),
@@ -1049,16 +1273,41 @@ pub(super) async fn websocket_task<S>(
             );
         }
     }
-    let mut handler_sent_close = false;
+    // Ends with a Close written, or with a write that failed.
+    let mut ended = false;
     while let Ok(output) = outputs.try_recv() {
-        handler_sent_close |= matches!(output, celld::js::WsOut::Close(_, _));
         if !write_ws_out(&writer, output).await {
+            ended = true;
             break;
         }
     }
-    echo_websocket_close(&writer, &close.state, handler_sent_close).await;
+    // A hibernatable socket never replies by itself: workerd drops it once
+    // `webSocketClose` returns, so a handler that did not close it leaves its
+    // peer with 1006. An accepted one replied during the close event unless
+    // it is half-open, and then the Durable Object may close it later. A
+    // dispatch that failed reached no handler that could reply: the object
+    // broke or could not be routed to, and workerd disconnects the sockets of
+    // an object that broke, so the peer sees 1006.
+    if let Some(reader) = reader {
+        if awaits_reply(ended, dispatched.is_ok(), || {
+            celld::js::ws_is_hibernatable(target.id)
+        }) {
+            write_until_close(&writer, &mut outputs, reader).await;
+        }
+    }
+    if close.initiator == CloseInitiator::Peer {
+        celld::js::ws_ended_after_peer_close(target.id);
+    }
     app.websocket_closed(route.cell().to_string(), target.id);
     celld::js::ws_unregister(target.id);
+}
+
+/// Whether a socket whose peer closed first waits for the application's
+/// reply after its close event: not when the drain already ended the socket,
+/// not when the dispatch failed and so reached no handler, and not for a
+/// hibernatable socket, which workerd drops once `webSocketClose` returns.
+fn awaits_reply(ended: bool, dispatched: bool, hibernatable: impl FnOnce() -> bool) -> bool {
+    !ended && dispatched && !hibernatable()
 }
 
 /// Headers that the WebSocket server must compute or remove for a 101.
@@ -1325,6 +1574,284 @@ fn emit_websocket_connection_timing(
         worker_dispatch_us,
         "WebSocket connection resolved"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use celld::js::{WsOut, WsPull};
+    use fastwebsockets::{Frame, OpCode, Role, WebSocket};
+    use std::time::Duration;
+
+    type Duplex = tokio::io::DuplexStream;
+
+    /// The client end of an in-memory connection, split so that it can still
+    /// read after its own Close.
+    struct Client {
+        read: fastwebsockets::WebSocketRead<tokio::io::ReadHalf<Duplex>>,
+        write: fastwebsockets::WebSocketWrite<tokio::io::WriteHalf<Duplex>>,
+    }
+
+    impl Client {
+        async fn read_frame(&mut self) -> Frame<'static> {
+            let frame = self
+                .read
+                .read_frame(&mut |_| async { Ok::<_, std::io::Error>(()) })
+                .await
+                .unwrap();
+            Frame::new(frame.fin, frame.opcode, None, frame.payload.to_vec().into())
+        }
+    }
+
+    /// A server socket as the connection tasks hold it, and the client at the
+    /// other end of an in-memory connection.
+    fn connection() -> (WebSocket<Duplex>, Client) {
+        let (server, client) = tokio::io::duplex(4096);
+        let mut server = WebSocket::after_handshake(server, Role::Server);
+        server.set_auto_close(false);
+        let mut client = WebSocket::after_handshake(client, Role::Client);
+        client.set_auto_close(false);
+        let (read, write) = client.split(tokio::io::split);
+        (server, Client { read, write })
+    }
+
+    /// Pump `server` until the client's Close, which the client sends first.
+    async fn pumped_after_client_close(
+        server: WebSocket<Duplex>,
+        client: &mut Client,
+        outputs: &mut mpsc::UnboundedReceiver<WsOut>,
+    ) -> Pumped<Duplex> {
+        client
+            .write
+            .write_frame(Frame::close(4000, b"bye"))
+            .await
+            .unwrap();
+        let pumped = pump_socket(server, outputs, true, |_| async { Ok(()) }).await;
+        assert_eq!(pumped.close.initiator, CloseInitiator::Peer);
+        assert_eq!(pumped.close.state, (4000, "bye".to_string(), true));
+        pumped
+    }
+
+    #[tokio::test]
+    async fn a_half_open_socket_ends_when_its_peer_disconnects() {
+        let (server, mut client) = connection();
+        // The application never replies, and its channel stays open.
+        let (_application, mut outputs) = mpsc::unbounded_channel();
+        let pumped = pumped_after_client_close(server, &mut client, &mut outputs).await;
+        drop(client);
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            write_until_close(&pumped.writer, &mut outputs, pumped.reader.unwrap()),
+        )
+        .await
+        .expect("the wait ends with the connection");
+    }
+
+    #[tokio::test]
+    async fn a_half_open_socket_waits_while_its_peer_stays_connected() {
+        let (server, mut client) = connection();
+        let (_application, mut outputs) = mpsc::unbounded_channel();
+        let pumped = pumped_after_client_close(server, &mut client, &mut outputs).await;
+        let waited = tokio::time::timeout(
+            Duration::from_millis(200),
+            write_until_close(&pumped.writer, &mut outputs, pumped.reader.unwrap()),
+        )
+        .await;
+        assert!(
+            waited.is_err(),
+            "no wall-clock bound while the peer is there"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_half_open_socket_sends_frames_and_then_its_reply() {
+        let (server, mut client) = connection();
+        let (application, mut outputs) = mpsc::unbounded_channel();
+        let pumped = pumped_after_client_close(server, &mut client, &mut outputs).await;
+        application.send(WsOut::Text("last".into())).unwrap();
+        application
+            .send(WsOut::Close(4001, "reply".into()))
+            .unwrap();
+        write_until_close(&pumped.writer, &mut outputs, pumped.reader.unwrap()).await;
+        let text = client.read_frame().await;
+        assert_eq!(
+            (text.opcode, &text.payload[..]),
+            (OpCode::Text, &b"last"[..])
+        );
+        let close = client.read_frame().await;
+        assert_eq!(close.opcode, OpCode::Close);
+        assert_eq!(
+            websocket_close_details(&close.payload),
+            (4001, "reply".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reply_to_a_close_without_a_status_is_empty() {
+        let (server, mut client) = connection();
+        let (application, mut outputs) = mpsc::unbounded_channel();
+        let pumped = pumped_after_client_close(server, &mut client, &mut outputs).await;
+        application.send(WsOut::Close(1005, String::new())).unwrap();
+        write_until_close(&pumped.writer, &mut outputs, pumped.reader.unwrap()).await;
+        let close = client.read_frame().await;
+        assert_eq!(close.opcode, OpCode::Close);
+        assert!(close.payload.is_empty());
+    }
+
+    #[tokio::test]
+    async fn closes_that_cross_leave_nothing_to_wait_for() {
+        let (server, mut client) = connection();
+        // The application's Close is queued as the peer's arrives.
+        let (application, mut outputs) = mpsc::unbounded_channel();
+        application.send(WsOut::Close(4009, "mine".into())).unwrap();
+        client
+            .write
+            .write_frame(Frame::close(4000, b"bye"))
+            .await
+            .unwrap();
+        let pumped = pump_socket(server, &mut outputs, false, |_| async { Ok(()) }).await;
+        // Either the pump wrote the application's Close, and so returns no
+        // reader to wait on, or the Close is still queued and the wait
+        // writes it at once. Neither waits for the peer to disconnect.
+        if let Some(reader) = pumped.reader {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                write_until_close(&pumped.writer, &mut outputs, reader),
+            )
+            .await
+            .expect("the queued Close ends the wait");
+        }
+        let close = client.read_frame().await;
+        assert_eq!(close.opcode, OpCode::Close);
+        assert_eq!(
+            websocket_close_details(&close.payload),
+            (4009, "mine".into())
+        );
+        drop(application);
+    }
+
+    #[test]
+    fn only_a_dispatched_accepted_socket_waits_for_its_reply() {
+        assert!(awaits_reply(false, true, || false));
+        assert!(!awaits_reply(true, true, || false), "the drain ended it");
+        assert!(!awaits_reply(false, false, || false), "no handler ran");
+        assert!(!awaits_reply(false, true, || true), "hibernatable");
+    }
+
+    /// A pipe's channels: the cell's and the caller's outputs, and the
+    /// caller's input queue.
+    struct Pipe {
+        cell: mpsc::UnboundedSender<WsOut>,
+        from_cell: mpsc::UnboundedReceiver<WsOut>,
+        caller: mpsc::UnboundedSender<WsOut>,
+        from_caller: mpsc::UnboundedReceiver<WsOut>,
+        pull: celld::js::WsPullSender,
+        caller_queue: celld::js::WsPullReceiver,
+    }
+
+    fn pipe() -> Pipe {
+        let (cell, from_cell) = mpsc::unbounded_channel();
+        let (caller, from_caller) = mpsc::unbounded_channel();
+        let (pull, caller_queue) = celld::js::ws_pull_channel();
+        Pipe {
+            cell,
+            from_cell,
+            caller,
+            from_caller,
+            pull,
+            caller_queue,
+        }
+    }
+
+    async fn carry(pipe: &mut Pipe, hibernatable: bool) {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            carry_cell_reply(
+                hibernatable,
+                async {},
+                &pipe.pull,
+                &mut pipe.from_cell,
+                &mut pipe.from_caller,
+            ),
+        )
+        .await
+        .expect("the carry ends");
+    }
+
+    #[tokio::test]
+    async fn a_pipe_carries_the_cells_reply_to_the_caller() {
+        let mut pipe = pipe();
+        pipe.cell.send(WsOut::Text("last".into())).unwrap();
+        pipe.cell.send(WsOut::Close(4005, "reply".into())).unwrap();
+        carry(&mut pipe, false).await;
+        assert!(
+            matches!(pipe.caller_queue.recv().await, Some(WsPull::Text(text)) if text == "last")
+        );
+        assert!(matches!(
+            pipe.caller_queue.recv().await,
+            Some(WsPull::Close(4005, reason, true)) if reason == "reply"
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_pipe_stops_waiting_when_the_callers_request_ends() {
+        let mut pipe = pipe();
+        let _cell = pipe.cell.clone();
+        drop(std::mem::replace(
+            &mut pipe.caller,
+            mpsc::unbounded_channel().0,
+        ));
+        carry(&mut pipe, false).await;
+    }
+
+    #[tokio::test]
+    async fn a_pipe_stops_waiting_when_the_caller_stops_reading() {
+        let mut pipe = pipe();
+        let _caller = pipe.caller.clone();
+        drop(std::mem::replace(
+            &mut pipe.caller_queue,
+            celld::js::ws_pull_channel().1,
+        ));
+        carry(&mut pipe, false).await;
+    }
+
+    #[tokio::test]
+    async fn a_pipe_stops_waiting_when_the_cells_socket_goes() {
+        let mut pipe = pipe();
+        let _caller = pipe.caller.clone();
+        drop(std::mem::replace(
+            &mut pipe.cell,
+            mpsc::unbounded_channel().0,
+        ));
+        carry(&mut pipe, false).await;
+    }
+
+    #[tokio::test]
+    async fn a_hibernatable_cell_replies_only_with_what_it_queued() {
+        let mut pipe = pipe();
+        let _caller = pipe.caller.clone();
+        // The cell's channel stays open: the carry must not wait on it.
+        carry(&mut pipe, true).await;
+        drop(pipe.pull);
+        assert!(pipe.caller_queue.recv().await.is_none(), "no reply");
+    }
+
+    #[tokio::test]
+    async fn a_pipe_takes_the_callers_reply_to_the_cells_close() {
+        let (caller, mut from_caller) = mpsc::unbounded_channel();
+        caller.send(WsOut::Text("ignored".into())).unwrap();
+        caller.send(WsOut::Close(4000, "reply".into())).unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            await_caller_reply(&mut from_caller, Duration::from_secs(60)),
+        )
+        .await
+        .expect("the reply ends the wait");
+        // A caller that never replies is waited for only so long.
+        await_caller_reply(&mut from_caller, Duration::from_millis(50)).await;
+        drop(caller);
+        await_caller_reply(&mut from_caller, Duration::from_secs(60)).await;
+    }
 }
 
 // Both cell socket loops had the same hazard as the tunnel: they read the socket

@@ -483,6 +483,23 @@ pub enum OpLifetime {
     Handler,
     IoContext,
     Unrefed,
+    /// Keeps the event's other operations running after the handler and
+    /// `waitUntil` settle, as an `IoContext` one does, but cannot keep the
+    /// event alive by itself, as an `Unrefed` one cannot.
+    IoContextUnrefed,
+}
+
+impl OpLifetime {
+    /// Whether the operation keeps its event's operations running after the
+    /// handler and `waitUntil` settle.
+    pub fn keeps_io_context(self) -> bool {
+        matches!(self, Self::IoContext | Self::IoContextUnrefed)
+    }
+
+    /// Whether the operation cannot keep its event alive by itself.
+    pub fn unrefed(self) -> bool {
+        matches!(self, Self::Unrefed | Self::IoContextUnrefed)
+    }
 }
 
 /// One enqueued operation, waiting for a driver to take it.
@@ -554,6 +571,14 @@ pub(crate) fn enqueue_io_context<T: Into<OpOut>>(
     future: impl Future<Output = Result<T, String>> + Send + 'static,
 ) -> u64 {
     enqueue_with_lifetime(future, OpLifetime::IoContext)
+}
+
+/// Register an operation that keeps its event's other operations running
+/// after the handler ends, but that cannot keep the event alive by itself.
+pub(crate) fn enqueue_io_context_unrefed<T: Into<OpOut>>(
+    future: impl Future<Output = Result<T, String>> + Send + 'static,
+) -> u64 {
+    enqueue_with_lifetime(future, OpLifetime::IoContextUnrefed)
 }
 
 /// Register an operation that runs with its event but cannot keep it alive.

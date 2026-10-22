@@ -23,30 +23,6 @@ pub fn websocket_close_code_is_allowed(code: u16) -> bool {
     matches!(code, 1000..=1003 | 1007..=1014 | 3000..=4999)
 }
 
-/// Select the protocol close code the shell must echo after the application
-/// close handler has run and all of its output has been written.
-///
-/// An application-selected close wins. Otherwise RFC 6455 requires a clean
-/// peer close to receive a close response; 1005 is the local sentinel for a
-/// frame with no status and cannot itself appear on the wire, so it becomes
-/// the normal close code 1000. A parsed protocol failure receives its permitted
-/// error code, while an abnormal transport end receives no frame.
-pub fn websocket_echo_close(
-    peer_code: u16,
-    peer_was_clean: bool,
-    handler_sent_close: bool,
-) -> Option<u16> {
-    if handler_sent_close {
-        None
-    } else if !peer_was_clean {
-        matches!(peer_code, 1002 | 1007).then_some(peer_code)
-    } else if peer_code == 1005 {
-        Some(1000)
-    } else {
-        Some(peer_code)
-    }
-}
-
 /// Track frame boundaries in the unmasked stream from a WebSocket owner.
 ///
 /// A byte-splicing hop can append a failure Close only between frames and

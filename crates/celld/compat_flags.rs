@@ -238,6 +238,7 @@ pub const QUEUES_JSON_MESSAGES: FlagId = id("queues_json_messages");
 pub const RPC_PARAMS_DUP_STUBS: FlagId = id("rpc_params_dup_stubs");
 pub const SERVICE_BINDING_EXTRA_HANDLERS: FlagId = id("service_binding_extra_handlers");
 pub const SQLITE_VEC: FlagId = id("sqlite_vec");
+pub const WEB_SOCKET_AUTO_REPLY_TO_CLOSE: FlagId = id("web_socket_auto_reply_to_close");
 pub const WEBSOCKET_STANDARD_BINARY_TYPE: FlagId = id("websocket_standard_binary_type");
 
 /// A Worker's computed flags.
@@ -1980,7 +1981,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2026, 4, 7)),
         implied: None,
         experimental: false,
-        support: On("an accepted WebSocket replies to a Close and is CLOSED when its close event fires"),
+        support: Honoured,
     },
     Flag {
         field: "enableCtxVersionMetadata",
@@ -2492,6 +2493,18 @@ mod tests {
         assert!(values("2026-01-01", &["websocket_standard_binary_type"]).get(flag));
         assert!(!values("2026-09-04", &["no_websocket_standard_binary_type"]).get(flag));
         assert!(!compile_lenient(None, &[]).get(flag));
+    }
+
+    #[test]
+    fn the_close_reply_follows_its_date_and_the_manual_flag() {
+        let flag = WEB_SOCKET_AUTO_REPLY_TO_CLOSE;
+        assert!(!values("2026-04-06", &[]).get(flag));
+        assert!(values("2026-04-07", &[]).get(flag));
+        assert!(values("2026-01-01", &["web_socket_auto_reply_to_close"]).get(flag));
+        assert!(!values("2026-09-04", &["web_socket_manual_reply_to_close"]).get(flag));
+        let reported: std::collections::HashMap<_, _> =
+            values("2026-01-01", &[]).reported().collect();
+        assert_eq!(reported.get("web_socket_auto_reply_to_close"), Some(&false));
     }
 
     #[test]

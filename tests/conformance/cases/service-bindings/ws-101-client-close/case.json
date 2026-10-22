@@ -1,6 +1,5 @@
 {
   "workers": ["front", "back"],
-  "xfail": "1.17",
   "steps": [
     {"ws": "/pass", "send": ["a"], "close": 4000},
     {"ws": "/accept", "send": ["a"], "close": 4001}

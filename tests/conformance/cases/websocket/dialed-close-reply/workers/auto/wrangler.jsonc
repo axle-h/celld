@@ -1,0 +1,7 @@
+// web_socket_auto_reply_to_close is on from 2026-04-07.
+{
+  "name": "auto",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "services": [{ "binding": "MANUAL", "service": "manual" }]
+}

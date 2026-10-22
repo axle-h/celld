@@ -1,0 +1,21 @@
+{
+  "steps": [
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": null,
+      "ended": true
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "close",
+          4000,
+          2
+        ]
+      ]
+    }
+  ]
+}
