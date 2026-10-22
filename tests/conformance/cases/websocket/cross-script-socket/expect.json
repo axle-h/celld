@@ -1,0 +1,25 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "frames": [
+        "room:before"
+      ],
+      "close": {
+        "code": 1000,
+        "reason": "room closed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "id1": "SyntaxError",
+        "id2": "SyntaxError",
+        "id3": "SyntaxError",
+        "targetInit": "RangeError",
+        "fakeSocket": "TypeError"
+      }
+    }
+  ]
+}

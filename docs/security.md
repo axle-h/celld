@@ -176,24 +176,33 @@ applications. See [what celld guarantees](guarantees.md) and
 
 ## WebSocket ownership
 
-The host records an owner for every WebSocket that JavaScript can act on:
+A WebSocket is reachable only from the code that owns it, as in workerd:
 the request that opened it, or the Durable Object (or facet) whose event
-accepted, opened or bound it. The host takes the owner from the running
-event, never from a value the script passes, and allocates socket ids only
-as it registers a socket. Sending, closing, reading, attachments,
-auto-response timestamps and handing a socket on to another Worker act only
-on sockets that the running request or Durable Object owns. Another owner's
-socket fails with workerd's cross-request I/O error. Every event of a Durable
-Object is the same owner, so a hibernatable socket still works after the
-object wakes. `getWebSockets()`, `acceptWebSocket()` and the auto-response
-pair use the running event's Durable Object, and throw a `TypeError` outside
-one.
+accepted, opened or bound it. Every event of a Durable Object is the same
+owner, so a hibernatable socket still works after the object wakes.
 
-A socket that another request uses while its own request still holds it
-throws the cross-request error, as in workerd. Once its request has ended,
-celld has closed the socket, and using it throws `InvalidStateError`
-instead, where workerd throws the cross-request error.
-
-The `{id, scope}` target that joins a Durable Object's socket, through
-`accept()` on a `stub.fetch` 101 or through a 101 response, still comes from
-JavaScript and is not checked yet; part 2 of plan item 1.21 adds that check.
+- **Socket objects.** A `WebSocket` keeps its state in private fields, and
+  records the owner of the code that made it. Using it from any other
+  request or Durable Object, including after its request has ended, throws
+  workerd's cross-request (or cross-object) I/O error before anything else
+  is checked. A pair's ends are joined inside the isolate only while
+  neither has reached the host or left in a response; a client end that
+  left in a response cannot be accepted. The constructor only dials: a number is a URL, never a socket
+  id. A `Response` takes only a real `WebSocket`, and has no option that
+  names a socket.
+- **Host ids.** The host allocates a socket id only as it registers the
+  socket, and records the owner from the running event, never from a value
+  the script passes. Every socket operation checks that owner, and refuses
+  another owner's socket with the cross-request error.
+- **Durable Object targets.** A subrequest's 101 names the Durable Object
+  socket it carries as `{id, scope}`. The host grants that name to the
+  caller that received it, and admits it once: to `accept()` the socket, or
+  to return it in the caller's own response. A Durable Object may also
+  return its own socket. Grants end when their holder's request retires, its
+  Durable Object stops, the socket closes, or 30 seconds pass unused. A
+  holder has at most 64, and a response that arrives after its caller
+  retired grants nothing.
+- **Durable Object state.** `getWebSockets()`, `acceptWebSocket()` and the
+  auto-response pair act on the running Durable Object, whichever object's
+  `ctx` they are called on, as in workerd, and throw a `TypeError` outside a
+  Durable Object event.

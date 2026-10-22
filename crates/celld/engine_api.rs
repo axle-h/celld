@@ -99,7 +99,7 @@ pub enum RpcData {
 pub type HttpChunkStream =
     Pin<Box<dyn futures_util::Stream<Item = Result<Vec<u8>, String>> + Send>>;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WsTarget {
     pub id: u64,
     pub scope: String,

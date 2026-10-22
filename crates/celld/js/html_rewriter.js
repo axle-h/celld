@@ -329,7 +329,6 @@
         statusText: response.statusText,
         headers: response.headers,
         webSocket: response.webSocket,
-        __wsTarget: response._wsTarget,
       };
       const source = response.body;
       if (!source) {

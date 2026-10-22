@@ -544,6 +544,16 @@ pub struct WorkerHandoffIssuer {
     pub request: u64,
 }
 
+/// The caller a subrequest's response returns to: the request a Worker
+/// socket it carries is parked for, and the owner that a Durable Object
+/// socket it carries is granted to.
+#[derive(Clone, Debug)]
+pub(crate) struct WsCaller {
+    pub(crate) issuer: WorkerHandoffIssuer,
+    pub(crate) owner: WsOwner,
+    pub(crate) retired: WsCallerRetired,
+}
+
 /// A random name for a parked Worker socket.
 ///
 /// Not the socket id: ids are a per-instance counter, and an application can
@@ -1099,7 +1109,7 @@ pub struct FacetSocket {
 /// the id alone grants nothing: each op asks whether the code running now
 /// owns the socket. The owner is taken from the running event when an op
 /// allocates the id, never from a value JavaScript passes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum WsOwner {
     /// A stateless request, by its `IoContext::handoff_request`. Its sockets
     /// live and die with it, as on Cloudflare.
@@ -1134,6 +1144,156 @@ pub struct WsRegistry {
     /// registration. A socket the host made for itself has none, so no op
     /// reaches it.
     pub(crate) owners: HashMap<u64, WsOwner>,
+    /// Durable Object sockets that a response handed to a caller. See
+    /// [`ws_grant`].
+    grants: WsGrants,
+}
+
+/// How long a Durable Object socket that a 101 handed to a caller stays
+/// usable by it. A caller takes the socket within a turn of the response,
+/// to `accept()` it or to return it, as it adopts a handed-over Worker
+/// socket within [`WORKER_HANDOFF_TIMEOUT`].
+pub const WS_GRANT_TIMEOUT: std::time::Duration = WORKER_HANDOFF_TIMEOUT;
+
+/// How many such sockets one owner can hold at once, for the reason
+/// [`WORKER_HANDOFFS_PER_REQUEST`] bounds handed-over Worker sockets.
+pub const WS_GRANTS_PER_OWNER: usize = WORKER_HANDOFFS_PER_REQUEST;
+
+/// workerd has no such limit, so the text is celld's.
+pub(crate) const TOO_MANY_WS_GRANTS: &str =
+    "this request or Durable Object holds too many WebSockets that subrequests returned and \
+     that it has not accepted or returned yet";
+
+/// A Durable Object socket that a subrequest's 101 handed to an owner.
+///
+/// The target crosses JavaScript as `{id, scope, tunnel}`, which names
+/// another object's socket. The grant is what lets the caller use that name,
+/// once: to `accept()` the socket, or to return it in its own response.
+struct WsGrant {
+    target: WsTarget,
+    since_ms: u64,
+}
+
+/// The grants, by owner, with the owners that hold a grant of each target
+/// socket id, so a release or a closing socket does not scan them all.
+#[derive(Default)]
+struct WsGrants {
+    by_owner: HashMap<WsOwner, Vec<WsGrant>>,
+    by_target: HashMap<u64, Vec<WsOwner>>,
+    /// Whether a sweep task is running for these grants.
+    sweeping: bool,
+}
+
+impl WsGrants {
+    fn grant(&mut self, target: &WsTarget, owner: WsOwner, now_ms: u64) -> Result<(), String> {
+        let held = self.by_owner.entry(owner.clone()).or_default();
+        if held.len() >= WS_GRANTS_PER_OWNER {
+            return Err(format!(
+                "{TOO_MANY_WS_GRANTS} (at most {WS_GRANTS_PER_OWNER})"
+            ));
+        }
+        held.push(WsGrant {
+            target: target.clone(),
+            since_ms: now_ms,
+        });
+        self.by_target.entry(target.id).or_default().push(owner);
+        Ok(())
+    }
+
+    /// Remove one index entry of `owner` under `id`.
+    fn unindex(&mut self, id: u64, owner: &WsOwner) {
+        if let Some(owners) = self.by_target.get_mut(&id) {
+            if let Some(index) = owners.iter().position(|held| held == owner) {
+                owners.swap_remove(index);
+            }
+            if owners.is_empty() {
+                self.by_target.remove(&id);
+            }
+        }
+    }
+
+    fn take(&mut self, target: &WsTarget, owner: &WsOwner) -> bool {
+        let Some(held) = self.by_owner.get_mut(owner) else {
+            return false;
+        };
+        let Some(index) = held.iter().position(|grant| grant.target == *target) else {
+            return false;
+        };
+        held.swap_remove(index);
+        if held.is_empty() {
+            self.by_owner.remove(owner);
+        }
+        self.unindex(target.id, owner);
+        true
+    }
+
+    fn held_elsewhere(&self, target: &WsTarget, owner: &WsOwner) -> bool {
+        self.by_target.get(&target.id).is_some_and(|owners| {
+            owners.iter().filter(|held| *held != owner).any(|held| {
+                self.by_owner
+                    .get(held)
+                    .is_some_and(|grants| grants.iter().any(|grant| grant.target == *target))
+            })
+        })
+    }
+
+    fn release(&mut self, owner: &WsOwner) {
+        for grant in self.by_owner.remove(owner).unwrap_or_default() {
+            self.unindex(grant.target.id, owner);
+        }
+    }
+
+    /// The local socket `id` closed. A target on another node keeps its
+    /// grants: its id is that process's, and only release or the sweep
+    /// removes them.
+    fn target_gone(&mut self, id: u64) {
+        let Some(owners) = self.by_target.remove(&id) else {
+            return;
+        };
+        let mut kept = Vec::new();
+        for owner in owners {
+            let Some(held) = self.by_owner.get_mut(&owner) else {
+                continue;
+            };
+            if let Some(index) = held
+                .iter()
+                .position(|grant| grant.target.id == id && grant.target.tunnel.is_none())
+            {
+                held.swap_remove(index);
+                if held.is_empty() {
+                    self.by_owner.remove(&owner);
+                }
+            } else {
+                kept.push(owner);
+            }
+        }
+        if !kept.is_empty() {
+            self.by_target.insert(id, kept);
+        }
+    }
+
+    /// Remove every grant held `timeout` or longer.
+    fn expire(&mut self, now_ms: u64, timeout: std::time::Duration) {
+        let timeout = timeout.as_millis() as u64;
+        let mut expired = Vec::new();
+        self.by_owner.retain(|owner, held| {
+            held.retain(|grant| {
+                let keep = now_ms.saturating_sub(grant.since_ms) < timeout;
+                if !keep {
+                    expired.push((grant.target.id, owner.clone()));
+                }
+                keep
+            });
+            !held.is_empty()
+        });
+        for (id, owner) in expired {
+            self.unindex(id, &owner);
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.by_owner.is_empty()
+    }
 }
 impl WsRegistry {
     #[doc(hidden)]
@@ -1148,6 +1308,8 @@ impl WsRegistry {
 
     fn unregister(&mut self, id: u64) -> Option<WsMeta> {
         self.outputs.remove(&id);
+        // A grant of this socket names nothing any more.
+        self.grants.target_gone(id);
         self.metadata.remove(&id)
     }
 
@@ -1360,6 +1522,108 @@ pub(crate) fn ws_access(id: u64, owner: &WsOwner) -> WsAccess {
         Some(_) => WsAccess::Other,
         None => WsAccess::Unknown,
     }
+}
+
+/// Whether a caller can still receive what a subrequest's response hands
+/// it. Set, under the registry lock, by the caller's retirement, which
+/// releases its grants in the same step, so a response that arrives after it
+/// grants nothing that no release would remove.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WsCallerRetired(Arc<std::sync::atomic::AtomicBool>);
+
+/// Grant `target`, a Durable Object socket that a response hands to the
+/// caller, to `owner`, the code running that caller. A caller that retired
+/// already gets no grant. An owner over its limit gets an error.
+pub(crate) fn ws_grant(
+    target: &WsTarget,
+    owner: WsOwner,
+    retired: &WsCallerRetired,
+) -> Result<(), String> {
+    ws_grant_in(&ws_registry(), target, owner, retired, SWEEP_TIMING_GRANTS)
+}
+
+const SWEEP_TIMING_GRANTS: SweepTiming = SweepTiming {
+    interval: WORKER_HANDOFF_SWEEP_INTERVAL,
+    timeout: WS_GRANT_TIMEOUT,
+};
+
+fn ws_grant_in(
+    registry: &Arc<std::sync::Mutex<WsRegistry>>,
+    target: &WsTarget,
+    owner: WsOwner,
+    retired: &WsCallerRetired,
+    timing: SweepTiming,
+) -> Result<(), String> {
+    let start_sweep = {
+        let mut registry = registry.lock().unwrap();
+        if retired.0.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        registry.grants.grant(target, owner, asyncrt::mono_ms())?;
+        !std::mem::replace(&mut registry.grants.sweeping, true)
+    };
+    if start_sweep {
+        asyncrt::spawn(sweep_ws_grants(registry.clone(), timing));
+    }
+    Ok(())
+}
+
+/// Remove grants that their holders did not use in time, until none is
+/// left. A later grant starts a new sweep. Holds this instance's registry,
+/// for the reason `sweep_worker_handoffs` does.
+async fn sweep_ws_grants(registry: Arc<std::sync::Mutex<WsRegistry>>, timing: SweepTiming) {
+    loop {
+        asyncrt::sleep(timing.interval).await;
+        let mut registry = registry.lock().unwrap();
+        registry.grants.expire(asyncrt::mono_ms(), timing.timeout);
+        if registry.grants.is_empty() {
+            registry.grants.sweeping = false;
+            return;
+        }
+    }
+}
+
+/// Retire a caller: no response that arrives later grants it anything, and
+/// the grants it holds as a request go.
+pub(crate) fn ws_retire_caller(retired: &WsCallerRetired, owner: Option<&WsOwner>) {
+    let registry = ws_registry();
+    let mut registry = registry.lock().unwrap();
+    retired.0.store(true, Ordering::Relaxed);
+    if let Some(owner) = owner {
+        registry.grants.release(owner);
+    }
+}
+
+/// Take `owner`'s grant of exactly `target`, if it holds one.
+pub(crate) fn ws_take_grant(target: &WsTarget, owner: &WsOwner) -> bool {
+    ws_registry().lock().unwrap().grants.take(target, owner)
+}
+
+/// Whether an owner other than `owner` holds a grant of `target`.
+pub(crate) fn ws_granted_elsewhere(target: &WsTarget, owner: &WsOwner) -> bool {
+    ws_registry()
+        .lock()
+        .unwrap()
+        .grants
+        .held_elsewhere(target, owner)
+}
+
+/// Drop every grant `owner` holds: its Durable Object stopped, and nothing
+/// it held can use them.
+pub fn ws_release_grants(owner: &WsOwner) {
+    ws_registry().lock().unwrap().grants.release(owner);
+}
+
+/// How many grants `owner` holds.
+#[cfg(test)]
+pub(crate) fn ws_grants_held(owner: &WsOwner) -> usize {
+    ws_registry()
+        .lock()
+        .unwrap()
+        .grants
+        .by_owner
+        .get(owner)
+        .map_or(0, Vec::len)
 }
 
 /// The recorded owner of socket `id`.
@@ -2010,6 +2274,7 @@ pub fn ws_close_scope(scope: &str, code: u16, reason: &str) {
 /// endpoint that is going away.
 pub(crate) fn ws_close_facet(scope: &str, reason: &str) {
     ws_auto_responses().lock().unwrap().remove(scope);
+    ws_release_grants(&WsOwner::Cell(scope.to_string()));
     let registry = ws_registry();
     let mut registry = registry.lock().unwrap();
     let ids: Vec<u64> = registry
@@ -2084,6 +2349,44 @@ pub(crate) mod tests {
     /// that test's sockets.
     fn own_registry() -> Arc<std::sync::Mutex<WsRegistry>> {
         Arc::new(std::sync::Mutex::new(WsRegistry::default()))
+    }
+
+    #[test]
+    fn grants_expire_and_their_index_follows() {
+        assert_eq!(WS_GRANT_TIMEOUT, Duration::from_secs(30));
+        let target = |id, tunnel| WsTarget {
+            id,
+            scope: "sweep".into(),
+            tunnel,
+        };
+        let early = WsOwner::Request(1);
+        let late = WsOwner::Request(2);
+        let mut grants = WsGrants::default();
+        grants
+            .grant(&target(5, None), early.clone(), 1_000)
+            .unwrap();
+        grants
+            .grant(&target(5, Some(9)), early.clone(), 1_000)
+            .unwrap();
+        grants
+            .grant(&target(5, None), late.clone(), 20_000)
+            .unwrap();
+        let timeout = WS_GRANT_TIMEOUT.as_millis() as u64;
+        grants.expire(1_000 + timeout - 1, WS_GRANT_TIMEOUT);
+        assert_eq!(grants.by_owner[&early].len(), 2);
+        grants.expire(1_000 + timeout, WS_GRANT_TIMEOUT);
+        assert!(!grants.by_owner.contains_key(&early));
+        assert_eq!(grants.by_target[&5], std::slice::from_ref(&late));
+        assert!(grants.held_elsewhere(&target(5, None), &early));
+        // The local socket closes: its grants go, a remote one would stay.
+        grants
+            .grant(&target(5, Some(9)), early.clone(), 30_000)
+            .unwrap();
+        grants.target_gone(5);
+        assert!(!grants.by_owner.contains_key(&late));
+        assert_eq!(grants.by_target[&5], std::slice::from_ref(&early));
+        grants.release(&early);
+        assert!(grants.is_empty() && grants.by_target.is_empty());
     }
 
     #[test]

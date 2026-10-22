@@ -6219,6 +6219,20 @@ impl Worker {
         storage::facet_opening(scope)
     }
 
+    /// Run `f` in this isolate's realm, as a unit test that drives ops
+    /// through V8 needs.
+    #[cfg(test)]
+    pub(crate) fn with_scope_for_test<R>(&mut self, f: impl FnOnce(&mut v8::PinScope) -> R) -> R {
+        let (mut locker, _cells) = self.lock();
+        v8::scope!(let hs, &mut *locker);
+        let realm = self.realm(hs);
+        let context = realm.context;
+        let cs = &mut v8::ContextScope::new(hs, context);
+        let tc = std::pin::pin!(v8::TryCatch::new(cs));
+        let tc = &mut tc.init();
+        f(tc)
+    }
+
     /// Close the facet `cell` at `facet_path` of `root`, and every facet
     /// below it that this isolate runs, deepest first. Answers each scope it
     /// closed, including those whose close failed.
@@ -6741,6 +6755,7 @@ ops! { OP_NAMES, install_op_functions,
         "__ws_auto_response_set" => websocket::op_ws_auto_response_set,
         "__ws_auto_response_get" => websocket::op_ws_auto_response_get,
         "__ws_auto_response_ts" => websocket::op_ws_auto_response_ts,
+        "__ws_owner" => websocket::op_ws_owner,
         "__ws_connect" => websocket::op_ws_connect,
         "__ws_bind_target" => websocket::op_ws_bind_target,
         "__ws_adopt_worker_handoff" => websocket::op_ws_adopt_worker_handoff,
@@ -7251,7 +7266,7 @@ fn op_svc_call_impl(
         headers,
         reply: tx,
     };
-    let ws_issuer = Some(event_context(scope).handoff_issuer(current_generation(scope)));
+    let ws_issuer = Some(ws_caller(scope));
     let stream_service = http_stream_service();
     let id = asyncrt::enqueue(async move {
         let mut cancel_guard = cancel_guard;
@@ -7865,7 +7880,7 @@ fn op_loader_fetch(
         .get(&id)
         .map(|entry| entry.state.clone());
     let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Service);
-    let ws_issuer = Some(event_context(scope).handoff_issuer(current_generation(scope)));
+    let ws_issuer = Some(ws_caller(scope));
     let stream_service = http_stream_service();
     let async_id = asyncrt::enqueue(async move {
         let mut cancel_guard = cancel_guard;
@@ -8560,7 +8575,7 @@ fn op_facet_fetch(
     };
     let host = FacetHost::of(loader);
     let trace = current_trace_context(scope);
-    let ws_issuer = Some(event_context(scope).handoff_issuer(current_generation(scope)));
+    let ws_issuer = Some(ws_caller(scope));
     let stream_service = http_stream_service();
     let async_id = asyncrt::enqueue(async move {
         let facet = prepare_facet(
@@ -8846,7 +8861,7 @@ fn op_do_call_impl(
         order,
         parent: current_trace_context(scope),
     };
-    let ws_issuer = Some(event_context(scope).handoff_issuer(current_generation(scope)));
+    let ws_issuer = Some(ws_caller(scope));
     let stream_service = http_stream_service();
     let id = asyncrt::enqueue(async move {
         gated_channel_send(gate, &DO_CALL_TX, request, "no proxy channel").await?;
@@ -9159,7 +9174,7 @@ fn op_fetch(
             headers,
             reply: tx,
         };
-        let ws_issuer = Some(event_context(scope).handoff_issuer(current_generation(scope)));
+        let ws_issuer = Some(ws_caller(scope));
         let stream_service = http_stream_service();
         let id = asyncrt::enqueue(async move {
             let mut cancel_guard = cancel_guard;
@@ -11023,6 +11038,12 @@ pub struct IoContext {
     /// for a subrequest of this request can be adopted and taken only here.
     /// Process-wide and never reused, unlike the context's address.
     handoff_request: u64,
+    /// Set when this context retires, so a subrequest's response that
+    /// arrives later grants it no Durable Object socket.
+    ws_retired: WsCallerRetired,
+    /// The token `__ws_owner` answers for code running here, computed once:
+    /// sockets compare it on every send.
+    ws_owner_token: OnceLock<f64>,
     /// HTMLRewriter instances this request created. Each holds a parked
     /// parser thread; freeing them at retirement is what reclaims the
     /// thread when a transform is abandoned unread — nothing else can,
@@ -11318,6 +11339,8 @@ impl IoContext {
             sockets: Mutex::new(Vec::new()),
             worker_handoffs: Mutex::new(Vec::new()),
             handoff_request: next_handoff_request(),
+            ws_retired: WsCallerRetired::default(),
+            ws_owner_token: OnceLock::new(),
             rewriters: Mutex::new(Vec::new()),
             tcp_sockets: Mutex::new(Vec::new()),
             input_gates: Mutex::new(InputGateClaims::default()),
@@ -11354,6 +11377,8 @@ impl IoContext {
             sockets: Mutex::new(Vec::new()),
             worker_handoffs: Mutex::new(Vec::new()),
             handoff_request: next_handoff_request(),
+            ws_retired: WsCallerRetired::default(),
+            ws_owner_token: OnceLock::new(),
             rewriters: Mutex::new(Vec::new()),
             tcp_sockets: Mutex::new(Vec::new()),
             input_gates: Mutex::new(InputGateClaims::default()),
@@ -11616,6 +11641,13 @@ impl IoContext {
         for token in handoffs {
             release_worker_handoff(&token, self.handoff_request);
         }
+        // A Durable Object socket that a subrequest handed to this request
+        // and that it neither accepted nor returned, and any that a response
+        // still on its way would hand it.
+        ws_retire_caller(
+            &self.ws_retired,
+            Some(&WsOwner::Request(self.handoff_request)),
+        );
         let rewriters: Vec<u64> = self.rewriters.lock().unwrap().drain(..).collect();
         for id in rewriters {
             html_rewriter::free(id);
@@ -11787,6 +11819,17 @@ impl IoContextRegistryForTest {
 fn next_handoff_request() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The caller that a subrequest's response returns to: the running request,
+/// and the owner of the code running it.
+fn ws_caller(scope: &mut v8::PinScope) -> WsCaller {
+    let context = event_context(scope);
+    WsCaller {
+        issuer: context.handoff_issuer(current_generation(scope)),
+        owner: websocket::owner_of(&context),
+        retired: context.ws_retired.clone(),
+    }
 }
 
 impl IoContext {
@@ -12783,9 +12826,21 @@ fn make_request<'s>(
 fn read_response(scope: &mut v8::PinScope, ret: v8::Local<v8::Value>) -> Result<HttpResponse> {
     let f = internal_function(scope, "__readResponse")?;
     let recv = v8::undefined(scope).into();
-    let out = f
-        .call(scope, recv, &[ret])
-        .ok_or_else(|| anyhow!("readResponse threw"))?;
+    let out = {
+        // The reader throws for a response it cannot carry, such as one with
+        // another request's socket. Its message is the Worker's error.
+        let tc = std::pin::pin!(v8::TryCatch::new(scope));
+        let tc = &mut tc.init();
+        match f.call(tc, recv, &[ret]) {
+            Some(out) => out,
+            None => {
+                let message = exc!(tc);
+                // The caller's own TryCatch still sees it, as before.
+                tc.rethrow();
+                return Err(anyhow!("readResponse threw: {message}"));
+            }
+        }
+    };
     // The harness response reader is synchronous. Keeping this assertion at
     // the native boundary prevents a future harness change from quietly
     // reintroducing a nested async runtime while an isolate is entered.
@@ -12844,7 +12899,12 @@ fn read_response(scope: &mut v8::PinScope, ret: v8::Local<v8::Value>) -> Result<
         .get(scope, wk.into())
         .map(|v| v.to_rust_string_lossy(scope))
         .unwrap_or_else(|| "null".into());
-    let ws = serde_json::from_str(&ws_json).ok();
+    let ws: Option<WsTarget> = serde_json::from_str(&ws_json).ok();
+    if let Some(target) = &ws {
+        // The response names another object's socket, which the host will
+        // bind to whoever receives it.
+        websocket::admit_target(&event_context(scope), target).map_err(|error| anyhow!(error))?;
+    }
     let worker_id = out
         .get(scope, worker_wk.into())
         .and_then(|value| value.integer_value(scope))

@@ -1,0 +1,10 @@
+{
+  "kind": "celld-only",
+  "reason": "a 101 to a request that did not ask to upgrade: workerd refuses it for that reason first, so it never reaches the socket's owner check",
+  "env": {"CELLD_MAX_STATELESS_ISOLATES": "1"},
+  "workers": ["app"],
+  "steps": [
+    {"path": "/grab"},
+    {"path": "/replay"}
+  ]
+}

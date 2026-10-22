@@ -1,0 +1,23 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "frames": [
+        "parent:a"
+      ],
+      "close": {
+        "code": 1000,
+        "reason": "done"
+      }
+    },
+    {
+      "status": 200,
+      "body": "200:{\"numericId\":\"SyntaxError\",\"targetInit\":\"RangeError\",\"fakeSocket\":\"TypeError\"}"
+    },
+    {
+      "status": 200,
+      "body": "refused"
+    }
+  ]
+}

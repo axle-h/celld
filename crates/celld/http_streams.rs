@@ -1758,7 +1758,7 @@ pub(crate) fn claim_http_stream(stream_id: u64) -> Option<HttpStreamClaim> {
 /// silently dropped.
 pub(crate) fn encode_http_response(
     mut response: HttpResponse,
-    ws_target: Option<crate::ws_registry::WorkerHandoffIssuer>,
+    ws_target: Option<crate::ws_registry::WsCaller>,
     stream_service: &Arc<HttpStreamService>,
 ) -> Result<String, String> {
     let mut obj = serde_json::json!({
@@ -1767,11 +1767,14 @@ pub(crate) fn encode_http_response(
     });
     match (ws_target, response.websocket.take()) {
         (Some(_), None) => obj["wsTarget"] = serde_json::Value::Null,
-        (Some(_), Some(HttpResponseWebSocket::Cell(target))) => {
+        (Some(caller), Some(HttpResponseWebSocket::Cell(target))) => {
+            // The name reaches the caller's JavaScript, which can use it only
+            // under this grant.
+            crate::ws_registry::ws_grant(&target, caller.owner, &caller.retired)?;
             obj["wsTarget"] = serde_json::json!(target);
         }
-        (Some(issuer), Some(HttpResponseWebSocket::Worker(socket))) => {
-            let token = crate::ws_registry::park_worker_handoff(socket, issuer)?;
+        (Some(caller), Some(HttpResponseWebSocket::Worker(socket))) => {
+            let token = crate::ws_registry::park_worker_handoff(socket, caller.issuer)?;
             obj["wsWorker"] = serde_json::Value::String(token.as_str().to_string());
         }
         (None, None) => {}
@@ -2145,9 +2148,13 @@ mod tests {
             let (socket, queue) = worker_socket();
             let encoded = encode_http_response(
                 upgrade(Some(HttpResponseWebSocket::Worker(socket))),
-                Some(crate::ws_registry::WorkerHandoffIssuer {
-                    generation: 1,
-                    request: u64::MAX,
+                Some(crate::ws_registry::WsCaller {
+                    issuer: crate::ws_registry::WorkerHandoffIssuer {
+                        generation: 1,
+                        request: u64::MAX,
+                    },
+                    owner: crate::ws_registry::WsOwner::Request(u64::MAX),
+                    retired: Default::default(),
                 }),
                 &http_stream_service(),
             )

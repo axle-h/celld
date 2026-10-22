@@ -350,8 +350,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 11 | 1.5 `redirect: "manual"` on incoming requests | done | `1ca26cd` |
 | 12 | 1.6 deploy configuration relaxations (W1-W3 removed) | done | see log |
 | 13 | 1.7 WebSocket through a service binding; router mode default | done | see log |
-| 14 | 1.21 part 1: host WebSocket owner map | done | see log |
-| 14b | 1.21 part 2: harness private state, target grants | next | |
+| 14 | 1.21 part 1: host WebSocket owner map | done | `184054a` |
+| 14b | 1.21 part 2: harness private state, target grants | done | see log |
 | 15+ | 0.5, then Phase 1 in plan order (1.8-1.22), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
@@ -1657,18 +1657,35 @@ legitimate cross-event uses.
 - Cases: `websocket/socket-ids` (differential), `socket-ids-dial` and
   `cross-request-socket` (celld-only).
 
-**Part 2 (next).**
-- Harness private state for every `_x` field, and captured primordials.
-- Remove the numeric `WebSocket` constructor path and the public
-  `__wsTarget` init.
-- Grants for `{id, scope}` targets in `op_ws_bind_target` and
-  `read_response`; these are still trusted from JS (docs/security.md says
-  so).
-- A DO `ctx` used during another cell's event should throw, as in workerd.
-- The socket object should carry its owner (as workerd's IoOwn does), so use
-  after the owning request has ended throws the cross-request error rather
-  than `InvalidStateError`.
-- Isolation cases: cross-script and Dynamic Worker vs parent.
+**Part 2 (harness and grants): done.** As built:
+- All socket state is in a private field, reached through one accessor that
+  is also the brand check. Primordials are captured. `WebSocket` is
+  non-extensible. Internal objects are null-prototype, and host results are
+  read as own properties.
+- The constructor only dials. Internal sockets come from `__wsCreate`.
+  `__wsTarget` is gone from `Response`, and `init.webSocket` is
+  brand-checked.
+- DO targets handed to JS become grants to the caller's owner. Each grant
+  is consumed once, with at most 64 per owner and a 30 s expiry, and is
+  never made for a retired caller. `admit_target` checks them in
+  `op_ws_bind_target` and `read_response`.
+- Socket objects carry a cached numeric owner token, checked first, so
+  use from another request throws the cross-request error even after that
+  request ended. Pair ends link in the isolate only while both are
+  unregistered, unreturned and owned by the running owner. A returned
+  socket can't be accepted again (workerd's text).
+- A DO `ctx` used during another object's event acts on the running object
+  and throws only on I/O to the other object's socket, as workerd does
+  (`websocket/cross-object-socket`).
+- Cases: `cross-script-socket`, `dynamic-worker-socket`, `forged-target`,
+  `ended-request-socket`, `cross-object-socket`, `returned-pair`
+  (differential), and `forged-response-target` (celld-only). Host refusals
+  are unit-tested through V8.
+- Follow-up: some Rust test modules may touch the WebSocket registry before
+  the shared test runtime is installed (a race fixed in `js/websocket.rs`).
+  Audit the others.
+- A Dynamic Worker's TypeError arrives in the parent as a plain Error (error
+  class lost across isolates). Check this against workerd under Phase 3.
 
 ### 1.22 WebSocket follow-ups (found by 1.7)
 

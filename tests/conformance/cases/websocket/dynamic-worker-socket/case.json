@@ -1,0 +1,9 @@
+{
+  "env": {"CELLD_MAX_STATELESS_ISOLATES": "1"},
+  "workers": ["app"],
+  "steps": [
+    {"ws": "/socket", "send": ["a"]},
+    {"path": "/child"},
+    {"path": "/child-response"}
+  ]
+}

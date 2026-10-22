@@ -1077,6 +1077,9 @@ fn finish_cell_adoption(tc: &mut v8::PinScope, cell: &str, owned: bool) -> Resul
     // it back.
     let source = format!("__celld.__cell.release({cell:?});");
     run_internal_snippet(tc, &source).ok_or_else(|| anyhow!("adopt failed"))?;
+    // The grants the released residency held go with the objects that held
+    // them.
+    crate::ws_registry::ws_release_grants(&crate::ws_registry::WsOwner::Cell(cell.to_string()));
     if !owned {
         // A facet of the root's own class lives in this isolate, and nothing
         // else releases it: its realm and connection would outlive the root.

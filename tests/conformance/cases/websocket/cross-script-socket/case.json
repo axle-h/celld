@@ -1,0 +1,7 @@
+{
+  "workers": ["app", "other"],
+  "steps": [
+    {"ws": "/socket", "send": ["before"], "close": 1000},
+    {"path": "/other"}
+  ]
+}

@@ -34,7 +34,7 @@ const NOT_VALID: &str = "WebSocket is not valid";
 /// The owner of the sockets that code running in `context` allocates, and
 /// the only owner whose sockets it may use: the Durable Object or facet of
 /// the running cell event, or else the request.
-fn owner_of(context: &IoContext) -> WsOwner {
+pub(super) fn owner_of(context: &IoContext) -> WsOwner {
     match current_cell_event(context) {
         Some(frame) => WsOwner::Cell(frame.storage),
         None => WsOwner::Request(context.handoff_request),
@@ -82,6 +82,75 @@ fn claim(owner: &WsOwner, id: u64) -> Result<u64, String> {
         WsAccess::Unknown => Err(NOT_VALID.to_string()),
         WsAccess::Other => Err(CROSS_REQUEST_IO.to_string()),
     }
+}
+
+/// Admit a Durable Object socket target that JavaScript names, for the
+/// `accept()` that binds it or the response that returns it.
+///
+/// A target is `{id, scope, tunnel}`, which JavaScript carries and so could
+/// copy from another request's socket. The code running in `context` may use
+/// it only if a subrequest's response granted it exactly that target, which
+/// this use consumes, or if the target is that Durable Object's own socket
+/// under its own scope.
+pub(super) fn admit_target(context: &IoContext, target: &WsTarget) -> Result<(), String> {
+    let owner = owner_of(context);
+    if ws_take_grant(target, &owner) {
+        return Ok(());
+    }
+    let own = match &owner {
+        WsOwner::Cell(cell) => {
+            target.tunnel.is_none()
+                && *cell == target.scope
+                && ws_access(target.id, &owner) == WsAccess::Owned
+        }
+        WsOwner::Request(_) => false,
+    };
+    if own {
+        return Ok(());
+    }
+    if ws_granted_elsewhere(target, &owner) || ws_access(target.id, &owner) == WsAccess::Other {
+        return Err(CROSS_REQUEST_IO.to_string());
+    }
+    Err(NOT_VALID.to_string())
+}
+
+/// The token `__ws_owner` answers for `owner`: an even number for a request,
+/// an odd one for a Durable Object, so the harness can choose workerd's text.
+///
+/// A request's is its unique number. An object's comes from a keyed hash of
+/// its scope, in 52 bits so it stays exact as a JavaScript number: two
+/// objects in one isolate share one only by a collision of that hash. The
+/// token is workerd's I/O check, which fails early with workerd's text. The
+/// host's own owner check, on full owners, is what refuses the socket.
+fn owner_token(owner: &WsOwner) -> f64 {
+    const BITS: u64 = (1 << 52) - 1;
+    match owner {
+        WsOwner::Request(request) => ((request & BITS) << 1) as f64,
+        WsOwner::Cell(cell) => {
+            static KEYS: std::sync::OnceLock<std::collections::hash_map::RandomState> =
+                std::sync::OnceLock::new();
+            let hash = std::hash::BuildHasher::hash_one(KEYS.get_or_init(Default::default), cell);
+            (((hash & BITS) << 1) | 1) as f64
+        }
+    }
+}
+
+/// `__ws_owner()`: the token of the owner of the running code. A socket
+/// object keeps the token of the code that made it and compares, so a
+/// socket used from another request or Durable Object fails before its own
+/// state is consulted, as workerd's I/O ownership check does.
+pub(super) fn op_ws_owner(
+    scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let context = event_context(scope);
+    // The running event's frame is in place before any of its code runs,
+    // and stays for the context's life, so the owner never changes.
+    let token = *context
+        .ws_owner_token
+        .get_or_init(|| owner_token(&owner_of(&context)));
+    rv.set(v8::Number::new(scope, token).into());
 }
 
 fn id_arg(scope: &mut v8::PinScope, args: &v8::FunctionCallbackArguments, index: i32) -> u64 {
@@ -860,6 +929,9 @@ pub(super) fn op_ws_bind_target(
         return loader_throw(scope, "WebSocket target is not valid");
     };
     let context = event_context(scope);
+    if let Err(error) = admit_target(&context, &target) {
+        return loader_throw(scope, &error);
+    }
     // The caller's own route, which is empty for a Worker: the socket is
     // accounted against the isolate holding it, exactly as `op_ws_connect`
     // accounts an outbound one.
@@ -1121,17 +1193,19 @@ pub(super) fn op_ws_auto_response_get(
     rv.set(v8::String::new(scope, &json).unwrap().into());
 }
 
-/// When the shell last auto-responded on socket `id`, for its owner.
-fn auto_response_ts(owner: &WsOwner, id: u64) -> Result<Option<f64>, String> {
-    if !may_use(owner, id)? {
-        return Ok(None);
+/// When the shell last auto-responded on socket `id`, for its owner. Another
+/// owner's socket reads as never answered, as in workerd, where the
+/// timestamp belongs to the running object's hibernation manager.
+fn auto_response_ts(owner: &WsOwner, id: u64) -> Option<f64> {
+    if ws_access(id, owner) != WsAccess::Owned {
+        return None;
     }
-    Ok(ws_registry()
+    ws_registry()
         .lock()
         .unwrap()
         .metadata
         .get(&id)
-        .and_then(|meta| meta.auto_response_at))
+        .and_then(|meta| meta.auto_response_at)
 }
 
 pub(super) fn op_ws_auto_response_ts(
@@ -1141,9 +1215,8 @@ pub(super) fn op_ws_auto_response_ts(
 ) {
     let id = id_arg(scope, &args, 0);
     match auto_response_ts(&owner_of(&event_context(scope)), id) {
-        Ok(Some(ms)) => rv.set(v8::Number::new(scope, ms).into()),
-        Ok(None) => rv.set(v8::null(scope).into()),
-        Err(error) => loader_throw(scope, &error),
+        Some(ms) => rv.set(v8::Number::new(scope, ms).into()),
+        None => rv.set(v8::null(scope).into()),
     }
 }
 
@@ -1151,6 +1224,11 @@ pub(super) fn op_ws_auto_response_ts(
 mod tests {
     use super::*;
     use crate::ws_registry::tests::{released, worker_socket};
+
+    /// Install the shared test domain, whose services every test must use.
+    fn services_ready() {
+        let _ = crate::asyncrt::test_host_runtime();
+    }
 
     /// A socket parked for `context`'s request and adopted by it, as
     /// `__hostResponseSocket` leaves one: returns its token and caller id.
@@ -1256,6 +1334,9 @@ mod tests {
 
     #[test]
     fn the_running_event_owns_what_it_allocates() {
+        // Before any registry access: the shared domain replaces the
+        // fallback services, and an id from one would name another\'s socket.
+        services_ready();
         let request = IoContext::new();
         assert_eq!(
             owner_of(&request),
@@ -1322,6 +1403,9 @@ mod tests {
 
     #[test]
     fn next_reads_only_the_owners_queue() {
+        // Before any registry access: the shared domain replaces the
+        // fallback services, and an id from one would name another\'s socket.
+        services_ready();
         let owner = WsOwner::Cell("cell-a".into());
         let id = ws_allocate(owner.clone());
         let (_sender, queue) = ws_pull_channel();
@@ -1345,6 +1429,9 @@ mod tests {
 
     #[test]
     fn accepting_allocates_for_the_running_cell() {
+        // Before any registry access: the shared domain replaces the
+        // fallback services, and an id from one would name another\'s socket.
+        services_ready();
         let id = accept_hibernatable("accept-a", 0, vec!["tag".into()]).unwrap();
         assert_eq!(ws_owner(id), Some(WsOwner::Cell("accept-a".into())));
         // Its own cell accepts it again, in any event, and lists it.
@@ -1385,6 +1472,9 @@ mod tests {
 
     #[test]
     fn attachments_and_auto_response_times_belong_to_the_cell() {
+        // Before any registry access: the shared domain replaces the
+        // fallback services, and an id from one would name another\'s socket.
+        services_ready();
         let owner = WsOwner::Cell("cell-a".into());
         let id = accept_hibernatable("cell-a", 0, Vec::new()).unwrap();
         ws_registry()
@@ -1399,7 +1489,8 @@ mod tests {
                 set_attachment(&stranger, id, vec![9]).err(),
                 cross_request()
             );
-            assert_eq!(auto_response_ts(&stranger, id).err(), cross_request());
+            // Another object reads its own timestamp, as in workerd: none.
+            assert_eq!(auto_response_ts(&stranger, id), None);
         }
         let attachment = |id| {
             ws_registry()
@@ -1412,10 +1503,10 @@ mod tests {
         assert_eq!(attachment(id), None);
         set_attachment(&owner, id, vec![1]).unwrap();
         assert_eq!(attachment(id), Some(vec![1]));
-        assert_eq!(auto_response_ts(&owner, id), Ok(Some(42.0)));
+        assert_eq!(auto_response_ts(&owner, id), Some(42.0));
         ws_unregister(id);
         set_attachment(&owner, id, vec![2]).unwrap();
-        assert_eq!(auto_response_ts(&owner, id), Ok(None));
+        assert_eq!(auto_response_ts(&owner, id), None);
     }
 
     #[test]
@@ -1507,6 +1598,9 @@ mod tests {
 
     #[test]
     fn the_owner_goes_with_the_last_registration() {
+        // Before any registry access: the shared domain replaces the
+        // fallback services, and an id from one would name another\'s socket.
+        services_ready();
         let id = ws_allocate(WsOwner::Request(u64::MAX));
         ws_register_outbound(id, "", None);
         let (_sender, queue) = ws_pull_channel();
@@ -1530,6 +1624,9 @@ mod tests {
 
     #[test]
     fn a_dial_that_never_reaches_the_connector_leaves_nothing() {
+        // Before any registry access: the shared domain replaces the
+        // fallback services, and an id from one would name another\'s socket.
+        services_ready();
         // Unit tests run no connector.
         for (context, target) in [
             (IoContext::new(), None),
@@ -1565,6 +1662,9 @@ mod tests {
 
     #[test]
     fn a_failed_dial_releases_what_its_op_registered() {
+        // Before any registry access: the shared domain replaces the
+        // fallback services, and an id from one would name another\'s socket.
+        services_ready();
         let id = ws_allocate(WsOwner::Request(u64::MAX));
         let (_sender, queue) = ws_pull_channel();
         ws_pull_register(id, queue);
@@ -1601,5 +1701,258 @@ mod tests {
         assert_eq!(ws_owner(id), Some(WsOwner::Cell("cell-a".into())));
         ws_unregister(id);
         assert_eq!(ws_owner(id), None);
+    }
+
+    fn target(id: u64, scope: &str) -> WsTarget {
+        WsTarget {
+            id,
+            scope: scope.to_string(),
+            tunnel: None,
+        }
+    }
+
+    #[test]
+    fn a_target_is_admitted_once_under_its_grant() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let caller = IoContext::new();
+            let other = IoContext::new();
+            let socket = accept_regular("grant-a", 0).unwrap();
+            let granted = target(socket, "grant-a");
+            ws_grant(&granted, owner_of(&caller), &WsCallerRetired::default()).unwrap();
+            // Another request that copied the name, and another object, are
+            // refused, and the grant stays for its holder.
+            assert_eq!(admit_target(&other, &granted).err(), cross_request());
+            assert_eq!(
+                admit_target(&cell_context("grant-b"), &granted).err(),
+                cross_request()
+            );
+            // The holder cannot widen the name.
+            let mut tunneled = granted.clone();
+            tunneled.tunnel = Some(7);
+            assert!(admit_target(&caller, &tunneled).is_err());
+            assert!(admit_target(&caller, &target(socket, "grant-b")).is_err());
+            admit_target(&caller, &granted).unwrap();
+            // Consumed: one accept, or one response.
+            assert!(admit_target(&caller, &granted).is_err());
+            ws_unregister(socket);
+        });
+    }
+
+    #[test]
+    fn an_object_returns_its_own_socket_without_a_grant() {
+        // Before any registry access: the shared domain replaces the
+        // fallback services, and an id from one would name another\'s socket.
+        services_ready();
+        let socket = accept_hibernatable("own-a", 0, Vec::new()).unwrap();
+        let own = cell_context("own-a");
+        admit_target(&own, &target(socket, "own-a")).unwrap();
+        // Still its own, so again.
+        admit_target(&own, &target(socket, "own-a")).unwrap();
+        // Not under another scope, through a tunnel, or by another object.
+        assert!(admit_target(&own, &target(socket, "own-b")).is_err());
+        let mut tunneled = target(socket, "own-a");
+        tunneled.tunnel = Some(1);
+        assert!(admit_target(&own, &tunneled).is_err());
+        assert_eq!(
+            admit_target(&cell_context("own-b"), &target(socket, "own-a")).err(),
+            cross_request()
+        );
+        assert_eq!(
+            admit_target(&IoContext::new(), &target(socket, "own-a")).err(),
+            cross_request()
+        );
+        // A name that matches nothing.
+        assert_eq!(
+            admit_target(&own, &target(ws_next_id(), "own-a")).err(),
+            Some(NOT_VALID.to_string())
+        );
+        ws_unregister(socket);
+    }
+
+    #[test]
+    fn grants_go_with_their_holder_or_their_target() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            // The holder's request retires.
+            let caller = IoContext::new();
+            let owner = owner_of(&caller);
+            let socket = accept_regular("release-a", 0).unwrap();
+            ws_grant(
+                &target(socket, "release-a"),
+                owner.clone(),
+                &WsCallerRetired::default(),
+            )
+            .unwrap();
+            // A target on another node, which no local unregister reaches.
+            let mut remote = target(socket, "release-a");
+            remote.tunnel = Some(3);
+            ws_grant(&remote, owner.clone(), &WsCallerRetired::default()).unwrap();
+            assert_eq!(ws_grants_held(&owner), 2);
+            caller.close_sockets();
+            assert_eq!(ws_grants_held(&owner), 0);
+
+            // The holder object stops.
+            let holder = WsOwner::Cell("release-holder".into());
+            ws_grant(
+                &target(socket, "release-a"),
+                holder.clone(),
+                &WsCallerRetired::default(),
+            )
+            .unwrap();
+            ws_close_facet("release-holder", "stopped");
+            assert_eq!(ws_grants_held(&holder), 0);
+
+            // The target goes; a remote one with the same id stays.
+            let request = WsOwner::Request(u64::MAX - 1);
+            ws_grant(
+                &target(socket, "release-a"),
+                request.clone(),
+                &WsCallerRetired::default(),
+            )
+            .unwrap();
+            ws_grant(&remote, request.clone(), &WsCallerRetired::default()).unwrap();
+            ws_unregister(socket);
+            assert_eq!(ws_grants_held(&request), 1);
+            ws_release_grants(&request);
+            assert_eq!(ws_grants_held(&request), 0);
+        });
+    }
+
+    /// Call `op` through V8 with string arguments, as a script that bypassed
+    /// the harness would. Answers what it returned, or the message it threw.
+    fn call_op(
+        scope: &mut v8::PinScope,
+        op: impl v8::MapFnTo<v8::FunctionCallback>,
+        args: &[&str],
+    ) -> Result<String, String> {
+        let tc = std::pin::pin!(v8::TryCatch::new(scope));
+        let tc = &mut tc.init();
+        let function = v8::Function::new(tc, op).unwrap();
+        let args: Vec<v8::Local<v8::Value>> = args
+            .iter()
+            .map(|arg| v8::String::new(tc, arg).unwrap().into())
+            .collect();
+        let recv = v8::undefined(tc).into();
+        match function.call(tc, recv, &args) {
+            Some(value) => Ok(value.to_rust_string_lossy(tc)),
+            None => Err(tc
+                .exception()
+                .map(|error| error.to_rust_string_lossy(tc))
+                .unwrap_or_default()),
+        }
+    }
+
+    /// `read_response` on a reader that names `target`, as a harness that
+    /// let a forged target through would.
+    fn read_forged(scope: &mut v8::PinScope, target: &str) -> Result<HttpResponse, String> {
+        let source = format!(
+            "__celld.__readResponse = () => ({{ status: 101, bodyBytes: new Uint8Array(), \
+             bodyStreamId: 0, headersJson: \"[]\", wsTargetJson: {target:?}, \
+             workerSocketId: 0 }});"
+        );
+        run_internal_snippet(scope, &source).expect("the reader is replaced");
+        let ret = v8::undefined(scope).into();
+        read_response(scope, ret).map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn the_host_refuses_a_target_that_bypassed_the_harness() {
+        // Before any registry access: the shared domain replaces the
+        // fallback services, and an id from one would name another\'s socket.
+        services_ready();
+        Engine::init();
+        // On a thread started after V8, as `runtime::init_v8` requires.
+        std::thread::spawn(|| {
+            let config = Arc::new(WorkerConfig::new(WorkerConfigOptions {
+                src: "export default { fetch() { return new Response(); } };\n".into(),
+                script_name: "admit".into(),
+                do_classes: Vec::new(),
+                bindings: Vec::new(),
+                r2_bindings: Vec::new(),
+                d1_bindings: Vec::new(),
+                kv_bindings: Vec::new(),
+                queue_bindings: Vec::new(),
+                queue_consumers: Vec::new(),
+                workflow_bindings: Vec::new(),
+                vars: Vec::new(),
+                node: String::new(),
+                modules: Vec::new(),
+                compat: Compat::default(),
+            }));
+            let mut worker = Worker::load_config(config).unwrap();
+            // Granting starts the sweep, which needs the host runtime.
+            let _runtime = crate::asyncrt::test_host_runtime().enter();
+            let request = IoContext::new();
+            let _current = CurrentGuard::enter(request.clone());
+            // Another object's socket, which this request was never handed.
+            let socket = accept_hibernatable("admit-a", 0, Vec::new()).unwrap();
+            let stolen = format!(r#"{{"id":{socket},"scope":"admit-a"}}"#);
+            let unknown = format!(r#"{{"id":{},"scope":"admit-a"}}"#, ws_next_id());
+            worker.with_scope_for_test(|scope| {
+                for target in [&stolen, &unknown] {
+                    let refused = call_op(scope, op_ws_bind_target, &[target]).unwrap_err();
+                    assert!(
+                        refused.contains(CROSS_REQUEST_IO) || refused.contains(NOT_VALID),
+                        "{refused}"
+                    );
+                    let refused = read_forged(scope, target).err().unwrap();
+                    assert!(
+                        refused.contains(CROSS_REQUEST_IO) || refused.contains(NOT_VALID),
+                        "{refused}"
+                    );
+                }
+                assert!(call_op(scope, op_ws_bind_target, &[&stolen])
+                    .unwrap_err()
+                    .contains(CROSS_REQUEST_IO));
+                // The same target under a grant to this request: admitted, and
+                // the grant is consumed by that one use.
+                let granted: WsTarget = serde_json::from_str(&stolen).unwrap();
+                ws_grant(&granted, owner_of(&request), &WsCallerRetired::default()).unwrap();
+                let response = read_forged(scope, &stolen).unwrap();
+                assert!(matches!(
+                    response.websocket,
+                    Some(HttpResponseWebSocket::Cell(ref target)) if *target == granted
+                ));
+                assert!(read_forged(scope, &stolen).is_err());
+                ws_grant(&granted, owner_of(&request), &WsCallerRetired::default()).unwrap();
+                let id: u64 = call_op(scope, op_ws_bind_target, &[&stolen])
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert_ne!(id, socket);
+                assert!(call_op(scope, op_ws_bind_target, &[&stolen]).is_err());
+            });
+            ws_unregister(socket);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn a_retired_caller_is_granted_nothing() {
+        // Before any registry access: the shared domain replaces the
+        // fallback services, and an id from one would name another\'s socket.
+        services_ready();
+        let caller = IoContext::new();
+        let owner = owner_of(&caller);
+        let socket = accept_regular("late-a", 0).unwrap();
+        caller.close_sockets();
+        // The response arrives after the caller retired.
+        ws_grant(&target(socket, "late-a"), owner.clone(), &caller.ws_retired).unwrap();
+        assert_eq!(ws_grants_held(&owner), 0);
+        ws_unregister(socket);
+    }
+
+    #[test]
+    fn an_owner_holds_at_most_its_limit_of_grants() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let owner = WsOwner::Request(u64::MAX - 2);
+            let retired = WsCallerRetired::default();
+            for id in 0..WS_GRANTS_PER_OWNER as u64 {
+                ws_grant(&target(u64::MAX - id, "cap-a"), owner.clone(), &retired).unwrap();
+            }
+            assert!(ws_grant(&target(1, "cap-a"), owner.clone(), &retired).is_err());
+            ws_release_grants(&owner);
+            assert_eq!(ws_grants_held(&owner), 0);
+        });
     }
 }
