@@ -51,7 +51,9 @@ nondeterministic case shows up when it is recorded. A case runs as it would unde
 `wrangler dev -c`, so a Worker can import `capnweb` from this package's
 `node_modules`, and the modules this package's `package.json` names under
 `imports`: `#byob` is `lib/worker/byob.js`, the BYOB reader checks the
-`streams/byob-*` cases share.
+`streams/byob-*` cases share, and `#params-dup` is `lib/worker/params-dup.js`,
+the stub-ownership checks the `rpc/params-dup*` cases run under different
+compatibility dates and flags.
 
 ```json
 {

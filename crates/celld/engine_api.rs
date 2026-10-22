@@ -272,6 +272,12 @@ pub struct Compat {
     /// rest of `nodejs_compat`. celld offers the module whatever the flags
     /// say, so only `Cloudflare.compatibilityFlags` reads this.
     pub nodejs_als: bool,
+    /// `rpc_params_dup_stubs` (off = `rpc_params_transfer_stubs`, default on
+    /// for dates >= 2026-01-20): a stub in an RPC call's params is duplicated
+    /// rather than transferred, and a param with its own `dup()` crosses as
+    /// what `dup()` returns (Workerd worker-rpc.c++ RpcSerializerExternalHandler
+    /// DUPLICATE). Return values transfer either way.
+    pub rpc_params_dup_stubs: bool,
 }
 
 /// A non-main module the worker's main module may import, tagged by how the

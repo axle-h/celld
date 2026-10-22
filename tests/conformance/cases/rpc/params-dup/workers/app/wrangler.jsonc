@@ -1,0 +1,8 @@
+// rpc_params_dup_stubs by date (from 2026-01-20): stubs in params are duplicated.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-01",
+  "durable_objects": { "bindings": [{ "name": "PEER", "class_name": "Peer" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Peer"] }]
+}

@@ -2485,9 +2485,10 @@ pub(crate) mod tests {
     fn a_request_holds_at_most_its_limit() {
         let mut parks = WorkerHandoffs::default();
         let mut queues = Vec::new();
+        let mut tokens = Vec::new();
         for _ in 0..WORKER_HANDOFFS_PER_REQUEST {
             let (socket, queue) = worker_socket();
-            parks.park(socket, 0, issuer(1)).ok().unwrap();
+            tokens.push(parks.park(socket, 0, issuer(1)).ok().unwrap());
             queues.push(queue);
         }
         let (socket, queue) = worker_socket();
@@ -2499,12 +2500,12 @@ pub(crate) mod tests {
         let (socket, _) = worker_socket();
         assert!(parks.park(socket, 0, issuer(2)).is_ok());
         // Adopted sockets count until the request takes them.
-        let token = parks.entries.keys().next().unwrap().clone();
-        let request = parks.entries[&token].issuer.request;
-        parks.adopt(&token, request, 1).unwrap();
+        let token = &tokens[0];
+        let request = parks.entries[token].issuer.request;
+        parks.adopt(token, request, 1).unwrap();
         let (socket, _) = worker_socket();
         let socket = parks.park(socket, 0, issuer(1)).expect_err("still full");
-        drop(parks.take_adopted(&token, request).unwrap());
+        drop(parks.take_adopted(token, request).unwrap());
         assert!(parks.park(socket, 0, issuer(1)).is_ok());
     }
 

@@ -1,0 +1,440 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "rpc_params_dup_stubs": true,
+        "rpc_params_transfer_stubs": "undefined"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "rpcStub": {
+          "call": {
+            "type": "string",
+            "value": "rpcStub:1"
+          },
+          "afterCall": [
+            "inc rpcStub 1"
+          ],
+          "reuse": {
+            "type": "string",
+            "value": "rpcStub:2"
+          },
+          "log": [
+            "inc rpcStub 1",
+            "inc rpcStub 2",
+            "dispose rpcStub"
+          ]
+        },
+        "exports": {
+          "call": {
+            "type": "string",
+            "value": "exports:1"
+          },
+          "afterCall": [
+            "inc exports 1"
+          ],
+          "reuse": {
+            "type": "string",
+            "value": "exports:2"
+          },
+          "log": [
+            "inc exports 1",
+            "inc exports 2",
+            "dispose exports"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "rpcStub": {
+          "type": "object",
+          "value": {
+            "first": {
+              "type": "string",
+              "value": "twice:1"
+            },
+            "second": {
+              "type": "string",
+              "value": "twice:2"
+            }
+          }
+        },
+        "rpcStubLog": [
+          "inc twice 1",
+          "inc twice 2"
+        ],
+        "exports": {
+          "type": "object",
+          "value": {
+            "first": {
+              "type": "string",
+              "value": "twice-exports:1"
+            },
+            "second": {
+              "type": "string",
+              "value": "twice-exports:2"
+            }
+          }
+        },
+        "exportsLog": [
+          "inc twice-exports 1",
+          "inc twice-exports 2"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "param": {
+          "error": "Error: RPC stub used after being disposed."
+        },
+        "keptLog": [],
+        "dup": {
+          "type": "string",
+          "value": "kept-dup:1"
+        },
+        "dupLog": [
+          "inc kept-dup 1"
+        ],
+        "forwarded": {
+          "type": "undefined",
+          "value": null
+        },
+        "proxied": {
+          "type": "string",
+          "value": "kept-proxied:1"
+        },
+        "caller": {
+          "type": "string",
+          "value": "kept-proxied:2"
+        },
+        "proxiedLog": [
+          "inc kept-proxied 1",
+          "inc kept-proxied 2"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "use": {
+          "type": "string",
+          "value": "held:1"
+        },
+        "again": {
+          "error": "Error: RPC stub used after being disposed."
+        },
+        "caller": {
+          "type": "string",
+          "value": "held:2"
+        },
+        "afterGiven": [
+          "inc held 1",
+          "inc held 2"
+        ],
+        "log": [
+          "inc held 1",
+          "inc held 2",
+          "dispose held"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "rpcTarget": {
+          "result": {
+            "type": "string",
+            "value": "target'"
+          },
+          "log": [
+            "dup target",
+            "dispose target'"
+          ]
+        },
+        "rpcTargetExports": {
+          "result": {
+            "type": "string",
+            "value": "target-exports'"
+          },
+          "log": [
+            "dup target-exports",
+            "dispose target-exports'"
+          ]
+        },
+        "function": {
+          "result": {
+            "type": "string",
+            "value": "fn'(x)"
+          },
+          "log": [
+            "dup fn",
+            "dispose fn'"
+          ]
+        },
+        "targetProxy": {
+          "result": {
+            "type": "string",
+            "value": "proxy'"
+          },
+          "log": [
+            "dup proxy",
+            "dispose proxy'"
+          ]
+        },
+        "targetProxyToTarget": {
+          "result": {
+            "type": "string",
+            "value": "plain'"
+          },
+          "log": [
+            "dup proxy",
+            "dispose plain'"
+          ]
+        },
+        "functionProxy": {
+          "result": {
+            "type": "string",
+            "value": "fproxy'(x)"
+          },
+          "log": [
+            "dup fproxy",
+            "dispose fproxy'"
+          ]
+        },
+        "functionProxyToPlain": {
+          "result": {
+            "type": "string",
+            "value": "plain'"
+          },
+          "log": [
+            "dup fproxy",
+            "dispose plain'"
+          ]
+        },
+        "notFunction": {
+          "result": {
+            "type": "string",
+            "value": "value-dup"
+          },
+          "log": [
+            "dispose value-dup"
+          ]
+        },
+        "none": {
+          "result": {
+            "type": "string",
+            "value": "plain"
+          },
+          "log": [
+            "dispose plain"
+          ]
+        },
+        "twice": {
+          "result": {
+            "type": "object",
+            "value": [
+              "both'",
+              "both'"
+            ]
+          },
+          "log": [
+            "dup both",
+            "dispose both'"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "targetToPlain": {
+          "result": {
+            "error": "DataCloneError: Couldn't create a stub for the RcpTarget because it has a dup() method which did not return another RpcTarget. Either remove the dup() method or make sure it returns an RpcTarget."
+          },
+          "log": [
+            "dup target"
+          ]
+        },
+        "targetToFunction": {
+          "result": {
+            "error": "DataCloneError: Couldn't create a stub for the RcpTarget because it has a dup() method which did not return another RpcTarget. Either remove the dup() method or make sure it returns an RpcTarget."
+          },
+          "log": [
+            "dup target"
+          ]
+        },
+        "targetToProxy": {
+          "result": {
+            "error": "DataCloneError: Couldn't create a stub for the RcpTarget because it has a dup() method which did not return another RpcTarget. Either remove the dup() method or make sure it returns an RpcTarget."
+          },
+          "log": [
+            "dup target"
+          ]
+        },
+        "targetToPrimitive": {
+          "result": {
+            "error": "DataCloneError: Couldn't create a stub for the RcpTarget because it has a dup() method which did not return another RpcTarget. Either remove the dup() method or make sure it returns an RpcTarget."
+          },
+          "log": [
+            "dup target"
+          ]
+        },
+        "functionToTarget": {
+          "result": {
+            "error": "DataCloneError: Couldn't create a stub for the function because it has a dup() method which did not return another function. Either remove the dup() method or make sure it returns a function."
+          },
+          "log": [
+            "dup fn"
+          ]
+        },
+        "targetProxyToFunction": {
+          "result": {
+            "error": "DataCloneError: Couldn't create a stub for the Proxy because it has a dup() method which did not return the same underlying type (RpcTarget or Function) as the Proxy itself represents. Either remove the dup() method or make sure it returns an RpcTarget."
+          },
+          "log": [
+            "dup proxy"
+          ]
+        },
+        "functionProxyToTarget": {
+          "result": {
+            "error": "DataCloneError: Couldn't create a stub for the Proxy because it has a dup() method which did not return the same underlying type (RpcTarget or Function) as the Proxy itself represents. Either remove the dup() method or make sure it returns an RpcTarget."
+          },
+          "log": [
+            "dup fproxy"
+          ]
+        },
+        "functionProxyToProperty": {
+          "result": {
+            "error": "DataCloneError: Couldn't create a stub for the Proxy because it has a dup() method which did not return the same underlying type (RpcTarget or Function) as the Proxy itself represents. Either remove the dup() method or make sure it returns an RpcTarget."
+          },
+          "log": [
+            "dup fproxy"
+          ]
+        },
+        "throws": {
+          "result": {
+            "error": "Error: dup failed"
+          },
+          "log": [
+            "dup throws"
+          ]
+        },
+        "partial": {
+          "result": {
+            "error": "DataCloneError: Couldn't create a stub for the RcpTarget because it has a dup() method which did not return another RpcTarget. Either remove the dup() method or make sure it returns an RpcTarget."
+          },
+          "log": [
+            "dup good",
+            "dup bad",
+            "dispose taken",
+            "dispose good'"
+          ]
+        },
+        "stubBeforeFailure": {
+          "result": {
+            "error": "DataCloneError: Couldn't create a stub for the RcpTarget because it has a dup() method which did not return another RpcTarget. Either remove the dup() method or make sure it returns an RpcTarget."
+          },
+          "reuse": {
+            "type": "string",
+            "value": "stub:1"
+          },
+          "log": [
+            "dup bad",
+            "inc stub 1"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "call": {
+          "type": "string",
+          "value": "do:1"
+        },
+        "reuse": {
+          "type": "string",
+          "value": "do:2"
+        },
+        "callLog": [
+          "inc do 1",
+          "inc do 2",
+          "dispose do"
+        ],
+        "names": {
+          "type": "object",
+          "value": [
+            "first",
+            "second",
+            "third"
+          ]
+        },
+        "namesLog": [
+          "dispose third",
+          "dispose second",
+          "dispose first"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "result": {
+          "error": "DataCloneError: Could not serialize object of type \"Unsupported\". This type does not support serialization."
+        },
+        "reuse": {
+          "type": "string",
+          "value": "stub:1"
+        },
+        "stubLog": [
+          "inc stub 1"
+        ],
+        "result2": {
+          "error": "DataCloneError: Could not serialize object of type \"Unsupported\". This type does not support serialization."
+        },
+        "takenLog": [
+          "dispose taken"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "same": true,
+        "calls": [
+          {
+            "type": "string",
+            "value": "pair:1"
+          },
+          {
+            "type": "string",
+            "value": "pair:2"
+          }
+        ],
+        "afterFirst": [
+          "inc pair 1",
+          "inc pair 2",
+          "dispose pair"
+        ],
+        "pairLog": [
+          "inc pair 1",
+          "inc pair 2",
+          "dispose pair"
+        ],
+        "severalLog": [
+          "dispose a",
+          "dispose b",
+          "dispose c"
+        ]
+      }
+    }
+  ]
+}

@@ -611,6 +611,7 @@ pub(super) fn inject_compatibility_flags(scope: &mut v8::PinScope, compat: Compa
         !compat.fetcher_get_put_delete,
     );
     set_flag(scope, "nodejs_als", compat.nodejs_als);
+    set_flag(scope, "rpc_params_dup_stubs", compat.rpc_params_dup_stubs);
     let cloudflare = v8::Object::new(scope);
     let key = v8::String::new(scope, "compatibilityFlags").unwrap();
     cloudflare.set(scope, key.into(), flags.into());
@@ -1106,13 +1107,15 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
          c.compat.fetcherGetPutDelete = {};\n\
          c.compat.websocketStandardBinaryType = {};\n\
          c.compat.queueJsonMessages = {};\n\
-         c.compat.allowIrrevocableStubStorage = {};",
+         c.compat.allowIrrevocableStubStorage = {};\n\
+         c.compat.rpcParamsDupStubs = {};",
         compat.delete_all_deletes_alarm,
         compat.js_rpc,
         compat.fetcher_get_put_delete,
         compat.websocket_standard_binary_type,
         compat.queue_json_messages,
         compat.allow_irrevocable_stub_storage,
+        compat.rpc_params_dup_stubs,
     );
     run_internal_snippet(scope, &source).ok_or_else(|| anyhow!("compatibility install failed"))?;
     Ok(())

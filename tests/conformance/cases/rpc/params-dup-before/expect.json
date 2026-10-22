@@ -1,0 +1,435 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "rpc_params_dup_stubs": false,
+        "rpc_params_transfer_stubs": "undefined"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "rpcStub": {
+          "call": {
+            "type": "string",
+            "value": "rpcStub:1"
+          },
+          "afterCall": [
+            "inc rpcStub 1",
+            "dispose rpcStub"
+          ],
+          "reuse": {
+            "error": "Error: RPC stub used after being disposed."
+          },
+          "log": [
+            "inc rpcStub 1",
+            "dispose rpcStub"
+          ]
+        },
+        "exports": {
+          "call": {
+            "type": "string",
+            "value": "exports:1"
+          },
+          "afterCall": [
+            "inc exports 1",
+            "dispose exports"
+          ],
+          "reuse": {
+            "error": "Error: RPC stub used after being disposed."
+          },
+          "log": [
+            "inc exports 1",
+            "dispose exports"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "rpcStub": {
+          "type": "object",
+          "value": {
+            "first": {
+              "type": "string",
+              "value": "twice:1"
+            },
+            "second": {
+              "error": "Error: RPC stub used after being disposed."
+            }
+          }
+        },
+        "rpcStubLog": [
+          "inc twice 1",
+          "dispose twice"
+        ],
+        "exports": {
+          "type": "object",
+          "value": {
+            "first": {
+              "type": "string",
+              "value": "twice-exports:1"
+            },
+            "second": {
+              "error": "Error: RPC stub used after being disposed."
+            }
+          }
+        },
+        "exportsLog": [
+          "inc twice-exports 1",
+          "dispose twice-exports"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "param": {
+          "error": "Error: RPC stub used after being disposed."
+        },
+        "keptLog": [
+          "dispose kept"
+        ],
+        "dup": {
+          "type": "string",
+          "value": "kept-dup:1"
+        },
+        "dupLog": [
+          "inc kept-dup 1"
+        ],
+        "forwarded": {
+          "type": "undefined",
+          "value": null
+        },
+        "proxied": {
+          "type": "string",
+          "value": "kept-proxied:1"
+        },
+        "caller": {
+          "error": "Error: RPC stub used after being disposed."
+        },
+        "proxiedLog": [
+          "inc kept-proxied 1"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "use": {
+          "type": "string",
+          "value": "held:1"
+        },
+        "again": {
+          "error": "Error: RPC stub used after being disposed."
+        },
+        "caller": {
+          "error": "Error: RPC stub used after being disposed."
+        },
+        "afterGiven": [
+          "inc held 1",
+          "dispose held"
+        ],
+        "log": [
+          "inc held 1",
+          "dispose held"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "rpcTarget": {
+          "result": {
+            "type": "string",
+            "value": "target"
+          },
+          "log": [
+            "dispose target"
+          ]
+        },
+        "rpcTargetExports": {
+          "result": {
+            "type": "string",
+            "value": "target-exports"
+          },
+          "log": [
+            "dispose target-exports"
+          ]
+        },
+        "function": {
+          "result": {
+            "type": "string",
+            "value": "fn(x)"
+          },
+          "log": [
+            "dispose fn"
+          ]
+        },
+        "targetProxy": {
+          "result": {
+            "type": "string",
+            "value": "proxy"
+          },
+          "log": [
+            "dispose proxy"
+          ]
+        },
+        "targetProxyToTarget": {
+          "result": {
+            "type": "string",
+            "value": "proxy"
+          },
+          "log": [
+            "dispose proxy"
+          ]
+        },
+        "functionProxy": {
+          "result": {
+            "type": "string",
+            "value": "fproxy(x)"
+          },
+          "log": [
+            "dispose fproxy"
+          ]
+        },
+        "functionProxyToPlain": {
+          "result": {
+            "error": "TypeError: \"name\" is not a function."
+          },
+          "log": [
+            "dispose fproxy"
+          ]
+        },
+        "notFunction": {
+          "result": {
+            "type": "string",
+            "value": "value-dup"
+          },
+          "log": [
+            "dispose value-dup"
+          ]
+        },
+        "none": {
+          "result": {
+            "type": "string",
+            "value": "plain"
+          },
+          "log": [
+            "dispose plain"
+          ]
+        },
+        "twice": {
+          "result": {
+            "type": "object",
+            "value": [
+              "both",
+              "both"
+            ]
+          },
+          "log": [
+            "dispose both"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "targetToPlain": {
+          "result": {
+            "type": "string",
+            "value": "target"
+          },
+          "log": [
+            "dispose target"
+          ]
+        },
+        "targetToFunction": {
+          "result": {
+            "type": "string",
+            "value": "target"
+          },
+          "log": [
+            "dispose target"
+          ]
+        },
+        "targetToProxy": {
+          "result": {
+            "type": "string",
+            "value": "target"
+          },
+          "log": [
+            "dispose target"
+          ]
+        },
+        "targetToPrimitive": {
+          "result": {
+            "type": "string",
+            "value": "target"
+          },
+          "log": [
+            "dispose target"
+          ]
+        },
+        "functionToTarget": {
+          "result": {
+            "error": "TypeError: \"name\" is not a function."
+          },
+          "log": [
+            "dispose fn"
+          ]
+        },
+        "targetProxyToFunction": {
+          "result": {
+            "type": "string",
+            "value": "proxy"
+          },
+          "log": [
+            "dispose proxy"
+          ]
+        },
+        "functionProxyToTarget": {
+          "result": {
+            "error": "TypeError: \"name\" is not a function."
+          },
+          "log": [
+            "dispose fproxy"
+          ]
+        },
+        "functionProxyToProperty": {
+          "result": {
+            "error": "TypeError: \"name\" is not a function."
+          },
+          "log": [
+            "dispose fproxy"
+          ]
+        },
+        "throws": {
+          "result": {
+            "type": "string",
+            "value": "throws"
+          },
+          "log": [
+            "dispose throws"
+          ]
+        },
+        "partial": {
+          "result": {
+            "type": "object",
+            "value": [
+              "good",
+              "taken",
+              "bad"
+            ]
+          },
+          "log": [
+            "dispose bad",
+            "dispose taken",
+            "dispose good"
+          ]
+        },
+        "stubBeforeFailure": {
+          "result": {
+            "type": "object",
+            "value": [
+              "stub",
+              "bad"
+            ]
+          },
+          "reuse": {
+            "error": "Error: RPC stub used after being disposed."
+          },
+          "log": [
+            "dispose bad",
+            "dispose stub"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "call": {
+          "type": "string",
+          "value": "do:1"
+        },
+        "reuse": {
+          "error": "Error: RPC stub used after being disposed."
+        },
+        "callLog": [
+          "inc do 1",
+          "dispose do"
+        ],
+        "names": {
+          "type": "object",
+          "value": [
+            "first",
+            "second",
+            "third"
+          ]
+        },
+        "namesLog": [
+          "dispose third",
+          "dispose second",
+          "dispose first"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "result": {
+          "error": "DataCloneError: Could not serialize object of type \"Unsupported\". This type does not support serialization."
+        },
+        "reuse": {
+          "error": "Error: RPC stub used after being disposed."
+        },
+        "stubLog": [
+          "dispose stub"
+        ],
+        "result2": {
+          "error": "DataCloneError: Could not serialize object of type \"Unsupported\". This type does not support serialization."
+        },
+        "takenLog": [
+          "dispose taken"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "same": true,
+        "calls": [
+          {
+            "type": "string",
+            "value": "pair:1"
+          },
+          {
+            "type": "string",
+            "value": "pair:2"
+          }
+        ],
+        "afterFirst": [
+          "inc pair 1",
+          "inc pair 2",
+          "dispose pair"
+        ],
+        "pairLog": [
+          "inc pair 1",
+          "inc pair 2",
+          "dispose pair"
+        ],
+        "severalLog": [
+          "dispose a",
+          "dispose b",
+          "dispose c"
+        ]
+      }
+    }
+  ]
+}

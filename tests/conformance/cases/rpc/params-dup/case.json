@@ -1,0 +1,15 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/flags"},
+    {"path": "/caller-copy"},
+    {"path": "/proxy-twice"},
+    {"path": "/keep"},
+    {"path": "/returned"},
+    {"path": "/dup-override"},
+    {"path": "/dup-wrong"},
+    {"path": "/do-call"},
+    {"path": "/failed-call"},
+    {"path": "/returns"}
+  ]
+}

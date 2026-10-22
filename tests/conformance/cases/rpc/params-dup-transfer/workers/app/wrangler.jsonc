@@ -1,0 +1,9 @@
+// rpc_params_transfer_stubs turns rpc_params_dup_stubs off after its date: stubs in params transfer.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["rpc_params_transfer_stubs"],
+  "durable_objects": { "bindings": [{ "name": "PEER", "class_name": "Peer" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Peer"] }]
+}

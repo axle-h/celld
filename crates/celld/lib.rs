@@ -313,5 +313,38 @@ pub fn worker_compat(metadata: &serde_json::Value) -> js::Compat {
         queue_json_messages: switch("queue_json_messages", "queue_v8_messages", "2024-03-18"),
         allow_irrevocable_stub_storage: has_flag("allow_irrevocable_stub_storage"),
         nodejs_als: has_flag("nodejs_als"),
+        rpc_params_dup_stubs: switch(
+            "rpc_params_dup_stubs",
+            "rpc_params_transfer_stubs",
+            "2026-01-20",
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::worker_compat;
+
+    fn rpc_params_dup_stubs(date: &str, flags: &[&str]) -> bool {
+        worker_compat(&serde_json::json!({
+            "compatibility_date": date,
+            "compatibility_flags": flags,
+        }))
+        .rpc_params_dup_stubs
+    }
+
+    #[test]
+    fn rpc_params_dup_stubs_follows_its_date_and_flags() {
+        assert!(!rpc_params_dup_stubs("2026-01-19", &[]));
+        assert!(rpc_params_dup_stubs("2026-01-20", &[]));
+        assert!(rpc_params_dup_stubs(
+            "2026-01-01",
+            &["rpc_params_dup_stubs"]
+        ));
+        assert!(!rpc_params_dup_stubs(
+            "2026-09-01",
+            &["rpc_params_transfer_stubs"]
+        ));
+        assert!(!worker_compat(&serde_json::json!({})).rpc_params_dup_stubs);
     }
 }

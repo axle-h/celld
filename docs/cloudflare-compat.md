@@ -318,6 +318,11 @@ celld honors these compatibility flags:
   rejects (see [Context](#context)). Stubs still cannot be stored.
 - `nodejs_als`. celld offers `node:async_hooks` with `AsyncLocalStorage`
   with or without the flag.
+- `rpc_params_dup_stubs`, on from compatibility date 2026-01-20 and turned
+  off by `rpc_params_transfer_stubs`. An RPC call duplicates the stubs in its
+  params instead of transferring them, and a param with its own `dup()`
+  crosses as what `dup()` returns. Return values transfer their stubs either
+  way. This applies within one isolate (see [RPC](#rpc)).
 
 `global_fetch_strictly_public` has no effect by design. On Cloudflare it
 decides whether a `fetch()` to the Worker's own zone goes to the zone's origin

@@ -358,8 +358,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 18 | 1.27 container ownership (security) | done | `f55c069` |
 | 19 | 1.10 small built-in fixes | done | `c7295a0` |
 | 20 | 1.11 method lookup on get-only Proxies | done | `a927af1` |
-| 21 | 1.12 DO stub calls return an RpcPromise | done | see log |
-| 22+ | Phase 1 in plan order (1.13-1.28), and the 1.4 props key-order follow-up | queued | |
+| 21 | 1.12 DO stub calls return an RpcPromise | done | `caa42f6` |
+| 22 | 1.13 stubs passed as params are duplicated | done | see log |
+| 23+ | Phase 1 in plan order (1.14-1.29), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -1580,6 +1581,23 @@ cleanly.
   workerd's error text.
 - Phase 3.2 extends this across isolates.
 
+**As built (done).**
+- `Compat.rpc_params_dup_stubs`: from 2026-01-20 or the flag, off with
+  `rpc_params_transfer_stubs`. It is reported in
+  `Cloudflare.compatibilityFlags`.
+- Only call params duplicate; returns still transfer. `dup()` on an
+  RpcTarget, function or Proxy follows workerd's kind rule and
+  DOMDataCloneError texts (including "RcpTarget").
+- Refusals now happen in serialisation order, and a failed serialisation
+  releases every ref it took.
+- Received params dispose last-first and returns first-first, both as in
+  workerd.
+- A marker repeated in one value revives as one stub. Before, its target
+  was disposed twice.
+- Cases: `rpc/params-dup`, `-explicit`, `-transfer` and `-before`, with a
+  shared `#params-dup` module. They cover RpcStub, `ctx.exports` and
+  same-isolate DO calls.
+
 **Prior art.** Reference royalcala `b02d30e` (patcon `1f7076f`). It is a
 heuristic: it applies to returns too, swallows errors and never validates the
 result.
@@ -1662,7 +1680,8 @@ showed.
   - **refused at deploy:** unimplemented behaviour a Worker would silently
     lose
 - Unknown flags are refused at deploy, as workerd refuses them.
-- Already classified: `global_fetch_strictly_public` is no-op by design
+- Already classified: `rpc_params_dup_stubs` / `rpc_params_transfer_stubs`
+  are honoured (1.13). `global_fetch_strictly_public` is no-op by design
   (1.9). `nodejs_als` is honoured and reported in
   `Cloudflare.compatibilityFlags` (`flags/nodejs-als`).
 - Known gap (found by 1.4, now reachable since 1.11 un-reserved `scheduled`):
@@ -1941,6 +1960,29 @@ still differ from workerd:
   `connect`.
 - workerd puts `Symbol.dispose` on every object RPC result; celld does so only
   when the result carries stubs.
+
+### 1.29 RPC serialisation follow-ups (found by 1.13)
+
+- **Security: forgeable markers.** The lift copies user keys named
+  `__celld$stub` without escaping them, so a user object can pose as a
+  marker if it knows `__stubIsolate`. That token comes from `Math.random`.
+  The reach is same isolate and same script only. Escape user keys, or use
+  a brand JS cannot forge, as 1.8 and 1.21 did.
+- A Proxy that presents a plain object is serialised by value; workerd stubs
+  it and, under 1.13, calls its `dup()`.
+- The RpcTarget check is `instanceof`, where workerd uses the JSG brand, so
+  `Object.create(RpcTarget.prototype)` is accepted.
+- If a call fails after `__rpcOut` but before the callee decodes (a gate
+  refusal, or `__rpc_call` rejecting), the lifted refs leak in both modes.
+- The cross-isolate DO path leaks one stub entry per call, and under 1.13 one
+  `dup()`ed Cap'n Web import per call. Phase 3 (3.2) owns this; a stopgap is
+  to release the refs when a call to a foreign target settles.
+- A stub with no request context (made in a top-level handler) runs each op
+  in a fresh context, so it cannot be returned or passed from inside the
+  target's method ("different request"). workerd allows it (one IoContext).
+- Contradictory compatibility flags (enable and disable both set) are
+  accepted, with the enable flag winning; workerd refuses them. 1.16 should
+  refuse them for every switch.
 
 ### Phase 1 gate
 

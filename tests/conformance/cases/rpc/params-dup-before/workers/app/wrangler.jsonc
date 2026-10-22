@@ -1,0 +1,8 @@
+// The day before rpc_params_dup_stubs's date: stubs in params transfer.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-19",
+  "durable_objects": { "bindings": [{ "name": "PEER", "class_name": "Peer" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Peer"] }]
+}
