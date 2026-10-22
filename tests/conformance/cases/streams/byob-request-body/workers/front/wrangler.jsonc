@@ -2,9 +2,11 @@
 // length and chunked, and back's, which front sends through a service binding
 // as a stream of parts or as bytes.
 //
-// /streamed/cancel is the last step: under wrangler's harness, the request
-// after a Worker cancels a chunked request body fails with "Network
-// connection lost".
+// workerd closes the connection after /streamed/cancel, so it is the last
+// step, and after /held/cancel and /streamed/reader, which have cases of their
+// own: streams/byob-request-body-held-cancel and
+// streams/byob-request-body-streamed-reader. See "Steps that close the
+// connection" in tests/conformance/README.md.
 {
   "name": "front",
   "main": "index.js",

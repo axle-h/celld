@@ -181,6 +181,21 @@ whose support hasn't landed yet: `nodes` greater than 1 or a step's `node`
   `deploy` steps: it starts no node, so its configs can be ones `celld deploy`
   refuses, and `observability` is refused.
 
+### Steps that close the connection
+
+workerd closes the connection after some requests, such as one whose Worker
+cancels a chunked request body, or reads part of a body sent with a length
+and then cancels it. A step like that must be the last step of its case,
+because otherwise the next step can fail on workerd. wrangler's harness puts
+a proxy, a second workerd running wrangler's `ProxyWorker`, in front of the
+case's Workers, and that proxy re-sends each request over a pool of
+keep-alive connections. The pool can hand the closed connection to the next
+request, which then fails with a 500 response from Miniflare's entry Worker:
+`Error: Network connection lost.` This happens on whatever connection the
+runner opens, so `connection: close` on the step does not help. Give each
+such step a case of its own, as `streams/byob-request-body-held-cancel` and
+`streams/byob-request-body-streamed-reader` do.
+
 ### Kinds
 
 - **`differential`** (the default): `expect.json` is recorded from workerd

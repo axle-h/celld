@@ -1,0 +1,13 @@
+{
+  "workers": [
+    "app"
+  ],
+  "steps": [
+    {
+      "path": "/streamed/reader",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    }
+  ]
+}

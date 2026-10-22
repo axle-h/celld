@@ -51,11 +51,6 @@
       "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
     },
     {
-      "path": "/held/cancel",
-      "method": "POST",
-      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
-    },
-    {
       "path": "/held/releaseLock",
       "method": "POST",
       "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
@@ -84,12 +79,6 @@
       "path": "/held/teeCancel",
       "method": "POST",
       "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
-    },
-    {
-      "path": "/streamed/reader",
-      "method": "POST",
-      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
-      "chunked": true
     },
     {
       "path": "/streamed/partial",

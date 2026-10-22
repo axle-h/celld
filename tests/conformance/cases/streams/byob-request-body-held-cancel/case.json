@@ -1,0 +1,12 @@
+{
+  "workers": [
+    "app"
+  ],
+  "steps": [
+    {
+      "path": "/held/cancel",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    }
+  ]
+}

@@ -364,19 +364,6 @@
     {
       "status": 200,
       "body": {
-        "first": true,
-        "cancelled": "resolved",
-        "read": "Error: stop",
-        "after": {
-          "done": true,
-          "bytes": 0
-        },
-        "closed": "resolved"
-      }
-    },
-    {
-      "status": 200,
-      "body": {
         "head": true,
         "released": {
           "read": {
@@ -430,14 +417,6 @@
       "body": {
         "x": "match",
         "y": "match"
-      }
-    },
-    {
-      "status": 200,
-      "body": {
-        "byob": true,
-        "locked": true,
-        "readAtLeast": "function"
       }
     },
     {

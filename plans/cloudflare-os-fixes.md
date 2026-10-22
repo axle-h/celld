@@ -361,7 +361,7 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 21 | 1.12 DO stub calls return an RpcPromise | done | `caa42f6` |
 | 22 | 1.13 stubs passed as params are duplicated | done | `5b67c22` |
 | 23 | 1.14 transactions on root storage; reset semantics | done | see log |
-| 24 | fix the workerd-side flake in `streams/byob-request-body` | next | |
+| 24 | fix the workerd-side flake in `streams/byob-request-body` | done | see log |
 | 25+ | Phase 1 in plan order (1.15-1.30), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
@@ -550,6 +550,10 @@ record the resolved workerd version in each `expect.json` header.
 - wrangler 4.147.0 resolves a single workerd, **1.20261001.1**. A
   differential case fails when the installed workerd differs from its
   `expect.json` header.
+- **Steps that close the connection must end their case.** workerd closes
+  the connection after a Worker cancels an unread request body. wrangler's
+  proxy can then reuse the closed connection for the next request, which gets
+  "Network connection lost". See the conformance README.
 - **Known workerd behaviour to avoid in cases:** an event waiting on a timer
   while another event holds `transaction()` or `blockConcurrencyWhile` and
   awaits its own timer deadlocks workerd, which resets the object after 30 s.

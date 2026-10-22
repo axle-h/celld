@@ -1,0 +1,19 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "first": true,
+        "cancelled": "resolved",
+        "read": "Error: stop",
+        "after": {
+          "done": true,
+          "bytes": 0
+        },
+        "closed": "resolved"
+      }
+    }
+  ]
+}

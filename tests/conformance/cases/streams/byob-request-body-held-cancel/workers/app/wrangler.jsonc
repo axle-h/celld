@@ -1,0 +1,10 @@
+// /held/cancel: a BYOB reader reads 16 bytes of the step's body, sent with a
+// length, and cancels it with a read in flight.
+//
+// A case of its own because workerd closes the connection after this request
+// (see "Steps that close the connection" in tests/conformance/README.md).
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}
