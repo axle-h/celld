@@ -51,7 +51,16 @@ APIs, and Wrangler configuration.
   installing the `env` and `process.env`, and reading the handlers. A load past
   either limit fails with Cloudflare's error, `Script startup exceeded memory
   limits.` or `Script startup exceeded CPU time limit.`, and celld discards the
-  isolate.
+  isolate. Through a Worker Loader, the error reads as workerd's report of a
+  Worker that failed to start: `Failed to start Worker:` and
+  `Error: Script startup exceeded CPU time limit.` on the next line. workerd
+  run locally enforces neither limit, so this follows workerd's source rather
+  than a recording.
+- Module scope cannot wait for I/O or a timer: celld runs no event loop
+  while a Worker starts, so a top-level `await` on one fails the start with
+  `Top-level await in module is unsettled.` workerd refuses the operation
+  itself, with `Disallowed operation called within global scope.`, and also
+  refuses `crypto.getRandomValues()` there, which celld allows.
 - Each isolate start is a load, so the limits apply whenever a pool adds an
   isolate under load, or a Durable Object's isolate starts, and not only at a
   deployment. A Worker whose load is close to a limit can fail later, when a

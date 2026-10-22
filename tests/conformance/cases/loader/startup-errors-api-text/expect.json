@@ -1,0 +1,38 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "child": "url",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught TypeError: Invalid URL string.\n  at main.js:2:1"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "atob",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught DOMException(InvalidCharacterError): atob() called with invalid base64-encoded data. (Only whitespace, '+', '/', alphanumeric ASCII, and up to two terminal '=' signs when the input data length is divisible by 4 are allowed.)\n  at main.js:2:1"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "headers",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught TypeError: To initialize a Headers object from a sequence, each inner sequence must have exactly two elements.\n  at main.js:2:1"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "text-decoder",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught RangeError: \"bogus\" is not a valid encoding.\n  at main.js:2:1"
+      }
+    }
+  ]
+}

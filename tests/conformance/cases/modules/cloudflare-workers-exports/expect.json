@@ -130,14 +130,14 @@
       "status": 200,
       "body": {
         "ok": false,
-        "error": "SyntaxError: The requested module 'cloudflare:workers' does not provide an export named 'NotAnExport'"
+        "error": "Failed to start Worker:\nUncaught SyntaxError: The requested module 'cloudflare:workers' does not provide an export named 'NotAnExport'\n  at worker.js:2:17"
       }
     },
     {
       "status": 200,
       "body": {
         "ok": false,
-        "error": "SyntaxError: The requested module 'cloudflare:workers' does not provide an export named 'default'"
+        "error": "Failed to start Worker:\nUncaught SyntaxError: The requested module 'cloudflare:workers' does not provide an export named 'default'\n  at worker.js:2:15"
       }
     },
     {

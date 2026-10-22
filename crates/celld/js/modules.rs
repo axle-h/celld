@@ -722,13 +722,17 @@ pub(super) fn register_stubs(scope: &mut v8::PinScope, config: &WorkerConfig) {
 
 /// Compile `source` and insert it into the isolate's module registry under
 /// both `name` and `./name`, so bare and relative sibling imports resolve to
-/// one module.
-fn register_sibling_module(scope: &mut v8::PinScope, name: &str, source: &str, trusted: bool) {
-    let Some(m) = compile_module(scope, name, source) else {
-        tracing::warn!(%name, "sibling module failed to compile");
-        return;
-    };
+/// one module. `None` when it does not compile, with the compile error
+/// pending in the caller's TryCatch.
+fn register_sibling_module(
+    scope: &mut v8::PinScope,
+    name: &str,
+    source: &str,
+    trusted: bool,
+) -> Option<()> {
+    let m = compile_module(scope, name, source)?;
     register_named_module(scope, name, m, trusted);
+    Some(())
 }
 
 fn register_named_module(
@@ -873,7 +877,9 @@ pub(super) fn register_wasm_modules(scope: &mut v8::PinScope, modules: &[(String
                 format!("throw new WebAssembly.CompileError({message});")
             }
         };
-        register_sibling_module(scope, name, &source, true);
+        if register_sibling_module(scope, name, &source, true).is_none() {
+            tracing::warn!(%name, "wasm module wrapper failed to compile");
+        }
     }
 }
 
@@ -882,12 +888,14 @@ pub(super) fn register_wasm_modules(scope: &mut v8::PinScope, modules: &[(String
 /// main module. Each module is registered under its own name and `./name` so
 /// both bare and relative sibling imports resolve; the whole graph links when
 /// the main module instantiates. Any builtin a sibling imports (and the main
-/// module did not) is stubbed too.
+/// module did not) is stubbed too. `None` when a sibling does not compile,
+/// which fails the Worker's start with the compile error pending in the
+/// caller's TryCatch.
 pub(super) fn register_loader_modules(
     scope: &mut v8::PinScope,
     config: &WorkerConfig,
     main: v8::Local<v8::Module>,
-) {
+) -> Option<()> {
     for (_name, _source, imports) in config.es_modules() {
         for (spec, names) in imports {
             if modreg(scope).modules.lock().unwrap().contains_key(spec) {
@@ -904,8 +912,9 @@ pub(super) fn register_loader_modules(
     }
     register_named_module(scope, &config.main_module_name, main, false);
     for (name, source, _imports) in config.es_modules() {
-        register_sibling_module(scope, name, source, false);
+        register_sibling_module(scope, name, source, false)?;
     }
+    Some(())
 }
 
 /// Module resolve callback: serve a registered stub for `cloudflare:*`/`node:*`.
@@ -931,9 +940,10 @@ pub(super) fn resolve_external<'s>(
         scope.throw_exception(exception);
         return None;
     }
-    let resolved = registry
-        .source_name(scope, referrer)
-        .and_then(|referrer| resolve_relative_specifier(&referrer, &spec));
+    let referrer_name = registry.source_name(scope, referrer);
+    let resolved = referrer_name
+        .as_deref()
+        .and_then(|referrer| resolve_relative_specifier(referrer, &spec));
     let key = resolved.as_deref().unwrap_or(&spec);
     let m = registry
         .modules
@@ -941,10 +951,70 @@ pub(super) fn resolve_external<'s>(
         .unwrap()
         .get(key)
         .map(|module| v8::Local::new(scope, module));
-    if m.is_none() {
-        tracing::warn!(%spec, resolved = key, "resolve: no stub for specifier");
+    if m.is_some() {
+        return m;
     }
-    m
+    // workerd's link errors name the module by its path from the bundle's
+    // root, which a specifier that climbs past the root does not have.
+    let referrer_name = referrer_name.unwrap_or_default();
+    let Some(path) = workerd_module_path(&referrer_name, &spec) else {
+        let text =
+            format!("Invalid module specifier \"{spec}\".\n  imported from \"{referrer_name}\".");
+        let message = v8::String::new(scope, &text).unwrap();
+        let exception = v8::Exception::type_error(scope, message);
+        scope.throw_exception(exception);
+        return None;
+    };
+    // A specifier from the root ("/x.js") names the module at that path.
+    if spec.starts_with('/') {
+        let found = registry
+            .modules
+            .lock()
+            .unwrap()
+            .get(&path)
+            .map(|module| v8::Local::new(scope, module));
+        if found.is_some() {
+            return found;
+        }
+    }
+    let text = format!("No such module \"{path}\".\n  imported from \"{referrer_name}\"");
+    let message = v8::String::new(scope, &text).unwrap();
+    let exception = v8::Exception::error(scope, message);
+    scope.throw_exception(exception);
+    None
+}
+
+/// A module specifier as workerd's `kj::Path` evaluation reads it: the path
+/// from the bundle's root, taken from the importing module's directory, or
+/// from the root when it starts with `/`. A builtin's specifier is itself.
+/// `None` when it climbs past the root.
+fn workerd_module_path(referrer: &str, spec: &str) -> Option<String> {
+    if ["node:", "cloudflare:", "workerd:"]
+        .iter()
+        .any(|prefix| spec.starts_with(prefix))
+    {
+        return Some(spec.to_string());
+    }
+    let mut segments: Vec<&str> = if spec.starts_with('/') {
+        Vec::new()
+    } else {
+        referrer
+            .rsplit_once('/')
+            .map_or("", |(parent, _)| parent)
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect()
+    };
+    for segment in spec.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop()?;
+            }
+            _ => segments.push(segment),
+        }
+    }
+    Some(segments.join("/"))
 }
 
 /// Resolve a relative module specifier against the importing module's name.
@@ -1062,6 +1132,7 @@ pub(super) fn op_builtin_module(
 fn dynamic_module<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     spec: &str,
+    path: &str,
 ) -> Result<v8::Local<'s, v8::Module>> {
     let key = format!("dyn:{spec}");
     let registry = modreg(scope);
@@ -1074,8 +1145,15 @@ fn dynamic_module<'s>(
     let module = match cached {
         Some(module) => module,
         None => {
-            let src = full_surface_source(scope, spec, &Default::default())
-                .ok_or_else(|| anyhow!("dynamic import of \"{spec}\" is not supported"))?;
+            let Some(src) = full_surface_source(scope, spec, &Default::default()) else {
+                // workerd's error, made here so that it has the frames of
+                // the import() call.
+                let text = format!("No such module \"{path}\".");
+                let message = v8::String::new(scope, &text).unwrap();
+                let exception = v8::Exception::error(scope, message);
+                scope.throw_exception(exception);
+                return Err(anyhow!("{text}"));
+            };
             let module = compile_module(scope, spec, &src)
                 .ok_or_else(|| anyhow!("dynamic module for {spec} did not compile"))?;
             modreg(scope).register(scope, [key], module, true, None);
@@ -1105,8 +1183,9 @@ fn return_callback_data(
 fn evaluate_dynamic_module<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     spec: &str,
+    path: &str,
 ) -> Result<v8::Local<'s, v8::Promise>> {
-    let module = dynamic_module(scope, spec)?;
+    let module = dynamic_module(scope, spec, path)?;
     let evaluated = module
         .evaluate(scope)
         .ok_or_else(|| anyhow!("dynamic module for {spec} threw"))?
@@ -1137,10 +1216,11 @@ pub(super) fn host_import_module_dynamically<'s>(
     let spec = specifier.to_rust_string_lossy(scope);
     let referrer = resource_name.to_rust_string_lossy(scope);
     let resolved = resolve_relative_specifier(&referrer, &spec);
+    let path = workerd_module_path(&referrer, &spec).unwrap_or_else(|| spec.clone());
     let spec = resolved.as_deref().unwrap_or(&spec);
     let tc = std::pin::pin!(v8::TryCatch::new(scope));
     let tc = &mut tc.init();
-    match evaluate_dynamic_module(tc, spec) {
+    match evaluate_dynamic_module(tc, spec, &path) {
         Ok(import) => return Some(import),
         Err(error) => {
             let caught = tc.exception();

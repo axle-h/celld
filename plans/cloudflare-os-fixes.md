@@ -368,8 +368,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 28 | 1.33 ArrayBuffer memory limits (security) | done | `cede9c5` |
 | 28b | 1.35 Wasm and resizable growth within a turn (security) | done | `5ff3e96` |
 | 29 | 1.16 compatibility-flag audit | done | `2fe3f0d`, starter `779b1e2` |
-| 30 | 1.17 close replies on WebSockets; half-open sockets end on disconnect | done | see log |
-| 31+ | Phase 1 in plan order (1.18-1.30, 1.34, 1.36, 1.37), and the 1.4 props key-order follow-up | queued | |
+| 30 | 1.17 close replies on WebSockets; half-open sockets end on disconnect | done | `4d139d5` |
+| 31 | 1.18 Worker Loader startup error text | done | see log |
+| 32+ | Phase 1 in plan order (1.19-1.30, 1.34, 1.36-1.40), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -1943,6 +1944,187 @@ Loader.
 **Tests.** Widen the link steps in `modules/cloudflare-workers-exports`
 back to the full message.
 
+**As built (done).**
+- Probed on workerd 1.20261001.1 and read in its source (`server.c++`
+  `DynamicErrorReporter`, `worker.c++` `reportStartupError`, jsg's
+  exception unwrapping and `JsMessage::addJsStackTrace`). A Worker Loader
+  rejects every call of a Worker that failed to start with an `Error`
+  whose message is `Failed to start Worker:` and the cause on the next line.
+  For a thrown value the cause is `Uncaught ` and its description: V8's
+  side-effect-free detail string, kept when the value is an object whose
+  string starts with one of jsg's error types (`Error`, `TypeError`, …,
+  `DOMException`) and otherwise typed as `Error: `. So a thrown `MyError`
+  reads `Uncaught Error: MyError: …`, a string `Uncaught Error: …`, a plain
+  object `Uncaught Error: #<Object>`, and a `DOMException`
+  `Uncaught DOMException(<name>): …`. Then come location lines from the V8
+  message: one per frame of its stack trace, `  at <file>:<line>:<col>`
+  with ` in <function>` when the frame has one (10 frames at most), or,
+  with no frames, the message's own location, whose column (0-based, as
+  V8 gives a start column) and line are left out when 0. An `Error`'s
+  frames are where it was constructed, because workerd rethrows module
+  scope's rejection from C++. A thrown primitive has no location, unless
+  `Error.captureStackTrace` gave it frames. workerd's runtime APIs are C++,
+  so an error one throws has only the Worker's frames.
+- celld does the same in `load_realm`. The isolate captures stack traces
+  for uncaught exceptions while it loads, as workerd's does, so an `Error`
+  keeps its construction frames; `uncaught!` and `uncaught_startup_error`
+  build the report from a TryCatch's exception and message, and a rejected
+  module promise goes through `v8::Exception::create_message`, which is
+  the path `ThrowException` takes in workerd. celld's own scripts (prelude,
+  harness, lazy builtins, host snippets) compile under the reserved name
+  `celld:internal`, and the report leaves their frames out, so
+  `new URL("bad")` reports only `  at main.js:2:1`. The load captures up to
+  64 frames so that 10 of the Worker's remain after celld's are dropped.
+  Code without a name (`new Function`) still reads as workerd's `worker.js`.
+  A `DOMException` keeps the name and message it was made with in two
+  `v8::Private` fields (`__dom_exception_brand`, called by its constructor),
+  and the report reads only those, after refusing a Proxy, so building the
+  report runs no Worker code: V8's detail string is side-effect free, and
+  the global lookup, `instanceof` and getters an earlier draft used are gone.
+  Compile, link and evaluation
+  failures, a throwing handler lookup (`get fetch()`), and a sibling module
+  that does not compile all report this way. A sibling that did not compile
+  used to be dropped with a warning, so the start failed later, at link
+  time. The link resolver throws workerd's `No such module "<path>".`
+  with `  imported from "<module>"`, the path taken from the bundle's root
+  as workerd's `kj::Path` evaluation gives it (a bare specifier is relative
+  to the importing module's directory, one starting with `/` from the root,
+  and `node:`, `cloudflare:` and `workerd:` are not paths). A root-relative
+  specifier also resolves that way now. One that climbs past the root fails
+  with workerd's `TypeError: Invalid module specifier "<spec>".` and
+  `  imported from "<module>".`. It used to fail without an exception
+  (`instantiate: <none>`). A dynamic `import()` of a module that is not
+  there rejects with workerd's `No such module "<path>".`, made in the
+  import hook so that it has the frames of the `import()` call.
+- **Top-level await.** After evaluation celld runs a microtask checkpoint,
+  and a module promise still pending fails the start with
+  `Uncaught Error: Top-level await in module is unsettled.`, as workerd
+  does. celld runs no event loop while a Worker starts, so nothing can
+  settle it there. workerd fails I/O and timers at module scope before it
+  gets that far (1.39). This applies to deployed
+  Workers too, as in workerd, and closes the 1.34 check of
+  `ns.get(...).unwrap()` reading a binding still in its TDZ.
+- **Main module.** `op_loader_load` reports workerd's
+  `Uncaught Error: No such module: <name>` for a `mainModule` the modules
+  lack, and `Uncaught TypeError: Main module must be an ES module.` for a
+  `json`, `text`, `data`, `cjs`, `py` or `wasm` main module.
+- **Decision (the 1.34 question):** the startup limits get the prefix too.
+  workerd's `reportStartupError` sends a limit error to the same
+  `DynamicErrorReporter`, without `Uncaught `, as the error's description,
+  which jsg always types (`Error: …`, or `Error: internal error` for an
+  untunneled one). So the Loader reports `Failed to start Worker:` then
+  `Error: Script startup exceeded CPU time limit.` (or `memory limits.`).
+  workerd run locally enforces neither limit, so this text follows the
+  source, not a recording; the sentence itself remains Cloudflare's deploy
+  error. `failed_to_start` adds the prefix where the Loader records a
+  failed load, so a deployed Worker's startup error stays the bare report
+  (`Uncaught …`), which replaces `compile: …`, `instantiate: …` and
+  `top-level rejected: …` in the node log.
+- Cases: `loader/startup-errors` (58 children, each loaded twice, and one
+  through `get()`): syntax errors in the main module, an imported sibling
+  and an unimported one, throws of every kind of value and of errors with
+  custom names, subclasses, empty and multi-line messages, a plain object
+  with captured frames, a Proxy whose `getPrototypeOf` never returns,
+  DOMExceptions whose properties were set, given a getter, or made with
+  `Object.create`, `structuredClone` and `AbortSignal` throws (harness
+  frames), frames across functions, methods, arrows, recursion past 10
+  frames and modules, a missing main module and four kinds of non-ES main
+  module, unresolved relative, bare, builtin and dynamic imports, imports
+  past the root and from it, a missing export, rejected and unsettled
+  top-level await, a throwing `fetch` getter and a primitive export.
+  Before this change
+  the 38 failure children it had then all differed, as did the `get()` step (`compile: …`, `top-level rejected:
+  …\n<stack>`, `worker loader: module … missing or not a string`,
+  `instantiate: <none>`, and `tla-never` loaded); the six added later
+  (DOMException, Symbol, AggregateError, the getter, a wasm main module, a
+  nested bare import) could not be run at HEAD, as a second lab build does
+  not fit the scratch quota. It passes now. `modules/cloudflare-workers-exports`
+  records the full message of its two link failures, with their location
+  lines. The celld-only `loader/startup-cpu`, `loader/startup-memory` and
+  `limits/backing-stores` take the new text (`backing-stores` now drops
+  only the location lines). A unit test in `bootstrap.rs` pins the
+  report and the prefix.
+- Found:
+  - Which builtin modules a Dynamic Worker can import differs from
+    workerd. `loader/startup-errors-builtins` records it, xfail until 1.38.
+  - Disallowed operations at module scope: `loader/global-scope-io`, xfail
+    until 1.39.
+  - Runtime API error messages: `loader/startup-errors-api-text`, xfail
+    until 1.40.
+  - celld's frames still show in `error.stack` (now as `celld:internal`
+    rather than unnamed); workerd's C++ APIs add none. Only the startup
+    report leaves them out. And a `DOMException` subclass's constructor
+    frame is missing from the report, because celld's `DOMException` is a
+    JS class whose constructor frames are internal; workerd reports the
+    subclass constructor's frame (`loader/startup-errors-dom-subclass`,
+    xfail until 1.34). Both listed in 1.34.
+
+### 1.38 Builtin modules a Worker can import (found by 1.18)
+
+**Problem.** workerd has a `node:` module (or its bare name, such as
+`path`) only under the flags that provide it, and no `cloudflare:` module
+it does not implement. A Dynamic Worker at 2026-01-01 without
+`nodejs_compat` that imports `node:fs`, `node:buffer` or `path`, or that
+imports a name from `cloudflare:nope`, fails to start there with
+`No such module "<name>".` celld stubs every `node:` and `cloudflare:`
+specifier a bundle imports by name, so the Worker loads, and only calls into
+an unsupported stub throw. The reverse also holds: a side-effect import of
+a builtin (`import "node:buffer";` under `nodejs_compat`) links on workerd,
+but celld's import scan needs a `from` clause, so no stub is registered and
+the start fails with `No such module`.
+
+**Design.** Register a builtin only when the Worker's flags provide it, as
+workerd's module registry does, and refuse unknown `cloudflare:` names at
+link time. Scan side-effect imports too. Check what the starter's and
+Cloudflare OS's bundles import without the flags first, since deployed
+Workers share the stub path.
+
+**Tests.** `loader/startup-errors-builtins` loses its `xfail`.
+
+### 1.39 Disallowed operations in global scope (found by 1.18)
+
+**Problem.** workerd refuses, at module scope, asynchronous I/O, setting a
+timer and generating random values. The operation throws, and the Worker
+fails to start with:
+
+```
+Failed to start Worker:
+Uncaught Error: Disallowed operation called within global scope. Asynchronous I/O (ex: fetch() or connect()), setting a timeout, and generating random values are not allowed within global scope. To fix this error, perform this operation within a handler. https://developers.cloudflare.com/workers/runtime-apis/handlers/
+  at main.js:2:7
+```
+
+Recorded for `await new Promise((r) => setTimeout(r, 0))`,
+`await scheduler.wait(0)`, `crypto.getRandomValues(new Uint8Array(1))`,
+`await new Response("x").text()`, reading a `TransformStream`'s readable
+side through a `Response`, and `await fetch(…)`. celld reports the first
+two and `fetch` as `Top-level await in module is unsettled.` (it runs no
+event loop while a Worker starts), and loads the Worker for the other three.
+
+**Design.** Refuse each such operation while a Worker loads, with
+workerd's text, from the op or harness entry point that performs it, so
+the frames are the caller's. Find the full list in workerd's
+`IoContext::current()` callers that check `hasCurrentIncomingRequest`
+(timers, crypto random, body reads, subrequests, sockets).
+
+**Tests.** `loader/global-scope-io` loses its `xfail`.
+
+### 1.40 Runtime API error messages (found by 1.18)
+
+**Problem.** Some of celld's runtime APIs throw with other messages than
+workerd's. At a Dynamic Worker's module scope (`loader/startup-errors-api-text`):
+
+| Call | workerd | celld |
+| --- | --- | --- |
+| `new URL("bad")` | `TypeError: Invalid URL string.` | `TypeError: Invalid URL: relative URL without a base` |
+| `atob("@@")` | `DOMException(InvalidCharacterError): atob() called with invalid base64-encoded data. (Only whitespace, '+', '/', alphanumeric ASCII, and up to two terminal '=' signs when the input data length is divisible by 4 are allowed.)` | `DOMException(InvalidCharacterError): Invalid base64` |
+| `new Headers([["a"]])` | `TypeError: To initialize a Headers object from a sequence, each inner sequence must have exactly two elements.` | `TypeError: Headers init entry must be a 2-tuple` |
+| `new TextDecoder("bogus")` | `RangeError: "bogus" is not a valid encoding.` | `RangeError: The encoding label 'bogus' is invalid.` |
+
+**Design.** Use workerd's texts; survey the other polyfills' errors
+against workerd's source.
+
+**Tests.** `loader/startup-errors-api-text` loses its `xfail`.
+
 ### 1.19 Trace context across DO RPC calls (found by 1.2)
 
 **Problem.** `op_rpc_call` and `RpcCallReq` carry no parent trace context,
@@ -2366,9 +2548,19 @@ node stays healthy.
 - A failed Loader load holds its registry slot until GC finalises the stub.
 - Check: `ns.get(...).unwrap()` in `load_realm` may panic if a module
   namespace binding is still in its TDZ while top-level await is pending.
+  Done by 1.18: a pending top-level await now fails the start first.
 - When 1.18 adds the "Failed to start Worker:" prefix, decide whether the two
-  startup-limit errors get it too.
+  startup-limit errors get it too. Decided in 1.18: they do, as
+  `Failed to start Worker:` then `Error: Script startup exceeded …`, from
+  workerd's source (its local runtime has no limits to probe).
 - `Response`/`Request` have no `bytes()` method in celld; workerd has one.
+- celld's own frames show in `error.stack` as `celld:internal`; workerd's
+  C++ APIs add none (found by 1.18, which leaves them out of the startup
+  report only).
+- A `DOMException` subclass's constructor frame is missing from a startup
+  report: celld's `DOMException` is a JS class, so the construction frames
+  are its own and dropped, where workerd reports the subclass constructor
+  (found by 1.18; `loader/startup-errors-dom-subclass` is xfail on it).
 - A recorded facet whose host-side close fails (only warned) keeps its
   database open until the isolate drops.
 - The facet-of-a-Dynamic-Worker-class path under condemnation is covered only

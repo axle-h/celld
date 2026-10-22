@@ -70,9 +70,7 @@ async function link(env, name) {
     const response = await worker.getEntrypoint().fetch("http://link.test/");
     return { ok: true, body: await response.text() };
   } catch (error) {
-    // Only the link error itself. How a Worker Loader wraps a startup
-    // failure differs between the runtimes and is not this case's subject.
-    return { ok: false, error: /SyntaxError: [^\n]*/.exec(error.message)?.[0] ?? error.message };
+    return { ok: false, error: error.message };
   }
 }
 

@@ -11,14 +11,14 @@
       "status": 200,
       "body": {
         "error": "Error",
-        "message": "top-level rejected: RangeError: Array buffer allocation failed"
+        "message": "Failed to start Worker:\nUncaught RangeError: Array buffer allocation failed"
       }
     },
     {
       "status": 200,
       "body": {
         "error": "Error",
-        "message": "top-level rejected: RangeError: Array buffer allocation failed"
+        "message": "Failed to start Worker:\nUncaught RangeError: Array buffer allocation failed"
       }
     },
     {
@@ -60,7 +60,7 @@
       "status": 200,
       "body": {
         "error": "Error",
-        "message": "Script startup exceeded memory limits."
+        "message": "Failed to start Worker:\nError: Script startup exceeded memory limits."
       }
     },
     {
@@ -95,7 +95,7 @@
       "status": 200,
       "body": {
         "error": "Error",
-        "message": "Script startup exceeded memory limits."
+        "message": "Failed to start Worker:\nError: Script startup exceeded memory limits."
       }
     },
     {
@@ -130,7 +130,7 @@
       "status": 200,
       "body": {
         "error": "Error",
-        "message": "top-level rejected: RangeError: Array buffer allocation failed"
+        "message": "Failed to start Worker:\nUncaught RangeError: Array buffer allocation failed"
       }
     },
     {

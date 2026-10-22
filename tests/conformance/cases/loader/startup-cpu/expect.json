@@ -5,7 +5,7 @@
       "body": {
         "child": "module-scope",
         "error": "Error",
-        "message": "Script startup exceeded CPU time limit."
+        "message": "Failed to start Worker:\nError: Script startup exceeded CPU time limit."
       }
     },
     {
@@ -21,7 +21,7 @@
       "body": {
         "child": "handler-getter",
         "error": "Error",
-        "message": "Script startup exceeded CPU time limit."
+        "message": "Failed to start Worker:\nError: Script startup exceeded CPU time limit."
       }
     },
     {

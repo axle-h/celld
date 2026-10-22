@@ -1,0 +1,54 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "child": "timer",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: Disallowed operation called within global scope. Asynchronous I/O (ex: fetch() or connect()), setting a timeout, and generating random values are not allowed within global scope. To fix this error, perform this operation within a handler. https://developers.cloudflare.com/workers/runtime-apis/handlers/\n  at main.js:2:32\n  at main.js:2:7"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "scheduler-wait",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: Disallowed operation called within global scope. Asynchronous I/O (ex: fetch() or connect()), setting a timeout, and generating random values are not allowed within global scope. To fix this error, perform this operation within a handler. https://developers.cloudflare.com/workers/runtime-apis/handlers/\n  at main.js:2:17"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "random",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: Disallowed operation called within global scope. Asynchronous I/O (ex: fetch() or connect()), setting a timeout, and generating random values are not allowed within global scope. To fix this error, perform this operation within a handler. https://developers.cloudflare.com/workers/runtime-apis/handlers/\n  at main.js:2:8"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "response-text",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: Disallowed operation called within global scope. Asynchronous I/O (ex: fetch() or connect()), setting a timeout, and generating random values are not allowed within global scope. To fix this error, perform this operation within a handler. https://developers.cloudflare.com/workers/runtime-apis/handlers/\n  at main.js:2:7"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "transform-stream",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: Disallowed operation called within global scope. Asynchronous I/O (ex: fetch() or connect()), setting a timeout, and generating random values are not allowed within global scope. To fix this error, perform this operation within a handler. https://developers.cloudflare.com/workers/runtime-apis/handlers/\n  at main.js:6:30"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "fetch",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: Disallowed operation called within global scope. Asynchronous I/O (ex: fetch() or connect()), setting a timeout, and generating random values are not allowed within global scope. To fix this error, perform this operation within a handler. https://developers.cloudflare.com/workers/runtime-apis/handlers/\n  at main.js:2:7"
+      }
+    }
+  ]
+}

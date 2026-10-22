@@ -10696,7 +10696,12 @@ if (!globalThis.CloseEvent) {
 }
 if (!globalThis.DOMException) {
   globalThis.DOMException = class DOMException extends Error {
-    constructor(message = "", name = "Error") { super(message); this.name = name; }
+    constructor(message = "", name = "Error") {
+      super(message);
+      this.name = name;
+      // What a startup error reports, whatever the properties become.
+      __dom_exception_brand(this, `${name}`, `${message}`);
+    }
   };
   // WebIDL legacy code constants, enumerable on both the interface
   // object and its prototype, in spec order.

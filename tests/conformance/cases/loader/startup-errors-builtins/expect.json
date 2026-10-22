@@ -1,0 +1,46 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "child": "node-default",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"node:fs\".\n  imported from \"main.js\""
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-named",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"node:buffer\".\n  imported from \"main.js\""
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-bare",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"path\".\n  imported from \"main.js\""
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "cloudflare-named",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"cloudflare:nope\".\n  imported from \"main.js\""
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-side-effect",
+        "status": 200,
+        "body": "loaded"
+      }
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "workers": ["app"],
+  "xfail": "1.38",
+  "steps": [
+    {"path": "/?child=node-default"},
+    {"path": "/?child=node-named"},
+    {"path": "/?child=node-bare"},
+    {"path": "/?child=cloudflare-named"},
+    {"path": "/?child=node-side-effect"}
+  ]
+}

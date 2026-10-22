@@ -58,8 +58,20 @@ The load must stay within the isolate's heap limit and 1 second of CPU time,
 as a deployed Worker's must (see [Limitations](../limitations.md#isolate-limits)).
 A load past either one fails, and the first call through the Worker rejects
 with `Script startup exceeded memory limits.` or `Script startup exceeded CPU
-time limit.`. Copying an `env` into `process.env` is part of the load, so it
-counts too.
+time limit.`, in the form below. Copying an `env` into `process.env` is part of
+the load, so it counts too.
+
+A Worker that fails to start rejects its calls with an `Error` whose message
+is workerd's: `Failed to start Worker:`, then the cause on the next line. A
+syntax error, a throw at module scope, an import that does not resolve or
+link, or a top-level `await` that rejects reads `Uncaught ` and the thrown
+value's description, then a line for each frame where the error was made,
+such as `  at main.js:2:7 in inner`; celld's own frames are left out. A
+value other than an `Error` reads `Uncaught Error: ` and the value, with no
+location unless `Error.captureStackTrace` gave it frames. A top-level `await`
+that is still pending once module scope has run fails with `Uncaught Error:
+Top-level await in module is unsettled.`, because celld runs no event loop
+while a Worker starts.
 
 ## The isolation boundary
 
@@ -152,6 +164,18 @@ compiles the code again.
   each invocation, not to the load, which has its own limit of 1 second.
 - `WorkerCode.env` accepts structured-clone values and Service Binding
   capabilities. The encoded values and the capability props can total 1 MiB.
+- A loaded Worker can import a `node:` module without the flag that provides
+  it, and a `cloudflare:` module that does not exist, by a named or default
+  import. workerd fails such a Worker's start with `No such module`. A
+  side-effect import of a builtin, such as `import "node:buffer";`, fails the
+  start on celld.
+- workerd refuses I/O, timers and random values at module scope with
+  `Uncaught Error: Disallowed operation called within global scope. …`, which
+  fails the Worker's start. celld does not: a timer, `scheduler.wait()` or
+  `fetch()` awaited there fails the start as an unsettled top-level `await`,
+  and `crypto.getRandomValues()` or reading a body works.
+- Some runtime APIs throw with other messages than workerd's, such as
+  `new URL("bad")`, `atob`, `new Headers([["a"]])` and `new TextDecoder("bogus")`.
 - A loaded Worker entrypoint cannot transfer to another Worker. Awaitable and
   pipelined properties are also unavailable.
 

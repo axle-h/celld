@@ -157,6 +157,11 @@ fn run_bootstrap_static_script<'s>(
     Ok(())
 }
 
+/// The resource name of every script celld runs inside an isolate: the
+/// prelude, the harness, lazy builtins and host-written snippets. A startup
+/// error leaves their frames out, as workerd's runtime APIs have none.
+pub(super) const INTERNAL_SCRIPT_NAME: &str = "celld:internal";
+
 /// Compile an internal script as one function whose parameters are the
 /// internals object and the host ops, and run it. A script and not a
 /// module, because the harness is one scope shared by every prelude file;
@@ -173,12 +178,27 @@ pub(super) fn run_internal_script<'s>(
     use v8::script_compiler::CompileOptions;
     use v8::script_compiler::NoCacheReason;
     let name = cache.unwrap_or("lazy script");
+    let resource = v8::String::new(scope, INTERNAL_SCRIPT_NAME).unwrap();
+    let origin = v8::ScriptOrigin::new(
+        scope,
+        resource.into(),
+        0,
+        0,
+        false,
+        0,
+        None,
+        false,
+        false,
+        false,
+        None,
+    );
     let cached = cache.and_then(|name| bootstrap_code_cache().lock().unwrap().get(name).cloned());
     let function = match cached {
         // `CachedData` borrows `bytes`; the Arc binding outlives the Source.
         Some(bytes) => {
             let data = v8::script_compiler::CachedData::new(&bytes);
-            let mut source = v8::script_compiler::Source::new_with_cached_data(code, None, data);
+            let mut source =
+                v8::script_compiler::Source::new_with_cached_data(code, Some(&origin), data);
             let function = v8::script_compiler::compile_function(
                 scope,
                 &mut source,
@@ -199,7 +219,7 @@ pub(super) fn run_internal_script<'s>(
         // request. A lazy script keeps V8's lazy compile: most of a builtin
         // module is never called.
         None => {
-            let mut source = v8::script_compiler::Source::new(code, None);
+            let mut source = v8::script_compiler::Source::new(code, Some(&origin));
             let options = match cache {
                 Some(_) => CompileOptions::EagerCompile,
                 None => CompileOptions::NoCompileOptions,
@@ -1518,6 +1538,61 @@ mod tests {
         assert_eq!(next, MEMORY_EXCEEDED);
     }
 
+    /// A load that fails reports as workerd does: "Uncaught " and the thrown
+    /// value's description, then where an `Error` was made or where the
+    /// parser stopped. A Worker Loader puts its own line in front, and types
+    /// a startup limit as an `Error`.
+    #[test]
+    fn a_failed_load_reports_as_workerd_does() {
+        let cases = [
+            (
+                format!("{HANDLER}function f() {{ throw new TypeError('no'); }}\nf();"),
+                "Uncaught TypeError: no\n  at worker.js:2:22 in f\n  at worker.js:3:1",
+            ),
+            (format!("{HANDLER}throw 'text';"), "Uncaught Error: text"),
+            (
+                format!("{HANDLER}const e = new Error('x'); e.name = 'Mine'; throw e;"),
+                "Uncaught Error: Mine: x\n  at worker.js:2:11",
+            ),
+            (
+                format!("{HANDLER}let = = 1;"),
+                "Uncaught SyntaxError: Unexpected strict mode reserved word\n  at worker.js:2",
+            ),
+            (
+                format!("import './gone.js';\n{HANDLER}"),
+                "Uncaught Error: No such module \"gone.js\".\n  imported from \"worker.js\"",
+            ),
+            (
+                format!("import '../up.js';\n{HANDLER}"),
+                "Uncaught TypeError: Invalid module specifier \"../up.js\".\n  imported from \"worker.js\".",
+            ),
+            // celld's own frames are left out.
+            (
+                format!("{HANDLER}structuredClone(() => {{}});"),
+                "Uncaught DOMException(DataCloneError): () => {} could not be cloned.\n  at worker.js:2:1",
+            ),
+            (
+                format!("{HANDLER}await new Promise(() => {{}});"),
+                "Uncaught Error: Top-level await in module is unsettled.",
+            ),
+        ];
+        for (source, report) in cases {
+            assert_eq!(load(&source, &[]), Err(report.to_string()), "{source}");
+        }
+        assert_eq!(
+            failed_to_start(&anyhow!("Uncaught Error: text")),
+            "Failed to start Worker:\nUncaught Error: text"
+        );
+        assert_eq!(
+            failed_to_start(&anyhow::Error::new(StartupCpuExceeded)),
+            format!("Failed to start Worker:\nError: {STARTUP_CPU_EXCEEDED}")
+        );
+        assert_eq!(
+            failed_to_start(&anyhow!(STARTUP_MEMORY_EXCEEDED)),
+            format!("Failed to start Worker:\nError: {STARTUP_MEMORY_EXCEEDED}")
+        );
+    }
+
     /// A buffer the budget refuses at module scope throws V8's RangeError,
     /// which fails the load as any throw there does, and does not count as
     /// the memory limit: a refusal takes no memory. Caught, it costs nothing.
@@ -1530,7 +1605,7 @@ mod tests {
             let error = load(&format!("{buffers}\n{HANDLER}"), &[]).unwrap_err();
             assert_eq!(
                 error.lines().next(),
-                Some("top-level rejected: RangeError: Array buffer allocation failed"),
+                Some("Uncaught RangeError: Array buffer allocation failed"),
                 "{buffers}"
             );
         }
@@ -1569,12 +1644,12 @@ mod tests {
             let error = load(&format!("{growth}\n{HANDLER}"), &[]).unwrap_err();
             assert_eq!(
                 error.lines().next(),
-                Some(format!("top-level rejected: RangeError: {refusal}").as_str()),
+                Some(format!("Uncaught RangeError: {refusal}").as_str()),
                 "{growth}"
             );
-            // The stack starts at the Worker's call, with no harness frames.
+            // The frames start at the Worker's call, with no harness frames.
             assert!(
-                error.lines().nth(2).is_some_and(|frame| frame.contains("worker.js")),
+                error.lines().nth(1).is_some_and(|frame| frame.starts_with("  at worker.js:")),
                 "{error}"
             );
         }

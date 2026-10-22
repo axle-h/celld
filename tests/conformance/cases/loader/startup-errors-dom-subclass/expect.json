@@ -1,0 +1,13 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught DOMException(DataError): sub\n  at main.js:2:51 in Mine\n  at main.js:3:7"
+      }
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "workers": ["app"],
+  "xfail": "1.39",
+  "steps": [
+    {"path": "/?child=timer"},
+    {"path": "/?child=scheduler-wait"},
+    {"path": "/?child=random"},
+    {"path": "/?child=response-text"},
+    {"path": "/?child=transform-stream"},
+    {"path": "/?child=fetch"}
+  ]
+}

@@ -1,0 +1,1693 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "child": "ok",
+        "via": "load",
+        "results": [
+          {
+            "status": 200,
+            "body": "loaded"
+          },
+          {
+            "status": 200,
+            "body": "loaded"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "syntax",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught SyntaxError: Unexpected end of input\n  at main.js:3",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught SyntaxError: Unexpected end of input\n  at main.js:3"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught SyntaxError: Unexpected end of input\n  at main.js:3",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught SyntaxError: Unexpected end of input\n  at main.js:3"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "syntax-token",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught SyntaxError: Unexpected strict mode reserved word\n  at main.js:2",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught SyntaxError: Unexpected strict mode reserved word\n  at main.js:2"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught SyntaxError: Unexpected strict mode reserved word\n  at main.js:2",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught SyntaxError: Unexpected strict mode reserved word\n  at main.js:2"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "syntax-in-dep",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught SyntaxError: Unexpected token ';'\n  at dep.js:1:8",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught SyntaxError: Unexpected token ';'\n  at dep.js:1:8"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught SyntaxError: Unexpected token ';'\n  at dep.js:1:8",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught SyntaxError: Unexpected token ';'\n  at dep.js:1:8"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-error",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: boom\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: boom\n  at main.js:2:7"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: boom\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: boom\n  at main.js:2:7"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-type-error",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: bad type\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: bad type\n  at main.js:2:7"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: bad type\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: bad type\n  at main.js:2:7"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-eval-error",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught EvalError: evil\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught EvalError: evil\n  at main.js:2:7"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught EvalError: evil\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught EvalError: evil\n  at main.js:2:7"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-aggregate",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught AggregateError: agg\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught AggregateError: agg\n  at main.js:2:7"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught AggregateError: agg\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught AggregateError: agg\n  at main.js:2:7"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-dom-exception",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught DOMException(SyntaxError): dom\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught DOMException(SyntaxError): dom\n  at main.js:2:7"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught DOMException(SyntaxError): dom\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught DOMException(SyntaxError): dom\n  at main.js:2:7"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-empty-message",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error\n  at main.js:2:7"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error\n  at main.js:2:7"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-multiline",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: line one\nline two\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: line one\nline two\n  at main.js:2:7"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: line one\nline two\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: line one\nline two\n  at main.js:2:7"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-custom-name",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: MyError: named\n  at main.js:2:11",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: MyError: named\n  at main.js:2:11"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: MyError: named\n  at main.js:2:11",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: MyError: named\n  at main.js:2:11"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-subclass",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: AppError: sub\n  at main.js:3:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: AppError: sub\n  at main.js:3:7"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: AppError: sub\n  at main.js:3:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: AppError: sub\n  at main.js:3:7"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-no-stack",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: nostack\n  at main.js:2:11",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: nostack\n  at main.js:2:11"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: nostack\n  at main.js:2:11",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: nostack\n  at main.js:2:11"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-nested",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught RangeError: deep\n  at main.js:2:26 in inner\n  at main.js:3:20 in outer\n  at main.js:4:1",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught RangeError: deep\n  at main.js:2:26 in inner\n  at main.js:3:20 in outer\n  at main.js:4:1"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught RangeError: deep\n  at main.js:2:26 in inner\n  at main.js:3:20 in outer\n  at main.js:4:1",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught RangeError: deep\n  at main.js:2:26 in inner\n  at main.js:3:20 in outer\n  at main.js:4:1"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-deep",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: bottom\n  at main.js:2:39 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: bottom\n  at main.js:2:39 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: bottom\n  at main.js:2:39 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: bottom\n  at main.js:2:39 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down\n  at main.js:2:60 in down"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-method",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: lid\n  at main.js:2:28 in open\n  at main.js:3:11",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: lid\n  at main.js:2:28 in open\n  at main.js:3:11"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: lid\n  at main.js:2:28 in open\n  at main.js:3:11",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: lid\n  at main.js:2:28 in open\n  at main.js:3:11"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-arrow",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: arrow\n  at main.js:2:26 in go\n  at main.js:3:5",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: arrow\n  at main.js:2:26 in go\n  at main.js:3:5"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: arrow\n  at main.js:2:26 in go\n  at main.js:3:5",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: arrow\n  at main.js:2:26 in go\n  at main.js:3:5"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-in-dep",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: from dep\n  at dep.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: from dep\n  at dep.js:2:7"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: from dep\n  at dep.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: from dep\n  at dep.js:2:7"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-cross-module",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: in util\n  at lib/util.js:2:9 in fail\n  at main.js:2:1",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: in util\n  at lib/util.js:2:9 in fail\n  at main.js:2:1"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: in util\n  at lib/util.js:2:9 in fail\n  at main.js:2:1",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: in util\n  at lib/util.js:2:9 in fail\n  at main.js:2:1"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-string",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: a string",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: a string"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: a string",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: a string"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-error-string",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: Error: looks typed",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: Error: looks typed"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: Error: looks typed",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: Error: looks typed"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-number",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: 42",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: 42"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: 42",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: 42"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-null",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: null",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: null"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: null",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: null"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-undefined",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: undefined",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: undefined"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: undefined",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: undefined"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-symbol",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: Symbol(sym)",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: Symbol(sym)"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: Symbol(sym)",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: Symbol(sym)"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-object",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: #<Object>",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: #<Object>"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: #<Object>",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: #<Object>"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-object-tostring",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: [object Object]",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: [object Object]"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: [object Object]",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: [object Object]"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-captured-object",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: plain\n  at main.js:3:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: plain\n  at main.js:3:7"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: plain\n  at main.js:3:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: plain\n  at main.js:3:7"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-proxy",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: #<Object>",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: #<Object>"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: #<Object>",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: #<Object>"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "dom-renamed",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught DOMException(SyntaxError): dom\n  at main.js:2:11",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught DOMException(SyntaxError): dom\n  at main.js:2:11"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught DOMException(SyntaxError): dom\n  at main.js:2:11",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught DOMException(SyntaxError): dom\n  at main.js:2:11"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "dom-getter",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught DOMException(SyntaxError): dom\n  at main.js:2:11",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught DOMException(SyntaxError): dom\n  at main.js:2:11"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught DOMException(SyntaxError): dom\n  at main.js:2:11",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught DOMException(SyntaxError): dom\n  at main.js:2:11"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "dom-prototype-object",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "api-structured-clone",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught DOMException(DataCloneError): () => {} could not be cloned.\n  at main.js:2:1",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught DOMException(DataCloneError): () => {} could not be cloned.\n  at main.js:2:1"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught DOMException(DataCloneError): () => {} could not be cloned.\n  at main.js:2:1",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught DOMException(DataCloneError): () => {} could not be cloned.\n  at main.js:2:1"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "api-abort",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught DOMException(AbortError): The operation was aborted\n  at main.js:2:13",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught DOMException(AbortError): The operation was aborted\n  at main.js:2:13"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught DOMException(AbortError): The operation was aborted\n  at main.js:2:13",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught DOMException(AbortError): The operation was aborted\n  at main.js:2:13"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "missing-main",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module: nope.js",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module: nope.js"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module: nope.js",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module: nope.js"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "main-json",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: Main module must be an ES module.",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: Main module must be an ES module."
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: Main module must be an ES module.",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: Main module must be an ES module."
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "main-text",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: Main module must be an ES module.",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: Main module must be an ES module."
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: Main module must be an ES module.",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: Main module must be an ES module."
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "main-commonjs",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: Main module must be an ES module.",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: Main module must be an ES module."
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: Main module must be an ES module.",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: Main module must be an ES module."
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "main-wasm",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: Main module must be an ES module.",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: Main module must be an ES module."
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: Main module must be an ES module.",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: Main module must be an ES module."
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "import-missing-file",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module \"missing.js\".\n  imported from \"main.js\"",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module \"missing.js\".\n  imported from \"main.js\""
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module \"missing.js\".\n  imported from \"main.js\"",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module \"missing.js\".\n  imported from \"main.js\""
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "import-missing-relative",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module \"gone.js\".\n  imported from \"lib/a.js\"",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module \"gone.js\".\n  imported from \"lib/a.js\""
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module \"gone.js\".\n  imported from \"lib/a.js\"",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module \"gone.js\".\n  imported from \"lib/a.js\""
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "import-bare",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module \"left-pad\".\n  imported from \"main.js\"",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module \"left-pad\".\n  imported from \"main.js\""
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module \"left-pad\".\n  imported from \"main.js\"",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module \"left-pad\".\n  imported from \"main.js\""
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "import-bare-nested",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module \"lib/left-pad\".\n  imported from \"lib/a.js\"",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module \"lib/left-pad\".\n  imported from \"lib/a.js\""
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module \"lib/left-pad\".\n  imported from \"lib/a.js\"",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module \"lib/left-pad\".\n  imported from \"lib/a.js\""
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "import-missing-builtin",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module \"cloudflare:nope\".\n  imported from \"main.js\"",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module \"cloudflare:nope\".\n  imported from \"main.js\""
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module \"cloudflare:nope\".\n  imported from \"main.js\"",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module \"cloudflare:nope\".\n  imported from \"main.js\""
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "import-up-past-root",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: Invalid module specifier \"../x.js\".\n  imported from \"main.js\".",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: Invalid module specifier \"../x.js\".\n  imported from \"main.js\"."
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: Invalid module specifier \"../x.js\".\n  imported from \"main.js\".",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: Invalid module specifier \"../x.js\".\n  imported from \"main.js\"."
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "import-up-past-root-nested",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: Invalid module specifier \"../../up.js\".\n  imported from \"lib/a.js\".",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: Invalid module specifier \"../../up.js\".\n  imported from \"lib/a.js\"."
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: Invalid module specifier \"../../up.js\".\n  imported from \"lib/a.js\".",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: Invalid module specifier \"../../up.js\".\n  imported from \"lib/a.js\"."
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "import-root-relative",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module \"root.js\".\n  imported from \"lib/a.js\"",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module \"root.js\".\n  imported from \"lib/a.js\""
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module \"root.js\".\n  imported from \"lib/a.js\"",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module \"root.js\".\n  imported from \"lib/a.js\""
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "import-root-relative-found",
+        "via": "load",
+        "results": [
+          {
+            "status": 200,
+            "body": "loaded"
+          },
+          {
+            "status": 200,
+            "body": "loaded"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "import-dynamic-missing",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module \"nope.js\".\n  at main.js:2:1",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module \"nope.js\".\n  at main.js:2:1"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: No such module \"nope.js\".\n  at main.js:2:1",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: No such module \"nope.js\".\n  at main.js:2:1"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "unimported-sibling-syntax",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught SyntaxError: Unexpected end of input\n  at lib/bad.js:1:16",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught SyntaxError: Unexpected end of input\n  at lib/bad.js:1:16"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught SyntaxError: Unexpected end of input\n  at lib/bad.js:1:16",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught SyntaxError: Unexpected end of input\n  at lib/bad.js:1:16"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "import-missing-export",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught SyntaxError: The requested module './dep.js' does not provide an export named 'nope'\n  at main.js:1:9",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught SyntaxError: The requested module './dep.js' does not provide an export named 'nope'\n  at main.js:1:9"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught SyntaxError: The requested module './dep.js' does not provide an export named 'nope'\n  at main.js:1:9",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught SyntaxError: The requested module './dep.js' does not provide an export named 'nope'\n  at main.js:1:9"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "tla-reject",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: tla\n  at main.js:2:22",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: tla\n  at main.js:2:22"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: tla\n  at main.js:2:22",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: tla\n  at main.js:2:22"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "tla-reject-string",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: tla string",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: tla string"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: tla string",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: tla string"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "tla-throw-after-await",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: after await\n  at main.js:3:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: after await\n  at main.js:3:7"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: after await\n  at main.js:3:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: after await\n  at main.js:3:7"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "tla-never",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: Top-level await in module is unsettled.",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: Top-level await in module is unsettled."
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: Top-level await in module is unsettled.",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: Top-level await in module is unsettled."
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-handler-getter",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: getter\n  at main.js:1:38 in get fetch",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: getter\n  at main.js:1:38 in get fetch"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: getter\n  at main.js:1:38 in get fetch",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: getter\n  at main.js:1:38 in get fetch"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "export-primitive",
+        "via": "load",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: Incorrect type for map entry 'n': the provided value is not of type 'function or ExportedHandler'.",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: Incorrect type for map entry 'n': the provided value is not of type 'function or ExportedHandler'."
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught TypeError: Incorrect type for map entry 'n': the provided value is not of type 'function or ExportedHandler'.",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught TypeError: Incorrect type for map entry 'n': the provided value is not of type 'function or ExportedHandler'."
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "throw-error",
+        "via": "get",
+        "results": [
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: boom\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: boom\n  at main.js:2:7"
+          },
+          {
+            "stage": "fetch",
+            "type": "object",
+            "name": "Error",
+            "message": "Failed to start Worker:\nUncaught Error: boom\n  at main.js:2:7",
+            "stackHead": true,
+            "ctor": "Error",
+            "keys": [],
+            "string": "Error: Failed to start Worker:\nUncaught Error: boom\n  at main.js:2:7"
+          }
+        ]
+      }
+    }
+  ]
+}

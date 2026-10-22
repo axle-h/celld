@@ -171,6 +171,16 @@ macro_rules! exc {
     };
 }
 
+/// A Worker's startup failure from the exception a TryCatch scope caught,
+/// as workerd reports it (see [`uncaught_startup_error`]).
+macro_rules! uncaught {
+    ($tc:expr) => {{
+        let exception = $tc.exception();
+        let message = $tc.message();
+        uncaught_startup_error(&*$tc, exception, message)
+    }};
+}
+
 /// A cross-node dispatch: the isolate hit `env.NS.get(id)` for a cell this node
 /// does not own. The op hands this to the tokio runtime, which resolves the
 /// owner and HTTP-proxies the fetch, replying on `reply` (an async oneshot the
@@ -6869,6 +6879,209 @@ fn startup_error(error: anyhow::Error) -> anyhow::Error {
     }
 }
 
+/// How a Worker Loader reports a Worker that failed to start, as workerd's
+/// `DynamicErrorReporter` does. A startup limit is reported by its
+/// description, which workerd types as an `Error`.
+fn failed_to_start(error: &anyhow::Error) -> String {
+    let description = error.to_string();
+    if error.is::<StartupCpuExceeded>() || description == STARTUP_MEMORY_EXCEEDED {
+        format!("Failed to start Worker:\nError: {description}")
+    } else {
+        format!("Failed to start Worker:\n{description}")
+    }
+}
+
+/// The names that type a thrown value's description in workerd: jsg's
+/// `JS_ERROR_TYPES` and `DOMException`. A description that starts with none
+/// of them is typed as an `Error`.
+const STARTUP_ERROR_TYPES: &[&str] = &[
+    "Error",
+    "RangeError",
+    "TypeError",
+    "SyntaxError",
+    "ReferenceError",
+    "CompileError",
+    "LinkError",
+    "RuntimeError",
+    "SuspendError",
+    "AggregateError",
+    "SuppressedError",
+    "URIError",
+    "EvalError",
+    "DOMException",
+];
+
+/// workerd's report of a startup that threw (`reportStartupError`):
+/// "Uncaught " and the exception's description, then the location lines of
+/// its message. The description is V8's side-effect-free detail string,
+/// typed as an `Error` when the value is not an object or the string does
+/// not start with an error type, so a thrown `MyError` reads
+/// "Error: MyError: …" and a thrown string "Error: …".
+fn uncaught_startup_error(
+    scope: &v8::PinScope,
+    exception: Option<v8::Local<v8::Value>>,
+    message: Option<v8::Local<v8::Message>>,
+) -> anyhow::Error {
+    let Some(exception) = exception else {
+        return anyhow!("startup failed without an exception");
+    };
+    let detail = exception
+        .to_detail_string(scope)
+        .map(|detail| detail.to_rust_string_lossy(scope))
+        .unwrap_or_else(|| "(couldn't stringify)".into());
+    let typed = exception.is_object()
+        && STARTUP_ERROR_TYPES
+            .iter()
+            .any(|name| detail.starts_with(name));
+    let mut lines = vec![
+        if let Some(dom) = dom_exception_description(scope, exception) {
+            format!("Uncaught {dom}")
+        } else if typed {
+            format!("Uncaught {detail}")
+        } else {
+            format!("Uncaught Error: {detail}")
+        },
+    ];
+    if let Some(message) = message {
+        startup_location_lines(scope, message, &mut lines);
+    }
+    anyhow!(lines.join("\n"))
+}
+
+/// The private fields where a `DOMException` keeps the name and message it
+/// was made with, as workerd keeps them in its C++ object. Script cannot
+/// read or change them, and reading them runs none.
+fn dom_exception_private<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    field: &str,
+) -> v8::Local<'s, v8::Private> {
+    let name = v8::String::new(scope, &format!("celld.DOMException.{field}")).unwrap();
+    v8::Private::for_api(scope, Some(name))
+}
+
+/// `__dom_exception_brand(exception, name, message)`: record a new
+/// `DOMException`'s name and message in its private fields.
+fn op_dom_exception_brand(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let Ok(object) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
+        return;
+    };
+    for (index, field) in [(1, "name"), (2, "message")] {
+        let key = dom_exception_private(scope, field);
+        object.set_private(scope, key, args.get(index));
+    }
+}
+
+/// workerd describes a `DOMException` by the name and message it was made
+/// with, as "DOMException(<name>): <message>", where V8 would describe it as
+/// an `Error` named by its `name` property. Only the private fields are
+/// read, so neither a Proxy nor a getter runs.
+fn dom_exception_description(
+    scope: &v8::PinScope,
+    exception: v8::Local<v8::Value>,
+) -> Option<String> {
+    if exception.is_proxy() {
+        return None;
+    }
+    let object = v8::Local::<v8::Object>::try_from(exception).ok()?;
+    let field = |field: &str| {
+        let key = dom_exception_private(scope, field);
+        object
+            .get_private(scope, key)
+            .filter(|value| value.is_string())
+            .map(|value| value.to_rust_string_lossy(scope))
+    };
+    Some(format!(
+        "DOMException({}): {}",
+        field("name")?,
+        field("message")?
+    ))
+}
+
+/// The frames a startup error reports, as V8's default for workerd.
+const STARTUP_FRAME_LIMIT: usize = 10;
+
+/// The frames a load captures: room for celld's own above the ones reported.
+const STARTUP_CAPTURED_FRAMES: i32 = 64;
+
+/// workerd's location lines for a startup error (`JsMessage::addJsStackTrace`):
+/// one per frame of the message's stack trace, which for an `Error` is where
+/// it was constructed, or else the message's own location, as for a syntax
+/// error. A frame names its function when it has one. A line or column of 0
+/// is V8's "no information", so it is left out, and a location left with
+/// nothing is not reported.
+fn startup_location_lines(
+    scope: &v8::PinScope,
+    message: v8::Local<v8::Message>,
+    lines: &mut Vec<String>,
+) {
+    let line_col = |mut location: String, line: usize, column: usize| {
+        if line != 0 {
+            location.push_str(&format!(":{line}"));
+            if column != 0 {
+                location.push_str(&format!(":{column}"));
+            }
+        }
+        location
+    };
+    let internal = |name: &str| name == bootstrap::INTERNAL_SCRIPT_NAME;
+    let trace = message
+        .get_stack_trace(scope)
+        .filter(|trace| trace.get_frame_count() != 0);
+    let Some(trace) = trace else {
+        let name = message
+            .get_script_resource_name(scope)
+            .filter(|name| name.is_string())
+            .map(|name| name.to_rust_string_lossy(scope))
+            .filter(|name| !name.is_empty());
+        if name.as_deref().is_some_and(internal) {
+            return;
+        }
+        let location = line_col(
+            name.map(|name| format!("  at {name}")).unwrap_or_default(),
+            message.get_line_number(scope).unwrap_or(0),
+            message.get_start_column(),
+        );
+        if !location.is_empty() {
+            lines.push(location);
+        }
+        return;
+    };
+    // celld's own frames are left out: workerd's runtime APIs are C++ and
+    // have none. Code without a name, such as `new Function`'s, reads as
+    // workerd's `worker.js`.
+    let frames = (0..trace.get_frame_count())
+        .filter_map(|index| trace.get_frame(scope, index))
+        .map(|frame| {
+            let name = frame
+                .get_script_name(scope)
+                .map(|name| name.to_rust_string_lossy(scope))
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "worker.js".into());
+            (frame, name)
+        })
+        .filter(|(_, name)| !internal(name))
+        .take(STARTUP_FRAME_LIMIT);
+    for (frame, name) in frames {
+        let mut location = line_col(
+            format!("  at {name}"),
+            frame.get_line_number(),
+            frame.get_column(),
+        );
+        let function = frame
+            .get_function_name(scope)
+            .map(|function| function.to_rust_string_lossy(scope))
+            .filter(|function| !function.is_empty());
+        if let Some(function) = function {
+            location.push_str(&format!(" in {function}"));
+        }
+        lines.push(location);
+    }
+}
+
 fn settle_isolate_heap(isolate: &mut v8::Isolate) {
     #[cfg(all(test, celld_internal_tests))]
     let _observation = HeapSettlementObservationForTest::begin();
@@ -6937,7 +7150,11 @@ impl Worker {
         isolate.add_near_heap_limit_callback(near_heap_limit, heap_limit_state_ptr);
         let startup = CpuWatchdog::startup(isolate.thread_safe_handle(), runtime_state.clone());
         let turn = WatchedTurn::enter(None);
+        // As workerd, while the Worker starts: an `Error` constructed then
+        // keeps where it was made, which its startup error reports.
+        isolate.set_capture_stack_trace_for_uncaught_exceptions(true, STARTUP_CAPTURED_FRAMES);
         let realm = Self::load_realm(&mut isolate, &config);
+        isolate.set_capture_stack_trace_for_uncaught_exceptions(false, STARTUP_CAPTURED_FRAMES);
         drop(turn);
         drop(startup);
         // While the load still counts as loading, so that memory past a
@@ -7030,42 +7247,48 @@ impl Worker {
 
         let module = match compile_module(scope, &config.main_module_name, src) {
             Some(m) => m,
-            None => return Err(anyhow!("compile: {}", exc!(scope))),
+            None => return Err(uncaught!(scope)),
         };
         register_stubs(scope, config); // cloudflare:*/node:* + text modules
         register_wasm_modules(scope, &config.modules);
-        register_loader_modules(scope, config, module);
-        module
-            .instantiate_module(scope, resolve_external)
-            .ok_or_else(|| anyhow!("instantiate: {}", exc!(scope)))?;
+        if register_loader_modules(scope, config, module).is_none() {
+            return Err(uncaught!(scope));
+        }
+        if module.instantiate_module(scope, resolve_external).is_none() {
+            return Err(uncaught!(scope));
+        }
         let ev = match module.evaluate(scope) {
             Some(value) => value,
             None => {
                 if let Some(error) = take_execution_termination(scope) {
                     return Err(error);
                 }
-                return Err(anyhow!("evaluate: {}", exc!(scope)));
+                return Err(uncaught!(scope));
             }
         };
+        // Settle what module scope left queued, as workerd does before it
+        // reads the module's promise.
+        scope.perform_microtask_checkpoint();
         if let Some(error) = take_execution_termination(scope) {
             return Err(error);
         }
         if let Ok(p) = ev.try_cast::<v8::Promise>() {
-            if p.state() == v8::PromiseState::Rejected {
-                let r = p.result(scope);
-                let stk = r
-                    .to_object(scope)
-                    .and_then(|o| {
-                        let k = v8::String::new(scope, "stack")?;
-                        o.get(scope, k.into())
-                    })
-                    .map(|s| s.to_rust_string_lossy(scope))
-                    .unwrap_or_default();
-                return Err(anyhow!(
-                    "top-level rejected: {}\n{}",
-                    r.to_rust_string_lossy(scope),
-                    stk
-                ));
+            match p.state() {
+                // workerd throws the rejection again, so its message is the
+                // one V8 makes for that value outside any frame.
+                v8::PromiseState::Rejected => {
+                    let reason = p.result(scope);
+                    let message = v8::Exception::create_message(scope, reason);
+                    return Err(uncaught_startup_error(scope, Some(reason), Some(message)));
+                }
+                // Nothing settles it: celld runs no event loop while a
+                // Worker starts.
+                v8::PromiseState::Pending => {
+                    return Err(anyhow!(
+                        "Uncaught Error: Top-level await in module is unsettled."
+                    ));
+                }
+                v8::PromiseState::Fulfilled => {}
             }
         }
 
@@ -7141,7 +7364,7 @@ impl Worker {
         let fk = v8::String::new(scope, "fetch").unwrap();
         let fetch_value = default
             .get(scope, fk.into())
-            .ok_or_else(|| anyhow!("no fetch"))?;
+            .ok_or_else(|| uncaught!(scope))?;
         let default_is_entrypoint =
             default.is_function() && cell_registry_has(scope, "entrypoints", "default")?;
         let class_fetch = default_is_entrypoint
@@ -8003,6 +8226,7 @@ ops! { OP_NAMES, install_op_functions,
         "__http_stream_read" => op_http_stream_read,
         "__http_stream_read_all" => op_http_stream_read_all,
         "__memory_admit" => op_memory_admit,
+        "__dom_exception_brand" => op_dom_exception_brand,
         "__memory_limit" => op_memory_limit,
         "__memory_watch_pause" => op_memory_watch_pause,
         "__http_stream_cancel" => op_http_stream_cancel,
@@ -8687,7 +8911,7 @@ impl LoaderReload {
                         return;
                     }
                     Ok(Err(error)) => (
-                        Arc::from(format!("{error}")),
+                        Arc::from(failed_to_start(&error)),
                         error.is::<StartupCpuExceeded>(),
                     ),
                     Err(error) => (
@@ -8816,6 +9040,10 @@ fn admit_loaded_worker(owner: LoaderOwner, id: u64, loaded: LoadedWorker) -> Res
     Ok(())
 }
 
+/// workerd's startup error for a main module of another kind than ES.
+const MAIN_NOT_ES_MODULE: &str =
+    "Failed to start Worker:\nUncaught TypeError: Main module must be an ES module.";
+
 fn loader_throw(scope: &mut v8::PinScope, message: &str) {
     let message = v8::String::new(scope, message).unwrap();
     let exception = v8::Exception::error(scope, message);
@@ -8892,16 +9120,13 @@ fn op_loader_load(
     let Some(main) = code.get("mainModule").and_then(|v| v.as_str()) else {
         return loader_throw(scope, "worker loader: missing mainModule");
     };
-    let Some(src) = code
-        .get("modules")
-        .and_then(|m| m.get(main))
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-    else {
-        return loader_throw(
-            scope,
-            &format!("worker loader: module {main:?} missing or not a string"),
-        );
+    // The main module must be an ES module that the code names. workerd
+    // fails the Worker's start otherwise; a wasm main module is checked as
+    // the side-band arrives.
+    let src = match code.get("modules").and_then(|m| m.get(main)) {
+        Some(serde_json::Value::String(src)) => Some(src.clone()),
+        Some(_) => return loader_throw(scope, MAIN_NOT_ES_MODULE),
+        None => None,
     };
     // Every module other than the main one is a sibling the main module may
     // import. JS modules arrive in the JSON as strings; anything else there is
@@ -8940,6 +9165,9 @@ fn op_loader_load(
             let Some((name, view)) = entry else {
                 return loader_throw(scope, "worker loader: malformed wasm module entry");
             };
+            if name == main && src.is_none() {
+                return loader_throw(scope, MAIN_NOT_ES_MODULE);
+            }
             // A name carried by both the JSON map and the side-band would
             // silently shadow one module with the other in the registry;
             // refuse it the way a non-string JSON module is refused.
@@ -8954,6 +9182,12 @@ fn op_loader_load(
             modules.push((name, ModuleSource::Wasm(bytes.into())));
         }
     }
+    let Some(src) = src else {
+        return loader_throw(
+            scope,
+            &format!("Failed to start Worker:\nUncaught Error: No such module: {main}"),
+        );
+    };
     // Total module bytes, checked before compiling anything (the oversized
     // module is never parsed) — the extra modules are not yet loaded but do
     // count against the ceiling, as upstream.

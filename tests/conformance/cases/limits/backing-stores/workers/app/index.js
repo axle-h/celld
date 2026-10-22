@@ -19,8 +19,8 @@ async function outcome(call) {
     const type = response.headers.get("content-type") ?? "";
     return { status: response.status, body: type.includes("json") ? await response.json() : await response.text() };
   } catch (error) {
-    // The first line: a failed load's message carries the stack after it.
-    return { error: error.name, message: error.message.split("\n")[0] };
+    // Without the location lines a failed load's report ends with.
+    return { error: error.name, message: error.message.split("\n  at ")[0] };
   }
 }
 
