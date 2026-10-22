@@ -1455,7 +1455,8 @@ mod tests {
 
     /// What a loaded isolate makes of `source`, run as a request would after
     /// the load: the script's result, the error its turn takes, the answer to
-    /// a fetch that arrives next, and whether the load's limit fired.
+    /// a fetch that arrives next (`began` when it runs), and whether the
+    /// load's limit fired.
     fn run_after_load(source: &'static str) -> (Option<String>, String, String, bool) {
         let config = config(HANDLER, &[], Vec::new());
         std::thread::spawn(move || {
@@ -1488,11 +1489,15 @@ mod tests {
                 tail_report: None,
                 reply,
             };
-            let (begun, ops) = worker.turn_begin(job, None, None);
-            assert!(begun.is_none() && ops.is_empty(), "the fetch began");
-            let next = match answer.try_recv().expect("the fetch is answered at once") {
-                Ok(response) => format!("answered {}", response.status),
-                Err(error) => error.to_string(),
+            // A condemned isolate fails the fetch at once, without running it.
+            let (begun, _ops) = worker.turn_begin(job, None, None);
+            let next = if begun.is_some() {
+                "began".to_string()
+            } else {
+                match answer.try_recv().expect("the fetch is answered at once") {
+                    Ok(response) => format!("answered {}", response.status),
+                    Err(error) => error.to_string(),
+                }
             };
             (result, first, next, load_exceeded)
         })
@@ -1526,39 +1531,145 @@ mod tests {
         assert_eq!(next, MEMORY_EXCEEDED);
     }
 
-    /// Backing stores past their budget at module scope fail the load as the
-    /// heap limit does, whether many buffers or one, caught or not.
+    /// A buffer the budget refuses at module scope throws V8's RangeError,
+    /// which fails the load as any throw there does, and does not count as
+    /// the memory limit: a refusal takes no memory. Caught, it costs nothing.
     #[test]
-    fn module_scope_buffers_past_the_budget_fail_the_load() {
+    fn module_scope_buffers_past_the_budget_are_refused() {
         for buffers in [
             "const keep = []; for (let i = 0; i < 40; i++) keep.push(new Uint8Array(64 << 20));",
             "globalThis.keep = new Uint8Array(512 << 20);",
-            "try { globalThis.keep = new ArrayBuffer(512 << 20); } catch {}",
         ] {
+            let error = load(&format!("{buffers}\n{HANDLER}"), &[]).unwrap_err();
             assert_eq!(
-                load(&format!("{buffers}\n{HANDLER}"), &[]),
-                Err(STARTUP_MEMORY_EXCEEDED.to_string()),
+                error.lines().next(),
+                Some("top-level rejected: RangeError: Array buffer allocation failed"),
                 "{buffers}"
             );
         }
-        assert_eq!(
-            load(
-                &format!("globalThis.keep = new Uint8Array(64 << 20);\n{HANDLER}"),
-                &[]
+        for fits in [
+            "try { globalThis.keep = new ArrayBuffer(512 << 20); } catch {}",
+            "globalThis.keep = new Uint8Array(64 << 20);",
+        ] {
+            assert_eq!(load(&format!("{fits}\n{HANDLER}"), &[]), Ok(()), "{fits}");
+        }
+    }
+
+    /// Memory V8 grows outside the allocator is bounded within the load, not
+    /// only when it ends. Growth JavaScript asks for past the budget is
+    /// refused with V8's RangeError (a resizable buffer resized past it, a
+    /// transfer that grows one, many WebAssembly memories); a module that
+    /// grows its own memory in Wasm is stopped by the watch, and fails the
+    /// load as the memory limit does.
+    #[test]
+    fn growth_outside_the_allocator_is_bounded_within_the_load() {
+        const GROWS_ITSELF: &str = "AGFzbQEAAAABCQJgAX8Bf2AAAAMDAgABBQMBAAEHEAIEZ3JvdwAABXRvdWNoAAEKFwIGACAAQAALDgBBAEEBPwBBEHT8CwAL";
+        for (growth, refusal) in [
+            (
+                "const b = new ArrayBuffer(0, { maxByteLength: 2 ** 31 }); b.resize(1 << 30);",
+                "ArrayBuffer.prototype.resize: Out of memory",
             ),
-            Ok(())
+            (
+                "const b = new ArrayBuffer(0, { maxByteLength: 2 ** 31 }); \
+                 new Uint8Array(b.transfer(2 ** 31)).fill(1);",
+                "Array buffer allocation failed",
+            ),
+            (
+                "const k = []; for (let i = 0; i < 10; i++) k.push(new WebAssembly.Memory({ initial: 1600 }));",
+                "WebAssembly.Memory(): could not allocate memory",
+            ),
+        ] {
+            let error = load(&format!("{growth}\n{HANDLER}"), &[]).unwrap_err();
+            assert_eq!(
+                error.lines().next(),
+                Some(format!("top-level rejected: RangeError: {refusal}").as_str()),
+                "{growth}"
+            );
+            // The stack starts at the Worker's call, with no harness frames.
+            assert!(
+                error.lines().nth(2).is_some_and(|frame| frame.contains("worker.js")),
+                "{error}"
+            );
+        }
+        let grows_itself = format!(
+            "const m = new WebAssembly.Module(Uint8Array.from(atob('{GROWS_ITSELF}'), (c) => c.charCodeAt(0))); \
+             const k = []; for (let i = 0; i < 10; i++) {{ const x = new WebAssembly.Instance(m); \
+             for (let p = 0; p < 1900; p += 50) {{ x.exports.grow(50); x.exports.touch(); }} k.push(x); }}"
+        );
+        assert_eq!(
+            load(&format!("{grows_itself}\n{HANDLER}"), &[]),
+            Err(STARTUP_MEMORY_EXCEEDED.to_string())
+        );
+        let fits = "const m = new WebAssembly.Memory({ initial: 16 }); m.grow(16);\n";
+        assert_eq!(load(&format!("{fits}{HANDLER}"), &[]), Ok(()));
+    }
+
+    /// After the load, a buffer the budget refuses throws V8's RangeError in
+    /// the turn and leaves the isolate serving.
+    #[test]
+    fn a_buffer_refused_after_the_load_leaves_the_isolate_serving() {
+        let (result, first, next, _) =
+            run_after_load("globalThis.keep = new Uint8Array(512 << 20); keep.length");
+        assert_eq!(
+            (result, first, next.as_str()),
+            (None, String::new(), "began")
+        );
+        let (result, first, next, _) = run_after_load(
+            "let e; try { new Uint8Array(512 << 20) } catch (error) { e = error.message } e",
+        );
+        assert_eq!(
+            (result.as_deref(), first, next.as_str()),
+            (
+                Some("Array buffer allocation failed"),
+                String::new(),
+                "began"
+            )
         );
     }
 
-    /// After the load, a buffer past the budget condemns the isolate as the
-    /// heap limit does.
+    /// A refusal does not hide the heap limit reached after it: V8 calls the
+    /// heap-limit callback for a refused buffer, which leaves the isolate be,
+    /// and for the heap, which still condemns it rather than aborting.
     #[test]
-    fn a_buffer_past_the_budget_after_the_load_condemns_the_isolate() {
-        let (result, first, next, _) =
-            run_after_load("globalThis.keep = new Uint8Array(512 << 20); keep.length");
-        assert_eq!(result, None);
+    fn the_heap_limit_after_a_refused_buffer_still_condemns_the_isolate() {
+        let (_, first, next, _) = run_after_load(
+            "try { new Uint8Array(512 << 20); } catch {} \
+             globalThis.keep = \"\\u1234\".repeat(2e8).toLowerCase(); keep.length",
+        );
         assert_eq!(first, MEMORY_EXCEEDED);
         assert_eq!(next, MEMORY_EXCEEDED);
+    }
+
+    /// Only an isolate that has made WebAssembly has its turns watched: a
+    /// resizable buffer grows only through the checked methods.
+    #[test]
+    fn only_webassembly_watches_the_isolate() {
+        let config = config(HANDLER, &[], Vec::new());
+        std::thread::spawn(move || {
+            let worker = Worker::load_config(config).expect("the handler loads");
+            let watched = |source: &str| {
+                let (mut locker, _cells) = worker.lock();
+                v8::scope!(let hs, &mut *locker);
+                let realm = worker.realm(hs);
+                let scope = &mut v8::ContextScope::new(hs, realm.context);
+                let source = v8::String::new(scope, source).unwrap();
+                v8::Script::compile(scope, source, None)
+                    .and_then(|script| script.run(scope))
+                    .expect("the script runs");
+                scope
+                    .get_slot::<Arc<BackingStoreBudget>>()
+                    .unwrap()
+                    .watched
+                    .load(Ordering::Relaxed)
+            };
+            assert!(!watched(
+                "new ArrayBuffer(0, { maxByteLength: 64 }).resize(32); \
+                 new SharedArrayBuffer(0, { maxByteLength: 64 }).grow(32);"
+            ));
+            assert!(watched("new WebAssembly.Memory({ initial: 1 });"));
+        })
+        .join()
+        .expect("the test thread panicked");
     }
 
     /// A load past the startup CPU limit carries a type a loader can retry,

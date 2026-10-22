@@ -195,13 +195,14 @@ const __handOverBody = (target, bytes) => {
 };
 // The rest of a body stream, as one buffer nothing else holds. A host
 // stream is read whole by the host, so the body is held once rather than as
-// chunks and then a copy.
-async function __drainStream(stream) {
+// chunks and then a copy. `expected` is its length when known, which the
+// host refuses at once past the isolate's memory limit.
+async function __drainStream(stream, expected = stream?._expectedLength) {
   const id = __hostStreamId(stream);
   if (id !== undefined && !stream.locked) {
     // Locked as a read would lock it: the host reads it now.
     stream.getReader();
-    return __http_stream_read_all(id);
+    return __http_stream_read_all(id, expected);
   }
   const chunks = [];
   let length = 0;
@@ -1098,7 +1099,7 @@ const __r2Bytes = (hex) => {
 };
 // Read a `ReadableStream` to one `Uint8Array`. Bodies drained this way
 // are the ones the caller asked to have whole.
-const __r2Drain = (stream) => __drainStream(stream);
+const __r2Drain = (stream, size) => __drainStream(stream, size);
 const __r2Ms = (value) => {
   if (value === undefined || value === null) return undefined;
   const ms = value instanceof Date ? value.getTime() : Number(value);
@@ -1237,7 +1238,13 @@ const __r2Object = (object, body) => {
   };
   if (object.range) r2.range = { ...object.range };
   if (!body) return r2;
-  const drain = () => __r2Drain(body);
+  // The body's length: the object's size, or the range of it that was read.
+  const range = object.range;
+  const length = !range ? r2.size
+    : range.length !== undefined ? range.length
+    : range.suffix !== undefined ? Math.min(range.suffix, r2.size)
+    : r2.size - (range.offset ?? 0);
+  const drain = () => __r2Drain(body, length);
   r2.body = body;
   Object.defineProperty(r2, "bodyUsed", {
     get: () => body.locked || body._disturbed === true,
@@ -10838,6 +10845,322 @@ __celld.__blobOf = (buffer, type) => {
   blob.size = bytes.byteLength;
   return blob;
 };
+// Memory V8 grows outside its allocator: WebAssembly memories, and buffers
+// made resizable or growable with `maxByteLength`. The host counts it
+// against the isolate's backing-store budget (`__memory_admit`). Growth that
+// JavaScript asks for is admitted before it happens, once the original's own
+// checks would pass, and refused past the budget with V8's RangeError; a
+// receiver or argument the original rejects goes to it untouched. A refusal
+// takes no memory, so it condemns nothing: a Worker may catch it and ask for
+// less, as Emscripten does. What V8 makes whole (a WebAssembly memory or
+// instance) is checked once made, and refused the same way, leaving it
+// garbage. What Wasm code grows itself, with `memory.grow`, the host watches
+// while the turn runs, once the isolate has made WebAssembly; a buffer grows
+// only through the methods here, so it needs no watch. Every original is
+// captured here, so code that runs later reaches only the checked forms.
+// Strict, so no Worker code reaches these functions through `caller`.
+(function () {
+  "use strict";
+  const construct = Reflect.construct;
+  const apply = Reflect.apply;
+  const defineProperty = Object.defineProperty;
+  const getter = (target, name) => Object.getOwnPropertyDescriptor(target, name).get;
+  const trunc = Math.trunc;
+  const isFinite = Number.isFinite;
+  const then = Promise.prototype.then;
+  const ErrorOfRange = RangeError;
+  const SharedPrototype = globalThis.SharedArrayBuffer?.prototype;
+  const PAGE = 65536;
+  const MAX_INDEX = 2 ** 53 - 1;
+  const MAX_UINT32 = 2 ** 32 - 1;
+  const admit = __memory_admit;
+  // The most one WebAssembly memory may hold (`--wasm-max-mem-pages`).
+  const MAX_PAGES = trunc(__memory_limit() / PAGE);
+  const captureStackTrace = Error.captureStackTrace;
+  // Throw V8's RangeError, with the stack from the Worker's call of `from`,
+  // the public function, so it shows no harness frames.
+  const refuse = (message, from) => {
+    const error = new ErrorOfRange(message);
+    captureStackTrace(error, from);
+    throw error;
+  };
+  const isObject = (value) =>
+    value !== null && (typeof value === "object" || typeof value === "function");
+  // ToIndex, given the number its argument converted to: the index, or
+  // undefined where the original throws a RangeError. The caller converts
+  // with unary plus, which throws V8's own TypeError for a BigInt or a
+  // Symbol, and passes the original the number, so a `valueOf` runs once.
+  const toIndex = (number) => {
+    const integer = trunc(number) || 0;
+    return integer >= 0 && integer <= MAX_INDEX ? integer : undefined;
+  };
+
+  // `Function.prototype.toString` prints each wrapper as its original, so
+  // feature detection that reads `[native code]` sees what it would in
+  // workerd.
+  const natives = new WeakMap();
+  const nativeOf = WeakMap.prototype.get;
+  const setNative = WeakMap.prototype.set;
+  const functionToString = Function.prototype.toString;
+  const toString = {
+    toString() {
+      return apply(functionToString, apply(nativeOf, natives, [this]) ?? this, []);
+    },
+  }.toString;
+  const disguise = (wrapper, original) => {
+    apply(setNative, natives, [wrapper, original]);
+    return wrapper;
+  };
+  defineProperty(Function.prototype, "toString", {
+    value: disguise(toString, functionToString),
+    writable: true, enumerable: false, configurable: true,
+  });
+  // Swap a method for `wrap(original, self)`, with the original's name,
+  // length and text; `self()` is the method, for `refuse`.
+  const replaceMethod = (prototype, name, wrap) => {
+    const original = prototype[name];
+    if (typeof original !== "function") return;
+    const wrapper = wrap(original, () => wrapper);
+    defineProperty(wrapper, "length", { value: original.length });
+    defineProperty(prototype, name, {
+      value: disguise(wrapper, original),
+      writable: true, enumerable: false, configurable: true,
+    });
+  };
+  // Swap a constructor for a function that runs `make`, keeping
+  // `value.constructor === Global`, statics and subclassing as they were.
+  // A function, not a proxy: V8 names a receiver in its errors after the
+  // function its `constructor` holds (`#<ArrayBuffer>`). `new.target` is
+  // the original, not the wrapper, so V8 makes what the original would.
+  // `named` makes the wrapper by a named function expression, since V8
+  // takes the name from the function's source rather than its `name`.
+  const replaceConstructor = (Original, make, named) => {
+    const wrapper = named((receiver, args, newTarget) => {
+      if (newTarget === undefined) return apply(Original, receiver, args);
+      return make(Original, args, newTarget === wrapper ? Original : newTarget, wrapper);
+    });
+    for (const key of Reflect.ownKeys(Original)) {
+      if (key === "name") continue;
+      defineProperty(wrapper, key, Object.getOwnPropertyDescriptor(Original, key));
+    }
+    defineProperty(Original.prototype, "constructor", {
+      value: wrapper, writable: true, enumerable: false, configurable: true,
+    });
+    return disguise(wrapper, Original);
+  };
+  // A resizable ArrayBuffer or a growable SharedArrayBuffer, made with a
+  // `maxByteLength`, commits its initial length outside the allocator.
+  const BUFFER_FAILED = "Array buffer allocation failed";
+  const checkedBuffer = (target, args, newTarget, from) => {
+    const options = args[1];
+    if (args.length < 2 || !isObject(options)) return construct(target, args, newTarget);
+    const length = +args[0];
+    const index = toIndex(length);
+    if (index === undefined) return construct(target, [length], newTarget);
+    const max = options.maxByteLength;
+    if (max === undefined) return construct(target, [length], newTarget);
+    const maxNumber = +max;
+    const maxIndex = toIndex(maxNumber);
+    if (maxIndex !== undefined && index <= maxIndex && !admit(index, false)) refuse(BUFFER_FAILED, from);
+    return construct(target, [length, { maxByteLength: maxNumber }], newTarget);
+  };
+
+  const byteLength = getter(ArrayBuffer.prototype, "byteLength");
+  const maxByteLength = getter(ArrayBuffer.prototype, "maxByteLength");
+  const resizable = getter(ArrayBuffer.prototype, "resizable");
+  const detached = getter(ArrayBuffer.prototype, "detached");
+  // Whether `buffer` is an ArrayBuffer that is resizable and not detached:
+  // anything else the original rejects or, for `transfer`, copies through
+  // the allocator.
+  const isResizable = (buffer) => {
+    try {
+      return apply(resizable, buffer, []) && !apply(detached, buffer, []);
+    } catch {
+      return false;
+    }
+  };
+  globalThis.ArrayBuffer = replaceConstructor(ArrayBuffer, checkedBuffer,
+    (body) => function ArrayBuffer() {
+      "use strict";
+      return body(this, arguments, new.target);
+    });
+  replaceMethod(ArrayBuffer.prototype, "resize", (original, self) => ({
+    resize(newLength) {
+      if (!isResizable(this)) return apply(original, this, [newLength]);
+      const length = +newLength;
+      const index = toIndex(length);
+      if (index !== undefined && index <= apply(maxByteLength, this, [])) {
+        const bytes = index - apply(byteLength, this, []);
+        if (bytes > 0 && !admit(bytes, false)) refuse("ArrayBuffer.prototype.resize: Out of memory", self());
+      }
+      return apply(original, this, [length]);
+    },
+  }).resize);
+  // A transfer of a resizable buffer keeps its reservation and commits the
+  // new length there, outside the allocator.
+  for (const name of ["transfer", "transferToFixedLength"]) {
+    replaceMethod(ArrayBuffer.prototype, name, (original, self) => ({
+      [name](newLength) {
+        if (!isResizable(this)) return apply(original, this, [newLength]);
+        const current = apply(byteLength, this, []);
+        const length = newLength === undefined ? undefined : +newLength;
+        const index = length === undefined ? current : toIndex(length);
+        const ceiling = name === "transfer" ? apply(maxByteLength, this, []) : MAX_INDEX;
+        if (index !== undefined && index <= ceiling && index > current &&
+            !admit(index - current, false))
+          refuse(BUFFER_FAILED, self());
+        return apply(original, this, [length]);
+      },
+    })[name]);
+  }
+
+  if (typeof SharedArrayBuffer === "function") {
+    const sharedLength = getter(SharedArrayBuffer.prototype, "byteLength");
+    const sharedMax = getter(SharedArrayBuffer.prototype, "maxByteLength");
+    const growable = getter(SharedArrayBuffer.prototype, "growable");
+    const isGrowable = (buffer) => {
+      try {
+        return apply(growable, buffer, []);
+      } catch {
+        return false;
+      }
+    };
+    globalThis.SharedArrayBuffer = replaceConstructor(SharedArrayBuffer, checkedBuffer,
+      (body) => function SharedArrayBuffer() {
+        "use strict";
+        return body(this, arguments, new.target);
+      });
+    replaceMethod(SharedArrayBuffer.prototype, "grow", (original, self) => ({
+      grow(newLength) {
+        if (!isGrowable(this)) return apply(original, this, [newLength]);
+        const length = +newLength;
+        const index = toIndex(length);
+        if (index !== undefined && index <= apply(sharedMax, this, [])) {
+          const bytes = index - apply(sharedLength, this, []);
+          if (bytes > 0 && !admit(bytes, false))
+            refuse("SharedArrayBuffer.prototype.grow: Out of memory", self());
+        }
+        return apply(original, this, [length]);
+      },
+    }).grow);
+  }
+
+  if (typeof WebAssembly === "object") {
+    const Memory = WebAssembly.Memory;
+    const Instance = WebAssembly.Instance;
+    const memoryBuffer = getter(Memory.prototype, "buffer");
+    // A WebAssembly memory's pages, or undefined if `memory` is none.
+    const pagesOf = (memory) => {
+      let buffer;
+      try {
+        buffer = apply(memoryBuffer, memory, []);
+      } catch {
+        return undefined;
+      }
+      try {
+        return apply(byteLength, buffer, []) / PAGE;
+      } catch {
+        return apply(getter(SharedPrototype, "byteLength"), buffer, []) / PAGE;
+      }
+    };
+    // A memory or instance V8 made whole: kept if the isolate's memory still
+    // fits, and otherwise left as garbage behind V8's RangeError.
+    const checked = (message) => (made, from) => {
+      if (!admit(0, true)) refuse(message, from);
+      return made;
+    };
+    const madeMemory = checked("WebAssembly.Memory(): could not allocate memory");
+    const INSTANCE_FAILED =
+      "WebAssembly.Instance(): Out of memory: Cannot allocate Wasm memory for new instance";
+    const madeInstance = checked(INSTANCE_FAILED);
+    const madeInstantiation = checked(
+      "WebAssembly.instantiate(): Out of memory: Cannot allocate Wasm memory for new instance");
+    // ToPrimitive, as V8 converts a descriptor's member: what Worker code
+    // a member runs (`valueOf`, `toString`), it runs here.
+    const toPrimitive = (value, hint) => {
+      const exotic = value[Symbol.toPrimitive];
+      if (exotic !== undefined && exotic !== null) {
+        const result = apply(exotic, value, [hint]);
+        if (!isObject(result)) return result;
+      } else {
+        for (const name of hint === "string" ? ["toString", "valueOf"] : ["valueOf", "toString"]) {
+          const method = value[name];
+          if (typeof method !== "function") continue;
+          const result = apply(method, value, []);
+          if (!isObject(result)) return result;
+        }
+      }
+      throw new TypeError("Cannot convert object to primitive value");
+    };
+    // A memory descriptor as plain data, each member read once in the order
+    // V8 reads them, and converted to the primitive V8 converts further, so
+    // V8 runs no Worker code with it. Anything else goes to V8 as it is.
+    const plainDescriptor = (descriptor) => {
+      if (!isObject(descriptor)) return descriptor;
+      const plain = { __proto__: null };
+      for (const key of ["address", "initial", "maximum", "shared"]) {
+        const value = descriptor[key];
+        if (value === undefined) continue;
+        plain[key] = key === "shared" || !isObject(value)
+          ? value
+          : toPrimitive(value, key === "address" ? "string" : "number");
+      }
+      return plain;
+    };
+    // The watch waits while V8 makes a memory, which runs no Worker code
+    // with a plain descriptor, for the check here, which refuses one past
+    // the budget rather than condemning it. A tick that comes meanwhile is
+    // taken when the wait ends. A subclass's `new.target` can run code as V8
+    // reads its prototype, so it is made unpaused.
+    const pause = __memory_watch_pause;
+    WebAssembly.Memory = replaceConstructor(Memory,
+      (target, args, newTarget, from) => {
+        const descriptor = plainDescriptor(args[0]);
+        if (newTarget !== target)
+          return madeMemory(construct(target, [descriptor], newTarget), from);
+        pause(true);
+        try {
+          return madeMemory(construct(target, [descriptor], target), from);
+        } finally {
+          pause(false);
+        }
+      },
+      (body) => function Memory() {
+        "use strict";
+        return body(this, arguments, new.target);
+      });
+    WebAssembly.Instance = replaceConstructor(Instance,
+      (target, args, newTarget, from) => madeInstance(construct(target, args, newTarget), from),
+      (body) => function Instance() {
+        "use strict";
+        return body(this, arguments, new.target);
+      });
+    // `grow(delta)` converts as WebIDL's [EnforceRange] unsigned long. The
+    // memory's own maximum is not readable, so a grow past both it and the
+    // budget throws the budget's RangeError rather than the maximum's.
+    replaceMethod(Memory.prototype, "grow", (original, self) => ({
+      grow(delta) {
+        const pages = pagesOf(this);
+        if (pages === undefined) return apply(original, this, [delta]);
+        const number = +delta;
+        if (isFinite(number)) {
+          const more = trunc(number);
+          if (more > 0 && more <= MAX_UINT32 && pages + more <= MAX_PAGES &&
+              !admit(more * PAGE, true))
+            refuse("WebAssembly.Memory.grow(): Unable to grow instance memory", self());
+        }
+        return apply(original, this, [number]);
+      },
+    }).grow);
+    for (const name of ["instantiate", "instantiateStreaming"]) {
+      replaceMethod(WebAssembly, name, (original) => ({
+        [name](...args) {
+          return apply(then, apply(original, WebAssembly, args), [madeInstantiation]);
+        },
+      })[name]);
+    }
+  }
+})();
 if (!globalThis.File) {
   // WebIDL-ish per Workerd: name is required, name/lastModified are
   // brand-checked prototype getters (enumerable, matching the
@@ -11993,6 +12316,11 @@ if (!globalThis.structuredClone) {
         throw new DOMException(error.message, "DataCloneError");
       throw error;
     }
+    // A clone of a resizable buffer commits outside the allocator, so the
+    // clone is kept only if the isolate's memory still fits, as a buffer the
+    // allocator refused would not be.
+    if (!__memory_admit(0, false))
+      throw new RangeError("Array buffer allocation failed");
     // Validate the complete list and clone the value before detaching any
     // source. A later invalid entry therefore cannot leave an earlier buffer
     // detached after the operation fails.

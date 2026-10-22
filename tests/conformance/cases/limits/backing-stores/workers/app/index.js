@@ -1,6 +1,7 @@
-// Dynamic Workers whose module scope or request holds backing stores past
-// the isolate's budget, and a stateless Worker (hog) that does in a request.
-// Each fails as the heap limit does, and the node keeps serving.
+// Dynamic Workers whose module scope or request asks for or holds backing
+// stores past the isolate's budget, and a stateless Worker (hog) that does
+// in a request. What is refused throws V8's RangeError; what is held past
+// the budget fails as the heap limit does. The node keeps serving.
 import { buffers } from "../hog/buffers.js";
 
 function source(at, kind) {
@@ -18,7 +19,8 @@ async function outcome(call) {
     const type = response.headers.get("content-type") ?? "";
     return { status: response.status, body: type.includes("json") ? await response.json() : await response.text() };
   } catch (error) {
-    return { error: error.name, message: error.message };
+    // The first line: a failed load's message carries the stack after it.
+    return { error: error.name, message: error.message.split("\n")[0] };
   }
 }
 

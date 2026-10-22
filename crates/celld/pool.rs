@@ -294,6 +294,7 @@ impl Slot {
             TurnLane::Cell(scope) => scope,
         });
         let previous = CURRENT_SLOT.replace(Some(self.me.clone()));
+        let _turn = worker.watched_turn();
         let result = f(worker);
         CURRENT_SLOT.set(previous);
         result

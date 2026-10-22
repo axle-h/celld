@@ -365,8 +365,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 25 | 1.15 `process.env` and `node:process` | done | `86c6418` |
 | 26 | 1.31 isolate limits during module load (security) | done | `9b0c9c1` |
 | 27 | 1.32 heap limit at request time (security) | done | `17b9c27` |
-| 28 | 1.33 ArrayBuffer memory limits (security) | done | see log |
-| 28b | 1.35 Wasm memory per isolate (security) | next | |
+| 28 | 1.33 ArrayBuffer memory limits (security) | done | `cede9c5` |
+| 28b | 1.35 Wasm and resizable growth within a turn (security) | done | see log |
 | 29+ | Phase 1 in plan order (1.16-1.34), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
@@ -2178,6 +2178,31 @@ budget, refuse with V8's RangeError and condemn, as 1.33 does.
 **Tests.** Many Wasm memories at load and at request time are refused, and the
 node stays healthy.
 
+**As built (done).**
+- V8 offers no hook, so there are two parts:
+  - Strict harness wrappers, with captured originals, admit growth before it
+    happens: `resize`, `transfer`, `transferToFixedLength`, growable SAB
+    `grow`, `Memory.grow`, `maxByteLength` initial lengths. Memory,
+    Instance, instantiate and structuredClone are checked after.
+  - A `MemoryWatch` thread interrupts running turns of isolates that made
+    WebAssembly every 5 ms, catching growth inside Wasm code.
+- The wrappers are native-looking named functions: they match workerd's
+  names, lengths, `toString`, descriptors and error texts
+  (`limits/growth-fidelity`).
+- A Memory descriptor is converted before the construct, so no Worker code
+  runs while the watch is paused. A tick during the pause is deferred, not
+  dropped.
+- **Decision:** a refusal throws V8's RangeError and never condemns on its own,
+  so Emscripten's overgrow-then-fallback works. Only memory actually held
+  past the budget condemns. This changed 1.33's caught-refusal behaviour.
+- read_all uses workerd's two texts ("would be exceeded" and "exceeded
+  before EOF").
+- Measured: a 3 GiB transfer then fill went from a 3126 MB peak to refused at
+  151 MB. Ten Wasm memories went from 1059 MiB to 54 MiB. The descriptor
+  bypass went from 1228 MB to 152 MiB. `ab` hello-world is within 1%.
+- Remaining (documented): Wasm self-growth can pass the budget by an eighth
+  plus 5 ms of writes; a resizable buffer revived by the host is caught at
+  turn end.
 ### 1.34 Isolate limit follow-ups (found by 1.31)
 
 - Deployed Workers and DOs have no per-request CPU limit (only Dynamic

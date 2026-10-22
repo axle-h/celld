@@ -19,7 +19,7 @@ use anyhow::{anyhow, Context as _, Result};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
@@ -1450,7 +1450,11 @@ fn resolve_res(tc: &mut v8::PinScope, id: u64, res: Result<asyncrt::OpOut, Strin
         }
         Err(e) => {
             let s = v8::String::new(tc, &e).unwrap();
-            let ex = v8::Exception::error(tc, s);
+            let ex = if e == BODY_PAST_BUDGET || e == BODY_PASSED_BUDGET {
+                v8::Exception::type_error(tc, s)
+            } else {
+                v8::Exception::error(tc, s)
+            };
             r.reject(tc, ex);
         }
     }
@@ -2271,6 +2275,8 @@ pub struct WorkerIsolate {
     /// turns run on whatever tokio worker holds the isolate. See
     /// `storage::Cells`.
     cells: storage::Cells,
+    /// The isolate's backing-store budget, also its slot.
+    backing_stores: Arc<BackingStoreBudget>,
 }
 
 /// An isolate's context and the entry `fetch` that lives in it.
@@ -2280,6 +2286,20 @@ pub struct WorkerIsolate {
 struct Realm {
     context: v8::Global<v8::Context>,
     fetch: v8::Global<v8::Function>,
+}
+
+impl Worker {
+    /// Mark the calling thread as running a turn of this isolate, until the
+    /// guard drops. The turn is watched for the memory Wasm code grows
+    /// (`MemoryWatch`) from its start if the isolate has made WebAssembly
+    /// before, or from when it first makes some.
+    pub(crate) fn watched_turn(&self) -> Option<WatchedTurn> {
+        let inner = self.inner.as_ref()?;
+        let watched = inner.backing_stores.watched.load(Ordering::Relaxed);
+        Some(WatchedTurn::enter(
+            watched.then(|| inner.isolate.thread_safe_handle()),
+        ))
+    }
 }
 
 impl WorkerIsolate {
@@ -2384,6 +2404,13 @@ const HEAP_ADMISSION_SHARE: f64 = 0.9;
 /// limit (`io-context.h`), and for every later event of that isolate.
 const MEMORY_EXCEEDED: &str = "Worker has exceeded memory limit.";
 
+/// workerd's `TypeError`s for a body read whole that the isolate's memory
+/// limit cannot hold: one whose length is known to be past it, before any
+/// is read, and one that passes it as it is read. Reading stops before the
+/// memory is taken, so the isolate is not condemned.
+const BODY_PAST_BUDGET: &str = "Memory limit would be exceeded before EOF.";
+const BODY_PASSED_BUDGET: &str = "Memory limit exceeded before EOF.";
+
 struct HeapLimitState {
     /// Whether the isolate reached its heap limit, which condemns it for
     /// good: the event running then is terminated, and every later turn
@@ -2406,7 +2433,23 @@ struct HeapLimitState {
     load_exceeded: AtomicBool,
     /// How the callback, which receives no isolate, terminates JavaScript.
     isolate: v8::IsolateHandle,
+    /// The isolate itself, for the callback to read its heap.
+    raw_isolate: RawIsolate,
+    /// The isolate's backing-store budget, whose refusals reach the callback
+    /// too (`near_heap_limit`).
+    backing_stores: Arc<BackingStoreBudget>,
 }
+
+/// An isolate's address, which `near_heap_limit` uses on the isolate's own
+/// thread, inside V8's call: the only place it is dereferenced.
+struct RawIsolate(v8::UnsafeRawIsolatePtr);
+
+// SAFETY: the pointer is only an address while it moves between threads, and
+// is dereferenced only by the callback V8 runs on the thread that holds the
+// isolate.
+unsafe impl Send for RawIsolate {}
+// SAFETY: as above; shared references only copy the address.
+unsafe impl Sync for RawIsolate {}
 
 impl HeapLimitState {
     /// Record that the isolate went past its memory limit: a load fails, and
@@ -2428,27 +2471,59 @@ impl HeapLimitState {
 /// V8 asks the isolate's allocator for every buffer JavaScript creates, and
 /// the allocator refuses one past the budget. V8 then collects garbage, asks
 /// again, and throws `RangeError: Array buffer allocation failed` when it is
-/// still refused. That condemns the isolate, as the heap limit does: a
-/// refusal still standing when the turn or the load ends
-/// (`backing_stores_refused`).
+/// still refused. A refusal takes no memory, so it condemns nothing: the
+/// Worker can catch it and go on, as Emscripten does when it grows its heap
+/// by less after a larger request fails. The isolate is condemned only when
+/// memory it actually holds passes the budget (`exceeded`).
 struct BackingStoreBudget {
     limit: usize,
     used: AtomicUsize,
-    /// The last allocation was refused. The next one that fits clears it, so
-    /// a refusal that V8's garbage collection recovered from does not count.
-    refused: AtomicBool,
+    /// Memory the isolate holds went past the budget: a host buffer that
+    /// could not be refused (`charge_host_buffer`), or memory V8 grew
+    /// outside the allocator (`MemoryWatch`). It condemns the isolate.
+    exceeded: AtomicBool,
     /// What `used` read after the last collection a host buffer forced
     /// (`host_array_buffer`), which paces the next.
     used_after_collection: AtomicUsize,
+    /// What V8's external memory read after the last collection a check of
+    /// it forced, which paces the `MemoryWatch`'s next.
+    external_after_collection: AtomicUsize,
+    /// The isolate has made WebAssembly, whose code grows its memories where
+    /// no JavaScript sees it, so its turns are watched (`MemoryWatch`).
+    watched: AtomicBool,
+    /// The harness is making a WebAssembly memory and checks it next, so the
+    /// watch waits rather than condemning what the check would refuse.
+    watch_paused: AtomicBool,
+    /// A `MemoryWatch` tick came while the watch was paused.
+    watch_deferred: AtomicBool,
+    /// Where the allocator is in refusing an allocation (`REFUSAL_*`). V8
+    /// retries a refused one after collecting, and before its last try it
+    /// invokes `near_heap_limit`, which must not take that for the heap at
+    /// its limit. The callback marks the last try, whose refusal ends the
+    /// refusal there, so V8's RangeError follows with nothing standing. An
+    /// allocation that fits and the end of each turn end it too.
+    refusing: AtomicU8,
 }
+
+/// No refusal stands (`BackingStoreBudget::refusing`).
+const REFUSAL_NONE: u8 = 0;
+/// The allocator refused, and V8 is retrying.
+const REFUSAL_RETRYING: u8 = 1;
+/// The callback excused the refusal, and V8 makes its last try.
+const REFUSAL_LAST_TRY: u8 = 2;
 
 impl BackingStoreBudget {
     fn new(limit: usize) -> Self {
         Self {
             limit,
             used: AtomicUsize::new(0),
-            refused: AtomicBool::new(false),
+            exceeded: AtomicBool::new(false),
             used_after_collection: AtomicUsize::new(0),
+            external_after_collection: AtomicUsize::new(0),
+            watched: AtomicBool::new(false),
+            watch_paused: AtomicBool::new(false),
+            watch_deferred: AtomicBool::new(false),
+            refusing: AtomicU8::new(REFUSAL_NONE),
         }
     }
 
@@ -2456,31 +2531,28 @@ impl BackingStoreBudget {
     // `try_update` needs Rust 1.95; this crate's MSRV is 1.94.1.
     #[allow(deprecated)]
     fn charge(&self, len: usize) -> bool {
-        let fits = self
-            .used
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
-                used.checked_add(len).filter(|total| *total <= self.limit)
-            })
-            .is_ok();
-        self.refused.store(!fits, Ordering::Relaxed);
+        let fits = self.charge_within(len, self.limit);
+        // Read first, so an allocation that fits does not write a shared
+        // line it need not.
+        let state = self.refusing.load(Ordering::Relaxed);
+        let next = match (fits, state) {
+            (true, _) | (false, REFUSAL_LAST_TRY) => REFUSAL_NONE,
+            (false, _) => REFUSAL_RETRYING,
+        };
+        if next != state {
+            self.refusing.store(next, Ordering::Relaxed);
+        }
         fits
     }
 
-    /// Charge memory the host is about to hold, if the total stays within
-    /// `ceiling`. Unlike `charge`, a success leaves a standing refusal alone:
-    /// it is not V8's retry of the allocation that was refused.
+    /// Charge `len` if the total stays within `ceiling`.
     #[allow(deprecated)]
-    fn reserve(&self, len: usize, ceiling: usize) -> bool {
-        let fits = self
-            .used
+    fn charge_within(&self, len: usize, ceiling: usize) -> bool {
+        self.used
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(len).filter(|total| *total <= ceiling)
             })
-            .is_ok();
-        if !fits {
-            self.refused.store(true, Ordering::Relaxed);
-        }
-        fits
+            .is_ok()
     }
 
     /// Charge memory the host already holds. It cannot be refused, since
@@ -2575,8 +2647,10 @@ mod backing_store_budget_tests {
         unsafe { free_backing_store(budget, data, len) }
     }
 
-    /// Allocations are charged until they are freed, one past the budget is
-    /// refused and flags the refusal, and the next one that fits clears it.
+    /// Allocations are charged until they are freed, and one past the budget
+    /// is refused without condemning anything, since it took no memory. The
+    /// refusal stands until an allocation fits, or V8's last try is refused
+    /// after the callback excused it (`refusing`).
     #[test]
     fn allocations_are_charged_refused_past_the_budget_and_released() {
         let budget = BackingStoreBudget::new(100);
@@ -2584,12 +2658,18 @@ mod backing_store_budget_tests {
         assert!(!first.is_null());
         assert_eq!(budget.used.load(Ordering::Relaxed), 60);
         assert!(allocate(&budget, 41).is_null());
-        assert!(budget.refused.load(Ordering::Relaxed));
+        assert!(!budget.exceeded.load(Ordering::Relaxed));
+        assert_eq!(budget.refusing.load(Ordering::Relaxed), REFUSAL_RETRYING);
+        // The callback marks V8's last try, whose refusal ends it.
+        budget.refusing.store(REFUSAL_LAST_TRY, Ordering::Relaxed);
+        assert!(allocate(&budget, 41).is_null());
+        assert_eq!(budget.refusing.load(Ordering::Relaxed), REFUSAL_NONE);
+        assert!(allocate(&budget, 41).is_null());
         assert_eq!(budget.used.load(Ordering::Relaxed), 60);
         // SAFETY: as `allocate`, without zeroing.
         let second = unsafe { allocate_backing_store_uninitialized(&budget, 40) };
         assert!(!second.is_null());
-        assert!(!budget.refused.load(Ordering::Relaxed));
+        assert_eq!(budget.refusing.load(Ordering::Relaxed), REFUSAL_NONE);
         assert_eq!(budget.used.load(Ordering::Relaxed), 100);
         free(&budget, first, 60);
         free(&budget, second, 40);
@@ -2634,23 +2714,20 @@ mod backing_store_budget_tests {
 
     /// Host memory is charged even past the budget, since it exists either
     /// way; the turn's end judges it. A host reservation is refused past its
-    /// bounds and flags the refusal, and a later one that fits leaves the
-    /// flag standing.
+    /// bounds, which condemns nothing, and a smaller one may still fit.
     #[test]
     fn host_memory_is_charged_and_reservations_are_refused() {
         let budget = Arc::new(BackingStoreBudget::new(100));
         budget.charge_host(80);
         budget.charge_host(40);
-        assert!(!budget.refused.load(Ordering::Relaxed));
         assert_eq!(budget.used.load(Ordering::Relaxed), 120);
         budget.release(120);
         // A gathering alone must fit the budget.
         let mut reservation = BudgetReservation::new(budget.clone());
         assert!(reservation.grow(70));
         assert!(!reservation.grow(40));
-        assert!(budget.refused.load(Ordering::Relaxed));
         assert!(reservation.grow(30));
-        assert!(budget.refused.load(Ordering::Relaxed));
+        assert!(!budget.exceeded.load(Ordering::Relaxed));
         // With others it may pass the budget, up to twice it.
         let mut other = BudgetReservation::new(budget.clone());
         assert!(other.grow(100));
@@ -2708,24 +2785,22 @@ impl BudgetReservation {
         Self { budget, len: 0 }
     }
 
-    /// Charge `more`, or refuse it, which condemns the isolate as one of
-    /// V8's refusals would. What this gathers alone must fit the budget. With
-    /// everything else the isolate holds it may pass the budget by as much
-    /// again, because dead buffers count until a collection, which the host
-    /// cannot ask for: the turn that takes the bytes over collects, and
-    /// condemns the isolate only if it is still past the budget then
-    /// (`check_backing_stores`). Every gathering together stays within
-    /// twice the budget.
+    /// Charge `more`, or refuse it, as the allocator refuses one of V8's:
+    /// the gathering stops and nothing is held. What this gathers alone must
+    /// fit the budget. With everything else the isolate holds it may pass
+    /// the budget by as much again, because dead buffers count until a
+    /// collection, which the host cannot ask for: the turn that takes the
+    /// bytes over collects, and condemns the isolate only if it is still past
+    /// the budget then (`check_backing_stores`). Every gathering together
+    /// stays within twice the budget.
     fn grow(&mut self, more: usize) -> bool {
         let limit = self.budget.limit;
         let fits = self.len.checked_add(more).is_some_and(|len| len <= limit)
-            && self.budget.reserve(more, limit.saturating_mul(2));
-        if !fits {
-            self.budget.refused.store(true, Ordering::Relaxed);
-            return false;
+            && self.budget.charge_within(more, limit.saturating_mul(2));
+        if fits {
+            self.len += more;
         }
-        self.len += more;
-        true
+        fits
     }
 }
 
@@ -2768,16 +2843,287 @@ fn host_array_buffer_charged<'s>(
     v8::ArrayBuffer::with_backing_store(scope, &store)
 }
 
+/// A turn, watched for the memory V8 grows outside the allocator where no
+/// JavaScript asks for it: a WebAssembly memory, which Wasm code grows with
+/// `memory.grow`. One process-wide thread interrupts every watched turn
+/// every `MEMORY_WATCH_INTERVAL`, and the interrupt reads V8's external
+/// memory, which counts it. Past the budget, after a collection, it condemns
+/// the isolate and terminates the turn. Growth that JavaScript asks for is
+/// refused before it happens (`op_memory_admit`); this bounds the rest
+/// within one interval. Only the turns of an isolate that has made
+/// WebAssembly are watched, and the thread sleeps while none is.
+pub(crate) struct MemoryWatch {
+    id: u64,
+}
+
+const MEMORY_WATCH_INTERVAL: Duration = Duration::from_millis(5);
+
+#[derive(Default)]
+struct MemoryWatchState {
+    next_id: u64,
+    watches: HashMap<u64, v8::IsolateHandle>,
+}
+
+#[derive(Default)]
+struct MemoryWatchService {
+    state: Mutex<MemoryWatchState>,
+    /// Rung when the first watch of an idle service starts.
+    started: std::sync::Condvar,
+}
+
+static MEMORY_WATCH_SERVICE: OnceLock<Arc<MemoryWatchService>> = OnceLock::new();
+
+fn memory_watch_service() -> &'static Arc<MemoryWatchService> {
+    MEMORY_WATCH_SERVICE.get_or_init(|| {
+        let shared = Arc::new(MemoryWatchService::default());
+        let watcher = shared.clone();
+        std::thread::Builder::new()
+            .name("celld-memory-watch".to_string())
+            .spawn(move || run_memory_watch_service(&watcher))
+            .expect("spawn the process memory watch");
+        shared
+    })
+}
+
+fn run_memory_watch_service(service: &MemoryWatchService) -> ! {
+    // A plain tick while anything is watched, rather than a wake per turn:
+    // starting a watch then costs one uncontended lock.
+    loop {
+        {
+            let state = service.state.lock().unwrap();
+            let _state = service
+                .started
+                .wait_while(state, |state| state.watches.is_empty())
+                .unwrap();
+        }
+        std::thread::sleep(MEMORY_WATCH_INTERVAL);
+        for handle in service.state.lock().unwrap().watches.values() {
+            handle.request_interrupt(memory_watch_interrupt, std::ptr::null_mut());
+        }
+    }
+}
+
+impl MemoryWatch {
+    fn start(isolate: v8::IsolateHandle) -> Self {
+        let service = memory_watch_service();
+        let mut state = service.state.lock().unwrap();
+        let id = state.next_id;
+        state.next_id = state.next_id.wrapping_add(1);
+        state.watches.insert(id, isolate);
+        if state.watches.len() == 1 {
+            service.started.notify_one();
+        }
+        Self { id }
+    }
+}
+
+impl Drop for MemoryWatch {
+    fn drop(&mut self) {
+        memory_watch_service()
+            .state
+            .lock()
+            .unwrap()
+            .watches
+            .remove(&self.id);
+    }
+}
+
+thread_local! {
+    /// The turn this thread runs: `Some` while one does, holding its watch
+    /// once it has one (`WatchedTurn`).
+    static TURN_WATCH: RefCell<Option<Option<MemoryWatch>>> = const { RefCell::new(None) };
+}
+
+/// A turn or a load on this thread, watched from its start or from when it
+/// first makes WebAssembly (`watch_this_turn`).
+/// It restores what the thread ran before, so a nested turn is its own.
+pub(crate) struct WatchedTurn {
+    previous: Option<Option<MemoryWatch>>,
+}
+
+impl WatchedTurn {
+    /// Enter a turn, watched from its start when given the isolate.
+    fn enter(watched: Option<v8::IsolateHandle>) -> Self {
+        let watch = watched.map(MemoryWatch::start);
+        Self {
+            previous: TURN_WATCH.replace(Some(watch)),
+        }
+    }
+}
+
+impl Drop for WatchedTurn {
+    fn drop(&mut self) {
+        TURN_WATCH.set(self.previous.take());
+    }
+}
+
+/// Watch the turn this thread runs, if it is not watched yet. A turn outside
+/// any `WatchedTurn` has nothing to watch it; the end of every turn still
+/// checks (`check_backing_stores`).
+fn watch_this_turn(isolate: &v8::Isolate) {
+    TURN_WATCH.with_borrow_mut(|turn| {
+        if let Some(watch @ None) = turn {
+            *watch = Some(MemoryWatch::start(isolate.thread_safe_handle()));
+        }
+    });
+}
+
+/// V8's external memory: every buffer it counts, those of the allocator and
+/// the host and those it grows itself, read without its full statistics.
+fn external_memory(isolate: &mut v8::Isolate) -> usize {
+    usize::try_from(isolate.adjust_amount_of_external_allocated_memory(0)).unwrap_or(0)
+}
+
+/// Memory the isolate holds is past the budget: condemn it, and terminate
+/// the turn.
+fn exceed_budget(isolate: &mut v8::Isolate, budget: &BackingStoreBudget) {
+    budget.exceeded.store(true, Ordering::Relaxed);
+    isolate.terminate_execution();
+}
+
+unsafe extern "C" fn memory_watch_interrupt(
+    mut isolate: v8::UnsafeRawIsolatePtr,
+    _data: *mut std::ffi::c_void,
+) {
+    // SAFETY: V8 runs an interrupt on the isolate's thread, inside a turn
+    // that holds its lock, with the isolate it was requested for.
+    let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut isolate) };
+    let Some(budget) = isolate.get_slot::<Arc<BackingStoreBudget>>().cloned() else {
+        return;
+    };
+    if budget.watch_paused.load(Ordering::Relaxed) {
+        // Taken when the pause ends (`op_memory_watch_pause`).
+        budget.watch_deferred.store(true, Ordering::Relaxed);
+        return;
+    }
+    watch_memory(isolate, &budget);
+}
+
+/// One tick of the `MemoryWatch`: condemn the isolate if what it holds is
+/// past the budget.
+fn watch_memory(isolate: &mut v8::Isolate, budget: &BackingStoreBudget) {
+    let external = external_memory(isolate);
+    if external <= budget.limit {
+        return;
+    }
+    // Dead buffers count until a collection, so only a collection can say
+    // the isolate holds too much. Collecting at every tick past the budget
+    // would cost a Worker that keeps garbage near it a collection each
+    // interval, so the watch collects once the memory has grown by an
+    // eighth of the budget since the last collection, and until then waits:
+    // what is held stays within an eighth of the budget past the memory
+    // measured then, and the turn's end collects and checks in any case.
+    let collected = budget.external_after_collection.load(Ordering::Acquire);
+    if external.saturating_sub(collected) < budget.limit / 8 {
+        return;
+    }
+    // An interrupt runs where V8 may collect, as it may at any allocation,
+    // and a collection runs no JavaScript: finalizers are queued as tasks.
+    isolate.low_memory_notification();
+    let external = external_memory(isolate);
+    budget
+        .external_after_collection
+        .store(external, Ordering::Release);
+    if external > budget.limit {
+        exceed_budget(isolate, budget);
+    }
+}
+
+/// Whether V8's external memory, grown by `bytes`, stays within the budget.
+/// Past it, the isolate collects first, since dead buffers count until a
+/// collection, as V8 does before it refuses an allocation. A refusal leaves
+/// the measure for `MemoryWatch` at nothing, because what was measured may
+/// include what the refusal leaves as garbage, so the next tick collects.
+fn external_memory_fits(
+    isolate: &mut v8::Isolate,
+    budget: &BackingStoreBudget,
+    bytes: usize,
+) -> bool {
+    if external_memory(isolate).saturating_add(bytes) <= budget.limit {
+        return true;
+    }
+    isolate.low_memory_notification();
+    let fits = external_memory(isolate).saturating_add(bytes) <= budget.limit;
+    let measured = if fits { external_memory(isolate) } else { 0 };
+    budget
+        .external_after_collection
+        .store(measured, Ordering::Release);
+    fits
+}
+
+/// `__memory_admit(bytes, watch)` -> bool: whether memory V8 grows outside
+/// the allocator may grow by `bytes`, asked by the harness before a
+/// WebAssembly memory or a growable buffer grows, and with 0 after one is
+/// made or a buffer cloned. Past the budget the isolate collects, and then
+/// refuses: the harness throws V8's RangeError. A refusal takes no memory,
+/// so it condemns nothing. `watch` marks WebAssembly, which watches this
+/// isolate's turns from now on.
+fn op_memory_admit(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let Some(budget) = scope.get_slot::<Arc<BackingStoreBudget>>().cloned() else {
+        rv.set(v8::Boolean::new(scope, true).into());
+        return;
+    };
+    let bytes = args.get(0).number_value(scope).unwrap_or(f64::INFINITY);
+    let bytes = if bytes.is_finite() && bytes >= 0.0 {
+        bytes as usize
+    } else {
+        usize::MAX
+    };
+    if args.get(1).is_true() {
+        budget.watched.store(true, Ordering::Relaxed);
+        watch_this_turn(scope);
+    }
+    let admitted = external_memory_fits(scope, &budget, bytes);
+    rv.set(v8::Boolean::new(scope, admitted).into());
+}
+
+/// `__memory_watch_pause(on)`: pause or resume the `MemoryWatch` while the
+/// harness makes a WebAssembly memory, which runs no Worker code, and checks
+/// it. A tick that came while paused is taken as the pause ends, so the
+/// pause defers the watch's decision rather than skipping it.
+fn op_memory_watch_pause(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let Some(budget) = scope.get_slot::<Arc<BackingStoreBudget>>().cloned() else {
+        return;
+    };
+    let pause = args.get(0).is_true();
+    budget.watch_paused.store(pause, Ordering::Relaxed);
+    if !pause && budget.watch_deferred.swap(false, Ordering::Relaxed) {
+        watch_memory(scope, &budget);
+    }
+}
+
+/// `__memory_limit()` -> number: the isolate's backing-store budget, which
+/// is also the most one WebAssembly memory may hold (`--wasm-max-mem-pages`).
+fn op_memory_limit(
+    scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let limit = scope
+        .get_slot::<Arc<BackingStoreBudget>>()
+        .map_or(v8_heap_limit_bytes(), |budget| budget.limit);
+    rv.set(v8::Number::new(scope, limit as f64).into());
+}
+
 /// Charge a host buffer of `len`, which exists already, or refuse it. Past
 /// the budget the isolate first collects, because buffers the Worker dropped
 /// count until a collection, but only once the budget has grown by an
 /// eighth since the last such collection: a Worker that streams near its
-/// budget would otherwise collect for every chunk. Still past it, the buffer
-/// is refused as V8 refuses one of its own: `RangeError: Array buffer
-/// allocation failed`, the isolate condemned, and the turn terminated, so a
-/// loop of synchronous host calls (an inflate, a SQL read, a hash) stops
-/// within one buffer. The buffer itself is still made, because the caller
-/// wraps it, and it exists already; nothing runs to use it.
+/// budget would otherwise collect for every chunk. Still past it, the
+/// isolate holds more than its budget, unlike after one of V8's refusals:
+/// it throws `RangeError: Array buffer allocation failed`, is condemned, and
+/// its turn is terminated, so a loop of synchronous host calls (an inflate,
+/// a SQL read, a hash) stops within one buffer. The buffer itself is still
+/// made, because the caller wraps it, and it exists already; nothing runs to
+/// use it.
 fn charge_host_buffer(scope: &mut v8::PinScope, budget: &BackingStoreBudget, len: usize) {
     budget.charge_host(len);
     let used = budget.used.load(Ordering::Acquire);
@@ -2793,7 +3139,7 @@ fn charge_host_buffer(scope: &mut v8::PinScope, budget: &BackingStoreBudget, len
             return;
         }
     }
-    budget.refused.store(true, Ordering::Relaxed);
+    budget.exceeded.store(true, Ordering::Relaxed);
     let message = v8::String::new(scope, "Array buffer allocation failed").unwrap();
     let exception = v8::Exception::range_error(scope, message);
     scope.throw_exception(exception);
@@ -3324,7 +3670,7 @@ fn take_one_execution_termination(
 /// `MEMORY_EXCEEDED` instead. A turn that keeps running there could retain
 /// more, take another extension, and answer for a Worker that is gone.
 fn heap_limit_reached(isolate: &mut v8::Isolate) -> bool {
-    fold_backing_store_refusal(isolate);
+    fold_backing_store_excess(isolate);
     let Some(heap) = isolate.get_slot::<Arc<HeapLimitState>>().cloned() else {
         return false;
     };
@@ -3332,7 +3678,7 @@ fn heap_limit_reached(isolate: &mut v8::Isolate) -> bool {
         return false;
     }
     // The first to see it carries the condemnation out, whichever entry
-    // point that is: a refusal can come from outside a turn, so the turn
+    // point that is: an excess can come from outside a turn, so the turn
     // that reached the limit is not always the one that notices.
     if !heap.condemnation_handled.swap(true, Ordering::Relaxed) {
         // The callback's termination can still be pending. Nothing runs here
@@ -3352,13 +3698,13 @@ fn heap_limit_reached(isolate: &mut v8::Isolate) -> bool {
     true
 }
 
-/// Count a backing-store allocation that stayed refused as the heap limit
-/// reached: the isolate is condemned the same way (`BackingStoreBudget`).
-fn fold_backing_store_refusal(isolate: &v8::Isolate) {
-    let refused = isolate
+/// Count backing stores held past the budget as the heap limit reached: the
+/// isolate is condemned the same way (`BackingStoreBudget`).
+fn fold_backing_store_excess(isolate: &v8::Isolate) {
+    let exceeded = isolate
         .get_slot::<Arc<BackingStoreBudget>>()
-        .is_some_and(|budget| budget.refused.load(Ordering::Relaxed));
-    if refused {
+        .is_some_and(|budget| budget.exceeded.load(Ordering::Relaxed));
+    if exceeded {
         if let Some(heap) = isolate.get_slot::<Arc<HeapLimitState>>() {
             heap.exceed();
         }
@@ -3370,13 +3716,18 @@ fn fold_backing_store_refusal(isolate: &v8::Isolate) {
 /// refusal: the buffers the host hands the isolate, which exist before they
 /// can be counted, and what V8 grows outside the allocator, a resizable
 /// `ArrayBuffer` and a WebAssembly memory, which only V8's external-memory
-/// counter sees. Buffers the Worker dropped count until a collection frees
+/// counter sees, and which the harness checks only as JavaScript grows it. Buffers the Worker dropped count until a collection frees
 /// them, so one collection comes first, and only when past the budget: at
 /// most once a turn.
 fn check_backing_stores(isolate: &mut v8::Isolate) {
     let Some(budget) = isolate.get_slot::<Arc<BackingStoreBudget>>().cloned() else {
         return;
     };
+    // A refusal V8 did not retry ends with the turn (`refusing`), as does a
+    // pause a terminated turn left (`watch_paused`).
+    budget.refusing.store(REFUSAL_NONE, Ordering::Relaxed);
+    budget.watch_paused.store(false, Ordering::Relaxed);
+    budget.watch_deferred.store(false, Ordering::Relaxed);
     let past = |isolate: &mut v8::Isolate| {
         // V8's counter, read without the cost of its full statistics.
         let external =
@@ -3400,7 +3751,7 @@ fn check_backing_stores(isolate: &mut v8::Isolate) {
 /// the Durable Objects it hosts are reset with it: their storage can take no
 /// further operation, and their events fail as their turns come.
 fn over_memory_limit(scope: &mut v8::PinScope) -> bool {
-    fold_backing_store_refusal(scope);
+    fold_backing_store_excess(scope);
     let Some(heap) = scope.get_slot::<Arc<HeapLimitState>>().cloned() else {
         return false;
     };
@@ -3433,6 +3784,9 @@ extern "C" fn near_heap_limit(
     // SAFETY: `data` points into the Arc stored in the isolate slot. Worker::drop
     // removes this callback before the isolate (and its slots) are destroyed.
     let state = unsafe { &*(data as *const HeapLimitState) };
+    if refused_buffer_reached_the_callback(state, current_heap_limit) {
+        return current_heap_limit;
+    }
     // A load fails, and anything else condemns the isolate: the turn that
     // reached the limit and every later one fail with `MEMORY_EXCEEDED`, and
     // the isolate is replaced.
@@ -3445,6 +3799,31 @@ extern "C" fn near_heap_limit(
     // drains, so the memory is held only until then.
     state.isolate.terminate_execution();
     current_heap_limit.saturating_add(V8_LARGEST_OBJECT_BYTES)
+}
+
+/// Whether V8 invoked `near_heap_limit` for a buffer the allocator refused,
+/// not for the heap: `HeapAllocator::RetryCustomAllocate` invokes it before
+/// its last try at any allocation, and ignores what it returns. A refusal
+/// takes no memory and throws V8's RangeError, so the isolate is not
+/// condemned and its limit stays. The heap must also be well below the
+/// limit, since a collection during the retry can reach the limit for real,
+/// and V8 then aborts the process unless the limit rises.
+fn refused_buffer_reached_the_callback(state: &HeapLimitState, current_heap_limit: usize) -> bool {
+    let refusing = &state.backing_stores.refusing;
+    if refusing.load(Ordering::Relaxed) != REFUSAL_RETRYING {
+        return false;
+    }
+    let mut raw = state.raw_isolate.0;
+    // SAFETY: V8 runs this callback on the isolate's thread, inside its own
+    // call, for the isolate the state belongs to.
+    let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut raw) };
+    let used = isolate.get_heap_statistics().used_heap_size();
+    if used >= current_heap_limit / 4 * 3 {
+        refusing.store(REFUSAL_NONE, Ordering::Relaxed);
+        return false;
+    }
+    refusing.store(REFUSAL_LAST_TRY, Ordering::Relaxed);
+    true
 }
 
 /// Live heap use, as a share of `limit`.
@@ -6527,6 +6906,9 @@ impl Worker {
             loading: AtomicBool::new(true),
             load_exceeded: AtomicBool::new(false),
             isolate: isolate.thread_safe_handle(),
+            // SAFETY: an address only; see `RawIsolate`.
+            raw_isolate: RawIsolate(unsafe { isolate.as_raw_isolate_ptr() }),
+            backing_stores: backing_stores.clone(),
         });
         let runtime_state = Arc::new(ActorRuntimeState {
             promises: std::sync::Mutex::new(PromiseMap::new()),
@@ -6540,7 +6922,7 @@ impl Worker {
         let heap_limit_state_ptr =
             Arc::as_ptr(&heap_limit_state) as *mut HeapLimitState as *mut std::ffi::c_void;
         isolate.set_slot(heap_limit_state.clone());
-        isolate.set_slot(backing_stores);
+        isolate.set_slot(backing_stores.clone());
         isolate.set_slot(runtime_state.clone());
         isolate.set_slot(Arc::new(ModuleRegistry::default()));
         isolate.set_slot(loader_owner.clone());
@@ -6554,12 +6936,14 @@ impl Worker {
         }));
         isolate.add_near_heap_limit_callback(near_heap_limit, heap_limit_state_ptr);
         let startup = CpuWatchdog::startup(isolate.thread_safe_handle(), runtime_state.clone());
+        let turn = WatchedTurn::enter(None);
         let realm = Self::load_realm(&mut isolate, &config);
+        drop(turn);
         drop(startup);
         // While the load still counts as loading, so that memory past a
         // budget fails the load rather than condemning the loaded isolate.
         check_backing_stores(&mut isolate);
-        fold_backing_store_refusal(&isolate);
+        fold_backing_store_excess(&isolate);
         heap_limit_state.loading.store(false, Ordering::Relaxed);
         if let Some(error) = startup_limit_exceeded(&heap_limit_state, &runtime_state) {
             return Err(error);
@@ -6606,6 +6990,7 @@ impl Worker {
                 compat,
                 loader_owner,
                 cells: storage::Cells::default(),
+                backing_stores,
             }),
         })
     }
@@ -7616,6 +8001,9 @@ ops! { OP_NAMES, install_op_functions,
         "__asset_fetch" => op_asset_fetch,
         "__http_stream_read" => op_http_stream_read,
         "__http_stream_read_all" => op_http_stream_read_all,
+        "__memory_admit" => op_memory_admit,
+        "__memory_limit" => op_memory_limit,
+        "__memory_watch_pause" => op_memory_watch_pause,
         "__http_stream_cancel" => op_http_stream_cancel,
         "__http_stream_tee" => op_http_stream_tee,
         "__response_stream_create" => op_response_stream_create,
@@ -10489,17 +10877,24 @@ fn op_http_stream_read(
     rv.set(promise_for(scope, id));
 }
 
-/// `__http_stream_read_all(id)` -> Promise<Uint8Array>: the rest of a host
+/// `__http_stream_read_all(id, expected)` -> Promise<Uint8Array>: the rest of a host
 /// body stream as one buffer, read here rather than as one JavaScript chunk
 /// each, so reading a body whole holds it once. A body larger than the
-/// isolate's backing-store budget cannot be held whole: the read fails and
-/// condemns the isolate, as reading it chunk by chunk would.
+/// isolate's backing-store budget cannot be held whole: the read stops and
+/// rejects with workerd's `TypeError`, as one of V8's allocations would be
+/// refused, without condemning the isolate. A body whose `expected` length
+/// is past the budget is refused before it is read.
 fn op_http_stream_read_all(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let stream_id = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
+    let expected = args
+        .get(1)
+        .is_number()
+        .then(|| args.get(1).number_value(scope))
+        .flatten();
     let Some(budget) = scope.get_slot::<Arc<BackingStoreBudget>>().cloned() else {
         let message = v8::String::new(scope, "the isolate has no backing-store budget").unwrap();
         let exception = v8::Exception::type_error(scope, message);
@@ -10511,13 +10906,17 @@ fn op_http_stream_read_all(
         // Each chunk is charged as it arrives, against the buffers the
         // isolate holds and every other read in flight, and the delivered
         // buffer takes the charge over.
+        if expected.is_some_and(|length| length > budget.limit as f64) {
+            service.cancel_source(stream_id);
+            return Err(BODY_PAST_BUDGET.to_string());
+        }
         let mut charge = BudgetReservation::new(budget);
         let mut chunks = Vec::new();
         let mut total = 0usize;
         while let Some(chunk) = http_stream_read(service.clone(), stream_id).await? {
             if !charge.grow(chunk.len()) {
                 service.cancel_source(stream_id);
-                return Err(MEMORY_EXCEEDED.to_string());
+                return Err(BODY_PASSED_BUDGET.to_string());
             }
             total += chunk.len();
             chunks.push(chunk);

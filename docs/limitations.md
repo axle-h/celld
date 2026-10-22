@@ -78,18 +78,37 @@ APIs, and Wrangler configuration.
   limit; Cloudflare counts both in one 128 MB. The budget counts
   `ArrayBuffer`s, typed arrays, `SharedArrayBuffer`s, WebAssembly memory, and
   the buffers celld hands a Worker: bodies, crypto and compression output,
-  SQL blobs, and bundle files. An allocation past it throws `RangeError:
-  Array buffer allocation failed`, after V8 has collected garbage, and
-  condemns the isolate as the heap limit does, even when the Worker catches
-  the error. A buffer the host hands over in a synchronous call, such as
-  `inflateSync()` or a SQL read, is refused the same way within the turn, so
-  a loop of such calls stops within one buffer.
-- A resizable `ArrayBuffer` and a WebAssembly memory grow outside the
-  allocator. celld counts them in the same budget, from V8's external memory,
-  when a turn or the load ends, so within one turn they can pass the budget
-  before the isolate is condemned: a resizable buffer up to its
-  `maxByteLength`, and each WebAssembly memory up to the heap limit, past
-  which `memory.grow()` fails with a `RangeError`.
+  SQL blobs, and bundle files.
+- Memory a Worker asks for past the budget is refused, after V8 has
+  collected garbage, with V8's `RangeError`: `Array buffer allocation
+  failed` for a buffer, and the error of the method for growth. A refusal
+  takes no memory, so it does not condemn the isolate, and a Worker may
+  catch it and ask for less, as Emscripten does when it grows its heap.
+- An isolate that comes to hold more than the budget is condemned as at the
+  heap limit. That happens when a buffer celld hands over in a synchronous
+  call, such as `inflateSync()` or a SQL read, takes it past the budget, so a
+  loop of such calls stops within one buffer; when Wasm code grows its own
+  memory past it; and when a turn or the load ends past it, after a
+  collection.
+- A WebAssembly memory and a resizable `ArrayBuffer` or growable
+  `SharedArrayBuffer` grow outside the allocator, and count in the same
+  budget through V8's external memory. celld checks growth that JavaScript
+  asks for before it happens: `resize()`, `grow()`, `transfer()`,
+  `transferToFixedLength()`, `memory.grow()`, and a buffer made with a
+  `maxByteLength`. It checks what V8 makes whole once made: `new
+  WebAssembly.Memory()`, `new WebAssembly.Instance()`,
+  `WebAssembly.instantiate()`, and `structuredClone()`. Each WebAssembly
+  memory is capped at the heap limit.
+- Wasm code that grows its own memory with `memory.grow` is checked every
+  5 ms while a turn of an isolate that has made WebAssembly runs. The check
+  collects garbage once the memory has grown by an eighth of the budget
+  since its last collection, so the isolate can pass the budget by that
+  eighth, and by what it writes in 5 ms, before it is condemned. An instance
+  whose own memories pass the budget as it is made may be refused or
+  condemned, whichever check sees it first.
+- A grow of a WebAssembly memory past both its own maximum and the budget
+  throws the budget's `RangeError` rather than V8's `Maximum memory size
+  exceeded`, since a memory's maximum cannot be read.
 - The host gathers a body read whole in chunks, each charged to the budget as
   it arrives. Buffers the Worker dropped still count until a collection,
   which the host cannot ask for while it reads, so reads in flight may pass
@@ -99,8 +118,11 @@ APIs, and Wrangler configuration.
   default.
 - Reading a body whole, with `arrayBuffer()`, `text()`, `json()` or
   `blob()`, holds it once in the budget, so a body larger than the budget
-  fails the request and condemns the isolate. Stream a larger body instead.
-  After `arrayBuffer()` or `blob()` hands a body over, reading it again throws
+  rejects with workerd's `TypeError`, and the isolate lives on: `Memory limit
+  would be exceeded before EOF.` when its length is known to be past the
+  budget before it is read, and `Memory limit exceeded before EOF.` when it
+  passes the budget as it is read. Stream a larger body instead. After
+  `arrayBuffer()` or `blob()` hands a body over, reading it again throws
   `Body has already been used`, as in workerd.
 - A request has a CPU limit only when a Dynamic Worker sets `cpuMs`. See
   [Dynamic Workers](services/dynamic-workers.md#differences-from-cloudflare).

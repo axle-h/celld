@@ -11,14 +11,14 @@
       "status": 200,
       "body": {
         "error": "Error",
-        "message": "Script startup exceeded memory limits."
+        "message": "top-level rejected: RangeError: Array buffer allocation failed"
       }
     },
     {
       "status": 200,
       "body": {
         "error": "Error",
-        "message": "Script startup exceeded memory limits."
+        "message": "top-level rejected: RangeError: Array buffer allocation failed"
       }
     },
     {
@@ -32,28 +32,28 @@
       "status": 200,
       "body": {
         "error": "Error",
-        "message": "Worker has exceeded memory limit."
+        "message": "fetch threw: RangeError: Array buffer allocation failed"
       }
     },
     {
       "status": 200,
       "body": {
         "error": "Error",
-        "message": "Worker has exceeded memory limit."
+        "message": "fetch threw: RangeError: Array buffer allocation failed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "status": 200,
+        "body": "ran Array buffer allocation failed"
       }
     },
     {
       "status": 200,
       "body": {
         "error": "Error",
-        "message": "Worker has exceeded memory limit."
-      }
-    },
-    {
-      "status": 200,
-      "body": {
-        "error": "Error",
-        "message": "Worker has exceeded memory limit."
+        "message": "fetch threw: RangeError: ArrayBuffer.prototype.resize: Out of memory"
       }
     },
     {
@@ -74,7 +74,7 @@
       "status": 200,
       "body": {
         "error": "Error",
-        "message": "Worker has exceeded memory limit."
+        "message": "fetch threw: RangeError: WebAssembly.Memory(): could not allocate memory"
       }
     },
     {
@@ -87,8 +87,131 @@
     {
       "status": 200,
       "body": {
+        "error": "Error",
+        "message": "Worker has exceeded memory limit."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "Script startup exceeded memory limits."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "fetch threw: RangeError: WebAssembly.Memory(): could not allocate memory"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "Worker has exceeded memory limit."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "fetch threw: RangeError: Array buffer allocation failed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "fetch threw: RangeError: Array buffer allocation failed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "top-level rejected: RangeError: Array buffer allocation failed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "fetch threw: RangeError: Array buffer allocation failed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "fetch threw: RangeError: SharedArrayBuffer.prototype.grow: Out of memory"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "fetch threw: RangeError: Array buffer allocation failed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "status": 200,
+        "body": "ran RangeError: WebAssembly.Memory.grow(): Unable to grow instance memory; grew 400"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "status": 200,
+        "body": "ran RangeError: WebAssembly.Memory.grow(): Unable to grow instance memory; grew 400"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "status": 200,
+        "body": "ran Array buffer allocation failed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
         "status": 200,
         "body": "other ok"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "fetch threw: RangeError: Array buffer allocation failed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "status": 200,
+        "body": {
+          "poisoned": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "fetch threw: RangeError: Array buffer allocation failed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "status": 200,
+        "body": {
+          "poisoned": true
+        }
       }
     },
     {
@@ -218,7 +341,14 @@
       "status": 200,
       "body": {
         "error": "Error",
-        "message": "Worker has exceeded memory limit."
+        "message": "rejected: TypeError: Memory limit would be exceeded before EOF."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "rejected: TypeError: Memory limit exceeded before EOF."
       }
     },
     {

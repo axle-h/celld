@@ -1,0 +1,154 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "ArrayBuffer": [
+          "ArrayBuffer",
+          1,
+          "function ArrayBuffer() { [native code] }",
+          "{\"value\":1,\"writable\":false,\"enumerable\":false,\"configurable\":true}"
+        ],
+        "SharedArrayBuffer": [
+          "SharedArrayBuffer",
+          1,
+          "function SharedArrayBuffer() { [native code] }",
+          "{\"value\":1,\"writable\":false,\"enumerable\":false,\"configurable\":true}"
+        ],
+        "Memory": [
+          "Memory",
+          1,
+          "function Memory() { [native code] }",
+          "{\"value\":1,\"writable\":false,\"enumerable\":false,\"configurable\":true}"
+        ],
+        "resize": [
+          "resize",
+          1,
+          "function resize() { [native code] }",
+          "{\"value\":1,\"writable\":false,\"enumerable\":false,\"configurable\":true}"
+        ],
+        "transfer": [
+          "transfer",
+          0,
+          "function transfer() { [native code] }",
+          "{\"value\":0,\"writable\":false,\"enumerable\":false,\"configurable\":true}"
+        ],
+        "transferToFixedLength": [
+          "transferToFixedLength",
+          0,
+          "function transferToFixedLength() { [native code] }",
+          "{\"value\":0,\"writable\":false,\"enumerable\":false,\"configurable\":true}"
+        ],
+        "grow": [
+          "grow",
+          1,
+          "function grow() { [native code] }",
+          "{\"value\":1,\"writable\":false,\"enumerable\":false,\"configurable\":true}"
+        ],
+        "memoryGrow": [
+          "grow",
+          1,
+          "function grow() { [native code] }",
+          "{\"value\":1,\"writable\":false,\"enumerable\":false,\"configurable\":true}"
+        ],
+        "toString": [
+          "toString",
+          0,
+          "function toString() { [native code] }",
+          "{\"value\":0,\"writable\":false,\"enumerable\":false,\"configurable\":true}"
+        ],
+        "wrapped": [
+          "Instance",
+          1,
+          "instantiate",
+          1
+        ],
+        "toStringOfNonFunction": "TypeError: Function.prototype.toString requires that 'this' be a Function",
+        "descriptors": [
+          "{\"value\":\"fn\",\"writable\":true,\"enumerable\":false,\"configurable\":true}",
+          "{\"value\":\"fn\",\"writable\":true,\"enumerable\":false,\"configurable\":true}",
+          "{\"value\":\"fn\",\"writable\":true,\"enumerable\":false,\"configurable\":true}",
+          "{\"value\":\"fn\",\"writable\":true,\"enumerable\":false,\"configurable\":true}",
+          "{\"value\":\"fn\",\"writable\":true,\"enumerable\":false,\"configurable\":true}"
+        ],
+        "keys": "isView,length,name,prototype",
+        "identity": [
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          "[object ArrayBuffer]"
+        ],
+        "subclass": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "called": "TypeError: Constructor ArrayBuffer requires 'new'",
+        "grown": [
+          true,
+          0,
+          0,
+          true,
+          32,
+          false,
+          16,
+          1,
+          196608,
+          8,
+          true,
+          "undefined"
+        ],
+        "convertedOnce": 1,
+        "errors": {
+          "resizeBigInt": "TypeError: Cannot convert a BigInt value to a number",
+          "resizeSymbol": "TypeError: Cannot convert a Symbol value to a number",
+          "resizeBigIntObject": "TypeError: Cannot convert a BigInt value to a number",
+          "resizeNonResizable": "TypeError: Method ArrayBuffer.prototype.resize called on incompatible receiver #<ArrayBuffer>",
+          "resizeShared": "TypeError: Method ArrayBuffer.prototype.resize called on incompatible receiver #<SharedArrayBuffer>",
+          "resizeNotBuffer": "TypeError: Method ArrayBuffer.prototype.resize called on incompatible receiver #<Object>",
+          "resizeTooBig": "RangeError: ArrayBuffer.prototype.resize: Invalid length parameter",
+          "resizeNegative": "RangeError: ArrayBuffer.prototype.resize: Invalid length parameter",
+          "resizeDetached": "TypeError: Cannot perform ArrayBuffer.prototype.resize on a detached ArrayBuffer",
+          "transferTooBig": "RangeError: Invalid array buffer length",
+          "transferNegative": "RangeError: Invalid array buffer length",
+          "transferDetached": "TypeError: Cannot perform ArrayBuffer.prototype.transfer on a detached ArrayBuffer",
+          "transferBigInt": "TypeError: Cannot convert a BigInt value to a number",
+          "fixedDetached": "TypeError: Cannot perform ArrayBuffer.prototype.transferToFixedLength on a detached ArrayBuffer",
+          "transferShared": "TypeError: Method ArrayBuffer.prototype.transfer called on incompatible receiver #<SharedArrayBuffer>",
+          "constructTooBig": "RangeError: Invalid array buffer max length",
+          "constructNegative": "RangeError: Invalid array buffer length",
+          "constructBadMax": "RangeError: Invalid array buffer max length",
+          "constructBigInt": "TypeError: Cannot convert a BigInt value to a number",
+          "constructMaxBigInt": "TypeError: Cannot convert a BigInt value to a number",
+          "growNotGrowable": "TypeError: Method SharedArrayBuffer.prototype.grow called on incompatible receiver #<SharedArrayBuffer>",
+          "growShrink": "RangeError: SharedArrayBuffer.prototype.grow: Invalid length parameter",
+          "growTooBig": "RangeError: SharedArrayBuffer.prototype.grow: Invalid length parameter",
+          "memoryPastMax": "RangeError: WebAssembly.Memory.grow(): Maximum memory size exceeded",
+          "memoryNegative": "TypeError: WebAssembly.Memory.grow(): Argument 0 must be non-negative",
+          "memoryNaN": "TypeError: WebAssembly.Memory.grow(): Argument 0 must be convertible to a valid number",
+          "memoryBigInt": "TypeError: Cannot convert a BigInt value to a number",
+          "memoryNotMemory": "TypeError: WebAssembly.Memory.grow(): Receiver is not a WebAssembly.Memory",
+          "memoryDescriptor": "TypeError: WebAssembly.Memory(): Property 'initial' is required"
+        },
+        "descriptorReads": "address,initial,valueOf,maximum,shared",
+        "descriptorErrors": [
+          "TypeError: WebAssembly.Memory(): Property 'initial' must be convertible to a valid number",
+          "TypeError: Cannot convert a BigInt value to a number",
+          "TypeError: Cannot convert object to primitive value",
+          "TypeError: WebAssembly.Memory(): Unknown address type 'i33'; pass 'i32' or 'i64'",
+          "TypeError: WebAssembly.Memory(): Argument 0 must be a memory descriptor"
+        ],
+        "memorySubclass": true
+      }
+    }
+  ]
+}
