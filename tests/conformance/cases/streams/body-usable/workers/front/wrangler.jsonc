@@ -1,0 +1,11 @@
+// A stream that is locked or has been read from, as a Response or Request
+// body: workerd refuses a disturbed stream for both, a locked one for a
+// Response, and a locked Request body when fetch() sends it. celld once
+// streamed past the lock, and a body with a read in flight or a BYOB read's
+// leftover bytes hung the client. Found by plan 1.8's review.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }]
+}

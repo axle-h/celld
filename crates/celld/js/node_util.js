@@ -4528,8 +4528,9 @@ stamp(globalThis.ReadableStream, {
   hidden: [
     ["state", (v) =>
       v._errored ? "errored" : v._closed ? "closed" : "readable"],
-    ["supportsBYOB", (v) =>
-      v.__celldBodyBytes !== undefined || v.__celldStreamId !== undefined],
+    // Platform streams first: their `_ictl` is made on first use.
+    ["supportsBYOB", (v) => v._chunks !== undefined ||
+      v._byteCtl !== undefined || v._ictl !== undefined],
     ["length", (v) =>
       v._expectedLength === undefined
         ? undefined

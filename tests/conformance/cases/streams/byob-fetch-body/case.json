@@ -1,0 +1,8 @@
+{
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/parts"},
+    {"path": "/cancel-waiting"},
+    {"path": "/release-waiting"}
+  ]
+}

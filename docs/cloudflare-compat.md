@@ -141,7 +141,7 @@ The `tail` and `email` handlers are unavailable.
 
 ### [RPC](https://developers.cloudflare.com/workers/runtime-apis/rpc/)
 
-- An RPC stub cannot cross an isolate boundary.
+- An RPC stub, or a stream passed over RPC, cannot cross an isolate boundary.
 - An `AbortSignal` in a Durable Object RPC call does not cross a node boundary.
 - A remote RPC retries only when the failed peer attempt did not start the
   method. Use a stable operation ID for an application retry.
@@ -151,6 +151,12 @@ The `tail` and `email` handlers are unavailable.
 - celld expires an unclaimed and inactive HTTP stream after 60 seconds. A
   successful stream operation starts a new 60-second period.
 - An expired or unknown stream reports an error instead of EOF.
+- A default reader on a platform stream (a request or response body, an R2
+  object's or a KV value's body, `Blob.stream()`, a compression stream's
+  output, or a stream received over RPC) accepts several pending reads, and a
+  cancel ends a pending read as done, except on a compression stream. workerd
+  allows one read at a time and rejects the pending read. BYOB readers on
+  these streams behave as in workerd.
 
 ### [WebSockets](https://developers.cloudflare.com/workers/runtime-apis/websockets/)
 

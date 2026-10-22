@@ -1,0 +1,7 @@
+// BYOB readers on streams built from bytes in the isolate: Blob.stream() and
+// a constructed Response's body.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

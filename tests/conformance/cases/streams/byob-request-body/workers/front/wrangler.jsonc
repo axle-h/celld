@@ -1,0 +1,13 @@
+// BYOB readers on an inbound request body: the step's own body, sent with a
+// length and chunked, and back's, which front sends through a service binding
+// as a stream of parts or as bytes.
+//
+// /streamed/cancel is the last step: under wrangler's harness, the request
+// after a Worker cancels a chunked request body fails with "Network
+// connection lost".
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }]
+}

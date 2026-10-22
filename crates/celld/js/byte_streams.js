@@ -1,5 +1,7 @@
 // Readable byte streams (WHATWG subset): ReadableByteStreamController,
-// ReadableStreamBYOBReader, ReadableStreamBYOBRequest.
+// ReadableStreamBYOBReader, ReadableStreamBYOBRequest. The BYOB reader also
+// serves internal streams: IdentityTransformStream readables, and the
+// harness's platform streams through ChunkedInternalController below.
 //
 // Compiled on first access (see LAZY_GLOBALS); streams.js names the
 // ReadableByteStreamController global when a source declares
@@ -20,6 +22,12 @@ const INVALIDATED =
   'This ReadableStreamBYOBRequest has been invalidated.';
 const RELEASED =
   'This ReadableStream reader has been released.';
+const NO_BYOB = 'This ReadableStream does not support BYOB reads.';
+const BAD_MODE = "mode must be undefined or 'byob' in call to getReader().";
+const ONE_READ =
+  'This ReadableStream only supports a single pending read request ' +
+  'at a time.';
+const NOT_BYTES = 'This ReadableStream did not return bytes.';
 
 // Same shape streams.js returns from reads: shadow `then` so a user
 // override of Object.prototype.then cannot intercept the result.
@@ -535,16 +543,14 @@ class ReadableStreamBYOBReader {
   _released = false;
 
   // Accepts byte streams (`_byteCtl`) and internal streams (`_ictl`:
-  // IdentityTransformStream readables and materialized body streams),
+  // IdentityTransformStream readables and the harness's platform streams),
   // both of which implement the `_pullInto` protocol.
   constructor(stream) {
     const c = stream instanceof ReadableStream
       ? (stream._byteCtl ?? stream._ictl) : undefined;
-    if (c === undefined)
-      throw new TypeError(
-        'ReadableStreamBYOBReader requires a byte ReadableStream');
+    if (c === undefined) throw new TypeError(NO_BYOB);
     if (stream._locked)
-      throw new TypeError('ReadableStream is locked');
+      throw new TypeError('This ReadableStream is currently locked to a reader.');
     this._s = stream;
     this._c = c;
     stream._locked = true;
@@ -554,17 +560,25 @@ class ReadableStreamBYOBReader {
   read(view, options) {
     if (this._released)
       return Promise.reject(new TypeError(RELEASED));
-    if (!ArrayBuffer.isView(view) || view.byteLength === 0 ||
-        view.buffer.byteLength === 0)
+    if (!ArrayBuffer.isView(view))
       return Promise.reject(new TypeError(
-        'read() requires a non-empty ArrayBufferView'));
+        "Failed to execute 'read' on 'ReadableStreamBYOBReader': " +
+        "parameter 1 is not of type 'ArrayBufferView'."));
+    if (view.byteLength === 0 || view.buffer.byteLength === 0)
+      return Promise.reject(new TypeError(
+        'You must call read() on a "byob" reader with a positive-sized ' +
+        'TypedArray object.'));
     let min = 1;
     if (options !== undefined && options !== null &&
         options.min !== undefined) {
       min = Number(options.min);
       const elements = view.length ?? view.byteLength; // DataView
-      if (!Number.isInteger(min) || min < 1 || min > elements)
+      if (!Number.isInteger(min) || min < 1)
         return Promise.reject(new TypeError('invalid min'));
+      if (min > elements)
+        return Promise.reject(new TypeError(
+          `Minimum bytes to read (${min}) exceeds size of buffer ` +
+          `(${elements}).`));
     }
     const s = this._s;
     s._disturbed = true;
@@ -578,11 +592,11 @@ class ReadableStreamBYOBReader {
     return this.read(view, { min });
   }
 
-  // Internal `_ictl` for the harness's materialized body streams,
-  // created on the first byob getReader() so the eager harness carries
-  // none of this machinery.
-  static _buffered(st) {
-    return new BufferedInternalController(st);
+  // The `_ictl` of a harness platform stream (CelldChunkStream), made on
+  // its first BYOB reader so the eager harness carries none of this
+  // machinery.
+  static _chunked(stream) {
+    return new ChunkedInternalController(stream);
   }
 
   cancel(reason) {
@@ -601,6 +615,11 @@ class ReadableStreamBYOBReader {
     if (this._released) return;
     const s = this._s;
     const c = this._c;
+    // Workerd's internal streams keep the lock while a read is in flight.
+    if (c._reading === true)
+      throw new TypeError(
+        'Cannot call releaseLock() on a reader with outstanding read ' +
+        'promises.');
     const err = new TypeError(RELEASED);
     for (const d of c._pendingPullIntos)
       if (d.req) d.req.reject(err);
@@ -612,34 +631,127 @@ class ReadableStreamBYOBReader {
   }
 }
 
-// Internal controller over an already-materialized body: BYOB reads
-// fill from the remaining bytes of the shared {bytes, off} cursor and
-// never park. Fewer bytes than asked (or than `min`) means the body is
-// ending; done flips only on the empty read after it, like Workerd's
-// internal sources.
-class BufferedInternalController {
-  _pendingPullIntos = [];  // for releaseLock; never populated
+// Workerd converts a cancel reason into a real Error before rejecting the
+// read in flight with it (cancelErrorTypePropagation).
+function toError(reason) {
+  if (reason instanceof Error) return reason;
+  return new Error(
+    reason === undefined ? 'Stream was cancelled.' : String(reason));
+}
 
-  constructor(st) { this._st = st; }
+// BYOB reads on a platform stream (the harness's CelldChunkStream): bodies,
+// Blob streams, compression output, streams received over RPC. Workerd
+// serves these as internal streams, and this controller has their contract:
+//
+// - one read at a time; a second read rejects, and releaseLock() throws
+//   while a read is in flight;
+// - a read fills the caller's buffer from the stream's chunks and resolves
+//   once it holds `min` elements' worth of bytes, or the stream ends, with a
+//   Uint8Array over that buffer whatever the view's type; what a chunk has
+//   beyond the buffer stays for the next read, of either kind;
+// - the read is served on a later turn, so a cancel in the same turn as the
+//   read rejects it, with the reason converted to an Error;
+// - a read after the end hands the buffer back as a zero-length view, done.
+//
+// Chunks come from the stream's default queue first (what a default read
+// left there), then from the stream's `_take()`, the source both kinds of
+// reader share.
+class ChunkedInternalController {
+  _pendingPullIntos = [];  // the reader's releaseLock walks it; always empty
+  _reading = false;
+  _req = null;             // the read in flight: { d, resolve, reject }
+
+  constructor(stream) { this._s = stream; }
 
   _invalidate() {}
 
-  _pullInto(view, _min) {
-    let buffer;
-    try { buffer = view.buffer.transfer(); }
+  _pullInto(view, min) {
+    if (this._reading)
+      return Promise.reject(new TypeError(ONE_READ));
+    // The view's bounds, before the transfer detaches it.
+    const d = {
+      buffer: null,
+      byteOffset: view.byteOffset,
+      byteLength: view.byteLength,
+      filled: 0,
+      minFill: min * (view.BYTES_PER_ELEMENT ?? 1), // DataView: 1
+    };
+    try { d.buffer = view.buffer.transfer(); }
     catch (e) { return Promise.reject(e); }
-    const st = this._st;
-    const elementSize = view.BYTES_PER_ELEMENT ?? 1;
-    let n = Math.min(st.bytes.byteLength - st.off, view.byteLength);
-    n -= n % elementSize;
-    if (n > 0) {
-      new Uint8Array(buffer, view.byteOffset, n)
-        .set(st.bytes.subarray(st.off, st.off + n));
-      st.off += n;
+    this._reading = true;
+    return new Promise((resolve, reject) => {
+      const req = { d, resolve, reject };
+      this._req = req;
+      Promise.resolve().then(() => this._serve(req));
+    });
+  }
+
+  async _serve(req) {
+    const s = this._s;
+    const d = req.d;
+    let ended = false;
+    try {
+      while (d.filled < d.minFill) {
+        const chunk = await this._next();
+        if (this._req !== req) return;  // cancelled meanwhile
+        if (chunk === null) {
+          ended = true;
+          break;
+        }
+        const bytes = ArrayBuffer.isView(chunk)
+          ? new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+          : chunk instanceof ArrayBuffer ? new Uint8Array(chunk) : null;
+        if (bytes === null) throw new TypeError(NOT_BYTES);
+        const n = Math.min(bytes.byteLength, d.byteLength - d.filled);
+        new Uint8Array(d.buffer, d.byteOffset + d.filled, n)
+          .set(n === bytes.byteLength ? bytes : bytes.subarray(0, n));
+        d.filled += n;
+        if (n < bytes.byteLength) s._chunks.rest = bytes.subarray(n);
+      }
+    } catch (e) {
+      if (this._req !== req) return;
+      this._req = null;
+      this._reading = false;
+      if (!s._closed && !s._errored) s._controller.error(e);
+      req.reject(s._errored ? s._error : e);
+      return;
     }
-    return Promise.resolve(_readResult(
-      new view.constructor(buffer, view.byteOffset, n / elementSize),
-      n === 0));
+    this._req = null;
+    this._reading = false;
+    if (ended && !s._closed && !s._errored && !s._closeRequested)
+      s._controller.close();
+    req.resolve(_readResult(
+      new Uint8Array(d.buffer, d.byteOffset, d.filled),
+      d.filled === 0));
+  }
+
+  // The next chunk: the default queue's, else the source's once no default
+  // pull is in flight (a default reader released with a read pending leaves
+  // one, whose chunk lands in the queue).
+  async _next() {
+    const s = this._s;
+    const st = s._chunks;
+    for (;;) {
+      if (s._errored) throw s._error;
+      if (s._queue.length > 0) {
+        const chunk = s._queue.shift();
+        s._queueTotalSize -= s._queueSizes.shift() ?? 0;
+        if (s._queue.length === 0 && s._closeRequested) s._finishClose();
+        return chunk;
+      }
+      if (s._closed || s._closeRequested) return null;
+      if (st.pulling === null) return s._take();
+      await st.pulling.catch(() => {});
+    }
+  }
+
+  // The stream was cancelled: reject the read in flight.
+  _cancelled(reason) {
+    const req = this._req;
+    if (req === null) return;
+    this._req = null;
+    this._reading = false;
+    req.reject(toError(reason));
   }
 }
 
@@ -647,8 +759,7 @@ class BufferedInternalController {
 function byteGetReader(options) {
   if (options !== undefined && options !== null &&
       options.mode !== undefined) {
-    if (String(options.mode) !== 'byob')
-      throw new TypeError(`Invalid reader mode '${options.mode}'`);
+    if (String(options.mode) !== 'byob') throw new TypeError(BAD_MODE);
     return new ReadableStreamBYOBReader(this);
   }
   return new ByteDefaultReader(this);

@@ -46,7 +46,9 @@ Then run `node run.mjs --update --filter <area>/<case>`, read the recorded
 workerd and refuses to record if the two transcripts differ, so a
 nondeterministic case shows up when it is recorded. A case runs as it would under
 `wrangler dev -c`, so a Worker can import `capnweb` from this package's
-`node_modules`.
+`node_modules`, and the modules this package's `package.json` names under
+`imports`: `#byob` is `lib/worker/byob.js`, the BYOB reader checks the
+`streams/byob-*` cases share.
 
 ```json
 {
@@ -57,6 +59,7 @@ nondeterministic case shows up when it is recorded. A case runs as it would unde
   "steps": [
     { "path": "/run" },
     { "path": "/items", "method": "POST", "headers": { "content-type": "text/plain" }, "body": "x" },
+    { "path": "/upload", "method": "POST", "body": "x", "chunked": true },
     { "path": "/login", "responseHeaders": ["location"] },
     { "ws": "/socket", "send": ["a"], "close": 1000 },
     { "ws": "/chat", "protocols": ["chat.v2", "chat.v1"], "send": ["a"] },
@@ -92,8 +95,10 @@ whose support hasn't landed yet: `nodes` greater than 1 or a step's `node`
 ### Steps
 
 - **`path`**: an HTTP request to the primary. `method`, `headers` and `body`
-  are optional. The client does not follow redirects. The transcript records
-  the status and the body, parsed as JSON when the response says it is JSON.
+  are optional. `"chunked": true` sends the body with no length, so celld
+  streams it to the Worker instead of holding it as bytes. The client does
+  not follow redirects. The transcript records the status and the body,
+  parsed as JSON when the response says it is JSON.
   `responseHeaders` (lower-case names, such as `["location"]`) also records
   those response headers, `null` when absent.
 - **`ws`**: opens a WebSocket and sends the `send` frames.

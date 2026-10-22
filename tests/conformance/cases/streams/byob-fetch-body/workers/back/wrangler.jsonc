@@ -1,0 +1,7 @@
+// Streams the shared payload in parts, or a few bytes and then nothing until
+// the reader cancels.
+{
+  "name": "back",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

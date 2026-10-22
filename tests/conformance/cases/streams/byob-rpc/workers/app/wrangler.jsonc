@@ -1,0 +1,7 @@
+// BYOB readers on a ReadableStream an RPC call returned, through ctx.exports
+// (in celld, the same isolate).
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

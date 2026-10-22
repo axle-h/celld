@@ -1,0 +1,179 @@
+{
+  "workers": [
+    "front",
+    "back"
+  ],
+  "steps": [
+    {
+      "path": "/forwarded/parts"
+    },
+    {
+      "path": "/forwarded/bytes"
+    },
+    {
+      "path": "/held/reader",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/held/partial",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/held/small",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/held/offset",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/held/elements",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/held/readAtLeast",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/held/readMin",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/held/refusals",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/held/cancel",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/held/releaseLock",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/held/concurrent",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/held/releasePending",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/held/teeAfterRead",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/held/tee",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/held/teeCancel",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr"
+    },
+    {
+      "path": "/streamed/reader",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    },
+    {
+      "path": "/streamed/partial",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    },
+    {
+      "path": "/streamed/small",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    },
+    {
+      "path": "/streamed/offset",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    },
+    {
+      "path": "/streamed/elements",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    },
+    {
+      "path": "/streamed/readAtLeast",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    },
+    {
+      "path": "/streamed/readMin",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    },
+    {
+      "path": "/streamed/refusals",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    },
+    {
+      "path": "/streamed/releaseLock",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    },
+    {
+      "path": "/streamed/concurrent",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    },
+    {
+      "path": "/streamed/releasePending",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    },
+    {
+      "path": "/streamed/teeAfterRead",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    },
+    {
+      "path": "/streamed/tee",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    },
+    {
+      "path": "/streamed/teeCancel",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    },
+    {
+      "path": "/streamed/cancel",
+      "method": "POST",
+      "body": "ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr",
+      "chunked": true
+    }
+  ]
+}

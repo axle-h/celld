@@ -1,0 +1,6 @@
+// Returns the shared payload as a stream over RPC.
+{
+  "name": "back",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

@@ -1,0 +1,101 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "user untouched": {
+          "response": "Response: front's body",
+          "request": "accepted",
+          "text": "Response: front's body",
+          "fetch": "Response: front's body"
+        },
+        "user locked": {
+          "response": "TypeError: This ReadableStream is currently locked to a reader.",
+          "request": "accepted",
+          "text": "TypeError: This ReadableStream is currently locked to a reader.",
+          "fetch": "TypeError: The ReadableStream has been locked to a reader."
+        },
+        "user reading": {
+          "response": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "request": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "text": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body."
+        },
+        "user read": {
+          "response": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "request": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "text": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body."
+        },
+        "user cancelled": {
+          "response": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "request": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "text": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body."
+        },
+        "blob untouched": {
+          "response": "Response: front's body",
+          "request": "accepted",
+          "text": "Response: front's body",
+          "fetch": "Response: front's body"
+        },
+        "blob locked": {
+          "response": "TypeError: This ReadableStream is currently locked to a reader.",
+          "request": "accepted",
+          "text": "TypeError: This ReadableStream is currently locked to a reader.",
+          "fetch": "TypeError: The ReadableStream has been locked to a reader."
+        },
+        "blob reading": {
+          "response": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "request": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "text": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body."
+        },
+        "blob read": {
+          "response": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "request": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "text": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body."
+        },
+        "blob cancelled": {
+          "response": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "request": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "text": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body."
+        },
+        "blob byobLeftover": {
+          "response": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "request": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "text": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body."
+        },
+        "fetched untouched": {
+          "response": "Response: back's body",
+          "request": "accepted",
+          "text": "Response: back's body"
+        },
+        "fetched locked": {
+          "response": "TypeError: This ReadableStream is currently locked to a reader.",
+          "request": "accepted",
+          "text": "TypeError: This ReadableStream is currently locked to a reader.",
+          "fetch": "TypeError: The ReadableStream has been locked to a reader."
+        },
+        "fetched reading": {
+          "response": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "request": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "text": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body."
+        },
+        "fetched read": {
+          "response": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "request": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "text": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body."
+        },
+        "fetched cancelled": {
+          "response": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "request": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "text": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body."
+        },
+        "fetched byobLeftover": {
+          "response": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "request": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body.",
+          "text": "TypeError: This ReadableStream is disturbed (has already been read from), and cannot be used as a body."
+        }
+      }
+    }
+  ]
+}

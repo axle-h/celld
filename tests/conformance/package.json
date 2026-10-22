@@ -6,6 +6,9 @@
   "engines": {
     "node": ">=24.19.0"
   },
+  "imports": {
+    "#byob": "./lib/worker/byob.js"
+  },
   "scripts": {
     "test": "node run.mjs --runtime=both",
     "celld": "node run.mjs --runtime=celld",

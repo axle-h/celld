@@ -1,0 +1,7 @@
+// BYOB readers on streams a Worker builds: refused on a default stream, and
+// served by a `type: "bytes"` stream, whose source fills the BYOB request.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

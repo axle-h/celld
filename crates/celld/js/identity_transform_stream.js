@@ -312,7 +312,8 @@ function internalGetReader(options) {
   if (options !== undefined && options !== null &&
       options.mode !== undefined) {
     if (String(options.mode) !== 'byob')
-      throw new TypeError(`Invalid reader mode '${options.mode}'`);
+      throw new TypeError(
+        "mode must be undefined or 'byob' in call to getReader().");
     return new ReadableStreamBYOBReader(this);
   }
   return new InternalDefaultReader(this);

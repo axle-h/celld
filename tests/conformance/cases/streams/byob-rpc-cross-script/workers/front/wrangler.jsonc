@@ -1,0 +1,9 @@
+// BYOB readers on a ReadableStream that an RPC call to another script
+// returned. celld runs back in another isolate, and RPC streams don't cross
+// isolates yet (plan 7.1).
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back", "entrypoint": "Source" }]
+}

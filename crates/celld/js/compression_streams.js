@@ -39,11 +39,21 @@ function make(format, decompress) {
     },
     cancel() { __zlib_stream_drop(id); },
   });
-  // Workerd's compression streams are internal streams: a
-  // pending read() rejects with the cancel reason instead
-  // of resolving {done: true}.
-  ts.readable._cancelRejectsReads = true;
-  return ts;
+  // Workerd's compression streams are internal streams, so the readable
+  // side is a platform stream over the transform's output: a BYOB reader
+  // works on it, and a pending default read() rejects with the cancel
+  // reason instead of resolving {done: true}. An error on the transform
+  // (a bad chunk, an aborted writable) errors it at once, as before.
+  const inner = ts.readable.getReader();
+  const readable = __celld.__makeInternalByteStream(
+    () => inner.read().then((r) => (r.done ? null : r.value)),
+    (reason) => inner.cancel(reason));
+  readable._cancelRejectsReads = true;
+  inner.closed.catch((e) => {
+    if (!readable._closed && !readable._errored)
+      readable._controller.error(e);
+  });
+  return { readable, writable: ts.writable };
 }
 
 class CompressionStream {

@@ -1,0 +1,136 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "reader": {
+          "byob": true,
+          "locked": true,
+          "readAtLeast": "function"
+        },
+        "partial": {
+          "bytes": "match",
+          "bounded": true,
+          "detached": true,
+          "types": [
+            "Uint8Array"
+          ],
+          "end": {
+            "type": "Uint8Array",
+            "bytes": 0
+          }
+        },
+        "small": {
+          "bytes": "match",
+          "bounded": true,
+          "detached": true,
+          "types": [
+            "Uint8Array"
+          ],
+          "end": {
+            "type": "Uint8Array",
+            "bytes": 0
+          }
+        },
+        "offset": {
+          "bytes": "match",
+          "bounded": true,
+          "detached": true,
+          "types": [
+            "Uint8Array"
+          ],
+          "end": {
+            "type": "Uint8Array",
+            "bytes": 0
+          },
+          "untouched": true
+        },
+        "elements": {
+          "bytes": "match",
+          "bounded": false,
+          "detached": true,
+          "types": [
+            "Uint8Array"
+          ],
+          "end": {
+            "type": "Uint8Array",
+            "bytes": 0
+          }
+        },
+        "readAtLeast": {
+          "short": 0,
+          "over": 0,
+          "bytes": "match"
+        },
+        "readMin": {
+          "short": 0,
+          "bytes": "match"
+        },
+        "refusals": {
+          "empty": {
+            "error": "TypeError: You must call read() on a \"byob\" reader with a positive-sized TypedArray object."
+          },
+          "none": {
+            "error": "TypeError: Failed to execute 'read' on 'ReadableStreamBYOBReader': parameter 1 is not of type 'ArrayBufferView'."
+          },
+          "tooMany": {
+            "error": "TypeError: Minimum bytes to read (5) exceeds size of buffer (4)."
+          },
+          "bytes": "match"
+        },
+        "cancel": {
+          "first": true,
+          "cancelled": "resolved",
+          "read": "Error: stop",
+          "after": {
+            "done": true,
+            "bytes": 0
+          },
+          "closed": "resolved"
+        },
+        "releaseLock": {
+          "head": true,
+          "released": {
+            "read": {
+              "error": "TypeError: This ReadableStream reader has been released."
+            },
+            "closed": {
+              "error": "TypeError: This ReadableStream reader has been released."
+            },
+            "locked": false
+          },
+          "bytes": "match"
+        },
+        "concurrent": {
+          "first": false,
+          "second": "TypeError: This ReadableStream only supports a single pending read request at a time.",
+          "bytes": "match"
+        },
+        "releasePending": {
+          "during": "TypeError: Cannot call releaseLock() on a reader with outstanding read promises.",
+          "read": false,
+          "locked": false,
+          "bytes": "match"
+        },
+        "teeAfterRead": {
+          "left": "match",
+          "right": "match"
+        },
+        "tee": {
+          "locked": true,
+          "left": {
+            "bounded": true,
+            "bytes": "match"
+          },
+          "right": "match"
+        },
+        "teeCancel": {
+          "x": "match",
+          "y": "match"
+        }
+      }
+    }
+  ]
+}

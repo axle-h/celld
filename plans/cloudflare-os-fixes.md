@@ -353,7 +353,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 14 | 1.21 part 1: host WebSocket owner map | done | `184054a` |
 | 14b | 1.21 part 2: harness private state, target grants | done | `324563e` |
 | 15 | 0.5 integration adapter | done | starter `fb97f16` |
-| 16+ | Phase 1 in plan order (1.8-1.25), and the 1.4 props key-order follow-up | queued | |
+| 16 | 1.8 BYOB readers on platform streams | done | see log |
+| 17+ | Phase 1 in plan order (1.9-1.26), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -654,7 +655,7 @@ to the plan's numbers), so it can run beside the manual trial. State lives in
      | S8 | scripted tool call that schedules a one-shot task 60 s out; `enableHook` | alarm fires; an `agentCallback` `onSchedule` message in chat | |
      | S9 | restart the node, log in; S2's `custom` mode, S5's account (if made this run) and S6's chat survive | works | durable stubs, restore |
      | S10 | `--router`: S1-S7 all passed through the router (not a rerun: `provisionAmbientAccount` throws the second time) | same | 5 |
-     | S11 | scan `node.log` for "cannot cross isolate", "could not be cloned", "is not a function", "dropped a frame for a closed WebSocket", "Invalid reader mode", "already disposed", "does not implement" | none | all |
+     | S11 | scan `node.log` for "cannot cross isolate", "could not be cloned", "is not a function", "dropped a frame for a closed WebSocket", "does not support BYOB reads", "already disposed", "does not implement" | none | all |
 
      Notes from building the gate:
      - celld logs "dropped a frame for a closed WebSocket" (`ws_registry.rs:569`)
@@ -1276,6 +1277,25 @@ reads it through the BYOB `PackReader` (`git-codec.ts:663`).
 - A user `new ReadableStream()` without `type:"bytes"` keeps refusing BYOB,
   as the spec and workerd do.
 
+**As built (replaces the design above).** workerd's platform streams are
+*internal* streams, not spec byte streams:
+- a BYOB read returns a `Uint8Array` whatever the view type;
+- only one read can be pending;
+- cancel rejects the read in flight;
+- `releaseLock()` throws while a read is pending.
+
+Native `type:"bytes"` streams would differ from workerd. So every platform
+stream (host bodies, `Blob.stream()`, compression output, RPC-revived
+readables, KV, the loopback response wrapper) is a `CelldChunkStream` with a
+`_chunked` BYOB controller. Default reads keep the existing path. Also:
+- `__celldStreamId` was forgeable, so a Worker could send another body the
+  host held. It is now a private-field brand.
+- Locked or disturbed bodies are refused with workerd's texts.
+- Benchmark (256 MiB, lab): pipe 930 → 913 MiB/s (−1.8%), fetch 5588 → 5376
+  MiB/s (−3.8%, noisy), BYOB fetch about 5330 MiB/s.
+- E2E: S7 and B5 now get past the pack read and fail on "RPC stubs cannot
+  cross isolate boundaries" (Phase 3).
+
 **Prior art.** royalcala `ef5e87c` takes the native `type:"bytes"` approach
 for `CelldHttpBodyStream` and `Blob`.
 - **Reference only:** it depends on `crates/celld/capability.rs` from the
@@ -1746,6 +1766,21 @@ Map it to esbuild's `alias`, as wrangler does.
 `celld dev` requires a KV `id` and ignores `preview_id`, where `wrangler dev`
 uses `preview_id`. The comment at `deploy.rs:1678` ("`wrangler dev`, which
 celld does not run") is out of date.
+
+### 1.26 Stream follow-ups (found by 1.8)
+
+- **Security hardening.** The host does not check ownership of HTTP stream
+  ids on the response path. JS can no longer forge them (1.8), so this is
+  defence in depth, as 1.21 part 1 was for sockets.
+- A body from one service-binding `fetch()`, sent on as another subrequest's
+  body, fails with "the body stream is not owned". workerd accepts it.
+  Register response streams for transfer, or fall back to reading in JS.
+  Then un-skip the row in `streams/body-usable`.
+- Default readers on platform streams still allow several pending reads, and
+  a cancel resolves the pending read as done.
+- `IdentityTransformStream`: BYOB returns the view's type, `tee()` branches
+  can't take a BYOB reader, and `releaseLock` with a read pending rejects
+  the read instead of throwing.
 
 ### Phase 1 gate
 
@@ -2412,6 +2447,9 @@ single-claim design above is the target, because packs reach 64 MiB.
   - BYOB on the received stream
 - E2E/manual: gadget export downloads, and a context collection backed by git
   refreshes.
+
+`streams/byob-rpc-cross-script` (xfail until 7.1, added by 1.8) loses its
+`xfail` here.
 
 ### 7.2 Incremental `DigestStream`
 

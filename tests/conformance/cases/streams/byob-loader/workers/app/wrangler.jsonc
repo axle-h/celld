@@ -1,0 +1,7 @@
+// BYOB readers on the body of a Dynamic Worker's response.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "worker_loaders": [{ "binding": "LOADER" }]
+}

@@ -113,7 +113,7 @@ class ReadableStreamDefaultReader {
         "ReadableStreamDefaultReader requires a " +
         "ReadableStream argument");
     if (stream._locked)
-      throw new TypeError("ReadableStream is locked");
+      throw new TypeError("This ReadableStream is currently locked to a reader.");
     this.#stream = stream;
     stream._locked = true;
     stream._reader = this;
@@ -403,10 +403,15 @@ class ReadableStream {
   }
 
   getReader(options) {
-    if (options !== undefined && options !== null) {
-      if (options.mode !== undefined)
+    // Byte streams, internal streams and the harness's platform streams
+    // override this to hand out BYOB readers; a default stream has none.
+    if (options !== undefined && options !== null &&
+        options.mode !== undefined) {
+      if (String(options.mode) !== 'byob')
         throw new TypeError(
-          `Invalid reader mode '${options.mode}'`);
+          "mode must be undefined or 'byob' in call to getReader().");
+      throw new TypeError(
+        'This ReadableStream does not support BYOB reads.');
     }
     return new ReadableStreamDefaultReader(this);
   }

@@ -60,10 +60,15 @@ async function runStep(session, step) {
 }
 
 async function fetchStep(origin, step) {
+  // A chunked body has no length, so the runtime streams it to the Worker.
+  const requestBody = step.chunked
+    ? new Blob([step.body]).stream()
+    : step.body;
   const response = await fetch(new URL(step.path, origin), {
     method: step.method,
     headers: step.headers,
-    body: step.body,
+    body: requestBody,
+    ...(step.chunked ? { duplex: "half" } : {}),
     redirect: "manual",
     signal: AbortSignal.timeout(STEP_TIMEOUT_MS),
   });

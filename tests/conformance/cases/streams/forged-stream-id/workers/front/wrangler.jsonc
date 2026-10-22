@@ -1,0 +1,9 @@
+// A Worker's own stream that claims to be a host body. celld once took a
+// stream's `__celldStreamId` property as the host stream to send, so a Worker
+// could send any body the host held under a guessed id. Found by plan 1.8.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }]
+}

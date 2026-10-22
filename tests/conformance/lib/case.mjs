@@ -7,7 +7,7 @@ import { join, relative } from "node:path";
 
 const CASE_KEYS = new Set(["kind", "reason", "workers", "env", "observability", "nodes", "xfail", "steps", "normalize"]);
 const STEP_KEYS = {
-  path: new Set(["path", "method", "headers", "body", "responseHeaders"]),
+  path: new Set(["path", "method", "headers", "body", "chunked", "responseHeaders"]),
   ws: new Set(["ws", "send", "receive", "close", "protocols"]),
   restart: new Set(["restart"]),
   otlp: new Set(["otlp"]),
@@ -187,6 +187,8 @@ function validateStep(step, fail) {
       }
       if ("body" in step && typeof step.body !== "string") fail(`"body" must be a string`);
       if ("body" in step && ["GET", "HEAD"].includes(step.method ?? "GET")) fail(`a ${step.method ?? "GET"} request cannot have a "body"`);
+      if ("chunked" in step && step.chunked !== true) fail(`"chunked" must be true when present`);
+      if (step.chunked && !("body" in step)) fail(`"chunked" needs a "body"`);
       if ("responseHeaders" in step) {
         const names = step.responseHeaders;
         if (!Array.isArray(names) || names.length === 0 || !names.every((name) => typeof name === "string" && /^[a-z0-9-]+$/.test(name))) {
@@ -200,6 +202,7 @@ function validateStep(step, fail) {
         method: step.method ?? "GET",
         headers: step.headers ?? {},
         body: step.body,
+        chunked: step.chunked ?? false,
         responseHeaders: step.responseHeaders,
       };
     case "ws": {

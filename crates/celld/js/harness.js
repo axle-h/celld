@@ -43,8 +43,6 @@ const __jsonStringList = (values) => {
 };
 function __bodyBytes(body) {
   if (body == null) return new Uint8Array();
-  if (body && body.__celldBodyBytes instanceof Uint8Array)
-    return body.__celldBodyBytes.slice();
   if (body instanceof ArrayBuffer) return new Uint8Array(body.slice(0));
   if (ArrayBuffer.isView(body))
     return new Uint8Array(body.buffer, body.byteOffset, body.byteLength).slice();
@@ -197,7 +195,151 @@ async function __drainBody(target) {
   target._body = undefined;
   return bytes;
 }
-class CelldBodyStream extends ReadableStream {
+// The next chunk of a platform stream, for either kind of reader: what a BYOB
+// read left of a chunk comes first, then the source. `null` is the end.
+const __chunkTake = (st) => {
+  const rest = st.rest;
+  if (rest !== null) {
+    st.rest = null;
+    return rest;
+  }
+  if (st.done) return null;
+  const pulled = st.pulling = Promise.resolve(st.pull()).then(
+    (chunk) => {
+      st.pulling = null;
+      if (chunk === null) st.done = true;
+      return chunk;
+    },
+    (error) => {
+      st.pulling = null;
+      throw error;
+    },
+  );
+  return pulled;
+};
+const __chunkCopy = (chunk) => ArrayBuffer.isView(chunk)
+  ? new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength).slice()
+  : chunk;
+// A platform stream: a body, a Blob's stream, a compression stream's output, a
+// stream received over RPC. In workerd these are internal byte streams, so a
+// BYOB reader works on them. `pull()` returns the next chunk (or a promise of
+// it), `null` at the end; `cancel(reason)` stops the source.
+//
+// A default reader reads through the ordinary stream machinery. A BYOB reader
+// reads through `_ictl`, an internal controller over the same chunks (see
+// ChunkedInternalController in byte_streams.js), with workerd's internal-stream
+// semantics: one read at a time, a Uint8Array whatever the view's type, and a
+// cancel that rejects the read in flight. `_ictl` names
+// ReadableStreamBYOBReader, which compiles the lazy byte-stream prelude, so a
+// Worker that never asks for a BYOB reader never pays for it.
+class CelldChunkStream extends ReadableStream {
+  constructor(pull, cancel) {
+    const st = {
+      pull, rest: null, done: false, pulling: null, cancelled: false,
+    };
+    super({
+      async pull(controller) {
+        const chunk = await __chunkTake(st);
+        // A cancel while the source was pulled has closed the stream.
+        if (st.cancelled) return;
+        if (chunk === null) controller.close();
+        else controller.enqueue(chunk);
+      },
+      cancel(reason) {
+        if (st.cancelled) return;
+        st.cancelled = true;
+        st.rest = null;
+        if (st.done) return;
+        st.done = true;
+        return cancel?.(reason);
+      },
+    }, { highWaterMark: 0 });
+    this._chunks = st;
+  }
+  getReader(options) {
+    if (options !== undefined && options !== null &&
+        options.mode !== undefined) {
+      if (String(options.mode) !== "byob")
+        throw new TypeError(
+          "mode must be undefined or 'byob' in call to getReader().");
+      return new ReadableStreamBYOBReader(this);
+    }
+    return super.getReader();
+  }
+  // The internal controller BYOB readers use, made on the first one.
+  get _ictl() {
+    return this._byob ??= ReadableStreamBYOBReader._chunked(this);
+  }
+  _take() { return __chunkTake(this._chunks); }
+  _cancel(reason) {
+    this._byob?._cancelled(reason);
+    return super._cancel(reason);
+  }
+  // Branches of the same kind, read from one default reader on this stream.
+  // A chunk goes to both. While both are live the second gets a copy, as a
+  // spec byte-stream tee clones its chunks, so neither branch's reader can
+  // detach or change what the other reads; `cloneForBranch2` makes that a
+  // structured clone. A branch that is not read buffers what the other one
+  // reads, as in a spec tee.
+  tee(cloneForBranch2 = false) {
+    const reader = this.getReader();
+    const queues = [[], []];
+    const cancelled = [false, false];
+    const reasons = [undefined, undefined];
+    let ended = false;
+    let reading = null;
+    const read = () => reader.read().then(({ done, value }) => {
+      reading = null;
+      if (done) {
+        ended = true;
+        return;
+      }
+      if (!cancelled[0]) queues[0].push(value);
+      if (!cancelled[1])
+        queues[1].push(cloneForBranch2 ? structuredClone(value)
+          : cancelled[0] ? value : __chunkCopy(value));
+    }, (error) => {
+      reading = null;
+      throw error;
+    });
+    const branch = (i) => new CelldChunkStream(async () => {
+      for (;;) {
+        if (queues[i].length > 0) return queues[i].shift();
+        if (ended) return null;
+        await (reading ??= read());
+      }
+    }, (reason) => {
+      cancelled[i] = true;
+      reasons[i] = reason;
+      queues[i] = [];
+      if (cancelled[0] && cancelled[1]) return reader.cancel(reasons);
+    });
+    const branches = [branch(0), branch(1)];
+    reader.closed.catch((error) => {
+      for (const b of branches)
+        if (!b._closed && !b._errored) b._controller.error(error);
+    });
+    return branches;
+  }
+}
+// workerd refuses, as a Request or Response body, a stream that has been
+// read from (a read in flight counts), and, for a Response, one locked to a
+// reader. A fetch() refuses a Request whose body is locked.
+const __BODY_DISTURBED = "This ReadableStream is disturbed (has already " +
+  "been read from), and cannot be used as a body.";
+const __usableBody = (stream, response) => {
+  if (stream._disturbed) throw new TypeError(__BODY_DISTURBED);
+  if (response && stream._locked)
+    throw new TypeError("This ReadableStream is currently locked to a reader.");
+  return stream;
+};
+// A subrequest takes its body's stream over, so the stream must be free.
+const __unlockedBody = (req) => {
+  if (req.body?._locked)
+    throw new TypeError("The ReadableStream has been locked to a reader.");
+};
+// A body whose bytes are in the isolate. Chunks are views of those bytes.
+class CelldBodyStream extends CelldChunkStream {
   constructor(owner) {
     // Couple the stream to its buffered owner, so _bodyBytes and the stream
     // cannot be installed from different arrays. Copying the owner's bytes
@@ -209,38 +351,17 @@ class CelldBodyStream extends ReadableStream {
     if (!(bytes instanceof Uint8Array))
       throw new TypeError("CelldBodyStream owner requires buffered body bytes");
     const st = { bytes, off: 0 };
-    super({
-      pull(controller) {
-        if (st.off >= st.bytes.byteLength) {
-          controller.close();
-          return;
-        }
-        const end = Math.min(st.off + 64 * 1024, st.bytes.byteLength);
-        controller.enqueue(st.bytes.subarray(st.off, end));
-        st.off = end;
-      },
-    }, { highWaterMark: 0 });
+    super(() => {
+      if (st.off >= st.bytes.byteLength) return null;
+      const end = Math.min(st.off + 64 * 1024, st.bytes.byteLength);
+      const chunk = st.bytes.subarray(st.off, end);
+      st.off = end;
+      return chunk;
+    });
     this._st = st;
-    this.__celldBodyBytes = bytes;
     // Known length, so re-using this stream as a subrequest body
     // still advertises Content-Length.
     this._expectedLength = bytes.byteLength;
-  }
-  get __celldBodyText() { return new TextDecoder().decode(this.__celldBodyBytes); }
-  // Workerd body streams are internal streams, so BYOB readers
-  // work on them. Naming ReadableStreamBYOBReader compiles the
-  // lazy byte-stream prelude; a worker that never asks for byob
-  // mode never pays for it.
-  getReader(options) {
-    if (options !== undefined && options !== null &&
-        options.mode !== undefined) {
-      if (String(options.mode) !== "byob")
-        throw new TypeError(`Invalid reader mode '${options.mode}'`);
-      if (this._ictl === undefined)
-        this._ictl = ReadableStreamBYOBReader._buffered(this._st);
-      return new ReadableStreamBYOBReader(this);
-    }
-    return super.getReader(options);
   }
   // Cancelling a body stream poisons later consumption: text()
   // and friends reject, as they would over a real socket.
@@ -249,28 +370,45 @@ class CelldBodyStream extends ReadableStream {
     return super._cancel(reason);
   }
 }
-class CelldHttpBodyStream extends ReadableStream {
+// The host stream behind `body`, for a consumer that can take it over (a
+// subrequest or response body, a tee), or undefined. Only a host body has
+// one, and only while none of its bytes are held here: the part of a chunk a
+// BYOB read left, or a read in flight. A brand check, not a property: a
+// stream id is a capability for whatever body the host holds under it, and a
+// Worker can put any property on its own stream.
+let __hostStreamId;
+// A body the host holds: a fetched body, a streamed request body, an R2
+// object's body, a Dynamic Worker's response. Each chunk is a Uint8Array the
+// host moved in without a copy.
+class CelldHttpBodyStream extends CelldChunkStream {
+  #id;
+  static {
+    __hostStreamId = (body) => {
+      if (typeof body !== "object" || body === null || !(#id in body))
+        return undefined;
+      const st = body._chunks;
+      return st.rest === null && st.pulling === null &&
+          body._queue.length === 0
+        ? body.#id
+        : undefined;
+    };
+  }
   constructor(streamId) {
     const id = Number(streamId);
-    super({
-      async pull(controller) {
-        // A chunk arrives as a Uint8Array. The host moves it in without
-        // a copy. The end of the stream arrives as a string.
-        const chunk = await __http_stream_read(id);
-        if (typeof chunk === "string") controller.close();
-        else controller.enqueue(chunk);
-      },
-      cancel() { __http_stream_cancel(id); },
-    }, { highWaterMark: 0 });
-    this.__celldStreamId = id;
+    super(async () => {
+      // The end of the stream arrives as a string.
+      const chunk = await __http_stream_read(id);
+      return typeof chunk === "string" ? null : chunk;
+    }, () => { __http_stream_cancel(id); });
+    this.#id = id;
   }
-  tee() {
+  tee(cloneForBranch2 = false) {
     if (this.locked) throw new TypeError("ReadableStream is locked");
+    const id = __hostStreamId(this);
+    if (id === undefined) return super.tee(cloneForBranch2);
     this._locked = true;
     this._disturbed = true;
-    const [left, right] = JSON.parse(
-      __http_stream_tee(this.__celldStreamId),
-    );
+    const [left, right] = JSON.parse(__http_stream_tee(id));
     return [
       new CelldHttpBodyStream(left),
       new CelldHttpBodyStream(right),
@@ -280,11 +418,13 @@ class CelldHttpBodyStream extends ReadableStream {
 // Body streams expose the standard constructor to consumers. In particular,
 // the Python Workers SDK validates JS body types by constructor.name.
 // Keep the internal prototypes and their specialized read/tee behavior.
-for (const bodyStream of [CelldBodyStream, CelldHttpBodyStream]) {
+for (const bodyStream of [CelldChunkStream, CelldBodyStream, CelldHttpBodyStream]) {
   Object.defineProperty(bodyStream.prototype, "constructor", {
     value: ReadableStream, writable: true, configurable: true,
   });
 }
+__celld.__makeInternalByteStream = (pull, cancel) =>
+  new CelldChunkStream(pull, cancel);
 globalThis.Response = class Response {
   // Read-only, as in workerd, so the socket a response carries is the one it
   // was made with.
@@ -296,7 +436,7 @@ globalThis.Response = class Response {
     let stream = null;
     let typed = null;
     if (body !== null && typeof body === "object") {
-      if (body instanceof ReadableStream) stream = body;
+      if (body instanceof ReadableStream) stream = __usableBody(body, true);
       else if ((typed = __typedBody(body)) !== null) { /* bytes and type */ }
       else {
         const iterable = __iterableBody(body);
@@ -458,7 +598,7 @@ globalThis.Request = class Request {
     let stream = null;
     let typed = null;
     if (hasBody && body !== null && typeof body === "object") {
-      if (body instanceof ReadableStream) stream = body;
+      if (body instanceof ReadableStream) stream = __usableBody(body, false);
       else if ((typed = __typedBody(body)) !== null) { /* bytes and type */ }
       else {
         const iterable = __iterableBody(body);
@@ -647,7 +787,8 @@ const __subrequestBody = async (req, absent = false) => {
   if (absent) return { body: undefined, streamId: undefined };
   if (req._bodyBytes !== null)
     return { body: req._bodyBytes, streamId: undefined };
-  const streamId = req.body?.__celldStreamId;
+  __unlockedBody(req);
+  const streamId = __hostStreamId(req.body);
   if (streamId === undefined) {
     req.bodyUsed = true;
     return { body: await req._consume(), streamId: undefined };
@@ -4490,7 +4631,6 @@ const __adoptBody = (target, bytes) => {
   const body = target.body;
   if (body !== null) {
     body._st.bytes = bytes;
-    body.__celldBodyBytes = bytes;
     body._expectedLength = bytes.byteLength;
   }
 };
@@ -4528,27 +4668,24 @@ const __reviveStream = (marker, id, readable, handles) => {
     ? __stubEntries.get(id) : undefined;
   if (entry === undefined)
     return readable
-      ? new ReadableStream({ pull: __foreignStreamOp })
+      ? new CelldChunkStream(__foreignStreamOp)
       : new WritableStream({ write: __foreignStreamOp,
           close: __foreignStreamOp, abort: __foreignStreamOp });
   const meta = { entry, disposed: false, ctx: __ctxNow() };
   __ctxRegister(meta);
   handles.push(meta);
+  // A received readable is a platform stream, as in workerd, so a BYOB
+  // reader works on it whatever the sender's stream was.
   const stream = readable
-    ? new ReadableStream({
-        async pull(controller) {
-          let result;
-          try {
-            result = await __stubOp(meta, ["read"], []);
-          } catch {
-            throw __rsDisconnect();
-          }
-          if (result.done) controller.close();
-          else controller.enqueue(result.value);
-        },
-        cancel: () =>
-          __stubOp(meta, ["cancel"], []).catch(() => {}),
-      }, { highWaterMark: 0 })
+    ? new CelldChunkStream(async () => {
+        let result;
+        try {
+          result = await __stubOp(meta, ["read"], []);
+        } catch {
+          throw __rsDisconnect();
+        }
+        return result.done ? null : result.value;
+      }, () => __stubOp(meta, ["cancel"], []).catch(() => {}))
     : new WritableStream({
         write: (chunk) => __stubOp(meta, ["write"], [chunk]),
         close: () => __stubOp(meta, ["close"], []),
@@ -5319,10 +5456,10 @@ class DurableObjectNamespace {
         // rather than the whole body (#156). The host keeps it a stream for a
         // local cell and collects it only to sign a cross-node frame. A held
         // body -- or a stream with no host id -- crosses as its bytes.
-        const bodyStreamId =
-          req._bodyBytes === null && req.body && req.body.__celldStreamId !== undefined
-            ? req.body.__celldStreamId
-            : undefined;
+        if (req._bodyBytes === null) __unlockedBody(req);
+        const bodyStreamId = req._bodyBytes === null
+          ? __hostStreamId(req.body)
+          : undefined;
         const body_ = bodyStreamId !== undefined
           ? new Uint8Array()
           : req._bodyBytes === null
@@ -5424,23 +5561,20 @@ const __attachResponseRequestCancellation = (
     requestControllers.push(requestController);
   }
   if (!wrapBody || response.__celldCancellationWrapped) return;
+  // A platform stream, like the body it wraps, so a BYOB reader works on it.
   const reader = response.body.getReader();
-  response.body = new ReadableStream({
-    async pull(controller) {
-      const result = await reader.read();
-      if (result.done) controller.close();
-      else controller.enqueue(result.value);
-    },
-    async cancel() {
-      const reason = new Error("The client has disconnected");
-      for (const controller of requestControllers) {
-        if (!controller.signal.aborted) controller.abort(reason);
-      }
-      try {
-        await reader.cancel(reason);
-      } catch {}
-    },
-  }, { highWaterMark: 0 });
+  response.body = new CelldChunkStream(async () => {
+    const result = await reader.read();
+    return result.done ? null : result.value;
+  }, async () => {
+    const reason = new Error("The client has disconnected");
+    for (const controller of requestControllers) {
+      if (!controller.signal.aborted) controller.abort(reason);
+    }
+    try {
+      await reader.cancel(reason);
+    } catch {}
+  });
   Object.defineProperty(response, "__celldCancellationWrapped", {
     value: true,
   });
@@ -10200,13 +10334,17 @@ if (!globalThis.Blob) {
     async arrayBuffer() { return this._bytes.slice().buffer; }
     async bytes() { return this._bytes.slice(); }
     async text() { return new TextDecoder().decode(this._bytes); }
+    // A platform stream, as in workerd, so a BYOB reader works on it. Each
+    // chunk is a copy: the Blob's bytes stay its own.
     stream() {
       const bytes = this._bytes;
-      return new ReadableStream({
-        start(controller) {
-          if (bytes.byteLength) controller.enqueue(bytes.slice());
-          controller.close();
-        },
+      let offset = 0;
+      return new CelldChunkStream(() => {
+        if (offset >= bytes.byteLength) return null;
+        const end = Math.min(offset + 64 * 1024, bytes.byteLength);
+        const chunk = bytes.slice(offset, end);
+        offset = end;
+        return chunk;
       });
     }
     [Symbol.for("nodejs.util.inspect.custom")]() {
@@ -11914,14 +12052,14 @@ __celld.__readResponse = (r) => {
       __wsFlushPending(server);
     }
   }
+  const hostStreamId = r.__celldRequestControllers
+    ? undefined
+    : __hostStreamId(r.body);
   const bodyStreamId = r._bodyBytes === null
-    ? typeof r.body?.__celldStreamId === "number" &&
-        !r.__celldRequestControllers
-      ? r.body.__celldStreamId
-      : __bridgeResponseStream(
-        r.body,
-        r.__celldRequestControllers,
-      )
+    ? hostStreamId ?? __bridgeResponseStream(
+      r.body,
+      r.__celldRequestControllers,
+    )
     : 0;
   if (bodyStreamId) {
     return {
