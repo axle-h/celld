@@ -1,0 +1,31 @@
+{
+  "kind": "celld-only",
+  "reason": "celld limits (plan 1.32): workerd run locally enforces no isolate memory limit, so a request that allocates past it succeeds there",
+  "workers": ["app", "hog", "other"],
+  "steps": [
+    {"path": "/other"},
+    {"path": "/stateless?mode=gradual"},
+    {"path": "/other"},
+    {"path": "/stateless?mode=check"},
+    {"path": "/stateless?mode=one"},
+    {"path": "/stateless?mode=check"},
+    {"path": "/stateless-concurrent"},
+    {"path": "/stateless?mode=check"},
+    {"path": "/dynamic?mode=gradual&id=gradual"},
+    {"path": "/other"},
+    {"path": "/dynamic?mode=check&id=gradual"},
+    {"path": "/dynamic?mode=one&id=one"},
+    {"path": "/dynamic?mode=check&id=one"},
+    {"path": "/dynamic-concurrent"},
+    {"path": "/dynamic?mode=check&id=concurrent"},
+    {"path": "/facet"},
+    {"path": "/other"},
+    {"path": "/do?mode=check"},
+    {"path": "/do?mode=gradual"},
+    {"path": "/other"},
+    {"path": "/do?mode=check"},
+    {"path": "/do?mode=one"},
+    {"path": "/do?mode=check"},
+    {"path": "/other"}
+  ]
+}

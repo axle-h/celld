@@ -1584,10 +1584,6 @@ class SqlCursor {
       const result = this.next();
       if (result.done) return rows;
       rows.push(result.value);
-      if (__heap_limit_excessively_exceeded())
-        throw new Error(
-          "the isolate is over its V8 heap limit, so it stopped " +
-          "materializing a result set (see CELLD_V8_HEAP_LIMIT_MB)");
     }
   }
   one() {

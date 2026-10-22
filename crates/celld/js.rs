@@ -772,8 +772,8 @@ use crate::host_channels::GateRefusal;
 pub(crate) use websocket::WebSocketService;
 pub use websocket::*;
 use websocket::{
-    ws_capture_begin, ws_capture_discard, ws_capture_flush_touched, ws_capture_set_promise,
-    ws_capture_take, ws_close_request_sockets,
+    ws_capture_begin, ws_capture_discard, ws_capture_discard_touched, ws_capture_flush_touched,
+    ws_capture_set_promise, ws_capture_take, ws_close_request_sockets,
 };
 
 /// What an outbound effect must trail before it leaves the process.
@@ -2295,49 +2295,6 @@ impl WorkerIsolate {
         (self.isolate.lock(), self.cells.install())
     }
 
-    /// Lift condemnation from an isolate whose heap has drained.
-    ///
-    /// `near_heap_limit` latches a flag that nothing used to clear, so a cell
-    /// that reached its limit once stayed condemned until the process
-    /// restarted. The flag is re-read here, between turns rather than inside
-    /// one, because a handler must not see the isolate recover halfway
-    /// through.
-    ///
-    /// A heap still over the line buys one `low_memory_notification` and a
-    /// second reading. V8 stops collecting once it is past the limit, so a
-    /// drained isolate holds the dead heap until something allocates again —
-    /// without the forced collection the reading that decides recovery is a
-    /// reading of garbage. `HEAP_GC_NUDGE_INTERVAL` bounds the cost.
-    ///
-    /// Removing the callback with the original limit puts back the limit
-    /// `near_heap_limit` raised; re-adding it re-arms the guard.
-    fn recover_heap(&self, locker: &mut v8::Locker<'_>) {
-        let Some(state) = locker.get_slot::<Arc<HeapLimitState>>().cloned() else {
-            return;
-        };
-        if !state.excessively_exceeded.load(Ordering::Relaxed) {
-            return;
-        }
-        if heap_share(locker, state.limit) >= HEAP_RECOVERY_SHARE {
-            if !state.due_for_gc_nudge() {
-                return;
-            }
-            locker.low_memory_notification();
-            if heap_share(locker, state.limit) >= HEAP_RECOVERY_SHARE {
-                return;
-            }
-        }
-        state.excessively_exceeded.store(false, Ordering::Relaxed);
-        let data = Arc::as_ptr(&state) as *mut HeapLimitState as *mut std::ffi::c_void;
-        locker.remove_near_heap_limit_callback(near_heap_limit, state.limit);
-        locker.add_near_heap_limit_callback(near_heap_limit, data);
-        tracing::info!(
-            event = "isolate_heap_recovered",
-            limit_bytes = state.limit,
-            "isolate heap fell back under its limit, so it serves again"
-        );
-    }
-
     /// Localise the realm for one turn.
     ///
     /// **Taking the scope is the point.** Reaching a realm means touching
@@ -2403,24 +2360,23 @@ const STARTUP_MEMORY_EXCEEDED: &str = "Script startup exceeded memory limits.";
 /// fires once it no longer does.
 const HEAP_ADMISSION_SHARE: f64 = 0.9;
 
-/// Share of the heap limit under which a condemned isolate is condemned no
-/// more. Under `HEAP_ADMISSION_SHARE` by enough that recovery does not
-/// immediately re-admit into a heap that is about to fail again.
-const HEAP_RECOVERY_SHARE: f64 = 0.75;
-
-/// The shortest gap between two collections forced by `recover_heap`. A full
-/// collection of a 128 MB heap costs tens of milliseconds and a loaded cell
-/// begins many turns each second, so an unbounded nudge would spend more of a
-/// condemned isolate on collecting than on serving.
-const HEAP_GC_NUDGE_INTERVAL: Duration = Duration::from_secs(1);
+/// workerd's error for an event that ran while its isolate reached the heap
+/// limit (`io-context.h`), and for every later event of that isolate.
+const MEMORY_EXCEEDED: &str = "Worker has exceeded memory limit.";
 
 struct HeapLimitState {
+    /// Whether the isolate reached its heap limit, which condemns it for
+    /// good: the event running then is terminated, and every later turn
+    /// fails (`take_one_execution_termination`). Named after workerd's
+    /// `hasExcessivelyExceededHeapLimit`.
     excessively_exceeded: AtomicBool,
+    /// Whether the condemnation has been carried out: the slot condemned and
+    /// the Durable Objects reset. Once, by the first turn that sees it.
+    condemnation_handled: AtomicBool,
     /// The limit V8 gave this isolate, before any emergency extension.
-    /// Recovery measures against this one because `near_heap_limit` raises
+    /// Admission measures against this one because `near_heap_limit` raises
     /// the current one.
     limit: usize,
-    last_gc_nudge: Mutex<Option<Instant>>,
     /// Whether the isolate is still loading its Worker. A load has no request
     /// to fail and nothing to recover, so the callback terminates it at the
     /// limit rather than letting module scope grow the heap without bound.
@@ -2428,41 +2384,8 @@ struct HeapLimitState {
     /// Whether the load reached the limit, which turns whatever error the
     /// terminated load produced into `STARTUP_MEMORY_EXCEEDED`.
     load_exceeded: AtomicBool,
-    /// How the callback, which receives no isolate, terminates the load.
+    /// How the callback, which receives no isolate, terminates JavaScript.
     isolate: v8::IsolateHandle,
-    /// An explicit admission refusal cannot use the condemnation flag because
-    /// recovery clears that flag at the next turn.
-    #[cfg(celld_internal_tests)]
-    forced_admission_refusal: AtomicBool,
-}
-
-impl HeapLimitState {
-    /// Whether a condemned isolate can pay for another forced collection.
-    ///
-    /// Rate-limited rather than once for each condemnation: the load can
-    /// still be live at the first reading and gone by the second, so a
-    /// one-shot nudge would leave the cell condemned exactly as before.
-    fn due_for_gc_nudge(&self) -> bool {
-        let Ok(mut last) = self.last_gc_nudge.lock() else {
-            return false;
-        };
-        let now = Instant::now();
-        if last.is_some_and(|at| now.duration_since(at) < HEAP_GC_NUDGE_INTERVAL) {
-            return false;
-        }
-        *last = Some(now);
-        true
-    }
-}
-
-#[cfg(celld_internal_tests)]
-fn admission_refusal_forced(state: &HeapLimitState) -> bool {
-    state.forced_admission_refusal.load(Ordering::Relaxed)
-}
-
-#[cfg(not(celld_internal_tests))]
-fn admission_refusal_forced(_state: &HeapLimitState) -> bool {
-    false
 }
 
 type SerializedPut = (String, Vec<u8>);
@@ -2856,6 +2779,9 @@ fn finish_retired_input_gate_context(scope: &mut v8::PinScope, context: &IoConte
 }
 
 fn retire_input_gate_js_context(scope: &mut v8::PinScope, context_id: u64) {
+    if heap_limit_reached(scope) {
+        return;
+    }
     let Ok(function) = internal_function(scope, "__retireInputGateContext") else {
         return;
     };
@@ -2923,7 +2849,7 @@ fn take_one_execution_termination(
     if termination.is_some() || is_terminating {
         scope.cancel_terminate_execution();
     }
-    if let Some(termination) = termination {
+    let termination = termination.map(|termination| {
         if termination.actor_scope.is_some() {
             if let Some(context_id) = termination.context_id {
                 if let Some(context) = state
@@ -2938,9 +2864,72 @@ fn take_one_execution_termination(
                 finish_terminated_actor_event(scope, &current_context());
             }
         }
-        return Some(anyhow!(termination.error));
+        anyhow!(termination.error)
+    });
+    // The heap limit outranks any other termination, and fails every turn
+    // of a condemned isolate whether or not it was terminated itself.
+    if over_memory_limit(scope) {
+        return Some(anyhow!(MEMORY_EXCEEDED));
     }
-    is_terminating.then(|| anyhow!("JavaScript execution was terminated"))
+    termination.or_else(|| is_terminating.then(|| anyhow!("JavaScript execution was terminated")))
+}
+
+/// Whether this isolate reached its heap limit after it loaded. It is
+/// condemned then, and no JavaScript runs in it again: every entry point
+/// checks this before it enters the realm, and fails what it was given with
+/// `MEMORY_EXCEEDED` instead. A turn that keeps running there could retain
+/// more, take another extension, and answer for a Worker that is gone.
+fn heap_limit_reached(isolate: &v8::Isolate) -> bool {
+    isolate
+        .get_slot::<Arc<HeapLimitState>>()
+        .is_some_and(|heap| {
+            heap.excessively_exceeded.load(Ordering::Relaxed)
+                && !heap.loading.load(Ordering::Relaxed)
+        })
+}
+
+/// Whether this isolate reached its heap limit. The first turn to see it
+/// condemns the isolate: the pool stops placing work in it and replaces it,
+/// as when workerd condemns an isolate. Since no JavaScript runs there again,
+/// the Durable Objects it hosts are reset with it: their storage can take no
+/// further operation, and their events fail as their turns come.
+fn over_memory_limit(scope: &mut v8::PinScope) -> bool {
+    let Some(heap) = scope.get_slot::<Arc<HeapLimitState>>().cloned() else {
+        return false;
+    };
+    if !heap.excessively_exceeded.load(Ordering::Relaxed) {
+        return false;
+    }
+    // A load that reaches the limit fails as a whole and has no slot.
+    if heap.loading.load(Ordering::Relaxed)
+        || heap.condemnation_handled.swap(true, Ordering::Relaxed)
+    {
+        return true;
+    }
+    // The callback's termination can still be pending. Nothing runs here
+    // again, but the isolate is still entered to release its cells.
+    scope.cancel_terminate_execution();
+    let used = scope.get_heap_statistics().used_heap_size();
+    tracing::warn!(
+        event = "isolate_memory_exceeded",
+        limit_bytes = heap.limit,
+        used_bytes = used,
+        "isolate reached its heap limit; its events fail and it is replaced"
+    );
+    if let Some(slot) = crate::pool::current_slot() {
+        slot.condemn(MEMORY_EXCEEDED);
+    }
+    true
+}
+
+/// Fail an event of a condemned isolate without running its JavaScript: the
+/// response, its `waitUntil` work, and the frames it captured for its
+/// hibernatable sockets all go.
+fn fail_condemned(entry: &mut InFlight, runtime_state: &ActorRuntimeState) {
+    entry.fail_in_turn(anyhow!(MEMORY_EXCEEDED));
+    entry.background = None;
+    entry.abandon();
+    ws_capture_discard_touched(runtime_state);
 }
 
 fn take_execution_termination(scope: &mut v8::PinScope) -> Option<anyhow::Error> {
@@ -2955,31 +2944,21 @@ extern "C" fn near_heap_limit(
     // SAFETY: `data` points into the Arc stored in the isolate slot. Worker::drop
     // removes this callback before the isolate (and its slots) are destroyed.
     let state = unsafe { &*(data as *const HeapLimitState) };
-    state.excessively_exceeded.store(true, Ordering::Relaxed);
+    // A load fails, and anything else condemns the isolate: the turn that
+    // reached the limit and every later one fail with `MEMORY_EXCEEDED`, and
+    // the isolate is replaced.
     if state.loading.load(Ordering::Relaxed) {
-        // Termination is only a request: V8 acts on it at the load's next
-        // interrupt check, and the allocation that reached the limit must
-        // finish first or V8 aborts the process. One allocation can be as
-        // large as V8's largest object, so the extension covers that. The
-        // isolate is discarded once the termination lands, so the memory is
-        // held only until then.
         state.load_exceeded.store(true, Ordering::Relaxed);
-        state.isolate.terminate_execution();
-        return current_heap_limit.saturating_add(V8_LARGEST_OBJECT_BYTES);
     }
-    // V8 fatally aborts the process if a near-limit callback does not extend
-    // the limit. This reserve lets JS observe condemnation and unwind.
-    //
-    // The extension must also cover one allocation as large as the limit
-    // itself: flattening a 128 MiB cons string asks V8 for a single 128 MiB
-    // block, and V8 re-invokes this callback across last-resort GC rounds
-    // only unreliably (under parallel load it often stops after one round
-    // and aborts the process). Doubling the original limit makes the first
-    // invocation sufficient on its own; `recover_heap` and `Drop` still
-    // restore the original limit, so nothing else changes.
-    current_heap_limit
-        .saturating_add(V8_HEAP_EMERGENCY_BYTES)
-        .max(state.limit.saturating_mul(2))
+    state.excessively_exceeded.store(true, Ordering::Relaxed);
+    // Termination is only a request: V8 acts on it at the next interrupt
+    // check, and the allocation that reached the limit must finish first or
+    // V8 aborts the process. One allocation can be as large as V8's largest
+    // object, so the extension covers that. The isolate runs nothing more of
+    // its Worker's once the termination lands, and is discarded when it
+    // drains, so the memory is held only until then.
+    state.isolate.terminate_execution();
+    current_heap_limit.saturating_add(V8_LARGEST_OBJECT_BYTES)
 }
 
 /// Live heap use, as a share of `limit`.
@@ -4293,7 +4272,10 @@ impl Worker {
             return (None, Vec::new());
         };
         let (mut locker, _cells) = inner.lock();
-        inner.recover_heap(&mut locker);
+        if heap_limit_reached(&locker) {
+            job.fail(anyhow!(MEMORY_EXCEEDED));
+            return (None, Vec::new());
+        }
         v8::scope!(let hs, &mut *locker);
         let realm = inner.realm(hs);
         let context = realm.context;
@@ -4377,6 +4359,10 @@ impl Worker {
             return Vec::new();
         };
         let (mut locker, _cells) = inner.lock();
+        if heap_limit_reached(&locker) {
+            fail_condemned(entry, &inner.runtime_state);
+            return Vec::new();
+        }
         v8::scope!(let hs, &mut *locker);
         let realm = inner.realm(hs);
         let context = realm.context;
@@ -4427,6 +4413,9 @@ impl Worker {
             return;
         };
         let (mut locker, _cells) = inner.lock();
+        if heap_limit_reached(&locker) {
+            return;
+        }
         v8::scope!(let hs, &mut *locker);
         let realm = inner.realm(hs);
         let context = realm.context;
@@ -4447,6 +4436,10 @@ impl Worker {
             return Vec::new();
         };
         let (mut locker, _cells) = inner.lock();
+        if heap_limit_reached(&locker) {
+            fail_condemned(entry, &inner.runtime_state);
+            return Vec::new();
+        }
         v8::scope!(let hs, &mut *locker);
         let realm = inner.realm(hs);
         let context = realm.context;
@@ -4505,6 +4498,14 @@ impl Worker {
 /// turn, and the spawn and its classification drain together. Such an op
 /// does not defer retirement: see `retired`.
 fn finish_turn(tc: &mut v8::PinScope, entry: &mut InFlight) -> Vec<Op> {
+    // Before anything settles: the turn that reached the heap limit, and any
+    // later one, must not answer.
+    if heap_limit_reached(tc) {
+        let _ = take_execution_termination_in_context(tc, Some(&entry.context));
+        let runtime_state = entry.runtime_state.clone();
+        fail_condemned(entry, &runtime_state);
+        return Vec::new();
+    }
     if let Err(error) = finish_cpu_turn(tc, entry) {
         let error = take_execution_termination_in_context(tc, Some(&entry.context))
             .unwrap_or_else(|| anyhow!(error));
@@ -4574,6 +4575,9 @@ fn finish_turn(tc: &mut v8::PinScope, entry: &mut InFlight) -> Vec<Op> {
 /// pass that makes none, its budget spent, leaves the rest for the next
 /// termination. Taking a termination calls this.
 fn wake_reset_events(tc: &mut v8::PinScope, context: &IoContext) {
+    if heap_limit_reached(tc) {
+        return;
+    }
     loop {
         let before = reset_wakes_pending(tc);
         if before == 0 {
@@ -5788,7 +5792,13 @@ fn cancel(tc: &mut v8::PinScope, entry: &mut InFlight, shutdown: bool) {
         finish_retired_input_gate_context(tc, &entry.context);
     }
     drop(guard);
-    entry.fail_cancelled(anyhow!("The client has disconnected"));
+    // The Actor cancels what a condemned isolate still runs when it moves the
+    // isolate's Durable Objects out; those events fail for the heap limit.
+    entry.fail_cancelled(if heap_limit_reached(tc) {
+        anyhow!(MEMORY_EXCEEDED)
+    } else {
+        anyhow!("The client has disconnected")
+    });
     if shutdown {
         // A lifecycle cancellation can be consumed either between turns or
         // during an operation turn. Keep the background cleanup here so both
@@ -5968,7 +5978,33 @@ fn startup_limit_exceeded(
         return Some(anyhow!(STARTUP_MEMORY_EXCEEDED));
     }
     let termination = runtime.termination.lock().ok()?.take()?;
-    Some(anyhow!(termination.error))
+    Some(startup_error(anyhow!(termination.error)))
+}
+
+/// The startup CPU limit as an error a loader can tell apart from the rest.
+/// A load that ran out of CPU time can fit the next time, on a less busy
+/// thread; a syntax error, a throw at module scope, or a module scope that
+/// reaches the heap limit fails the same way every time.
+#[derive(Debug)]
+struct StartupCpuExceeded;
+
+impl std::fmt::Display for StartupCpuExceeded {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(STARTUP_CPU_EXCEEDED)
+    }
+}
+
+impl std::error::Error for StartupCpuExceeded {}
+
+/// Type the startup CPU error. The watchdog records it as text, which only
+/// the watchdog writes, and a load can take it either after evaluation or
+/// once the load has ended.
+fn startup_error(error: anyhow::Error) -> anyhow::Error {
+    if error.to_string() == STARTUP_CPU_EXCEEDED {
+        anyhow::Error::new(StartupCpuExceeded)
+    } else {
+        error
+    }
 }
 
 fn settle_isolate_heap(isolate: &mut v8::Isolate) {
@@ -5999,13 +6035,11 @@ impl Worker {
         let original_heap_limit = isolate.get_heap_statistics().heap_size_limit();
         let heap_limit_state = Arc::new(HeapLimitState {
             excessively_exceeded: AtomicBool::new(false),
+            condemnation_handled: AtomicBool::new(false),
             limit: original_heap_limit,
-            last_gc_nudge: Mutex::new(None),
             loading: AtomicBool::new(true),
             load_exceeded: AtomicBool::new(false),
             isolate: isolate.thread_safe_handle(),
-            #[cfg(celld_internal_tests)]
-            forced_admission_refusal: AtomicBool::new(false),
         });
         let runtime_state = Arc::new(ActorRuntimeState {
             promises: std::sync::Mutex::new(PromiseMap::new()),
@@ -6038,7 +6072,7 @@ impl Worker {
         if let Some(error) = startup_limit_exceeded(&heap_limit_state, &runtime_state) {
             return Err(error);
         }
-        let (context, fetch) = realm?;
+        let (context, fetch) = realm.map_err(startup_error)?;
         // Module evaluation and harness installation allocate temporary V8
         // objects. No request can reuse them after these scopes close, and a
         // new cell isolate can otherwise retain their pages indefinitely.
@@ -6386,6 +6420,9 @@ impl Worker {
             storage::refresh_embedded_root(cell, parent);
             return Ok(opening);
         }
+        if heap_limit_reached(&locker) {
+            return Err(anyhow!(MEMORY_EXCEEDED));
+        }
         v8::scope!(let hs, &mut *locker);
         let realm = self.realm(hs);
         let context = realm.context;
@@ -6484,6 +6521,9 @@ impl Worker {
 
     pub fn set_id_name(&mut self, scope: &str, name: &str) -> Result<()> {
         let (mut locker, _cells) = self.lock();
+        if heap_limit_reached(&locker) {
+            return Err(anyhow!(MEMORY_EXCEEDED));
+        }
         v8::scope!(let hs, &mut *locker);
         let realm = self.realm(hs);
         let context = realm.context;
@@ -6506,7 +6546,10 @@ impl Worker {
             return (None, Vec::new());
         };
         let (mut locker, _cells) = inner.lock();
-        inner.recover_heap(&mut locker);
+        if heap_limit_reached(&locker) {
+            job.fail(anyhow!(MEMORY_EXCEEDED));
+            return (None, Vec::new());
+        }
         v8::scope!(let hs, &mut *locker);
         let realm = inner.realm(hs);
         let context = realm.context;
@@ -6564,6 +6607,10 @@ impl Worker {
             return Vec::new();
         };
         let (mut locker, _cells) = inner.lock();
+        if heap_limit_reached(&locker) {
+            fail_condemned(entry, &inner.runtime_state);
+            return Vec::new();
+        }
         v8::scope!(let hs, &mut *locker);
         let realm = inner.realm(hs);
         let context = realm.context;
@@ -6588,6 +6635,10 @@ impl Worker {
             return Vec::new();
         };
         let (mut locker, _cells) = inner.lock();
+        if heap_limit_reached(&locker) {
+            fail_condemned(entry, &inner.runtime_state);
+            return Vec::new();
+        }
         v8::scope!(let hs, &mut *locker);
         let realm = inner.realm(hs);
         let context = realm.context;
@@ -6939,8 +6990,6 @@ fn call_op_patch(
 }
 
 ops! { OP_NAMES, install_op_functions,
-        "__heap_limit_excessively_exceeded" =>
-            op_heap_limit_excessively_exceeded,
         "__heap_over_admission_share" => op_heap_over_admission_share,
         "__ws_send" => websocket::op_ws_send,
         "__ws_send_binary" => websocket::op_ws_send_binary,
@@ -7135,10 +7184,6 @@ ops! { TEST_OP_NAMES, install_test_op_functions,
     "__test_patch_op" => op_test_patch_op,
     "__test_gc" => op_test_gc,
         "__loader_count" => op_loader_count,
-        "__test_set_heap_limit_excessively_exceeded" =>
-            op_test_set_heap_limit_excessively_exceeded,
-        "__test_force_heap_admission_refusal" =>
-            op_test_force_heap_admission_refusal,
         "__test_heap_share" => op_test_heap_share,
         "__test_external_memory" => op_test_external_memory,
         "__test_workflow_event_consumed" => op_test_workflow_event_consumed,
@@ -7558,6 +7603,47 @@ enum LoaderState {
     Loading,
     Ready(Arc<crate::pool::Slot>),
     Failed(Arc<str>),
+    /// The Worker has no isolate now, and loads again at the next call once
+    /// the backoff (`LoaderPacing`) has passed; calls fail until then.
+    Retry(RetryCause),
+}
+
+/// Why a loaded Worker has no isolate.
+#[derive(Clone)]
+enum RetryCause {
+    /// Its isolate reached the heap limit.
+    MemoryLimit,
+    /// Loading it failed in a way the next load can avoid: the startup CPU
+    /// limit, a load task that died, or any failure of a Worker that had
+    /// loaded before.
+    LoadFailed(Arc<str>),
+}
+
+impl RetryCause {
+    /// The error itself, for the call that waited for the load that failed.
+    fn error(&self) -> String {
+        match self {
+            Self::MemoryLimit => MEMORY_EXCEEDED.to_string(),
+            Self::LoadFailed(error) => error.to_string(),
+        }
+    }
+
+    /// The error of a call that comes during the backoff: it says the Worker
+    /// is waiting, why, and when it loads again, since the call itself did
+    /// nothing wrong.
+    fn backing_off(&self, remaining: Duration) -> String {
+        let seconds = remaining.as_secs_f64().ceil() as u64;
+        match self {
+            Self::MemoryLimit => format!(
+                "Dynamic Worker is backing off after it exceeded its memory limit; it \
+                 loads again in {seconds} s."
+            ),
+            Self::LoadFailed(error) => format!(
+                "Dynamic Worker is backing off after its load failed ({error}); it loads \
+                 again in {seconds} s."
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -7587,7 +7673,208 @@ impl LoaderOwner {
 #[doc(hidden)]
 pub struct LoaderEntry {
     owner: LoaderOwner,
+    loaded: LoadedWorker,
+}
+
+/// A loaded Worker as a call holds it: its load state, and how to load it
+/// again. The state can own the Worker's isolate, so the last holder decides
+/// where that isolate is dropped.
+#[derive(Clone)]
+struct LoadedWorker {
     state: tokio::sync::watch::Receiver<LoaderState>,
+    reload: Arc<LoaderReload>,
+}
+
+/// What loading a Worker again takes: its config, the sender of its load
+/// state, and how soon it may load again.
+struct LoaderReload {
+    state: tokio::sync::watch::Sender<LoaderState>,
+    config: Arc<WorkerConfig>,
+    pacing: Mutex<LoaderPacing>,
+}
+
+/// The backoff between loads of a Worker whose isolates keep reaching the
+/// heap limit, or that keeps failing to load again. The first such end
+/// loads again at the next call; each later one doubles the wait, from
+/// `RELOAD_BACKOFF_MIN` to `RELOAD_BACKOFF_MAX`, so a Worker that exceeds the
+/// limit on every call costs one load and one heap at most that often. An
+/// isolate that served for `RELOAD_BACKOFF_MAX` starts the count again.
+#[derive(Default)]
+struct LoaderPacing {
+    failures: u32,
+    loaded_at: Option<Instant>,
+    not_before: Option<Instant>,
+}
+
+const RELOAD_BACKOFF_MIN: Duration = Duration::from_secs(1);
+const RELOAD_BACKOFF_MAX: Duration = Duration::from_secs(60);
+
+impl LoaderPacing {
+    fn loaded(&mut self) {
+        self.loaded_at = Some(Instant::now());
+    }
+
+    /// Count one end: a condemned isolate, or a load that failed.
+    fn failed(&mut self) {
+        let now = Instant::now();
+        if self
+            .loaded_at
+            .is_some_and(|loaded| now.duration_since(loaded) >= RELOAD_BACKOFF_MAX)
+        {
+            self.failures = 0;
+        }
+        self.loaded_at = None;
+        self.failures = self.failures.saturating_add(1);
+        self.not_before = Some(now + Self::backoff(self.failures));
+    }
+
+    /// The wait after `failures` ends in a row.
+    fn backoff(failures: u32) -> Duration {
+        match failures {
+            0 | 1 => Duration::ZERO,
+            failures => RELOAD_BACKOFF_MIN
+                .saturating_mul(1 << (failures - 2).min(6))
+                .min(RELOAD_BACKOFF_MAX),
+        }
+    }
+
+    /// How long until the Worker may load again, if it must still wait.
+    fn remaining(&self) -> Option<Duration> {
+        let remaining = self.not_before?.checked_duration_since(Instant::now())?;
+        (!remaining.is_zero()).then_some(remaining)
+    }
+}
+
+#[cfg(test)]
+mod loader_pacing_tests {
+    use super::*;
+
+    /// The first end loads again at once, each later one doubles the wait up
+    /// to the cap, and an isolate that served long enough starts over.
+    #[test]
+    fn reloads_back_off_and_recover() {
+        let waits: Vec<_> = (1..=9).map(LoaderPacing::backoff).collect();
+        let seconds = |s| Duration::from_secs(s);
+        assert_eq!(waits, [0, 1, 2, 4, 8, 16, 32, 60, 60].map(seconds).to_vec(),);
+        let mut pacing = LoaderPacing::default();
+        pacing.failed();
+        assert_eq!(pacing.remaining(), None);
+        pacing.loaded();
+        pacing.failed();
+        assert!(pacing
+            .remaining()
+            .is_some_and(|wait| wait <= Duration::from_secs(1)));
+        assert_eq!(pacing.failures, 2);
+        pacing.loaded_at = Some(Instant::now() - RELOAD_BACKOFF_MAX);
+        pacing.failed();
+        assert_eq!(pacing.failures, 1);
+        assert_eq!(pacing.remaining(), None);
+        assert_eq!(
+            RetryCause::MemoryLimit.backing_off(Duration::from_millis(1_500)),
+            "Dynamic Worker is backing off after it exceeded its memory limit; it loads \
+             again in 2 s."
+        );
+    }
+}
+
+impl LoaderReload {
+    /// Compile the Worker into a new isolate on Tokio's blocking pool, and
+    /// publish the result as its load state. A first load that fails stays
+    /// failed when the failure is deterministic, as the code does not change.
+    /// Otherwise, and for any reload, the load is retried after the backoff,
+    /// so a transient failure never breaks the Worker for good.
+    fn spawn_load(self: &Arc<Self>, handle: &tokio::runtime::Handle, reloading: bool) {
+        let reload = self.clone();
+        handle.spawn(async move {
+            let config = reload.config.clone();
+            let (error, transient) =
+                match tokio::task::spawn_blocking(move || Worker::load_config(config)).await {
+                    Ok(Ok(worker)) => {
+                        let slot = crate::pool::Slot::loaded_worker(worker);
+                        // Weak: the state holds the slot, so a strong reference
+                        // here would keep both alive for good.
+                        let owner = Arc::downgrade(&reload);
+                        slot.on_condemn(Box::new(move |slot| {
+                            release_condemned_facets(slot);
+                            if let Some(owner) = owner.upgrade() {
+                                owner.let_go(slot);
+                            }
+                        }));
+                        reload.pacing.lock().unwrap().loaded();
+                        reload.state.send_replace(LoaderState::Ready(slot));
+                        return;
+                    }
+                    Ok(Err(error)) => (
+                        Arc::from(format!("{error}")),
+                        error.is::<StartupCpuExceeded>(),
+                    ),
+                    Err(error) => (
+                        Arc::from(format!("worker loader: load task failed: {error}")),
+                        true,
+                    ),
+                };
+            if reloading || transient {
+                reload.pacing.lock().unwrap().failed();
+                reload
+                    .state
+                    .send_replace(LoaderState::Retry(RetryCause::LoadFailed(error)));
+            } else {
+                reload.state.send_replace(LoaderState::Failed(error));
+            }
+        });
+    }
+
+    /// Let a condemned isolate go as soon as it is condemned, rather than at
+    /// the next call, which may never come: it can hold a heap far over its
+    /// limit. Its running calls fail at their next turn, or when their
+    /// drivers see the condemnation, and it is freed when they end.
+    fn let_go(&self, condemned: &crate::pool::Slot) {
+        let mut previous = None;
+        self.state.send_if_modified(|state| {
+            if !matches!(state, LoaderState::Ready(slot) if std::ptr::eq(Arc::as_ptr(slot), condemned))
+            {
+                return false;
+            }
+            previous = Some(std::mem::replace(
+                state,
+                LoaderState::Retry(RetryCause::MemoryLimit),
+            ));
+            true
+        });
+        if previous.is_none() {
+            return;
+        }
+        self.pacing.lock().unwrap().failed();
+        // This can run in a turn of that isolate, where dropping it is not
+        // allowed, so a task drops the state's reference. Every turn runs
+        // under Tokio.
+        if let (Some(previous), Ok(handle)) = (previous, tokio::runtime::Handle::try_current()) {
+            handle.spawn(async move { drop(previous) });
+        }
+    }
+
+    /// Load the Worker again once its backoff has passed, as a pool replaces
+    /// one of its own isolates: module scope runs again, as when Cloudflare
+    /// evicts a Dynamic Worker. Only the first caller to find it due starts
+    /// the load; the others wait for it. Before then, the call fails.
+    fn reload(self: &Arc<Self>, cause: &RetryCause) -> Result<(), String> {
+        if let Some(remaining) = self.pacing.lock().unwrap().remaining() {
+            return Err(cause.backing_off(remaining));
+        }
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|error| format!("worker loader: {error}"))?;
+        let started = self.state.send_if_modified(|state| {
+            if !matches!(state, LoaderState::Retry(_)) {
+                return false;
+            }
+            *state = LoaderState::Loading;
+            true
+        });
+        if started {
+            self.spawn_load(&handle, true);
+        }
+        Ok(())
+    }
 }
 
 type LoaderRegistry = HashMap<u64, LoaderEntry>;
@@ -7603,14 +7890,14 @@ pub fn loader_registry() -> &'static std::sync::Mutex<LoaderRegistry> {
 /// Remove the registry references for every child of `owner`. The caller
 /// chooses when to drop the returned states, because they can own V8 isolates
 /// and no other isolate can be entered on that thread at destruction time.
-fn take_loader_owner(owner: &LoaderOwner) -> Vec<tokio::sync::watch::Receiver<LoaderState>> {
+fn take_loader_owner(owner: &LoaderOwner) -> Vec<LoadedWorker> {
     let mut registry = loader_registry().lock().unwrap();
     let ids: Vec<u64> = registry
         .iter()
         .filter_map(|(id, entry)| (&entry.owner == owner).then_some(*id))
         .collect();
     ids.into_iter()
-        .filter_map(|id| registry.remove(&id).map(|entry| entry.state))
+        .filter_map(|id| registry.remove(&id).map(|entry| entry.loaded))
         .collect()
 }
 
@@ -7624,10 +7911,7 @@ const MAX_LOADED_WORKERS_PER_PRINCIPAL: usize = MAX_LOADED_WORKERS - 1;
 
 /// Check both limits and install the live state under one registry lock. A
 /// separate check and insert lets concurrent isolates exceed either limit.
-fn admit_loaded_worker(
-    owner: LoaderOwner,
-    state: tokio::sync::watch::Receiver<LoaderState>,
-) -> Result<u64, String> {
+fn admit_loaded_worker(owner: LoaderOwner, id: u64, loaded: LoadedWorker) -> Result<(), String> {
     let mut registry = loader_registry().lock().unwrap();
     let principal_limit = MAX_LOADED_WORKERS_PER_PRINCIPAL;
     let principal_count = registry
@@ -7646,9 +7930,8 @@ fn admit_loaded_worker(
         ));
     }
 
-    let id = LOADER_NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    registry.insert(id, LoaderEntry { owner, state });
-    Ok(id)
+    registry.insert(id, LoaderEntry { owner, loaded });
+    Ok(())
 }
 
 fn loader_throw(scope: &mut v8::PinScope, message: &str) {
@@ -7666,14 +7949,20 @@ fn loader_invocation_limits(
         .map_err(|error| format!("worker loader: invalid invocation limits: {error}"))
 }
 
-async fn loaded_worker_slot(
-    mut state: tokio::sync::watch::Receiver<LoaderState>,
-) -> Result<Arc<crate::pool::Slot>, String> {
+async fn loaded_worker_slot(loaded: LoadedWorker) -> Result<Arc<crate::pool::Slot>, String> {
+    let LoadedWorker { mut state, reload } = loaded;
+    // A call that waited for a load and saw it fail takes that failure, and
+    // leaves the next load to a later call.
+    let mut waited = false;
     loop {
-        match state.borrow().clone() {
+        let current = state.borrow_and_update().clone();
+        match current {
+            LoaderState::Ready(slot) if slot.is_condemned() => reload.let_go(&slot),
             LoaderState::Ready(slot) => return Ok(slot),
+            LoaderState::Retry(cause) if waited => return Err(cause.error()),
+            LoaderState::Retry(cause) => reload.reload(&cause)?,
             LoaderState::Failed(error) => return Err(error.to_string()),
-            LoaderState::Loading => {}
+            LoaderState::Loading => waited = true,
         }
         state
             .changed()
@@ -7935,11 +8224,7 @@ fn op_loader_load(
         Ok(handle) => handle,
         Err(error) => return loader_throw(scope, &format!("worker loader: {error}")),
     };
-    let (loaded, state) = tokio::sync::watch::channel(LoaderState::Loading);
-    let id = match admit_loaded_worker(owner, state) {
-        Ok(id) => id,
-        Err(error) => return loader_throw(scope, &error),
-    };
+    let id = LOADER_NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let config = Arc::new(
         WorkerConfig::new(WorkerConfigOptions {
             src,
@@ -7967,16 +8252,20 @@ fn op_loader_load(
         .with_tail_reporting(tail_reporting)
         .with_loader_env(loader_env),
     );
-    handle.spawn(async move {
-        let state = match tokio::task::spawn_blocking(move || Worker::load_config(config)).await {
-            Ok(Ok(worker)) => LoaderState::Ready(crate::pool::Slot::loaded_worker(worker)),
-            Ok(Err(error)) => LoaderState::Failed(Arc::from(format!("{error}"))),
-            Err(error) => LoaderState::Failed(Arc::from(format!(
-                "worker loader: load task failed: {error}"
-            ))),
-        };
-        loaded.send_replace(state);
+    let (sender, state) = tokio::sync::watch::channel(LoaderState::Loading);
+    let reload = Arc::new(LoaderReload {
+        state: sender,
+        config,
+        pacing: Mutex::new(LoaderPacing::default()),
     });
+    let loaded = LoadedWorker {
+        state,
+        reload: reload.clone(),
+    };
+    if let Err(error) = admit_loaded_worker(owner, id, loaded) {
+        return loader_throw(scope, &error);
+    }
+    reload.spawn_load(&handle, false);
     rv.set(v8::Number::new(scope, id as f64).into());
 }
 
@@ -8077,7 +8366,7 @@ fn op_loader_fetch(
         .lock()
         .unwrap()
         .get(&id)
-        .map(|entry| entry.state.clone());
+        .map(|entry| entry.loaded.clone());
     let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Service);
     let ws_issuer = Some(ws_caller(scope));
     let stream_service = http_stream_service();
@@ -8181,7 +8470,7 @@ fn op_loader_rpc(
         .lock()
         .unwrap()
         .get(&id)
-        .map(|entry| entry.state.clone());
+        .map(|entry| entry.loaded.clone());
     let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Service);
     let async_id = asyncrt::enqueue(async move {
         // The same rule as `op_loader_fetch`: the call carries cell state.
@@ -8341,7 +8630,7 @@ const OWN_SCRIPT_LOADER: u64 = 0;
 /// The isolate a facet's class runs in: a loaded Worker's, or, for a class
 /// of the root's own script, the root's own, as workerd runs it.
 enum FacetHost {
-    Loaded(tokio::sync::watch::Receiver<LoaderState>),
+    Loaded(LoadedWorker),
     Own(Arc<crate::pool::Slot>),
 }
 
@@ -8357,7 +8646,7 @@ impl FacetHost {
             .lock()
             .unwrap()
             .get(&loader)
-            .map(|entry| Self::Loaded(entry.state.clone()))
+            .map(|entry| Self::Loaded(entry.loaded.clone()))
             .ok_or_else(|| "worker loader: unknown worker".to_string())
     }
 
@@ -8532,6 +8821,45 @@ pub(crate) async fn release_root_facets(root: &str, epoch: u64, release: RootRel
         }
         ws_close_facet(&scope, "the parent Durable Object was released");
     }
+}
+
+/// Close the facets that roots run in a loaded Worker's isolate that was just
+/// condemned, and drop their records, which would otherwise hold the isolate
+/// until each root gives its residency back. Closing runs no JavaScript in a
+/// condemned isolate: it closes each facet's database, so no lock outlives
+/// it, and its sockets. A root that calls the facet again opens it in the
+/// Worker's next isolate.
+fn release_condemned_facets(condemned: &crate::pool::Slot) {
+    let taken: Vec<RecordedFacet> = {
+        let mut roots = root_facets();
+        let mut taken = Vec::new();
+        roots.retain(|_, entry| {
+            let (gone, kept) = std::mem::take(&mut entry.open)
+                .into_iter()
+                .partition::<Vec<_>, _>(|open| std::ptr::eq(Arc::as_ptr(&open.slot), condemned));
+            taken.extend(gone);
+            entry.open = kept;
+            entry.pending != 0 || !entry.open.is_empty()
+        });
+        taken
+    };
+    if taken.is_empty() {
+        return;
+    }
+    // This runs in a turn of the condemned isolate; the closes queue behind
+    // it on the same slot. Every turn runs under Tokio.
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    handle.spawn(async move {
+        // A nested facet records after its parent, so it closes first.
+        for RecordedFacet { slot, scope, .. } in taken.into_iter().rev() {
+            if let Err(error) = slot.turn(|worker| worker.own_cell(&scope, None)).await {
+                tracing::warn!(facet = %scope, %error, "a facet did not close with its condemned isolate");
+            }
+            ws_close_facet(&scope, "the Worker exceeded its memory limit");
+        }
+    });
 }
 
 /// Take the records of the facets below the facet at `path`, deepest first.
@@ -8965,7 +9293,7 @@ fn op_loader_drop(
         // different isolate is entered on the same thread. Hand the final
         // reference to the host scheduler so destruction happens after this
         // turn has left V8.
-        asyncrt::op_handle().spawn(async move { drop(entry.state) });
+        asyncrt::op_handle().spawn(async move { drop(entry.loaded) });
     }
 }
 
@@ -10399,16 +10727,6 @@ fn op_isolate_condemn(
 
 const MAX_CONDEMN_REASON_CHARS: usize = 256;
 
-fn op_heap_limit_excessively_exceeded(
-    scope: &mut v8::PinScope,
-    _args: v8::FunctionCallbackArguments,
-    mut rv: v8::ReturnValue<v8::Value>,
-) {
-    let exceeded = scope
-        .get_slot::<Arc<HeapLimitState>>()
-        .is_some_and(|state| state.excessively_exceeded.load(Ordering::Relaxed));
-    rv.set(v8::Boolean::new(scope, exceeded).into());
-}
 /// Whether this isolate is too close to its heap limit to retain more state.
 fn op_heap_over_admission_share(
     scope: &mut v8::PinScope,
@@ -10418,40 +10736,11 @@ fn op_heap_over_admission_share(
     let state = scope.get_slot::<Arc<HeapLimitState>>().cloned();
     let over = match state {
         // A condemned isolate admits nothing, whatever the heap now reads.
-        Some(state)
-            if state.excessively_exceeded.load(Ordering::Relaxed)
-                || admission_refusal_forced(&state) =>
-        {
-            true
-        }
+        Some(state) if state.excessively_exceeded.load(Ordering::Relaxed) => true,
         Some(state) => heap_share(scope, state.limit) >= HEAP_ADMISSION_SHARE,
         None => false,
     };
     rv.set(v8::Boolean::new(scope, over).into());
-}
-#[cfg(celld_internal_tests)]
-fn op_test_set_heap_limit_excessively_exceeded(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue<v8::Value>,
-) {
-    if let Some(state) = scope.get_slot::<Arc<HeapLimitState>>() {
-        state
-            .excessively_exceeded
-            .store(args.get(0).boolean_value(scope), Ordering::Relaxed);
-    }
-}
-#[cfg(celld_internal_tests)]
-fn op_test_force_heap_admission_refusal(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue<v8::Value>,
-) {
-    if let Some(state) = scope.get_slot::<Arc<HeapLimitState>>() {
-        state
-            .forced_admission_refusal
-            .store(args.get(0).boolean_value(scope), Ordering::Relaxed);
-    }
 }
 #[cfg(celld_internal_tests)]
 fn op_test_gc(

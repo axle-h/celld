@@ -268,6 +268,17 @@ pub enum WorkerJob {
     },
 }
 
+impl WorkerJob {
+    /// Fail this event without running it.
+    pub(crate) fn fail(self, error: anyhow::Error) {
+        match self {
+            WorkerJob::Fetch { reply, .. } => drop(reply.send(Err(error))),
+            WorkerJob::Rpc { reply, .. } => drop(reply.send(Err(error))),
+            WorkerJob::Queue { reply, .. } => drop(reply.send(Err(error))),
+        }
+    }
+}
+
 /// Temporary host seam required by the verbatim JS adapter. The runtime
 /// adapter will construct the real shared Worker queue; lifecycle policy does
 /// not move into this type.

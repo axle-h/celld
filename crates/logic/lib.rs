@@ -819,6 +819,10 @@ pub struct State {
     /// adoption, so the pump reads it where it decides, and no cell can hold
     /// a swap flag it is not swapping under.
     swap_eager_classes: BTreeSet<String>,
+    /// Isolates that reached their heap limit (`Event::IsolateCondemned`).
+    /// The swap pump moves their cells at once, and forgets an isolate when
+    /// no cell is in it or can still start in it.
+    condemned_isolates: BTreeSet<isolate::HeapId>,
     /// The shedding latch. celld kept this in the executor, which meant the
     /// hysteresis -- the part with actual behaviour -- was the one piece the
     /// simulation could not reach. It is carried here so a sample
@@ -853,6 +857,7 @@ impl State {
             generation_changed_mono_ms: 0,
             swap_max_age_ms: 0,
             swap_eager_classes: BTreeSet::new(),
+            condemned_isolates: BTreeSet::new(),
             resuming: false,
             resuming_cells: BTreeSet::new(),
             confirming: false,
@@ -5254,6 +5259,12 @@ impl State {
         self.swap_eager_classes.contains(class)
     }
 
+    /// Whether `isolate` reached its heap limit, so a swap of its cells
+    /// cannot wait.
+    fn isolate_condemned(&self, isolate: Option<isolate::HeapId>) -> bool {
+        isolate.is_some_and(|isolate| self.condemned_isolates.contains(&isolate))
+    }
+
     /// Whether a swap can stop this cell's runtime now without cutting work
     /// short: no request running, no output withheld by the gate, no alarm
     /// handler in flight, and no regular or outbound socket, which cannot
@@ -5290,7 +5301,21 @@ impl State {
     /// a Cloudflare deployment does to every object unconditionally. The
     /// hibernatable sockets survive either way.
     fn pump_swap(&mut self, effects: &mut Vec<Effect>) {
-        if self.current_generation == 0
+        if !self.condemned_isolates.is_empty() {
+            // A cell starting has no isolate recorded yet, and can be starting
+            // in a condemned one; it moves once it is resident.
+            let cells = &self.cells;
+            let starting = cells
+                .values()
+                .any(|cell| matches!(cell.phase, Phase::Starting { .. }));
+            self.condemned_isolates.retain(|isolate| {
+                starting || cells.values().any(|cell| cell.isolate == Some(*isolate))
+            });
+        }
+        // Without authority, or fenced or draining, the node moves no cell
+        // between isolates. A condemned isolate's cells then stay, failing
+        // their events without running, until the drain or fence stops them.
+        if (self.current_generation == 0 && self.condemned_isolates.is_empty())
             || self.draining
             || self.fenced
             || !self.node_authoritative()
@@ -5304,19 +5329,35 @@ impl State {
             >= self.swap_max_age_ms;
         let in_flight = self.cells.values().filter(|cell| cell.swapping).count();
         let room = self.config.max_releases.saturating_sub(in_flight);
+        let nominable = |cell: &&Cell| {
+            matches!(cell.phase, Phase::Resident { .. })
+                && !cell.swapping
+                && !cell.quiescing
+                && cell.releasing.is_none()
+        };
+        // A condemned isolate runs nothing, so its cells go first and all at
+        // once, past `max_releases`: quiescing queues their requests for the
+        // new isolate, where waiting for room would fail them. An isolate
+        // holds a bounded number of cells.
+        let condemned: Vec<CellId> = self
+            .cells
+            .iter()
+            .filter(|(_, cell)| nominable(cell) && self.isolate_condemned(cell.isolate))
+            .map(|(id, _)| id.clone())
+            .collect();
         let stale: Vec<CellId> = self
             .cells
             .iter()
             .filter(|(_, cell)| {
-                matches!(cell.phase, Phase::Resident { .. })
-                    && !cell.swapping
-                    && !cell.quiescing
-                    && cell.releasing.is_none()
+                nominable(cell)
+                    && current != 0
                     && cell.generation != current
+                    && !self.isolate_condemned(cell.isolate)
             })
             .map(|(id, _)| id.clone())
+            .take(room.saturating_sub(condemned.len()))
             .collect();
-        for id in stale.into_iter().take(room) {
+        for id in condemned.into_iter().chain(stale) {
             let cell = self.cells.get_mut(&id).expect("stale cell listed above");
             cell.swapping = true;
             cell.quiescing = true;
@@ -5332,8 +5373,8 @@ impl State {
             .collect();
         for id in nominated {
             if !self.swap_safe_point(&id) {
-                let eager = self.swap_is_eager(&id);
                 let cell = self.cells.get(&id).expect("nominated cell listed above");
+                let eager = self.swap_is_eager(&id) || self.isolate_condemned(cell.isolate);
                 let alarm = match cell.alarm {
                     Some(AlarmState::Firing { op, .. }) => Some(op),
                     _ => None,
@@ -6895,6 +6936,9 @@ pub fn on_event(state: &mut State, event: Event) -> Vec<Effect> {
             eager_classes,
             ..
         } => state.generation_changed(generation, max_age_ms, &eager_classes),
+        Event::IsolateCondemned { isolate } => {
+            state.condemned_isolates.insert(isolate);
+        }
         Event::Published { op, result } => state.published(op, result, &mut effects),
         Event::DurabilityChecked { op, result } => state.durability_checked(
             op,
@@ -7099,5 +7143,208 @@ fn runtime_epoch(phase: &Phase) -> Option<Epoch> {
         | Phase::Cleaning { epoch, .. }
         | Phase::Resident { epoch } => Some(*epoch),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state(max_releases: usize) -> State {
+        State::new(
+            "node",
+            Config {
+                max_resident: 64,
+                max_activations: 4,
+                max_evictions: 4,
+                max_releases,
+                max_outbound_websockets: 4,
+                ownership_on_evict: OwnershipOnEvict::default(),
+                require_node_lease: false,
+                peer_protocol: 1,
+                operation_deadline_ms: None,
+                owner_log_recovery_backoff_ms: 1_000,
+                owner_log_recovery_attempts: 1,
+                alarm_resident_ms: 0,
+                idle_evict_ms: None,
+                pressure: pressure::PressureConfig::default(),
+            },
+        )
+    }
+
+    /// A cell resident at epoch 7 on generation 1, in heap `isolate`.
+    fn resident(state: &mut State, id: &str, isolate: u64) {
+        state.cells.insert(
+            id.to_string(),
+            Cell {
+                phase: Phase::Resident { epoch: 7 },
+                isolate: Some(isolate::HeapId::new(isolate)),
+                generation: 1,
+                ..Cell::default()
+            },
+        );
+        state.occupied += 1;
+    }
+
+    fn adopt_generation(state: &mut State) {
+        on_event(
+            state,
+            Event::GenerationChanged {
+                generation: 1,
+                now_mono_ms: 0,
+                max_age_ms: 60_000,
+                eager_classes: Vec::new(),
+            },
+        );
+    }
+
+    fn stops(effects: &[Effect]) -> Vec<(OpId, CellId, Epoch)> {
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::StopRuntime {
+                    op,
+                    cell,
+                    epoch,
+                    cause: StopCause::Swap,
+                    ..
+                } => Some((*op, cell.clone(), *epoch)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every cell of a condemned isolate stops at once, past
+    /// `max_releases`, and starts again at the same epoch; a cell in another
+    /// isolate stays, and one already swapping is not nominated again.
+    #[test]
+    fn a_condemned_isolate_swaps_its_cells_at_the_same_epoch() {
+        let mut state = state(1);
+        adopt_generation(&mut state);
+        resident(&mut state, "Room:a", 1);
+        resident(&mut state, "Room:b", 1);
+        resident(&mut state, "Room:c", 2);
+        resident(&mut state, "Room:d", 1);
+        state.cells.get_mut("Room:d").unwrap().swapping = true;
+        state.validate().expect("valid before");
+
+        let effects = on_event(
+            &mut state,
+            Event::IsolateCondemned {
+                isolate: isolate::HeapId::new(1),
+            },
+        );
+        state.validate().expect("valid after the condemnation");
+        let stopped = stops(&effects);
+        let cells: Vec<&str> = stopped.iter().map(|(_, cell, _)| cell.as_str()).collect();
+        assert_eq!(cells, ["Room:a", "Room:b"]);
+        assert!(stopped.iter().all(|(_, _, epoch)| *epoch == 7));
+
+        let (op, cell, _) = stopped[0].clone();
+        let effects = on_event(&mut state, Event::RuntimeStopped { op });
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::StartRuntime { cell: started, epoch: 7, .. } if *started == cell
+        )));
+        state.validate().expect("valid after the stop");
+    }
+
+    /// A condemned cell still running a request cannot wait for a safe
+    /// point: its activity is cancelled at once, as for an eager class,
+    /// without waiting out the swap's maximum age.
+    #[test]
+    fn a_condemned_cell_with_a_request_is_cancelled_at_once() {
+        let mut state = state(4);
+        adopt_generation(&mut state);
+        resident(&mut state, "Room:a", 1);
+        state.active_requests.insert(42, "Room:a".to_string());
+        state.active_cells.insert("Room:a".to_string(), 1);
+        state.validate().expect("valid before");
+        let effects = on_event(
+            &mut state,
+            Event::IsolateCondemned {
+                isolate: isolate::HeapId::new(1),
+            },
+        );
+        state.validate().expect("valid after the condemnation");
+        assert!(stops(&effects).is_empty());
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::CancelCellActivity { cell, requests, .. }
+                if cell == "Room:a" && requests == &[42]
+        )));
+        assert!(state.cells["Room:a"].quiescing);
+    }
+
+    /// A cell that is starting when its isolate is condemned has no isolate
+    /// recorded yet. The core keeps the isolate until the start reports it,
+    /// and moves the cell once it is resident. This node has announced no
+    /// generation, so only the condemnation moves it.
+    #[test]
+    fn a_cell_starting_in_a_condemned_isolate_moves_once_resident() {
+        let mut state = state(4);
+        let op = state.cell_op("Room:a");
+        state.cells.insert(
+            "Room:a".to_string(),
+            Cell {
+                phase: Phase::Starting { op, epoch: 7 },
+                ..Cell::default()
+            },
+        );
+        state.occupied += 1;
+        state.activation_permits.insert("Room:a".to_string());
+        state.validate().expect("valid before");
+        let effects = on_event(
+            &mut state,
+            Event::IsolateCondemned {
+                isolate: isolate::HeapId::new(1),
+            },
+        );
+        assert!(stops(&effects).is_empty());
+        assert!(!state.condemned_isolates.is_empty());
+
+        let effects = on_event(
+            &mut state,
+            Event::RuntimeStarted {
+                op,
+                isolate: Some(isolate::HeapId::new(1)),
+                generation: 1,
+                result: Ok(()),
+            },
+        );
+        let publish = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Publish { op, .. } => Some(*op),
+                _ => None,
+            })
+            .expect("the started cell publishes");
+        let effects = on_event(
+            &mut state,
+            Event::Published {
+                op: publish,
+                result: Ok(()),
+            },
+        );
+        state.validate().expect("valid once resident");
+        let stopped = stops(&effects);
+        assert_eq!(stopped.len(), 1);
+        assert_eq!((stopped[0].1.as_str(), stopped[0].2), ("Room:a", 7));
+    }
+
+    /// The core forgets a condemned isolate once no cell is in it.
+    #[test]
+    fn a_condemned_isolate_without_cells_is_forgotten() {
+        let mut state = state(4);
+        adopt_generation(&mut state);
+        resident(&mut state, "Room:a", 2);
+        let effects = on_event(
+            &mut state,
+            Event::IsolateCondemned {
+                isolate: isolate::HeapId::new(9),
+            },
+        );
+        assert!(stops(&effects).is_empty());
+        assert!(state.condemned_isolates.is_empty());
     }
 }

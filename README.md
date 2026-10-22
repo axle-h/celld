@@ -371,19 +371,22 @@ clients a cell can carry: approximately 50,000 at the default, and
 approximately 512 MB for 100,000.
 
 An isolate above 90% of this limit refuses a new hibernatable WebSocket, and
-it accepts again when the use of the heap falls under 90%. An isolate that
-reaches the limit also stops the materialization of a SQL result set; both
-errors name the heap. celld measures the heap before each event, and the
-isolate serves again when the use falls under 75% of the limit. An idle
-isolate holds a dead heap until something allocates, so celld forces a
-collection when a measurement is above that share. A restart of the process
-is not necessary.
+it accepts again when the use of the heap falls under 90%.
+
+An isolate that reaches the limit is condemned, as on Cloudflare. The event
+running then fails with `Worker has exceeded memory limit.`, and so does every
+other event still running in the isolate. celld replaces the isolate, so the
+next request runs in a new one. Every Durable Object the isolate hosted
+resets and starts again in a new isolate, as after `ctx.abort()`: its storage
+keeps what was written before the reset, its hibernatable WebSockets stay
+open, and its other WebSockets close with code 1012.
 
 While a Worker loads, celld stops the load at the limit: a load whose module
 scope reaches it fails with `Script startup exceeded memory limits.`, and a
 load that uses more than 1 second of CPU time fails with `Script startup
-exceeded CPU time limit.`, as on Cloudflare. The operation in progress at the
-limit finishes first, so the node can briefly hold more than the limit. See
+exceeded CPU time limit.`, as on Cloudflare. At the load and after it, the
+operation in progress at the limit finishes first, so the node can briefly
+hold more than the limit. See
 [Limitations](docs/limitations.md#isolate-limits).
 
 ## Contributions

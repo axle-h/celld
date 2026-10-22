@@ -813,6 +813,13 @@ pub enum Event {
         generation: u64,
         result: Result<(), Failure>,
     },
+    /// An isolate reached its heap limit and can run nothing more. Every
+    /// cell resident in it moves to a new isolate at once, as a generation
+    /// swap of an eager class does: what it runs is cancelled, its
+    /// hibernatable sockets survive, and it starts again at the same epoch.
+    IsolateCondemned {
+        isolate: crate::isolate::HeapId,
+    },
     /// The node adopted a new application generation. Every resident cell on
     /// an older generation moves to it at a safe point, or by force once
     /// `max_age_ms` has passed since this event. A resident cell whose class

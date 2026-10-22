@@ -107,6 +107,21 @@ The `dispose()` method of a stub releases its loaded Worker and removes the id
 from the map. The other stubs for that load cannot start new calls, and an
 in-flight call finishes.
 
+A loaded Worker whose isolate reaches the heap limit fails its running calls
+with `Worker has exceeded memory limit.`, as on Cloudflare, and celld lets the
+isolate go, with any facet that ran in it. The next call loads the code again
+into a new isolate, so module scope runs again, and the stub stays valid. When
+the Worker reaches the limit again, or loading it again fails, celld waits
+before the next load: 1 second after the second time in a row, doubling to at
+most 60 seconds. A call in that wait fails with an error that says the Worker
+is backing off, why, and when it loads again. A Worker that served for 60
+seconds starts the count again.
+
+A first load that fails stays failed when the same code would fail again: a
+syntax error, a throw at module scope, or the startup memory limit. A first
+load that runs past the startup CPU limit, which a busy node can cause, is
+retried with the same backoff.
+
 celld drops every loaded Worker when its host isolate retires, after in-flight
 calls finish. A loaded Worker never outlives its loader, and a redeploy
 compiles the code again.

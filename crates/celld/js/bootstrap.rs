@@ -1046,6 +1046,11 @@ pub(super) fn adopt_cell(
     compat: Compat,
 ) -> Result<Option<i64>> {
     let owned = cell_storage.is_some();
+    // No cell enters a condemned isolate, and refusing before the open keeps
+    // its database closed.
+    if owned && super::heap_limit_reached(tc) {
+        return Err(anyhow!(super::MEMORY_EXCEEDED));
+    }
     if let Some(cell_storage) = cell_storage {
         storage::open_at_epoch(
             cell,
@@ -1141,8 +1146,17 @@ fn finish_cell_adoption(tc: &mut v8::PinScope, cell: &str, owned: bool) -> Resul
     // The release loses nothing the cell needs back: `register_actor_name`
     // persists the id name before writing it here, so the take-in below reads
     // it back.
-    let source = format!("__celld.__cell.release({cell:?});");
-    run_internal_snippet(tc, &source).ok_or_else(|| anyhow!("adopt failed"))?;
+    // A condemned isolate runs no JavaScript again, so a cell leaving one
+    // skips the release, whose memory goes with the isolate, and keeps the
+    // host's side below. None can enter one (`adopt_cell`).
+    let condemned = super::heap_limit_reached(tc);
+    if condemned && owned {
+        return Err(anyhow!(super::MEMORY_EXCEEDED));
+    }
+    if !condemned {
+        let source = format!("__celld.__cell.release({cell:?});");
+        run_internal_snippet(tc, &source).ok_or_else(|| anyhow!("adopt failed"))?;
+    }
     // The grants the released residency held go with the objects that held
     // them.
     crate::ws_registry::ws_release_grants(&crate::ws_registry::WsOwner::Cell(cell.to_string()));
@@ -1150,8 +1164,10 @@ fn finish_cell_adoption(tc: &mut v8::PinScope, cell: &str, owned: bool) -> Resul
         // A facet of the root's own class lives in this isolate, and nothing
         // else releases it: its realm and connection would outlive the root.
         for facet in storage::embedded_facets(cell) {
-            let source = format!("__celld.__cell.release({facet:?});");
-            run_internal_snippet(tc, &source).ok_or_else(|| anyhow!("release failed"))?;
+            if !condemned {
+                let source = format!("__celld.__cell.release({facet:?});");
+                run_internal_snippet(tc, &source).ok_or_else(|| anyhow!("release failed"))?;
+            }
             storage::close(&facet);
             crate::ws_registry::ws_close_facet(&facet, "the parent Durable Object was released");
         }
@@ -1431,40 +1447,108 @@ mod tests {
         assert_eq!(load(&string, &[]), Err(STARTUP_MEMORY_EXCEEDED.to_string()));
     }
 
-    /// A load that succeeds ends the load's limits: allocation past the heap
-    /// limit afterwards meets the request-time behaviour, which raises the
-    /// limit and condemns the isolate rather than terminating it.
-    #[test]
-    fn a_loaded_isolate_is_not_terminated_past_the_heap_limit() {
+    /// One allocation past the limit by a wide margin: a 400 MB two-byte
+    /// string, well under V8's largest (`String::kMaxLength`, 2^29 - 24
+    /// characters), so a V8 upgrade does not turn it into a RangeError.
+    const ONE_ALLOCATION: &str =
+        "globalThis.keep = \"\\u1234\".repeat(2e8).toLowerCase(); keep.length";
+
+    /// What a loaded isolate makes of `source`, run as a request would after
+    /// the load: the script's result, the error its turn takes, the answer to
+    /// a fetch that arrives next, and whether the load's limit fired.
+    fn run_after_load(source: &'static str) -> (Option<String>, String, String, bool) {
         let config = config(HANDLER, &[], Vec::new());
-        let (length, load_exceeded, excessively_exceeded) = std::thread::spawn(move || {
-            let worker = Worker::load_config(config).expect("the handler loads");
-            let (mut locker, _cells) = worker.lock();
-            v8::scope!(let hs, &mut *locker);
-            let realm = worker.realm(hs);
-            let scope = &mut v8::ContextScope::new(hs, realm.context);
-            // About 180 MB retained, past the 128 MiB default.
-            let source = "globalThis.keep = []; \
-                          for (let i = 0; i < 3e6; i++) keep.push([i, 1, 2]); \
-                          keep.length";
-            let source = v8::String::new(scope, source).unwrap();
-            let length = v8::Script::compile(scope, source, None)
-                .and_then(|script| script.run(scope))
-                .map(|value| value.to_rust_string_lossy(scope));
-            let state = scope.get_slot::<Arc<HeapLimitState>>().unwrap().clone();
-            (
-                length,
-                state.load_exceeded.load(Ordering::Relaxed),
-                state.excessively_exceeded.load(Ordering::Relaxed),
-            )
+        std::thread::spawn(move || {
+            let mut worker = Worker::load_config(config).expect("the handler loads");
+            let (result, first, load_exceeded) = {
+                let (mut locker, _cells) = worker.lock();
+                v8::scope!(let hs, &mut *locker);
+                let realm = worker.realm(hs);
+                let scope = &mut v8::ContextScope::new(hs, realm.context);
+                let source = v8::String::new(scope, source).unwrap();
+                let result = v8::Script::compile(scope, source, None)
+                    .and_then(|script| script.run(scope))
+                    .map(|value| value.to_rust_string_lossy(scope));
+                let first = take_execution_termination(scope)
+                    .map_or_else(String::new, |error| error.to_string());
+                let state = scope.get_slot::<Arc<HeapLimitState>>().unwrap().clone();
+                (result, first, state.load_exceeded.load(Ordering::Relaxed))
+            };
+            // `HANDLER` answers 200 if it runs at all.
+            let (reply, mut answer) = tokio::sync::oneshot::channel();
+            let job = crate::WorkerJob::Fetch {
+                queued_at: Instant::now(),
+                entrypoint: None,
+                invocation_limits: None,
+                url: "http://worker/".to_string(),
+                method: "GET".to_string(),
+                body: crate::js::RequestBody::Bytes(Default::default()),
+                headers: Vec::new(),
+                request_id: None,
+                tail_report: None,
+                reply,
+            };
+            let (begun, ops) = worker.turn_begin(job, None, None);
+            assert!(begun.is_none() && ops.is_empty(), "the fetch began");
+            let next = match answer.try_recv().expect("the fetch is answered at once") {
+                Ok(response) => format!("answered {}", response.status),
+                Err(error) => error.to_string(),
+            };
+            (result, first, next, load_exceeded)
         })
         .join()
-        .expect("the request thread panicked");
-        assert_eq!(length.as_deref(), Some("3000000"));
+        .expect("the request thread panicked")
+    }
+
+    /// After the load, reaching the heap limit terminates what runs and
+    /// condemns the isolate: no JavaScript runs there again, so the next
+    /// event fails with workerd's error without running, and the load's own
+    /// limit stays out of it.
+    #[test]
+    fn reaching_the_heap_limit_after_the_load_condemns_the_isolate() {
+        // About 180 MB retained, past the 128 MiB default.
+        let (result, first, next, load_exceeded) = run_after_load(
+            "globalThis.keep = []; for (let i = 0; i < 3e6; i++) keep.push([i, 1, 2]); keep.length",
+        );
+        assert_eq!(result, None);
+        assert_eq!(first, MEMORY_EXCEEDED);
+        assert_eq!(next, MEMORY_EXCEEDED);
         assert!(!load_exceeded);
-        assert!(
-            excessively_exceeded,
-            "the allocation never reached the limit"
+    }
+
+    /// One allocation past the limit after the load finishes, rather than V8
+    /// aborting the process. The script can end before the termination lands, and the
+    /// turn fails either way.
+    #[test]
+    fn one_allocation_past_the_heap_limit_after_the_load_condemns_the_isolate() {
+        let (_, first, next, _) = run_after_load(ONE_ALLOCATION);
+        assert_eq!(first, MEMORY_EXCEEDED);
+        assert_eq!(next, MEMORY_EXCEEDED);
+    }
+
+    /// A load past the startup CPU limit carries a type a loader can retry,
+    /// whichever path took the termination; a throw at module scope does not.
+    #[test]
+    fn only_the_startup_cpu_limit_is_typed_as_transient() {
+        let transient = |src: String| {
+            let config = config(&src, &[], Vec::new());
+            std::thread::spawn(move || {
+                Worker::load_config(config)
+                    .err()
+                    .map(|error| error.is::<StartupCpuExceeded>())
+            })
+            .join()
+            .expect("load thread panicked")
+        };
+        assert_eq!(
+            transient(format!("while (true) {{}}\n{HANDLER}")),
+            Some(true)
+        );
+        let getter = "export default { get fetch() { while (true) {} } };\n".to_string();
+        assert_eq!(transient(getter), Some(true));
+        assert_eq!(
+            transient(format!("throw new Error('no');\n{HANDLER}")),
+            Some(false)
         );
     }
 

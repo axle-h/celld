@@ -1927,6 +1927,9 @@ pub struct Actor {
     eviction_abandons: BTreeMap<OpId, Arc<crate::replication::EvictionAbandon>>,
     handoff_directory: Arc<Mutex<HandoffDirectory>>,
     host: Option<CellHost>,
+    /// How many isolate condemnations this Actor has looked at
+    /// (`observe_condemned_isolates`).
+    seen_condemnations: u64,
     drain_pins: DrainPinRegistry,
     /// Per-cell handoff pipeline timings, one entry per quiesce nomination.
     /// Each phase is measured from effect dispatch to its answering event,
@@ -2519,6 +2522,7 @@ impl Actor {
             eviction_abandons: BTreeMap::new(),
             handoff_directory: Arc::new(Mutex::new(HandoffDirectory::default())),
             host,
+            seen_condemnations: 0,
             drain_pins,
             handoff_timings: HashMap::new(),
             handoff_phase_ops: HashMap::new(),
@@ -2663,6 +2667,29 @@ impl Actor {
     /// Handles exactly one ready mailbox item, completion, or timer.
     pub fn step(&mut self, input: ActorInput, out: &mut StepOutput) {
         assert!(self.started, "Actor::step was called before Actor::start");
+        self.step_input(input, out);
+        self.observe_condemned_isolates(out);
+    }
+
+    /// Move the cells out of isolates that reached their heap limit. The
+    /// counter keeps this to one atomic load a step until an isolate is
+    /// condemned, and the turn that condemns one ends in a step of its own,
+    /// the failed event's `ActivityFinished`.
+    fn observe_condemned_isolates(&mut self, out: &mut StepOutput) {
+        let condemnations = crate::pool::condemnations();
+        if condemnations == self.seen_condemnations || self.preserving {
+            return;
+        }
+        self.seen_condemnations = condemnations;
+        let Some(host) = &self.host else {
+            return;
+        };
+        for isolate in host.condemned_cell_isolates() {
+            self.drive(Event::IsolateCondemned { isolate }, out);
+        }
+    }
+
+    fn step_input(&mut self, input: ActorInput, out: &mut StepOutput) {
         match input {
             ActorInput::Message(message) => self.handle_message(message, out),
             ActorInput::Completed(completed) => {

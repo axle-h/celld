@@ -25,6 +25,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::sync::RwLock;
 
 use anyhow::Result;
@@ -204,8 +205,31 @@ pub struct Slot {
     // toward the collection boundary. Residency drop retires both counts.
     adopted_cells: AtomicUsize,
     retiring: AtomicBool,
+    /// The guest can no longer run here (see [`Slot::condemn`]). Unlike
+    /// `retiring`, which an idle isolate also reaches, this says the cells
+    /// it holds must move.
+    condemned: AtomicBool,
+    /// Run once when the slot is condemned, by the owner of a slot outside a
+    /// pool (`on_condemn`).
+    condemn_hook: OnceLock<CondemnHook>,
+    /// Wakes the drivers of the events still in the isolate when it is
+    /// condemned (`until_condemned`).
+    condemned_wake: tokio::sync::Notify,
     #[cfg(celld_internal_tests)]
     turn_observations: Mutex<Vec<String>>,
+}
+
+type CondemnHook = Box<dyn Fn(&Slot) + Send + Sync>;
+
+/// How many isolates this process has condemned, so a watcher can tell that
+/// one was without scanning every slot.
+static CONDEMNATIONS: AtomicU64 = AtomicU64::new(0);
+
+/// The number of isolates condemned so far.
+pub(crate) fn condemnations() -> u64 {
+    // Pairs with the increment in `condemn`, so a watcher that sees the new
+    // count also sees the slot's `condemned` flag.
+    CONDEMNATIONS.load(Ordering::Acquire)
 }
 
 thread_local! {
@@ -250,6 +274,10 @@ impl Slot {
         impl Drop for Counted<'_> {
             fn drop(&mut self) {
                 self.0.turns.fetch_sub(1, Ordering::Relaxed);
+                // A stop's turn can give back a condemned isolate's last cell
+                // while it still holds the isolate, so the bell the residency
+                // rang found it busy. Ring again now that the turn is over.
+                self.0.ring_if_condemned_and_empty();
             }
         }
         self.turns.fetch_add(1, Ordering::Relaxed);
@@ -337,6 +365,9 @@ impl Slot {
             cells: AtomicUsize::new(0),
             adopted_cells: AtomicUsize::new(0),
             retiring: AtomicBool::new(false),
+            condemned: AtomicBool::new(false),
+            condemn_hook: OnceLock::new(),
+            condemned_wake: tokio::sync::Notify::new(),
             #[cfg(celld_internal_tests)]
             turn_observations: Mutex::new(Vec::new()),
         })
@@ -369,6 +400,9 @@ impl Slot {
             cells: AtomicUsize::new(0),
             adopted_cells: AtomicUsize::new(0),
             retiring: AtomicBool::new(false),
+            condemned: AtomicBool::new(false),
+            condemn_hook: OnceLock::new(),
+            condemned_wake: tokio::sync::Notify::new(),
             turn_observations: Mutex::new(Vec::new()),
         })
     }
@@ -430,18 +464,66 @@ impl Slot {
     /// every start would otherwise hold one dead heap per failure until the
     /// next tick, and a Python heap is tens of megabytes.
     ///
-    /// A cell pool has no task on the bell. A condemned cell isolate still
-    /// takes no new cell, and frees when its cells leave, as retirement
-    /// always has; Python Workers cannot declare cells.
+    /// A cell pool has no task on the bell. A condemned cell isolate takes
+    /// no new cell, and frees when its cells leave, as retirement always
+    /// has. The Actor moves them (`condemned_cell_isolates`).
+    ///
+    /// A Worker Loader's slot has no pool either: the loader replaces it at
+    /// the next call (`loaded_worker_slot`).
     pub(crate) fn condemn(&self, reason: &str) -> bool {
-        let Some(reclaim) = &self.reclaim else {
-            return false;
-        };
-        if !self.retiring.swap(true, Ordering::Relaxed) {
+        if !self.condemned.swap(true, Ordering::Relaxed) {
+            self.retiring.store(true, Ordering::Relaxed);
+            CONDEMNATIONS.fetch_add(1, Ordering::Release);
             tracing::warn!(isolate = %self.heap_id, slot = self.id, reason, "isolate condemned");
+            if let Some(hook) = self.condemn_hook.get() {
+                hook(self);
+            }
+            self.condemned_wake.notify_waiters();
         }
-        reclaim.notify_one();
-        true
+        match &self.reclaim {
+            Some(reclaim) => {
+                reclaim.notify_one();
+                true
+            }
+            None => self.loaded_worker,
+        }
+    }
+
+    /// Have `hook` run when this slot is condemned. Set once, by the owner of
+    /// a slot outside a pool, which no pool replaces.
+    pub(crate) fn on_condemn(&self, hook: CondemnHook) {
+        if self.condemn_hook.set(hook).is_err() {
+            panic!("isolate {} already has a condemnation hook", self.heap_id);
+        }
+    }
+
+    /// Ask the pool to free this isolate if it is condemned and holds no
+    /// cell. Freeing waits for its turns and requests, so a busy one is
+    /// asked again when they end.
+    fn ring_if_condemned_and_empty(&self) {
+        if self.is_condemned() && self.cells.load(Ordering::Relaxed) == 0 {
+            if let Some(reclaim) = &self.reclaim {
+                reclaim.notify_one();
+            }
+        }
+    }
+
+    /// Resolves once this slot is condemned, so the driver of an event that
+    /// waits on something else, possibly for good, fails it at once and lets
+    /// the isolate go.
+    pub(crate) async fn until_condemned(&self) {
+        let notified = self.condemned_wake.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if self.is_condemned() {
+            return;
+        }
+        notified.await;
+    }
+
+    /// Whether [`condemn`](Self::condemn) ran.
+    pub(crate) fn is_condemned(&self) -> bool {
+        self.condemned.load(Ordering::Relaxed)
     }
 
     /// The node-wide identity of this slot's currently installed V8 heap.
@@ -536,6 +618,9 @@ impl Drop for Residency {
             self.slot.adopted_cells.fetch_sub(1, Ordering::Relaxed);
         }
         self.slot.cells.fetch_sub(1, Ordering::Relaxed);
+        // The last cell out of a condemned isolate is what lets it free, as
+        // the last request out of a retiring one does.
+        self.slot.ring_if_condemned_and_empty();
     }
 }
 
@@ -573,6 +658,13 @@ impl Pool {
             retired: AtomicBool::new(false),
             maintenance: RwLock::new(()),
         }
+    }
+
+    /// Share `reclaim` as this pool's reclaim bell, for an owner whose one
+    /// task frees several pools.
+    pub(crate) fn with_reclaim(mut self, reclaim: Arc<tokio::sync::Notify>) -> Self {
+        self.reclaim = reclaim;
+        self
     }
 
     fn load(&self) -> PoolLoad {
@@ -639,6 +731,9 @@ impl Pool {
             cells: AtomicUsize::new(0),
             adopted_cells: AtomicUsize::new(0),
             retiring: AtomicBool::new(self.retired.load(Ordering::Relaxed)),
+            condemned: AtomicBool::new(false),
+            condemn_hook: OnceLock::new(),
+            condemned_wake: tokio::sync::Notify::new(),
             #[cfg(celld_internal_tests)]
             turn_observations: Mutex::new(Vec::new()),
         });

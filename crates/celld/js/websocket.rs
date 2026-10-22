@@ -478,6 +478,17 @@ pub(super) fn ws_capture_flush_touched(tc: &mut v8::PinScope, runtime_state: &Ac
     }
 }
 
+/// Drop every capture that received a frame during this isolate turn: the
+/// isolate reached its heap limit, so the events that sent them fail.
+pub(super) fn ws_capture_discard_touched(runtime_state: &ActorRuntimeState) {
+    let touched = std::mem::take(&mut *runtime_state.ws_capture_touched.lock().unwrap());
+    for context in touched.into_iter().filter_map(|context| context.upgrade()) {
+        for pending in context.ws_capture.lock().unwrap().iter_mut() {
+            std::mem::take(&mut pending.frames).discard();
+        }
+    }
+}
+
 /// Send or hold one frame. `context` is the event the sending JavaScript
 /// belongs to: the continuation's own for a V8 entry point, so a reaction of
 /// cell A that runs inside another event's checkpoint is captured by and

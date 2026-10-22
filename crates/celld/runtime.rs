@@ -647,12 +647,18 @@ pub(crate) fn init_engine() {
 }
 
 /// The isolates a script's cells live in, built from the script's config.
-pub(crate) fn cell_pool(config: Arc<WorkerConfig>) -> Arc<crate::pool::Pool> {
-    Arc::new(crate::pool::Pool::new(
-        pool_limits(),
-        admission_wait(),
-        Box::new(move || load_cell_isolate(config.clone())),
-    ))
+pub(crate) fn cell_pool(
+    config: Arc<WorkerConfig>,
+    reclaim: Arc<tokio::sync::Notify>,
+) -> Arc<crate::pool::Pool> {
+    Arc::new(
+        crate::pool::Pool::new(
+            pool_limits(),
+            admission_wait(),
+            Box::new(move || load_cell_isolate(config.clone())),
+        )
+        .with_reclaim(reclaim),
+    )
 }
 
 /// Wait for one cell fetch reply without retaining the internal receiver after
@@ -873,6 +879,7 @@ impl RuntimeManager {
             return;
         };
         let reaping = Arc::downgrade(generation);
+        let reclaim = generation.cell_reclaim.clone();
         let generations = self.generations.clone();
         handle.spawn(async move {
             let mut tick = tokio::time::interval_at(
@@ -881,10 +888,24 @@ impl RuntimeManager {
             );
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
-                tick.tick().await;
+                let reap = crate::asyncrt::select_biased! {
+                    "the paced reap also frees, so it wins a tie with the reclaim bell";
+                    _ = tick.tick() => true,
+                    _ = reclaim.notified() => false,
+                };
                 let Some(generation) = reaping.upgrade() else {
                     return;
                 };
+                if !reap {
+                    // A condemned cell isolate is freed once its last cell
+                    // has left, not at the next tick: it can hold a heap far
+                    // over its limit. A pool busy placing a cell is asked
+                    // again shortly.
+                    while !generation.free_drained_cell_pools() {
+                        crate::asyncrt::sleep(RECLAIM_RETRY).await;
+                    }
+                    continue;
+                }
                 generation.reap_cell_pools();
                 if !generation.is_drained() {
                     continue;
@@ -1172,6 +1193,19 @@ impl RuntimeManager {
         }
         let pruned = replication.prune_stale_live(&keep)?;
         Ok(pruned)
+    }
+
+    /// The isolates holding cells that reached their heap limit
+    /// (`Slot::condemn`), for the Actor to move the cells out of.
+    pub fn condemned_cell_isolates(&self) -> BTreeSet<celld_logic::isolate::HeapId> {
+        let cells = self.cells.lock().expect("cell registry poisoned");
+        [&cells.starting, &cells.published]
+            .into_iter()
+            .flat_map(|residents| residents.values())
+            .map(|handle| handle.residency.slot())
+            .filter(|slot| slot.is_condemned())
+            .map(|slot| slot.heap_id())
+            .collect()
     }
 
     /// Take a cell out of its isolate for a generation swap.
@@ -2282,7 +2316,15 @@ async fn drive_worker(
     after_turn(&entry);
 
     while !entry.finished() {
-        let started = match wake_with_cross_entry_gate(&mut ops, &mut entry, budget).await {
+        let wake = crate::asyncrt::select_biased! {
+            "an event's own wake goes first; condemnation only fails what is left";
+            wake = wake_with_cross_entry_gate(&mut ops, &mut entry, budget) => wake,
+            // A condemned isolate runs nothing more, and an event waiting on
+            // something slow would hold its heap until that came; the poll
+            // fails it without entering JavaScript.
+            () = slot.until_condemned() => Wake::Poll,
+        };
+        let started = match wake {
             Wake::Op(op, result) => {
                 slot.turn(|worker| worker.turn_deliver(&mut entry, op, result))
                     .await

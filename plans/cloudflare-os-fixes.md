@@ -362,10 +362,10 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 22 | 1.13 stubs passed as params are duplicated | done | `5b67c22` |
 | 23 | 1.14 transactions on root storage; reset semantics | done | see log |
 | 24 | fix the workerd-side flake in `streams/byob-request-body` | done | `ed11b98` |
-| 25 | 1.15 `process.env` and `node:process` | done | see log |
-| 26 | 1.31 isolate limits during module load (security) | done | see log |
-| 27 | 1.32 heap limit at request time (security) | next | |
-| 28 | 1.33 ArrayBuffer/Wasm memory limits (security) | queued | |
+| 25 | 1.15 `process.env` and `node:process` | done | `86c6418` |
+| 26 | 1.31 isolate limits during module load (security) | done | `9b0c9c1` |
+| 27 | 1.32 heap limit at request time (security) | done | see log |
+| 28 | 1.33 ArrayBuffer/Wasm memory limits (security) | next | |
 | 29+ | Phase 1 in plan order (1.16-1.34), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
@@ -590,8 +590,8 @@ shows a full-binary Rust test pattern.
 
 - Inline `#[cfg(test)] mod tests` beside the code, run with
   `cargo test --profile lab -p celld <module>::tests`.
-- `crates/logic` and `crates/ltx` set `test = false`; a public inline test
-  there also needs that removed. The out-of-tree suites sit behind
+- `crates/ltx` sets `test = false`; a public inline test there also needs
+  that removed. `crates/logic` has inline tests since 1.32. The out-of-tree suites sit behind
   `cfg(celld_internal_tests)`, which nothing sets, so they compile out.
 - First targets are the pure parsers in `deploy.rs`. Each test asserts both
   the accepted shape and the loud refusal message.
@@ -2105,6 +2105,30 @@ design for DO cells: a DO condemned this way resets, as on Cloudflare.
 allocate past the limit in a request get the error; the node keeps serving
 other Workers; and a DO that exceeds the limit resets.
 
+**As built (done).**
+- At the limit the running event is terminated with "Worker has exceeded
+  memory limit.", and the isolate is condemned for good. The single-object
+  extension means one big allocation finishes first instead of aborting.
+- No JS runs in a condemned isolate again: every turn entry is guarded, its
+  in-flight events fail with the same error, captured WebSocket frames are
+  discarded, and hung events are woken through `until_condemned`.
+- Stateless pools replace the slot. A Dynamic Worker reloads on its next
+  call, with backoff (1 s doubling to 60 s). Calls during backoff get a
+  distinct message. Transient first-load failures (startup CPU limit,
+  JoinError) are retried; deterministic ones stay failed.
+- DO cells move to a fresh isolate at the same epoch (a new core event,
+  `IsolateCondemned`). Condemned cells are nominated first and quiesce, so
+  their requests queue rather than fail.
+- Facets recorded in a condemned loaded isolate are released and closed
+  host-side, so no dead heap or open SQLite connection is pinned.
+- The old soft-limit recovery is removed.
+- Measured peak RSS: one 400 MB allocation peaks at about 780 MiB and returns
+  to about 60 MiB. Gradual growth stays at about 195 MiB. Repeated facet
+  condemnations stay flat.
+- Cases: `limits/request-memory` (stateless, Dynamic Worker, DO, concurrent
+  in-flight events, facet cycles). celld-logic now has inline unit tests
+  (4).
+
 ### 1.33 ArrayBuffer and Wasm memory outside every limit (found by 1.31) — security
 
 **Problem.** Backing stores (ArrayBuffer, typed arrays, Wasm memory) aren't
@@ -2128,6 +2152,11 @@ backing stores are refused, and the node stays healthy.
   namespace binding is still in its TDZ while top-level await is pending.
 - When 1.18 adds the "Failed to start Worker:" prefix, decide whether the two
   startup-limit errors get it too.
+- A recorded facet whose host-side close fails (only warned) keeps its
+  database open until the isolate drops.
+- The facet-of-a-Dynamic-Worker-class path under condemnation is covered only
+  through `limits/request-memory`'s supervisor; the 1.31 load tests could
+  use the same margin-based allocation as 1.32.
 - A DO caller sees "route failed: RuntimeFailed" for any startup failure of
   the callee's cell isolate, because `RequestError::RuntimeFailed` carries no
   text. Carry a startup-failure kind and message through

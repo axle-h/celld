@@ -172,8 +172,10 @@ in workerd:
   Dynamic Worker answered it with, as a Worker can. An object on another node
   from its caller cannot return such a socket; the caller receives status
   502.
-- `SqlStorage.Cursor.toArray()` gives a celld-specific error near the V8 heap
-  limit.
+- An object whose isolate reaches the V8 heap limit resets, and every object
+  sharing that isolate resets with it. On Cloudflare, objects of one class can
+  share an isolate too. See
+  [Limitations](../limitations.md#isolate-limits).
 - `storage.sync()` waits for the object store or the fleet ensemble to hold all
   earlier committed writes. The operation uses the shorter of the 10-second
   `CELLD_LTX_DURABILITY_TIMEOUT_SECS` default and the 15-second

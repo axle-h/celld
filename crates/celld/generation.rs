@@ -291,6 +291,10 @@ pub struct Generation {
     /// of one script share them, so cells of one class share module scope
     /// exactly when they are colocated, which is what Durable Objects do.
     pub(crate) cell_isolates: HashMap<String, Arc<crate::pool::Pool>>,
+    /// The reclaim bell every cell pool shares. A cell pool has no task of
+    /// its own, so the generation's maintenance loop frees a condemned cell
+    /// isolate when this rings, once its last cell has left it.
+    pub(crate) cell_reclaim: Arc<tokio::sync::Notify>,
     pub(crate) default_do_class: Option<Arc<str>>,
     pub(crate) assets: HashMap<String, AssetResolver>,
     /// Every container class of every script in the graph.
@@ -411,6 +415,18 @@ impl Generation {
         for pool in self.cell_isolates.values() {
             pool.reap_empty();
         }
+    }
+
+    /// Free the drained isolates the cell pools retired, such as a condemned
+    /// one its last cell has left. Returns false when a pool was busy and
+    /// should be asked again.
+    pub(crate) fn free_drained_cell_pools(&self) -> bool {
+        // Every pool gets its pass, so a busy one does not hold the others.
+        let mut freed = true;
+        for pool in self.cell_isolates.values() {
+            freed &= pool.free_drained();
+        }
+        freed
     }
 
     /// The isolates this generation holds right now, for `/state`.
@@ -605,12 +621,13 @@ impl Generation {
             }
         }
         let stateless = service_pools[&primary_script].clone();
+        let cell_reclaim = Arc::new(tokio::sync::Notify::new());
         let cell_isolates: HashMap<String, Arc<crate::pool::Pool>> = cell_configs
             .values()
             .map(|config| {
                 (
                     config.script_name.clone(),
-                    crate::runtime::cell_pool(config.clone()),
+                    crate::runtime::cell_pool(config.clone(), cell_reclaim.clone()),
                 )
             })
             .collect();
@@ -623,6 +640,7 @@ impl Generation {
             services: service_pools,
             cell_configs,
             cell_isolates,
+            cell_reclaim,
             default_do_class,
             assets,
             containers: all_containers,

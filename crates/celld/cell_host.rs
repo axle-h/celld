@@ -92,6 +92,18 @@ impl CellHost {
         }
     }
 
+    /// The isolates whose cells must move because the isolate reached its
+    /// heap limit. The scripted host's isolates have no heap limit.
+    pub(crate) fn condemned_cell_isolates(
+        &self,
+    ) -> std::collections::BTreeSet<celld_logic::isolate::HeapId> {
+        match self {
+            Self::Engine(runtime) => runtime.condemned_cell_isolates(),
+            #[cfg(all(test, celld_internal_tests))]
+            Self::Scripted(_) => Default::default(),
+        }
+    }
+
     pub(crate) fn publish_cell(&self, cell: &str, epoch: u64) -> anyhow::Result<()> {
         match self {
             Self::Engine(runtime) => runtime.publish_cell(cell, epoch),

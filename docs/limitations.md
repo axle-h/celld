@@ -57,17 +57,23 @@ APIs, and Wrangler configuration.
   deployment. A Worker whose load is close to a limit can fail later, when a
   pool grows. A Durable Object request whose isolate fails to start rejects
   with `route failed: RuntimeFailed`, and the node log names the limit.
-- celld stops a load at the memory limit when the operation in progress
-  finishes: a JavaScript loop stops at once, but one builtin call, such as a
-  single allocation of up to 1 GB (V8's largest object) or a `JSON.parse()`,
-  runs to its end first. The node can therefore briefly hold a few GB more
-  than the limit; a 1 GB array at module scope peaks at about 2.2 GB of
-  resident memory.
-- After the load, the heap limit is not a hard limit. An isolate over it
-  refuses new hibernatable WebSockets and stops materializing SQL result sets,
-  but celld does not stop a request that keeps allocating. V8 then ends the
-  node's process when it cannot grow the heap further, so every Worker on the
-  node stops.
+- After the load, an isolate that reaches the heap limit is condemned, and no
+  JavaScript runs in it again. The event running then, and every other event
+  in the isolate, fails with workerd's error, `Worker has exceeded memory
+  limit.`; their `waitUntil` work stops, and frames they held for
+  hibernatable WebSockets are dropped. The next request runs in a new
+  isolate. A Dynamic Worker loads again, so its module scope runs again, after
+  a backoff if it keeps reaching the limit (see
+  [Dynamic Workers](services/dynamic-workers.md)). A Durable Object in the
+  isolate resets as after `ctx.abort()`, and starts again in a new isolate;
+  its requests wait for that isolate.
+- celld stops JavaScript at the memory limit when the operation in progress
+  finishes, at the load and after it: a JavaScript loop stops at once, but one
+  builtin call, such as a single allocation of up to 1 GB (V8's largest
+  object) or a `JSON.parse()`, runs to its end first. The node can therefore
+  briefly hold a few GB more than the limit; a 1 GB array peaks at about
+  2.2 GB of resident memory. celld frees a condemned isolate when its last
+  event or Durable Object leaves it.
 - `ArrayBuffer` and WebAssembly memory is outside the V8 heap, and no limit
   counts it, during the load or after it.
 - A request has a CPU limit only when a Dynamic Worker sets `cpuMs`. See
