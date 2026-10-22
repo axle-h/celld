@@ -1,0 +1,8 @@
+{
+  "xfail": "3.1",
+  "workers": ["front"],
+  "steps": [
+    {"path": "/do-return-rpc-pipeline"},
+    {"path": "/more"}
+  ]
+}

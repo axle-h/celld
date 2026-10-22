@@ -357,8 +357,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 17 | 1.9 egress policy (part A), node-address always-block (part B) | done | `36b5b0f`, `5e33fe2` |
 | 18 | 1.27 container ownership (security) | done | `f55c069` |
 | 19 | 1.10 small built-in fixes | done | `c7295a0` |
-| 20 | 1.11 method lookup on get-only Proxies | done | see log |
-| 21+ | Phase 1 in plan order (1.12-1.28), and the 1.4 props key-order follow-up | queued | |
+| 20 | 1.11 method lookup on get-only Proxies | done | `a927af1` |
+| 21 | 1.12 DO stub calls return an RpcPromise | done | see log |
+| 22+ | Phase 1 in plan order (1.13-1.28), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -1537,6 +1538,19 @@ get-only Proxy over an un-awaited `startGatekeeperSession()`.
 `__makeNode(__valueSession(invoke(...)), [], __ctxNow())`, as entrypoint stubs
 already do.
 
+**As built (done).**
+- DO stub methods return an RpcPromise (patcon `333a2c7`).
+- Dispose follows workerd's `JsRpcPromise::dispose`: one shared prototype
+  method, and only RpcPromises are disposable. Awaiting after dispose still
+  gives the result; a property read or call throws "RPC promise used after
+  being disposed." This reworks IlyaGulya `4594b6c` where it differed.
+- A pipelined walk through a foreign stub now throws instead of returning
+  `undefined`.
+- Cases: `rpc/do-promise-pipeline` (passes).
+  `rpc/do-return-rpc-pipeline` is xfail until 3.1 (IlyaGulya's case needs a
+  returned RpcTarget to cross isolates). `rpc/pipeline-receiver-rules` is
+  xfail until 1.28.
+
 **Prior art.** Adopt royalcala `38082b4` (patcon `333a2c7`). For
 `Symbol.dispose` on RpcPromises, also take IlyaGulya `4594b6c`, which applies
 cleanly.
@@ -1920,6 +1934,13 @@ still differ from workerd:
   `isInstanceOf<JsRpcTarget>`); celld probably allows it.
 - Tests to add: a prototype accessor on a plain class returning `undefined`,
   and `constructor`/`dup` refused on a transient RpcTarget.
+- Value-session pipelining (`__walkLocal`) uses plain `[[Get]]`: a missing
+  name gives `undefined` and a primitive's members can be read, where workerd
+  refuses both (`rpc/pipeline-receiver-rules`, xfail).
+- `connect` on DO stubs is an RPC call; workerd has a native Fetcher
+  `connect`.
+- workerd puts `Symbol.dispose` on every object RPC result; celld does so only
+  when the result carries stubs.
 
 ### Phase 1 gate
 

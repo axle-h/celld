@@ -4843,16 +4843,22 @@ const __stubRevive = (value) => {
   };
   return { value: revive(value), handles, disposers };
 };
-// A marker that crossed an isolate boundary: fail on use, loudly.
-const __foreignStub = () => new Proxy(function () {}, {
-  get: (_b, prop) => {
-    if (prop === "then" || typeof prop !== "string") return undefined;
-    return () => Promise.reject(new Error(
-      "RPC stubs cannot cross isolate boundaries yet."));
-  },
-  apply: () => Promise.reject(new Error(
-    "RPC stubs cannot cross isolate boundaries yet.")),
-});
+// A marker that crossed an isolate boundary: fail on use, loudly. A
+// pipelined path through one fails too (`__walkLocal`).
+const __foreignStubError = () =>
+  new Error("RPC stubs cannot cross isolate boundaries yet.");
+const __foreignStubs = new WeakSet();
+const __foreignStub = () => {
+  const stub = new Proxy(function () {}, {
+    get: (_b, prop) => {
+      if (prop === "then" || typeof prop !== "string") return undefined;
+      return () => Promise.reject(__foreignStubError());
+    },
+    apply: () => Promise.reject(__foreignStubError()),
+  });
+  __foreignStubs.add(stub);
+  return stub;
+};
 // Workerd's entrypoint method-visibility rules (worker-rpc.c++
 // EntrypointJsRpcTarget::isReservedName): reserved names are refused
 // before the instance is read; otherwise a member is found as an
@@ -5005,6 +5011,7 @@ const __walkLocal = (parent, path, args) => {
   for (let i = 0; i < path.length; i++) {
     const meta = __stubMeta.get(parent);
     if (meta) return __stubOp(meta, path.slice(i), args);
+    if (__foreignStubs.has(parent)) throw __foreignStubError();
     const prop = path[i];
     const member = parent == null ? undefined : parent[prop];
     if (i < path.length - 1) {
@@ -5030,12 +5037,68 @@ const __walkLocal = (parent, path, args) => {
 // A session is one place pipeline ops resolve: the local value a
 // call returned, a same-isolate stub's target, or a named
 // entrypoint (whose paths resolve receiver-side in one op).
-const __valueSession = (promise) => ({
-  root: () => promise,
-  get: (path) => promise.then((v) => __walkLocal(v, path, null)),
-  call: (path, args) =>
-    promise.then((v) => __walkLocal(v, path, args)),
-});
+//
+// A call's session is what its RpcPromise disposes, as workerd's
+// JsRpcPromise::dispose() does: the result is disposed through its own
+// Symbol.dispose, now if it has arrived or else when it arrives, and later
+// pipelining is refused. Awaiting the RpcPromise itself still yields the
+// result.
+const __rpcPromiseDisposedError = () =>
+  new Error("RPC promise used after being disposed.");
+const __disposeRpcResult = (value) => {
+  if (value === null ||
+      (typeof value !== "object" && typeof value !== "function")) return;
+  const disposer = value[Symbol.dispose];
+  if (typeof disposer === "function") disposer.call(value);
+};
+const __valueSession = (call) => {
+  let settled = false;
+  let result;
+  // Awaiters chain on `promise`, after the result is recorded, so a
+  // dispose in their continuation finds it. (Observing `call` with a
+  // second handler would save this tick but mark every call's rejection
+  // as handled.)
+  const promise = call.then((value) => {
+    if (session.disposed) {
+      __disposeRpcResult(value);
+    } else {
+      settled = true;
+      result = value;
+    }
+    return value;
+  });
+  const session = {
+    disposed: false,
+    root: () => promise,
+    get: (path) => session.disposed
+      ? Promise.reject(__rpcPromiseDisposedError())
+      : promise.then((v) => __walkLocal(v, path, null)),
+    call: (path, args) => session.disposed
+      ? Promise.reject(__rpcPromiseDisposedError())
+      : promise.then((v) => __walkLocal(v, path, args)),
+    dispose: () => {
+      if (session.disposed) return;
+      session.disposed = true;
+      if (!settled) return;
+      const value = result;
+      result = undefined;
+      __disposeRpcResult(value);
+    },
+  };
+  return session;
+};
+// RpcPromise -> its call's session, for the disposer every RpcPromise
+// shares from RpcPromise.prototype, as in workerd.
+const __rpcPromiseSessions = new WeakMap();
+const __rpcPromiseSession = (node) => {
+  const session = __rpcPromiseSessions.get(node);
+  if (session === undefined)
+    throw new TypeError(
+      "Illegal invocation: function called with incorrect `this` " +
+      "reference. See https://developers.cloudflare.com/workers/" +
+      "observability/errors/#illegal-invocation-errors for details.");
+  return session;
+};
 const __stubSession = (meta) => ({
   get: (path) => __stubOp(meta, path, null),
   call: (path, args) => __stubOp(meta, path, args),
@@ -5070,20 +5133,32 @@ const __entrypointSession = (name, local, script, propsSc) => ({
 // starts a fresh session per await); a foreign context awaiting a
 // property or calling through the node gets Workerd's
 // cross-context error. Depth is capped like Workerd's
-// MAX_PROPERTY_DEPTH.
+// MAX_PROPERTY_DEPTH. An RpcPromise (an empty path, always over a
+// call's value session) is disposable through RpcPromise.prototype;
+// an RpcProperty is not. Like workerd's wildcard property, every
+// string name is `in` a node.
 const __makeNode = (session, path, ctx) => {
   let promise;
-  const value = () => promise ??= (() => {
-    if (path.length === 0) return session.root();
-    if (ctx !== null && ctx !== __ctxNow())
-      return Promise.reject(__ctxError("Pipeline"));
-    return session.get(path);
-  })();
+  const value = () => {
+    // A property read again after its RpcPromise was disposed is
+    // refused, as each read is a new pipelined op in workerd.
+    if (path.length !== 0 && session.disposed)
+      return Promise.reject(__rpcPromiseDisposedError());
+    return promise ??= (() => {
+      if (path.length === 0) return session.root();
+      if (ctx !== null && ctx !== __ctxNow())
+        return Promise.reject(__ctxError("Pipeline"));
+      return session.get(path);
+    })();
+  };
   const brand =
     path.length === 0 ? __cf.RpcPromise : __cf.RpcProperty;
-  return new Proxy(function () {}, {
+  const node = new Proxy(function () {}, {
     getPrototypeOf: () => brand.prototype,
+    has: (_b, p) =>
+      typeof p === "string" || (p === Symbol.dispose && path.length === 0),
     get: (_b, p) => {
+      if (p === Symbol.dispose) return brand.prototype[Symbol.dispose];
       if (p === "then")
         return (onOk, onErr) => value().then(onOk, onErr);
       if (p === "catch") return (onErr) => value().catch(onErr);
@@ -5096,18 +5171,21 @@ const __makeNode = (session, path, ctx) => {
       return __makeNode(session, [...path, p], ctx);
     },
     apply: (_b, _this, args) => {
-      let call;
+      let result;
       if (ctx !== null && ctx !== __ctxNow()) {
-        call = Promise.reject(__ctxError("JsRpcPromise"));
-        call.catch(() => {});
+        result = __valueSession(
+          Promise.reject(__ctxError("JsRpcPromise")));
+        // A call refused before it started is never reported unhandled.
+        result.root().catch(() => {});
       } else {
         // Eager, so concurrent calls keep e-order.
-        call = session.call(path, args);
+        result = __valueSession(session.call(path, args));
       }
-      return __makeNode(
-        __valueSession(call), [], ctx ?? __ctxNow());
+      return __makeNode(result, [], ctx ?? __ctxNow());
     },
   });
+  if (path.length === 0) __rpcPromiseSessions.set(node, session);
+  return node;
 };
 const __makeStub = (entry, callable) => {
   const meta =
@@ -5587,12 +5665,14 @@ class DurableObjectNamespace {
       // Every cell RPC goes out through the host, whichever node owns the
       // target. Same-process dispatch re-enters this isolate, where the
       // abort and exit markers revive; bytes that land elsewhere revive as
-      // loud foreign stubs.
-      return async (...args) => invoke(
+      // loud foreign stubs. The call returns an RpcPromise, as in workerd,
+      // so a caller can pipeline through its result before awaiting it
+      // (`stub.open().method()`, or a Proxy that forwards to it).
+      return (...args) => __makeNode(__valueSession(invoke(
         async () => __rpcDes(await __rpc_call(
           scope, dispatchName ?? null, prop, __rpcOut(args, true),
         )),
-      );
+      )), [], __ctxNow());
     }});
     __doStubMeta.set(stub, id);
     return stub;
@@ -9923,7 +10003,9 @@ const __cf = __celld.__cf = {
         __newEntry(target), typeof target === "function");
     }
   },
-  RpcPromise: class RpcPromise extends Promise {},
+  RpcPromise: class RpcPromise extends Promise {
+    [Symbol.dispose]() { __rpcPromiseSession(this).dispose(); }
+  },
   RpcProperty: class RpcProperty {},
   ServiceStub: class ServiceStub {},
   // `import { waitUntil } from "cloudflare:workers"`: register into

@@ -1,0 +1,10 @@
+// Pipelined calls on an RpcTarget a Durable Object returns.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": {
+    "bindings": [{ "name": "HOST", "class_name": "Host" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Host"] }]
+}

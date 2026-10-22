@@ -1,0 +1,197 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "rpcPromise": true,
+        "rpcProperty": true,
+        "typeofCall": "function",
+        "field": {
+          "type": "string",
+          "value": "value"
+        },
+        "nested": {
+          "type": "string",
+          "value": "deep"
+        },
+        "whole": {
+          "type": "string",
+          "value": "deep"
+        },
+        "again": {
+          "type": "string",
+          "value": "deep"
+        },
+        "awaitedTwice": {
+          "type": "string",
+          "value": "value"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "promiseThen": "value",
+        "propertyThen": "deep",
+        "caught": "caught RangeError",
+        "propertyCaught": "caught RangeError",
+        "finished": "value",
+        "order": [
+          "finally"
+        ],
+        "thenReturns": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "awaited": {
+          "error": "RangeError: deliberate failure"
+        },
+        "field": {
+          "error": "RangeError: deliberate failure"
+        },
+        "nested": {
+          "error": "RangeError: deliberate failure"
+        },
+        "later": {
+          "error": "TypeError: later failure"
+        },
+        "call": {
+          "error": "RangeError: deliberate failure"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "local": {
+          "type": "string",
+          "value": "deep"
+        },
+        "field": {
+          "type": "string",
+          "value": "value"
+        },
+        "nested": {
+          "error": "TypeError: The RPC receiver does not implement the method \"inner\"."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "name": "members",
+        "id": true,
+        "then": "undefined",
+        "fetch": "host fetch /path",
+        "connect": "function",
+        "method": "function"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "echo": {
+          "result": "rpc-promise:hello",
+          "disposable": true
+        },
+        "doDisposable": "function",
+        "propertyDisposable": "undefined",
+        "inside": {
+          "type": "string",
+          "value": "value"
+        },
+        "awaitAfter": {
+          "type": "string",
+          "value": "value"
+        },
+        "fieldAfter": {
+          "error": "Error: RPC promise used after being disposed."
+        },
+        "nestedAfter": {
+          "error": "Error: RPC promise used after being disposed."
+        },
+        "callAfter": {
+          "error": "Error: RPC promise used after being disposed."
+        },
+        "earlyAwait": {
+          "type": "string",
+          "value": "value"
+        },
+        "earlyField": {
+          "error": "Error: RPC promise used after being disposed."
+        },
+        "afterUsing": {
+          "error": "Error: RPC stub used after being disposed."
+        },
+        "arrivalEcho": {
+          "error": "Error: RPC stub used after being disposed."
+        },
+        "wrappedEcho": {
+          "error": "Error: RPC stub used after being disposed."
+        },
+        "wrappedLabel": "wrapped",
+        "log": [
+          "inside: tool:a",
+          "tool disposed",
+          "tool disposed",
+          "tool disposed"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "beforeDispose": {
+          "error": "RangeError: deliberate failure"
+        },
+        "awaitAfter": {
+          "error": "RangeError: deliberate failure"
+        },
+        "fieldAfter": {
+          "error": "Error: RPC promise used after being disposed."
+        },
+        "earlyAwait": {
+          "error": "RangeError: deliberate failure"
+        },
+        "earlyField": {
+          "error": "Error: RPC promise used after being disposed."
+        },
+        "propertyBefore": {
+          "type": "string",
+          "value": "value"
+        },
+        "propertyAfter": {
+          "error": "Error: RPC promise used after being disposed."
+        },
+        "propertyThenAfter": {
+          "error": "Error: RPC promise used after being disposed."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "protoDispose": "function",
+        "shared": true,
+        "fromProto": true,
+        "ownDispose": false,
+        "hasDispose": true,
+        "hasThen": true,
+        "hasCatch": true,
+        "hasField": true,
+        "hasIterator": false,
+        "propertyHasDispose": false,
+        "propertyHasThen": true,
+        "propertyHasField": true,
+        "propertyProtoDispose": "undefined",
+        "wrongReceiver": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+        "propertyReceiver": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+        "noReceiver": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+      }
+    }
+  ]
+}

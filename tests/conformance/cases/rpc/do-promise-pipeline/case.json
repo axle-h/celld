@@ -1,0 +1,13 @@
+{
+  "workers": ["front"],
+  "steps": [
+    {"path": "/pipeline"},
+    {"path": "/thenables"},
+    {"path": "/rejection"},
+    {"path": "/gatekeeper"},
+    {"path": "/members"},
+    {"path": "/dispose"},
+    {"path": "/dispose-settled"},
+    {"path": "/introspection"}
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "result": "returned:hello"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "property": {
+          "type": "string",
+          "value": "tool"
+        },
+        "awaited": {
+          "type": "string",
+          "value": "returned:awaited"
+        },
+        "gatekeeper": {
+          "type": "string",
+          "value": "returned:gatekeeper"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "missing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "missingDeep": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "primitive": {
+          "error": "TypeError: The RPC receiver does not implement the method \"toFixed\"."
+        }
+      }
+    }
+  ]
+}
