@@ -133,10 +133,13 @@ whose support hasn't landed yet: `nodes` greater than 1 or a step's `node`
 ### Steps
 
 - **`path`**: an HTTP request to the primary. `method`, `headers` and `body`
-  are optional. `"chunked": true` sends the body with no length, so celld
-  streams it to the Worker instead of holding it as bytes. The client does
-  not follow redirects. The transcript records the status and the body,
-  parsed as JSON when the response says it is JSON.
+  are optional. A step whose `headers` name a `sec-fetch-` header, such as
+  `"sec-fetch-mode": "navigate"`, goes out through `node:http`, because
+  `fetch()` sends its own `sec-fetch-mode`; it takes only a string body.
+  `"chunked": true` sends the body with no length, so celld streams it to
+  the Worker instead of holding it as bytes. The client does not follow
+  redirects. The transcript records the status and the body, parsed as JSON
+  when the response says it is JSON.
   `responseHeaders` (lower-case names, such as `["location"]`) also records
   those response headers, `null` when absent.
 - **`ws`**: opens a WebSocket and sends the `send` frames.

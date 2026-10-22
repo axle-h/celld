@@ -1,0 +1,8 @@
+{
+  "workers": ["front", "old", "mixed"],
+  "steps": [
+    {"path": "/"},
+    {"path": "/old"},
+    {"path": "/mixed"}
+  ]
+}

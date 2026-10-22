@@ -324,39 +324,279 @@ The class exists so that a bundle can load, but its constructor throws.
 
 ## Compatibility flags
 
-celld honors these compatibility flags:
+celld checks a Worker's `compatibility_date` and `compatibility_flags` when
+`celld deploy` or `celld dev` builds it, and a Dynamic Worker's
+`compatibilityDate` and `compatibilityFlags` when the Worker Loader loads it.
+It refuses what workerd 1.20261001.1 refuses, with workerd's message:
 
-- `delete_all_deletes_alarm`
-- `js_rpc`
-- `fetcher_no_get_put_delete`
-- `sqlite_vec`
-- `websocket_standard_binary_type`
-- The static-assets navigation flags
+- an unknown flag (`No such compatibility flag`), a flag named twice, or a
+  flag with its disable flag (`Compatibility flags are mutually
+  contradictory`)
+- an invalid date, which must have the form `YYYY-MM-DD`, or a date in the
+  future
+- in a Dynamic Worker, any experimental flag, with workerd's message that
+  the flag needs `--experimental`
+
+It also refuses:
+
+- a Worker without a `compatibility_date`, as Wrangler does
+- a date after 2026-09-04, the newest date celld models, with workerd's
+  message for a date newer than the binary supports
+- an experimental flag in a Worker's configuration, which Cloudflare refuses
+  too, except `js_rpc` and `service_binding_extra_handlers`
+- a flag from the [refused flags](#refused-flags) list, which would select a
+  behaviour that celld lacks
+
+`celld deploy` reports every error. The Worker Loader rejects with the first,
+as workerd does.
+
+`Cloudflare.compatibilityFlags` is a sealed object without a prototype, as in
+workerd. It holds each honoured flag with the value workerd computes, each
+flag that celld always behaves as on, as `true`, where workerd computes it on
+for the Worker's date and flags, and `sqlite_vec`. Other flags are absent.
+
+### Honoured flags
+
+celld follows these flags and the dates that turn them on:
+
+- `nodejs_compat` and `no_nodejs_compat` (on from 2026-08-04), and
+  `nodejs_compat_v2` and `no_nodejs_compat_v2` (on from 2026-08-04, or from
+  2024-09-23 with `nodejs_compat`). They turn on
+  `nodejs_compat_populate_process_env` and decide whether `process.env` is
+  filled (see [Node.js compatibility](#nodejs-compatibility)). celld offers
+  its Node.js modules and the `process` and `Buffer` globals with or without
+  them.
+- `nodejs_compat_populate_process_env` and
+  `nodejs_compat_do_not_populate_process_env`, which `nodejs_compat` turns on
+  from 2025-04-01. With Node.js compatibility, `process.env` holds the env's
+  strings and JSON values. Without it, `process.env` stays empty, because
+  workerd has no `process` to fill.
+- `nodejs_als` and `no_nodejs_als`. celld offers `node:async_hooks` with
+  `AsyncLocalStorage` with or without the flag.
+- `rpc_params_dup_stubs` and `rpc_params_transfer_stubs` (on from
+  2026-01-20). An RPC call duplicates the stubs in its params instead of
+  transferring them, and a param with its own `dup()` crosses as what `dup()`
+  returns. Return values transfer their stubs either way. This applies within
+  one isolate (see [RPC](#rpc)).
 - `allow_irrevocable_stub_storage`, which adds only a `ctx.restore()` that
   rejects (see [Context](#context)). Stubs still cannot be stored.
-- `nodejs_als`. celld offers `node:async_hooks` with `AsyncLocalStorage`
-  with or without the flag.
-- `rpc_params_dup_stubs`, on from compatibility date 2026-01-20 and turned
-  off by `rpc_params_transfer_stubs`. An RPC call duplicates the stubs in its
-  params instead of transferring them, and a param with its own `dup()`
-  crosses as what `dup()` returns. Return values transfer their stubs either
-  way. This applies within one isolate (see [RPC](#rpc)).
-- `nodejs_compat_populate_process_env`, which `nodejs_compat` turns on from
-  compatibility date 2025-04-01 and
-  `nodejs_compat_do_not_populate_process_env` turns off. With Node.js
-  compatibility (`nodejs_compat` or `nodejs_compat_v2`, on by default from
-  2026-08-04), `process.env` holds the env's strings and JSON values (see
-  [Node.js compatibility](#nodejs-compatibility)). Without it, `process.env`
-  stays empty, because workerd has no `process` to fill.
+- `disallow_importable_env` and `allow_importable_env`. With the flag, `env`
+  and `exports` from `cloudflare:workers` read every name as `undefined`.
+- `service_binding_extra_handlers`, an experimental flag that celld honours
+  only in part. With it, a service binding has `scheduled()` and `queue()`. `scheduled()` runs the target's
+  `scheduled` handler for a binding to the Worker's own default export and
+  throws for any other binding. `queue()` always throws, because celld does
+  not implement it. Without the flag, both names are RPC methods.
+- `fetcher_no_get_put_delete` and `fetcher_has_get_put_delete` (on from
+  2024-03-26). Before, a service binding and a Durable Object stub have the
+  `get()`, `put()`, and `delete()` helpers.
+- `js_rpc`, an experimental flag: RPC to a Durable Object class that does not
+  extend `DurableObject`.
+- `queues_json_messages` and `no_queues_json_messages` (on from 2024-03-18):
+  a queue message's default content type is `json`, otherwise `v8`.
+- `delete_all_deletes_alarm` and `delete_all_preserves_alarm` (on from
+  2026-02-24): `deleteAll()` also deletes the Durable Object's alarm.
+- `websocket_standard_binary_type` and `no_websocket_standard_binary_type`
+  (on from 2026-03-17): a WebSocket's `binaryType` starts as `"blob"`, and a
+  binary message arrives as a `Blob`. Otherwise it starts as
+  `"arraybuffer"`.
+- `assets_navigation_prefers_asset_serving` and
+  `assets_navigation_has_no_effect` (on from 2025-04-01); see
+  [Static assets](services/static-assets.md).
+- The Python Workers flags `python_workers`, `python_workers_20250116`,
+  `no_python_workers_20250116`, `python_no_global_handlers`,
+  `disable_python_no_global_handlers`, `python_workers_force_new_vendor_path`,
+  `enable_python_external_sdk`, `disable_python_external_sdk`,
+  `python_request_headers_preserve_commas`,
+  `disable_python_request_headers_preserve_commas`,
+  `python_workflows_implicit_dependencies`,
+  `no_python_workflows_implicit_dependencies`, `python_process_pth_files`,
+  `disable_python_process_pth_files`, `python_workers_20260610`,
+  `no_python_workers_20260610`, `python_workers_314`, and
+  `no_python_workers_314`. `celld deploy` refuses a Python Worker that they
+  put on another runtime than celld's (see
+  [Python Workers](services/workers.md#python-workers)). They have no effect
+  on a JavaScript Worker.
+- `sqlite_vec`, celld's own flag, which Cloudflare does not have: it exposes
+  the pre-v1 sqlite-vec extension to SQLite-backed Durable Objects.
 
-`global_fetch_strictly_public` has no effect by design. On Cloudflare it
-decides whether a `fetch()` to the Worker's own zone goes to the zone's origin
-server. celld has no zone origin, and its
-[egress policy](security.md#limit-worker-egress) applies whatever the flag
-says.
+### Flags without effect
 
-celld accepts every other flag without effect.
-`Cloudflare.compatibilityFlags` reports only the honored flags.
+celld accepts these flags, and they change nothing it does. celld always
+behaves as these flags select:
+
+- `formdata_parser_supports_files`: formData() returns a file field as a File.
+- `fetch_refuses_unknown_protocols`: fetch() rejects a URL whose scheme is not http or https.
+- `durable_object_fetch_requires_full_url`: a Durable Object stub's fetch() needs an absolute URL.
+- `streams_byob_reader_detaches_buffer`: a BYOB read detaches the buffer it is given.
+- `streams_enable_constructors`: the ReadableStream and WritableStream constructors take JavaScript sources and sinks.
+- `workers_api_getters_setters_on_instance`: Request, Response and Headers carry their attributes as own instance properties, not prototype accessors.
+- `url_standard`: URL follows the WHATWG URL Standard.
+- `global_navigator`: navigator is defined.
+- `capture_async_api_throws`: a promise-returning API rejects instead of throwing.
+- `r2_public_beta_bindings`: R2 bindings have the public R2 API.
+- `dont_substitute_null_on_type_error`: an API never substitutes null for an argument of the wrong type.
+- `transformstream_enable_standard_constructor`: the TransformStream constructor follows the Streams Standard.
+- `r2_list_honor_include`: R2 list() returns only the metadata `include` names.
+- `no_web_socket_compression`: celld never negotiates permessage-deflate on a WebSocket.
+- `response_redirect_url_standard`: Response.redirect() serializes its URL with the WHATWG URL Standard.
+- `http_headers_getsetcookie`: Headers has getSetCookie() and iterates each Set-Cookie separately.
+- `no_cf_botmanagement_default`: request.cf never has default botManagement data.
+- `urlsearchparams_delete_has_value_arg`: URLSearchParams delete() and has() take a value argument.
+- `strict_compression_checks`: DecompressionStream errors on trailing or truncated data.
+- `strict_crypto_checks`: Web Crypto validates RSA sizes and exponents and public key usages.
+- `crypto_preserve_public_exponent`: an RSA key's publicExponent is a Uint8Array.
+- `no_global_importscripts`: importScripts is undefined.
+- `unwrap_custom_thenables`: an API that takes a promise also accepts a thenable.
+- `rpc`: service bindings and Durable Object stubs support RPC.
+- `internal_stream_byob_return_view`: a BYOB read that ends a platform stream returns an empty view.
+- `fetch_standard_url`: fetch() parses its URL with the WHATWG URL Standard.
+- `legacy_module_registry`: celld does not implement workerd's new module registry.
+- `cache_option_disabled`: the Request `cache` option throws.
+- `allow_custom_ports`: fetch() uses the URL's port.
+- `upper_case_all_http_methods`: a Request upper-cases a known method name.
+- `cache_no_cache_disabled`: the Request `cache` option throws.
+- `urlpattern_standard`: URLPattern follows the WHATWG URLPattern Standard.
+- `enable_weak_ref`: WeakRef and FinalizationRegistry are defined.
+- `no_request_signal_passthrough`: an incoming request's signal never reaches a subrequest.
+- `enable_navigator_language`: navigator.language is defined.
+- `allow_eval_during_startup`: eval() and new Function() work while the Worker starts.
+- `enable_request_signal`: an incoming request's signal aborts when the client disconnects.
+- `set_event_target_this`: an event listener runs with the EventTarget as `this`.
+- `non_pedantic_wpt`: celld does not implement workerd's pedantic WPT mode.
+- `expose_global_message_channel`: MessageChannel and MessagePort are globals.
+- `strip_authorization_on_cross_origin_redirect`: fetch() drops Authorization when it follows a redirect to another origin.
+- `legacy_error_serialization`: structuredClone() and RPC carry an Error's name, message, stack and cause, but not its other own properties.
+- `enable_ctx_exports`: ctx.exports is defined.
+- `mutable_api_prototypes`: API prototypes are mutable.
+- `strip_bom_in_read_all_text`: Response.text() and Request.text() drop a leading byte order mark.
+- `no_nodejs_global_timers`: the global setTimeout() and setInterval() return numbers, not Node.js Timeout objects.
+- `text_decoder_replace_surrogates`: the UTF-16LE TextDecoder replaces a lone surrogate with U+FFFD.
+- `containers_pid_namespace`: a container has its own PID namespace.
+- `text_decoder_cjk_decoder`: TextDecoder decodes CJK encodings per the Encoding Standard.
+- `websocket_close_reason_byte_limit`: WebSocket close() throws SyntaxError for a reason over 123 bytes.
+- `writable_stream_spec_compliant_writer`: a WritableStream writer follows the Streams Standard on release.
+- `no_encoder_stream_spec_compliant_backpressure`: TextEncoderStream and TextDecoderStream accept a write before their readable side is read.
+- `workflows_preserve_non_retryable_error_message`: a NonRetryableError keeps its message and name.
+- `web_socket_auto_reply_to_close`: an accepted WebSocket replies to a Close and is CLOSED when its close event fires.
+- `resizable_array_buffer_in_blob`: Blob accepts a resizable ArrayBuffer.
+- `diagnostics_channel_has_subscribers_getter`: diagnostics_channel's hasSubscribers is a getter.
+- `workflows_disable_fast_engine_creation`: Workflow create() without an id names the instance with a random UUID.
+
+These flags do not apply to celld:
+
+- `minimal_subrequests`, `no_minimal_subrequests`: it changes only how Cloudflare's CDN treats subrequests.
+- `no_cots_on_external_fetch`, `cots_on_external_fetch`: it selects only Cloudflare's origin trust store.
+- `durable_object_alarms`: it is obsolete; alarms are always available.
+- `export_commonjs_default`, `export_commonjs_namespace`: celld has no CommonJS module type; esbuild resolves require() when it bundles.
+- `tcp_sockets_support`: it is obsolete; TCP sockets are always available.
+- `dynamic_dispatch_tunnel_exceptions`, `dynamic_dispatch_treat_exceptions_as_500`: it applies to dispatch namespace bindings, which celld does not support.
+- `vectorize_query_metadata_optional`, `vectorize_query_original`: it applies to Vectorize bindings, which celld does not support.
+- `global_fetch_strictly_public`, `global_fetch_private_origin`: it chooses how Cloudflare routes a fetch() to the Worker's own zone, and celld has no zone; the egress policy applies whatever the flag says.
+- `nodejs_zlib`, `no_nodejs_zlib`, `enable_nodejs_process_v2`, `disable_nodejs_process_v2`, `enable_nodejs_http_modules`, `disable_nodejs_http_modules`, `enable_nodejs_http_server_modules`, `disable_nodejs_http_server_modules`, `enable_nodejs_fs_module`, `disable_nodejs_fs_module`, `enable_nodejs_os_module`, `disable_nodejs_os_module`, `remove_nodejs_compat_eol`, `add_nodejs_compat_eol`, `enable_nodejs_http2_module`, `disable_nodejs_http2_module`, `remove_nodejs_compat_eol_v22`, `add_nodejs_compat_eol_v22`, `remove_nodejs_compat_eol_v23`, `add_nodejs_compat_eol_v23`, `remove_nodejs_compat_eol_v24`, `add_nodejs_compat_eol_v24`, `enable_nodejs_console_module`, `disable_nodejs_console_module`, `enable_nodejs_vm_module`, `disable_nodejs_vm_module`, `enable_nodejs_perf_hooks_module`, `disable_nodejs_perf_hooks_module`, `enable_global_performance_classes`, `disable_global_performance_classes`, `enable_nodejs_domain_module`, `disable_nodejs_domain_module`, `enable_nodejs_v8_module`, `disable_nodejs_v8_module`, `enable_nodejs_tty_module`, `disable_nodejs_tty_module`, `enable_nodejs_punycode_module`, `disable_nodejs_punycode_module`, `enable_nodejs_cluster_module`, `disable_nodejs_cluster_module`, `enable_nodejs_child_process_module`, `disable_nodejs_child_process_module`, `enable_nodejs_worker_threads_module`, `disable_nodejs_worker_threads_module`, `enable_nodejs_stream_wrap_module`, `disable_nodejs_stream_wrap_module`, `enable_nodejs_wasi_module`, `disable_nodejs_wasi_module`, `enable_nodejs_dgram_module`, `disable_nodejs_dgram_module`, `enable_nodejs_inspector_module`, `disable_nodejs_inspector_module`, `enable_nodejs_trace_events_module`, `disable_nodejs_trace_events_module`, `enable_nodejs_readline_module`, `disable_nodejs_readline_module`, `enable_nodejs_repl_module`, `disable_nodejs_repl_module`, `enable_nodejs_sqlite_module`, `disable_nodejs_sqlite_module`, `throw_on_not_implemented_tls_options`, `no_throw_on_not_implemented_tls_options`: celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility).
+- `python_external_packages`: it is obsolete.
+- `disable_top_level_await_in_require`, `enable_top_level_await_in_require`, `require_returns_default_export`, `require_returns_namespace`: celld has no run-time require() of a module; esbuild resolves it when it bundles.
+- `request_cf_overrides_cache_rules`, `no_request_cf_overrides_cache_rules`: it changes only Cloudflare's cache rules, and celld has no edge cache.
+- `unique_ctx_per_invocation`: it is obsolete; each invocation gets its own ctx.
+- `cache_api_request_cf_overrides_cache_rules`, `no_cache_api_request_cf_overrides_cache_rules`: celld's Cache API stores nothing.
+- `cache_api_compat_flags`, `no_cache_api_compat_flags`: it passes flags only to Cloudflare's cache, and celld's Cache API stores nothing.
+- `python_workflows`, `disable_python_workflows`: celld does not run Workflows in Python Workers.
+- `set_forwardable_email_full_headers`, `set_forwardable_email_single_headers`: it applies to Email Workers, which celld does not run.
+- `enable_validate_workflow_entrypoint`, `disable_validate_workflow_entrypoint`: it adds checks to Cloudflare's upload; `celld deploy` applies its own Workflows checks whatever the flag says.
+- `python_dedicated_snapshot`, `disable_python_dedicated_snapshot`, `python_check_rng_state`, `disable_python_check_rng_state`: celld takes no Python memory snapshots.
+- `enable_email_sending_queuing`, `disable_email_sending_queuing`: it applies to send_email bindings, which celld does not support.
+- `env_module_nullable_support`, `no_env_module_nullable_support`: it changes only withEnv() and withExports(), which celld does not implement.
+- `cache_reload_disabled`, `no_precise_timers`, `streams_auto_allocate_chunk_size_default`, `no_spec_compliant_property_attributes`, `no_auto_inject_python_workers`: each turns off an experimental
+  flag, which is off unless its enable flag is set.
+
+### Refused flags
+
+`celld deploy` refuses these flags, and the Worker Loader refuses them in a
+Dynamic Worker's code. celld always behaves as the flag named after each:
+
+- `formdata_parser_converts_files_to_strings` (as formdata_parser_supports_files), `fetch_treats_unknown_protocols_as_http` (as fetch_refuses_unknown_protocols), `durable_object_fetch_allows_relative_url` (as durable_object_fetch_requires_full_url), `streams_byob_reader_does_not_detach_buffer` (as streams_byob_reader_detaches_buffer), `streams_disable_constructors` (as streams_enable_constructors), `url_original` (as url_standard), `no_global_navigator` (as global_navigator), `do_not_capture_async_api_throws` (as capture_async_api_throws), `r2_internal_beta_bindings` (as r2_public_beta_bindings), `substitute_null_on_type_error` (as dont_substitute_null_on_type_error), `transformstream_disable_standard_constructor` (as transformstream_enable_standard_constructor), `response_redirect_url_original` (as response_redirect_url_standard), `no_http_headers_getsetcookie` (as http_headers_getsetcookie), `cf_botmanagement_default` (as no_cf_botmanagement_default), `no_urlsearchparams_delete_has_value_arg` (as urlsearchparams_delete_has_value_arg), `no_strict_compression_checks` (as strict_compression_checks), `no_strict_crypto_checks` (as strict_crypto_checks), `no_crypto_preserve_public_exponent` (as crypto_preserve_public_exponent), `global_importscripts` (as no_global_importscripts), `no_unwrap_custom_thenables` (as unwrap_custom_thenables), `no_rpc` (as rpc), `internal_stream_byob_return_undefined` (as internal_stream_byob_return_view), `fetch_legacy_url` (as fetch_standard_url), `ignore_custom_ports` (as allow_custom_ports), `no_upper_case_all_http_methods` (as upper_case_all_http_methods), `urlpattern_original` (as urlpattern_standard), `disable_weak_ref` (as enable_weak_ref), `disable_navigator_language` (as enable_navigator_language), `disallow_eval_during_startup` (as allow_eval_during_startup), `disable_request_signal` (as enable_request_signal), `no_set_event_target_this` (as set_event_target_this), `no_expose_global_message_channel` (as expose_global_message_channel), `retain_authorization_on_cross_origin_redirect` (as strip_authorization_on_cross_origin_redirect), `disable_ctx_exports` (as enable_ctx_exports), `do_not_strip_bom_in_read_all_text` (as strip_bom_in_read_all_text), `disable_text_decoder_replace_surrogates` (as text_decoder_replace_surrogates), `no_containers_pid_namespace` (as containers_pid_namespace), `disable_text_decoder_cjk_decoder` (as text_decoder_cjk_decoder), `no_websocket_close_reason_byte_limit` (as websocket_close_reason_byte_limit), `no_writable_stream_spec_compliant_writer` (as writable_stream_spec_compliant_writer), `workflows_replace_non_retryable_error_message` (as workflows_preserve_non_retryable_error_message), `web_socket_manual_reply_to_close` (as web_socket_auto_reply_to_close), `no_diagnostics_channel_has_subscribers_getter` (as diagnostics_channel_has_subscribers_getter).
+
+celld lacks the behaviour these flags select:
+
+- `html_rewriter_treats_esi_include_as_void_tag`: HTMLRewriter parses <esi:include> as an element with an end tag.
+- `workers_api_getters_setters_on_prototype`: Request, Response and Headers carry their attributes as own instance properties, not prototype accessors.
+- `web_socket_compression`: celld never negotiates permessage-deflate on a WebSocket.
+- `brotli_content_encoding`, `no_brotli_content_encoding`: celld neither encodes nor decodes a body by its Content-Encoding, gzip or br.
+- `blob_standard_mime_type`, `blob_legacy_mime_type`: Blob.type lower-cases a body's Content-Type but normalizes it as neither flag state does.
+- `new_module_registry`: celld does not implement workerd's new module registry.
+- `cache_option_enabled`, `cache_no_cache_enabled`: the Request `cache` option throws.
+- `internal_writable_stream_abort_clears_queue`, `internal_writable_stream_abort_does_not_clear_queue`: celld does not model when abort() clears a platform writable stream's queue.
+- `handle_cross_request_promise_resolution`, `no_handle_cross_request_promise_resolution`: celld does not model which request a promise continuation runs in.
+- `set_tostring_tag`, `do_not_set_tostring_tag`: only some of celld's API classes have their name as Symbol.toStringTag.
+- `fixup-transform-stream-backpressure`, `original-transform-stream-backpressure`: celld's TransformStream lets a write settle before its readable side is read, as neither flag state does.
+- `nonclass_entrypoint_reuses_ctx_across_invocations`: each event gets its own ctx.
+- `queue_consumer_no_wait_for_wait_until`, `queue_consumer_wait_for_wait_until`: celld does not model when a queue consumer reports its outcome relative to waitUntil().
+- `request_signal_passthrough`: an incoming request's signal never reaches a subrequest.
+- `bind_asynclocalstorage_snapshot_to_request`, `do_not_bind_asynclocalstorage_snapshot_to-request`: celld does not tie an AsyncLocalStorage snapshot to the request that took it.
+- `throw_on_unrecognized_import_assertion`, `ignore_unrecognized_import_assertion`: celld does not model unknown import attributes.
+- `pedantic_wpt`: celld does not implement workerd's pedantic WPT mode.
+- `enhanced_error_serialization`: structuredClone() and RPC carry an Error's name, message, stack and cause, but not its other own properties.
+- `enable_fast_jsg_struct`, `disable_fast_jsg_struct`: celld does not model whether an API dictionary carries absent optional fields as undefined.
+- `enable_streams_nodejs_v24_compat`, `disable_streams_nodejs_v24_compat`: celld does not model the Node.js 24 stream changes.
+- `immutable_api_prototypes`: API prototypes are mutable.
+- `fetch_iterable_type_support`, `no_fetch_iterable_type_support`, `fetch_iterable_type_support_override_adjustment`, `no_fetch_iterable_type_support_override_adjustment`: a Request or Response body stringifies an Array but iterates an async iterable, as neither flag state does.
+- `enable_nodejs_global_timers`: the global setTimeout() and setInterval() return numbers, not Node.js Timeout objects.
+- `queue_expose_error_codes`, `no_queue_expose_error_codes`: celld does not model the error codes queue operations carry.
+- `unhandled_rejection_after_microtask_checkpoint`, `no_unhandled_rejection_after_microtask_checkpoint`: celld does not model when an unhandled rejection is reported.
+- `encoder_stream_spec_compliant_backpressure`: TextEncoderStream and TextDecoderStream accept a write before their readable side is read.
+- `no_resizable_array_buffer_in_blob`: Blob accepts a resizable ArrayBuffer.
+- `auto_grpc_convert`: celld does not convert a gRPC-web subrequest to gRPC.
+- `workflows_enable_fast_engine_creation`: Workflow create() without an id names the instance with a random UUID.
+- `spec_compliant_dispatch_exceptions`, `no_spec_compliant_dispatch_exceptions`: celld does not model how dispatchEvent() reports a listener's exception.
+- `durable_object_io_tasks_prevent_eviction`, `durable_object_io_tasks_do_not_prevent_eviction`: celld does not model eviction protection for a Durable Object's waitUntil() tasks.
+- `webcrypto_modern_algorithms`: Web Crypto has no ML-KEM or ML-DSA.
+
+### Differences selected by compatibility date
+
+celld implements one behaviour for each of these flags, so a Worker can get
+a behaviour on Cloudflare that celld lacks.
+
+#### From a date
+
+From these dates Cloudflare gives a Worker the flag's behaviour. celld
+behaves as before the date:
+
+- `workers_api_getters_setters_on_prototype`, from 2022-01-31: Request, Response and Headers carry their attributes as own instance properties, not prototype accessors.
+- `web_socket_compression`, from 2023-08-15: celld never negotiates permessage-deflate on a WebSocket.
+- `brotli_content_encoding`, from 2024-04-29: celld neither encodes nor decodes a body by its Content-Encoding, gzip or br.
+- `blob_standard_mime_type`, from 2024-06-03: Blob.type lower-cases a body's Content-Type but normalizes it as neither flag state does.
+- `cache_option_enabled`, from 2024-11-11: the Request `cache` option throws.
+- `internal_writable_stream_abort_clears_queue`, from 2024-09-02: celld does not model when abort() clears a platform writable stream's queue.
+- `handle_cross_request_promise_resolution`, from 2024-10-14: celld does not model which request a promise continuation runs in.
+- `set_tostring_tag`, from 2024-09-26: only some of celld's API classes have their name as Symbol.toStringTag.
+- `fixup-transform-stream-backpressure`, from 2024-12-16: celld's TransformStream lets a write settle before its readable side is read, as neither flag state does.
+- `cache_no_cache_enabled`, from 2025-08-07 with cache_option_enabled: the Request `cache` option throws.
+- `bind_asynclocalstorage_snapshot_to_request`, from 2025-06-16: celld does not tie an AsyncLocalStorage snapshot to the request that took it.
+- `throw_on_unrecognized_import_assertion`, from 2025-06-16: celld does not model unknown import attributes.
+- `enhanced_error_serialization`, from 2026-04-21: structuredClone() and RPC carry an Error's name, message, stack and cause, but not its other own properties.
+- `enable_fast_jsg_struct`, from 2025-12-03: celld does not model whether an API dictionary carries absent optional fields as undefined.
+- `fetch_iterable_type_support`, from 2026-02-19: a Request or Response body stringifies an Array but iterates an async iterable, as neither flag state does.
+- `fetch_iterable_type_support_override_adjustment`, from 2026-01-15 with fetch_iterable_type_support: a Request or Response body stringifies an Array but iterates an async iterable, as neither flag state does.
+- `enable_nodejs_global_timers`, from 2026-02-10 with nodejs_compat: the global setTimeout() and setInterval() return numbers, not Node.js Timeout objects.
+- `queue_expose_error_codes`, from 2026-03-12: celld does not model the error codes queue operations carry.
+- `unhandled_rejection_after_microtask_checkpoint`, from 2026-03-03: celld does not model when an unhandled rejection is reported.
+- `encoder_stream_spec_compliant_backpressure`, from 2026-03-24: TextEncoderStream and TextDecoderStream accept a write before their readable side is read.
+- `workflows_enable_fast_engine_creation`, from 2026-08-11: Workflow create() without an id names the instance with a random UUID.
+
+#### Before a date
+
+Before these dates Cloudflare gives a Worker the behaviour without the
+flag. celld behaves as from the date:
+
+- `formdata_parser_supports_files` (2021-11-03), `fetch_refuses_unknown_protocols` (2021-11-10), `durable_object_fetch_requires_full_url` (2021-11-10), `streams_byob_reader_detaches_buffer` (2021-11-10), `streams_enable_constructors` (2022-11-30), `url_standard` (2022-10-31), `global_navigator` (2022-03-21), `capture_async_api_throws` (2022-10-31), `dont_substitute_null_on_type_error` (2022-06-01), `transformstream_enable_standard_constructor` (2022-11-30), `r2_list_honor_include` (2022-08-04), `response_redirect_url_standard` (2023-03-14), `http_headers_getsetcookie` (2023-03-01), `no_cf_botmanagement_default` (2023-08-01), `urlsearchparams_delete_has_value_arg` (2023-07-01), `strict_compression_checks` (2023-08-01), `strict_crypto_checks` (2023-08-01), `crypto_preserve_public_exponent` (2023-12-01), `no_global_importscripts` (2024-03-04), `unwrap_custom_thenables` (2024-04-01), `rpc` (2024-04-03), `internal_stream_byob_return_view` (2024-05-13), `fetch_standard_url` (2024-06-03), `allow_custom_ports` (2024-09-02), `upper_case_all_http_methods` (2024-10-14), `urlpattern_standard` (2025-05-01), `enable_weak_ref` (2025-05-05), `enable_navigator_language` (2025-05-19), `allow_eval_during_startup` (2025-06-01), `set_event_target_this` (2025-08-01), `expose_global_message_channel` (2025-08-15), `strip_authorization_on_cross_origin_redirect` (2025-09-01), `enable_ctx_exports` (2025-11-17), `strip_bom_in_read_all_text` (2026-01-13), `text_decoder_replace_surrogates` (2026-02-24), `containers_pid_namespace` (2026-04-01), `text_decoder_cjk_decoder` (2026-03-03), `websocket_close_reason_byte_limit` (2026-03-03), `writable_stream_spec_compliant_writer` (2026-03-24), `workflows_preserve_non_retryable_error_message` (2026-05-14), `web_socket_auto_reply_to_close` (2026-04-07), `diagnostics_channel_has_subscribers_getter` (2026-05-19).
+
+#### Whatever the date
+
+These flags have no date, so Cloudflare gives every Worker that does not
+set them the behaviour without the flag. celld always behaves as with the
+flag:
+
+- `enable_request_signal`: an incoming request's signal aborts when the client disconnects.
 
 ## Wrangler configuration
 

@@ -1,0 +1,7 @@
+// A flag with its disable flag.
+{
+  "name": "contradictory",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["nodejs_compat", "no_nodejs_compat"]
+}

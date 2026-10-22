@@ -3915,9 +3915,27 @@ __celld.__makeLoader = () => {
     if (c === null || typeof c !== "object" || c.modules === null
         || typeof c.modules !== "object")
       return { config: c, wasm: [], outbound: undefined, tails: [] };
-    // workerd requires the date, and names the missing value as it does.
-    if (typeof c.compatibilityDate !== "string")
-      throw new Error(`Invalid compatibility date: ${c.compatibilityDate}`);
+    // JSG converts the date and each flag to a string as a template literal
+    // does: a missing date is "undefined", which the host then refuses as
+    // invalid, a hole is "undefined", and a Symbol throws a TypeError. The
+    // flags must be an array.
+    const {
+      globalOutbound: _globalOutbound,
+      env: _env,
+      tails: _tails,
+      compatibilityDate: date,
+      compatibilityFlags: flags,
+      ...rest
+    } = c;
+    const compatibilityDate = `${date}`;
+    let compatibilityFlags;
+    if (flags !== undefined) {
+      if (!Array.isArray(flags))
+        throw new TypeError(
+          "Incorrect type for the 'compatibilityFlags' field on 'WorkerCode': " +
+          "the provided value is not of type 'Array'.");
+      compatibilityFlags = Array.from(flags, (flag) => `${flag}`);
+    }
     const modules = {};
     const wasm = [];
     for (const [name, value] of Object.entries(c.modules)) {
@@ -3981,15 +3999,9 @@ __celld.__makeLoader = () => {
         return tail;
       });
     }
-    const {
-      globalOutbound: _globalOutbound,
-      env: _env,
-      tails: _tails,
-      ...rest
-    } = c;
     return {
-      config: { ...rest, modules }, wasm, outbound, outboundProps,
-      env, envRoutes, tails,
+      config: { ...rest, compatibilityDate, compatibilityFlags, modules },
+      wasm, outbound, outboundProps, env, envRoutes, tails,
     };
   };
   // getCode is deferred into a microtask so a throw (or async getCode)
@@ -4137,8 +4149,13 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
       }),
       req, redirectState);
   },
-  // Workerd's test-visible Fetcher.scheduled(): invoke the target's
-  // scheduled handler and report the outcome.
+  // Under service_binding_extra_handlers, Fetcher.queue() runs the target's
+  // queue handler. celld does not implement it, so it fails at first use.
+  async queue() {
+    throw new Error("Fetcher.queue() is not implemented in celld");
+  },
+  // Under service_binding_extra_handlers, Fetcher.scheduled() invokes the
+  // target's scheduled handler and reports the outcome.
   async scheduled(options = {}) {
     if (script !== __cell.script || entrypoint !== null ||
         typeof __cell.selfScheduled !== "function")
@@ -4189,8 +4206,17 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
     getPrototypeOf: () => __cf.ServiceStub.prototype,
     get: (base, prop) => {
     if (prop === "then") return undefined; // a stub is not a thenable
+    // workerd defines queue() and scheduled() on a Fetcher only under
+    // service_binding_extra_handlers; without it both are RPC methods
+    // (http.h Fetcher).
+    if ((prop === "queue" || prop === "scheduled") &&
+        !__cell.compat.serviceBindingExtraHandlers)
+      return __makeNode(session, [prop], null);
     if (Reflect.has(base, prop)) return Reflect.get(base, prop);
     if (typeof prop !== "string") return undefined;
+    if (__cell.compat.fetcherGetPutDelete &&
+        (prop === "get" || prop === "put" || prop === "delete"))
+      return __fetcherHelper(base.fetch, prop);
     // Workerd's test hook: the named method as a callable handle,
     // resolved -- and refused -- on the receiver side.
     if (prop === "getRpcMethodForTestOnly")
@@ -10357,6 +10383,30 @@ const __cf = __celld.__cf = {
   withEnv: __cfUnimplementedFunction("withEnv"),
   withEnvAndExports: __cfUnimplementedFunction("withEnvAndExports"),
   withExports: __cfUnimplementedFunction("withExports"),
+};
+// `import { env, exports } from "cloudflare:workers"`. Under
+// disallow_importable_env workerd has no Worker env or exports to give them
+// (modules.c++ EnvModule::getCurrentEnv and getCurrentExports), so its
+// proxies (cloudflare/workers.ts) read every name as undefined, list none,
+// and ignore writes to `env`.
+const __cfNoEnv = new Proxy({}, {
+  get: () => undefined,
+  set: () => true,
+  has: () => false,
+  ownKeys: () => [],
+  deleteProperty: () => true,
+  defineProperty: () => true,
+  getOwnPropertyDescriptor: () => undefined,
+});
+const __cfNoExports = new Proxy({}, {
+  get: () => undefined,
+  has: () => false,
+  ownKeys: () => [],
+  getOwnPropertyDescriptor: () => undefined,
+});
+__celld.__cfImportable = (name) => {
+  if (!__cell.compat.disallowImportableEnv) return __cf[name];
+  return name === "env" ? __cfNoEnv : __cfNoExports;
 };
 // workerd adds ctx.restore() to ExecutionContext and DurableObjectState
 // under allow_irrevocable_stub_storage. celld can't restore yet, so the

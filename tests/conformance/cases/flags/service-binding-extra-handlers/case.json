@@ -1,0 +1,7 @@
+{
+  "workers": ["front", "back", "flagged"],
+  "steps": [
+    {"path": "/without-flag"},
+    {"path": "/with-flag"}
+  ]
+}

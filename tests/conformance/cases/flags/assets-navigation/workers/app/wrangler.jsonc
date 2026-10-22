@@ -1,0 +1,9 @@
+// assets_navigation_prefers_asset_serving is on from 2025-04-01: with
+// single-page-application handling, a navigation to a path that is not an
+// asset gets index.html instead of reaching the Worker.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2025-04-01",
+  "assets": { "directory": "public", "not_found_handling": "single-page-application" }
+}

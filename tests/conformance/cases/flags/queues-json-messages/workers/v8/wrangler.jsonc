@@ -1,0 +1,7 @@
+{
+  "name": "v8",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["no_queues_json_messages"],
+  "queues": { "producers": [{ "binding": "QUEUE", "queue": "messages-v8" }] }
+}

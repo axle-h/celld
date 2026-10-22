@@ -1,0 +1,42 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "bigint": "refused",
+        "bigintAsV8": "sent",
+        "object": "sent",
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "bigint": "sent",
+        "bigintAsV8": "sent",
+        "object": "sent",
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "bigint": "sent",
+        "bigintAsV8": "sent",
+        "object": "sent",
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "bigint": "refused",
+        "bigintAsV8": "sent",
+        "object": "sent",
+        "reported": true
+      }
+    }
+  ]
+}

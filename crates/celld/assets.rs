@@ -83,6 +83,9 @@ struct AssetResolverInner {
     bucket: Bucket,
     index: AssetIndex,
     asset_only: bool,
+    /// `assets_navigation_prefers_asset_serving` (off =
+    /// `assets_navigation_has_no_effect`, default on for dates >= 2025-04-01).
+    navigation_prefers_assets: bool,
     fallback: Option<FallbackSource>,
     fallback_state: std::sync::Mutex<FallbackState>,
     cache_root: PathBuf,
@@ -161,6 +164,17 @@ impl AssetResolver {
         validate_index(&index, reference)?;
         let header_rules = parse_header_rules(index.config.headers.as_deref().unwrap_or(""))?;
         let redirect_rules = parse_redirect_rules(index.config.redirects.as_deref().unwrap_or(""))?;
+        let flags: Vec<&str> = index
+            .config
+            .compatibility_flags
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let navigation_prefers_assets = crate::compat_flags::compile_lenient(
+            index.config.compatibility_date.as_deref(),
+            &flags,
+        )
+        .get(crate::compat_flags::ASSETS_NAVIGATION_PREFERS_ASSET_SERVING);
         let cache_root = std::env::var_os("CELLD_ASSET_CACHE_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::temp_dir().join("celld").join("asset-cache"));
@@ -173,6 +187,7 @@ impl AssetResolver {
                 bucket: bucket.clone(),
                 index,
                 asset_only,
+                navigation_prefers_assets,
                 fallback,
                 fallback_state: std::sync::Mutex::new(FallbackState::default()),
                 cache_root,
@@ -620,29 +635,11 @@ impl AssetResolver {
     }
 
     fn navigation_prefers_asset_serving(&self, headers: &HeaderMap) -> bool {
-        if headers
-            .get("sec-fetch-mode")
-            .and_then(|value| value.to_str().ok())
-            != Some("navigate")
-        {
-            return false;
-        }
-        let config = &self.inner.index.config;
-        if config
-            .compatibility_flags
-            .iter()
-            .any(|flag| flag == "assets_navigation_has_no_effect")
-        {
-            return false;
-        }
-        config
-            .compatibility_flags
-            .iter()
-            .any(|flag| flag == "assets_navigation_prefers_asset_serving")
-            || config
-                .compatibility_date
-                .as_deref()
-                .is_some_and(|date| date >= "2025-04-01")
+        self.inner.navigation_prefers_assets
+            && headers
+                .get("sec-fetch-mode")
+                .and_then(|value| value.to_str().ok())
+                == Some("navigate")
     }
 
     async fn open_asset(

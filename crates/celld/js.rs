@@ -9094,12 +9094,30 @@ fn op_loader_load(
         .get_slot::<LoaderOwner>()
         .expect("Worker isolate has a Loader owner")
         .clone();
-    // Honor the WorkerCode's declared compatibility (workerd worker_compat
-    // reads snake_case keys); Code Mode workers keep RPC on regardless.
-    let mut compat = crate::worker_compat(&serde_json::json!({
-        "compatibility_date": code.get("compatibilityDate"),
-        "compatibility_flags": code.get("compatibilityFlags"),
-    }));
+    // The WorkerCode's compatibility date and flags, which the harness made
+    // strings as JSG does, refused as workerd's
+    // WorkerLoader::extractCompatFlags refuses them: with the first error.
+    // Code Mode workers keep RPC on regardless.
+    let flags = match code.get("compatibilityFlags") {
+        None => Some(Vec::new()),
+        Some(flags) => flags.as_array().and_then(|flags| {
+            flags
+                .iter()
+                .map(serde_json::Value::as_str)
+                .collect::<Option<Vec<&str>>>()
+        }),
+    };
+    let Some(flags) = flags else {
+        return loader_throw(scope, "compatibilityFlags must be an array of strings.");
+    };
+    let date = code
+        .get("compatibilityDate")
+        .and_then(serde_json::Value::as_str);
+    let mut compat =
+        match crate::compat_flags::compile(date, &flags, crate::compat_flags::Context::Loader) {
+            Ok(flags) => Compat::from_flags(flags),
+            Err(errors) => return loader_throw(scope, &errors[0]),
+        };
     compat.js_rpc = true;
     let handle = match tokio::runtime::Handle::try_current() {
         Ok(handle) => handle,

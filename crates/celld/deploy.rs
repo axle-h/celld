@@ -723,11 +723,7 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
         file_count: assets.file_count,
         total_bytes: assets.total_bytes,
     });
-    let sqlite_vec = project
-        .metadata
-        .get("compatibility_flags")
-        .and_then(Value::as_array)
-        .is_some_and(|flags| flags.iter().any(|flag| flag.as_str() == Some("sqlite_vec")));
+    let sqlite_vec = crate::worker_compat(&project.metadata).sqlite_vec;
     let uses_d1 = project.do_classes.iter().any(|class| class == D1_CLASS);
     let python_runtime = project.python.is_some();
     let manifest = Manifest {
@@ -1410,6 +1406,37 @@ fn compact_json(text: &str) -> String {
     out
 }
 
+/// Refuse a compatibility date or flag that workerd would refuse, or that
+/// would select a behaviour celld lacks (see [`crate::compat_flags`]).
+fn check_compatibility(object: &Map<String, Value>) -> anyhow::Result<()> {
+    let date = match object.get("compatibility_date") {
+        None => bail!(
+            "A compatibility_date is required when publishing. Add one to the Wrangler \
+             configuration file, such as \"compatibility_date\": \"{}\"",
+            crate::compat_flags::NEWEST_DATE
+        ),
+        Some(Value::String(date)) => date.as_str(),
+        Some(_) => bail!("config `compatibility_date` must be a string"),
+    };
+    let flags: Vec<&str> = match object.get("compatibility_flags") {
+        None => Vec::new(),
+        Some(Value::Array(flags)) => flags
+            .iter()
+            .map(|flag| {
+                flag.as_str()
+                    .ok_or_else(|| anyhow!("compatibility flags must be strings"))
+            })
+            .collect::<anyhow::Result<_>>()?,
+        Some(_) => bail!("config `compatibility_flags` must be an array"),
+    };
+    if let Err(errors) =
+        crate::compat_flags::compile(Some(date), &flags, crate::compat_flags::Context::Deploy)
+    {
+        bail!("{}", errors.join("\n"));
+    }
+    Ok(())
+}
+
 fn read_project(
     path: &Path,
     root: &Path,
@@ -1447,6 +1474,7 @@ fn read_project(
             unsupported.join(", ")
         );
     }
+    check_compatibility(object)?;
     for (key, value) in object {
         if PLATFORM_KEYS.contains(&key.as_str()) {
             if let Some(note) = platform_key_note(key, value)? {
@@ -4229,6 +4257,9 @@ mod tests {
         let mut config = object(config);
         config.insert("name".into(), json!("app"));
         config.insert("main".into(), json!("index.js"));
+        config
+            .entry("compatibility_date")
+            .or_insert(json!("2026-09-04"));
         let path = root.path().join("wrangler.json");
         std::fs::write(&path, Value::Object(config).to_string()).unwrap();
         std::fs::write(root.path().join("index.js"), "").unwrap();
@@ -4292,6 +4323,7 @@ mod tests {
                 json!({
                     "name": "app",
                     "main": "index.js",
+                    "compatibility_date": "2026-09-04",
                     "no_bundle": true,
                     "triggers": { "crons": crons },
                 })
@@ -4328,6 +4360,7 @@ mod tests {
             r#"{
               "name": "app",
               "main": "index.js",
+              "compatibility_date": "2026-09-04",
               // Nested values, keys out of sorted order, and whitespace.
               "vars": {
                 "ADMINS": ["admin", "ops"],
@@ -4359,7 +4392,7 @@ mod tests {
     fn a_dotenv_override_of_a_json_var_is_a_string() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("index.js"), "").unwrap();
-        let source = r#"{ "name": "app", "main": "index.js", "vars": { "ADMINS": ["admin"] } }"#;
+        let source = r#"{ "name": "app", "compatibility_date": "2026-09-04", "main": "index.js", "vars": { "ADMINS": ["admin"] } }"#;
         for overrides in [
             VarOverrides::DevVars(entries(&[("ADMINS", r#"["dev"]"#)])),
             dotenv(&[("ADMINS", r#"["dev"]"#)], &[]),
@@ -4572,8 +4605,7 @@ mod tests {
     fn required_secrets_can_come_from_dotenv_files_under_celld_dev() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("index.js"), "").unwrap();
-        let source =
-            r#"{ "name": "app", "main": "index.js", "secrets": { "required": ["TOKEN"] } }"#;
+        let source = r#"{ "name": "app", "compatibility_date": "2026-09-04", "main": "index.js", "secrets": { "required": ["TOKEN"] } }"#;
         let deploy = |overrides: &VarOverrides| {
             project_source(root.path(), source, overrides, BuildCommand::Deploy)
         };
@@ -4620,7 +4652,7 @@ mod tests {
             .collect::<Vec<_>>()
         };
         let pair = |name: &str, value: &str| (name.to_string(), value.to_string());
-        let with_secrets = r#"{ "name": "app", "main": "index.js", "vars": { "MODE": "prod" },
+        let with_secrets = r#"{ "name": "app", "compatibility_date": "2026-09-04", "main": "index.js", "vars": { "MODE": "prod" },
             "secrets": { "required": ["TOKEN"] } }"#;
         let files = &[
             ("MODE", "file"),
@@ -4639,7 +4671,7 @@ mod tests {
             [pair("MODE", "file"), pair("TOKEN", "file")]
         );
         // Without `secrets`, every entry is a var and the environment is not read.
-        let without = r#"{ "name": "app", "main": "index.js", "vars": { "MODE": "prod" } }"#;
+        let without = r#"{ "name": "app", "compatibility_date": "2026-09-04", "main": "index.js", "vars": { "MODE": "prod" } }"#;
         assert_eq!(
             deploy(without, &dotenv(files, &[("MODE", "env")])),
             [
@@ -4653,7 +4685,12 @@ mod tests {
     /// A project whose `main` only the build creates, so it reads only after
     /// the build ran.
     fn built_project(root: &Path, build: Value, mode: BuildCommand) -> anyhow::Result<Project> {
-        let config = json!({ "name": "app", "main": "dist/index.js", "build": build });
+        let config = json!({
+            "name": "app",
+            "compatibility_date": "2026-09-04",
+            "main": "dist/index.js",
+            "build": build,
+        });
         project_source(root, &config.to_string(), &VarOverrides::None, mode)
     }
 
@@ -4786,7 +4823,7 @@ mod tests {
         let config = root.path().join("wrangler.jsonc");
         std::fs::write(
             &config,
-            r#"{ "name": "app", "main": "src/index.ts",
+            r#"{ "name": "app", "compatibility_date": "2026-09-04", "main": "src/index.ts",
                  "build": { "command": "make", "watch_dir": ["lib", "../shared"] } }"#,
         )
         .unwrap();
@@ -4794,7 +4831,11 @@ mod tests {
             build_watch_dirs(&config).unwrap(),
             [root.path().join("lib"), root.path().join("../shared")]
         );
-        std::fs::write(&config, r#"{ "name": "app", "main": "index.js" }"#).unwrap();
+        std::fs::write(
+            &config,
+            r#"{ "name": "app", "compatibility_date": "2026-09-04", "main": "index.js" }"#,
+        )
+        .unwrap();
         assert!(build_watch_dirs(&config).unwrap().is_empty());
     }
 

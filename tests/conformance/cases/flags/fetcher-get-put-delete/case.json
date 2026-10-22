@@ -1,0 +1,8 @@
+{
+  "workers": ["has", "no", "before", "back"],
+  "steps": [
+    {"path": "/"},
+    {"path": "/no"},
+    {"path": "/before"}
+  ]
+}

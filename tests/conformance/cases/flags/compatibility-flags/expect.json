@@ -1,0 +1,159 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "values": {
+          "nodejs_compat": true,
+          "nodejs_compat_v2": true,
+          "nodejs_compat_populate_process_env": true,
+          "nodejs_als": false,
+          "service_binding_extra_handlers": false,
+          "js_rpc": false,
+          "queues_json_messages": true,
+          "fetcher_no_get_put_delete": true,
+          "disallow_importable_env": false,
+          "assets_navigation_prefers_asset_serving": true,
+          "allow_irrevocable_stub_storage": false,
+          "rpc_params_dup_stubs": true,
+          "delete_all_deletes_alarm": true,
+          "websocket_standard_binary_type": true,
+          "python_workers": false,
+          "python_workers_20250116": false,
+          "python_no_global_handlers": true,
+          "python_workers_force_new_vendor_path": true,
+          "enable_python_external_sdk": true,
+          "python_workflows_implicit_dependencies": false,
+          "python_request_headers_preserve_commas": true,
+          "python_process_pth_files": true,
+          "python_workers_20260610": false,
+          "python_workers_314": false
+        },
+        "alwaysOn": {
+          "url_standard": true,
+          "capture_async_api_throws": true,
+          "upper_case_all_http_methods": true,
+          "enable_ctx_exports": true,
+          "strip_bom_in_read_all_text": true,
+          "websocket_close_reason_byte_limit": true,
+          "web_socket_auto_reply_to_close": true
+        },
+        "prototype": null,
+        "sealed": true,
+        "frozen": true,
+        "descriptor": {
+          "value": true,
+          "writable": false,
+          "enumerable": true,
+          "configurable": false
+        },
+        "assigned": "TypeError",
+        "unknown": null
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "values": {
+          "nodejs_compat": true,
+          "nodejs_compat_v2": true,
+          "nodejs_compat_populate_process_env": true,
+          "nodejs_als": true,
+          "service_binding_extra_handlers": false,
+          "js_rpc": true,
+          "queues_json_messages": true,
+          "fetcher_no_get_put_delete": true,
+          "disallow_importable_env": false,
+          "assets_navigation_prefers_asset_serving": true,
+          "allow_irrevocable_stub_storage": false,
+          "rpc_params_dup_stubs": true,
+          "delete_all_deletes_alarm": false,
+          "websocket_standard_binary_type": false,
+          "python_workers": false,
+          "python_workers_20250116": false,
+          "python_no_global_handlers": false,
+          "python_workers_force_new_vendor_path": false,
+          "enable_python_external_sdk": false,
+          "python_workflows_implicit_dependencies": false,
+          "python_request_headers_preserve_commas": false,
+          "python_process_pth_files": false,
+          "python_workers_20260610": false,
+          "python_workers_314": false
+        },
+        "alwaysOn": {
+          "url_standard": true,
+          "capture_async_api_throws": true,
+          "upper_case_all_http_methods": true,
+          "enable_ctx_exports": false,
+          "strip_bom_in_read_all_text": false,
+          "websocket_close_reason_byte_limit": false,
+          "web_socket_auto_reply_to_close": false
+        },
+        "prototype": null,
+        "sealed": true,
+        "frozen": true,
+        "descriptor": {
+          "value": true,
+          "writable": false,
+          "enumerable": true,
+          "configurable": false
+        },
+        "assigned": "TypeError",
+        "unknown": null
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "values": {
+          "nodejs_compat": false,
+          "nodejs_compat_v2": true,
+          "nodejs_compat_populate_process_env": false,
+          "nodejs_als": false,
+          "service_binding_extra_handlers": true,
+          "js_rpc": false,
+          "queues_json_messages": true,
+          "fetcher_no_get_put_delete": false,
+          "disallow_importable_env": true,
+          "assets_navigation_prefers_asset_serving": true,
+          "allow_irrevocable_stub_storage": true,
+          "rpc_params_dup_stubs": false,
+          "delete_all_deletes_alarm": false,
+          "websocket_standard_binary_type": false,
+          "python_workers": false,
+          "python_workers_20250116": false,
+          "python_no_global_handlers": true,
+          "python_workers_force_new_vendor_path": true,
+          "enable_python_external_sdk": true,
+          "python_workflows_implicit_dependencies": false,
+          "python_request_headers_preserve_commas": true,
+          "python_process_pth_files": true,
+          "python_workers_20260610": false,
+          "python_workers_314": false
+        },
+        "alwaysOn": {
+          "url_standard": true,
+          "capture_async_api_throws": true,
+          "upper_case_all_http_methods": true,
+          "enable_ctx_exports": true,
+          "strip_bom_in_read_all_text": true,
+          "websocket_close_reason_byte_limit": true,
+          "web_socket_auto_reply_to_close": true
+        },
+        "prototype": null,
+        "sealed": true,
+        "frozen": true,
+        "descriptor": {
+          "value": false,
+          "writable": false,
+          "enumerable": true,
+          "configurable": false
+        },
+        "assigned": "TypeError",
+        "unknown": null
+      }
+    }
+  ]
+}

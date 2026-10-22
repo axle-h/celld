@@ -1,0 +1,9 @@
+// From 2024-03-26 the names are RPC methods.
+{
+  "name": "no",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }],
+  "durable_objects": { "bindings": [{ "name": "STORE", "class_name": "NoStore" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["NoStore"] }]
+}

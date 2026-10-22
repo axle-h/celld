@@ -1,0 +1,12 @@
+// disallow_importable_env: `env` and `exports` from cloudflare:workers read as
+// empty, here and in a Dynamic Worker that sets the flag, as Cloudflare OS's
+// code-mode Worker does.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["disallow_importable_env"],
+  "vars": { "SECRET": "app-secret" },
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "services": [{ "binding": "PLAIN", "service": "plain" }]
+}

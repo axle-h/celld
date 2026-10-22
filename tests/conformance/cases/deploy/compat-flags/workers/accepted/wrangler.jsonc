@@ -1,0 +1,18 @@
+// Honoured flags, a flag celld always has on, one that does not apply, an
+// experimental flag celld honours, and celld's own flag.
+{
+  "name": "accepted",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "allow_irrevocable_stub_storage",
+    "nodejs_als",
+    "global_fetch_strictly_public",
+    "disallow_importable_env",
+    "url_standard",
+    "minimal_subrequests",
+    "service_binding_extra_handlers",
+    "sqlite_vec"
+  ]
+}

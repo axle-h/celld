@@ -1,0 +1,13 @@
+// delete_all_deletes_alarm is on from 2026-02-24.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-02-24",
+  "services": [
+    { "binding": "BEFORE", "service": "before" },
+    { "binding": "ENABLE", "service": "enable" },
+    { "binding": "DISABLE", "service": "disable" }
+  ],
+  "durable_objects": { "bindings": [{ "name": "OBJECT", "class_name": "FrontObject" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["FrontObject"] }]
+}

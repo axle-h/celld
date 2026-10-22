@@ -1,0 +1,7 @@
+// A flag workerd does not have, named twice.
+{
+  "name": "unknown",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["no_such_flag", "no_such_flag"]
+}

@@ -1,0 +1,11 @@
+// websocket_standard_binary_type is on from 2026-03-17.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-03-17",
+  "services": [
+    { "binding": "BEFORE", "service": "before" },
+    { "binding": "ENABLE", "service": "enable" },
+    { "binding": "DISABLE", "service": "disable" }
+  ]
+}

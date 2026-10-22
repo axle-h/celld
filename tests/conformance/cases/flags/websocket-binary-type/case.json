@@ -1,0 +1,9 @@
+{
+  "workers": ["front", "before", "enable", "disable"],
+  "steps": [
+    {"path": "/"},
+    {"path": "/before"},
+    {"path": "/enable"},
+    {"path": "/disable"}
+  ]
+}

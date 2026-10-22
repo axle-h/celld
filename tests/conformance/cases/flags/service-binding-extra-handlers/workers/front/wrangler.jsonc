@@ -1,0 +1,11 @@
+// Without service_binding_extra_handlers, a service binding's `scheduled` and
+// `queue` are RPC methods of the target.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [
+    { "binding": "BACK", "service": "back" },
+    { "binding": "FLAGGED", "service": "flagged" }
+  ]
+}

@@ -1,0 +1,7 @@
+// An experimental flag celld does not honour.
+{
+  "name": "experimental",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["experimental", "allow_irrevocable_stub_storage"]
+}

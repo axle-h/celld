@@ -1,0 +1,49 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "scheduledType": "function",
+        "queueType": "function",
+        "scheduled": {
+          "value": {
+            "called": "scheduled",
+            "controller": {
+              "cron": "* * * * *"
+            }
+          }
+        },
+        "queue": {
+          "value": {
+            "called": "queue",
+            "name": "jobs",
+            "messages": [
+              {
+                "id": "1"
+              }
+            ]
+          }
+        },
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "scheduledType": "function",
+        "queueType": "function",
+        "result": {
+          "outcome": "ok",
+          "noRetry": false
+        },
+        "ran": {
+          "cron": "5 * * * *",
+          "scheduledTime": 1000
+        },
+        "reported": true
+      }
+    }
+  ]
+}

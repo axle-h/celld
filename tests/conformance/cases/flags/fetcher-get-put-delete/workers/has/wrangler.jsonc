@@ -1,0 +1,14 @@
+// fetcher_has_get_put_delete keeps the helpers past their date.
+{
+  "name": "has",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["fetcher_has_get_put_delete"],
+  "services": [
+    { "binding": "BACK", "service": "back" },
+    { "binding": "NO", "service": "no" },
+    { "binding": "BEFORE", "service": "before" }
+  ],
+  "durable_objects": { "bindings": [{ "name": "STORE", "class_name": "HasStore" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["HasStore"] }]
+}

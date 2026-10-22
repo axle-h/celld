@@ -1,6 +1,7 @@
 // Runs a case's steps against a started runtime and returns the transcript:
 // one entry per step, in the shape expect.json stores.
 
+import { request as httpRequest } from "node:http";
 import { createServer } from "node:net";
 
 const STEP_TIMEOUT_MS = 30_000;
@@ -96,11 +97,16 @@ async function runStep(session, step) {
 }
 
 async function fetchStep(origin, step) {
+  // fetch() replaces a `sec-fetch-mode` header with its own, so a step that
+  // sets one, to send a navigation, goes out through node:http instead.
+  const send = Object.keys(step.headers ?? {}).some((name) => /^sec-fetch-/i.test(name))
+    ? httpFetch
+    : fetch;
   // A chunked body has no length, so the runtime streams it to the Worker.
   const requestBody = step.chunked
     ? new Blob([step.body]).stream()
     : step.body;
-  const response = await fetch(new URL(step.path, origin), {
+  const response = await send(new URL(step.path, origin), {
     method: step.method,
     headers: step.headers,
     body: requestBody,
@@ -124,6 +130,32 @@ async function fetchStep(origin, step) {
   // differ between runtimes without meaning anything.
   const headers = Object.fromEntries(step.responseHeaders.map((name) => [name, response.headers.get(name)]));
   return { status: response.status, headers, body };
+}
+
+// The part of fetch() a step uses, over node:http, which sends the headers
+// it is given and no others but `host` and `connection`. It sends a string
+// body only; a chunked step uses fetch().
+function httpFetch(url, { method = "GET", headers = {}, body, signal }) {
+  if (body !== undefined && typeof body !== "string") {
+    return Promise.reject(new Error("a step with a sec-fetch- header takes only a string body"));
+  }
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(url, { method, headers, signal }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("error", reject);
+      response.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        const responseHeaders = new Headers();
+        for (const [name, value] of Object.entries(response.headers)) {
+          for (const item of [value].flat()) responseHeaders.append(name, item);
+        }
+        resolve({ status: response.statusCode, headers: responseHeaders, text: async () => text });
+      });
+    });
+    request.on("error", reject);
+    request.end(body);
+  });
 }
 
 function webSocketStep(origin, step) {

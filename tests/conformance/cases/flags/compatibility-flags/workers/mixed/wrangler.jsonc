@@ -1,0 +1,16 @@
+// Disable flags past their dates, and opt-in flags.
+{
+  "name": "mixed",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": [
+    "no_nodejs_compat",
+    "rpc_params_transfer_stubs",
+    "delete_all_preserves_alarm",
+    "no_websocket_standard_binary_type",
+    "allow_irrevocable_stub_storage",
+    "disallow_importable_env",
+    "service_binding_extra_handlers",
+    "fetcher_has_get_put_delete"
+  ]
+}

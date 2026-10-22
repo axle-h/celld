@@ -1,0 +1,8 @@
+// The Worker Loader refuses what `celld deploy` refuses: a flag that selects
+// a behaviour celld lacks, and a date past the newest one celld models.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "worker_loaders": [{ "binding": "LOADER" }]
+}

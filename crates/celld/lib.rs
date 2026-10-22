@@ -46,6 +46,7 @@ pub mod cell_runtime;
 pub mod clean_reload;
 pub mod cli_options;
 pub mod cli_output;
+pub mod compat_flags;
 pub mod container;
 pub mod control_plane;
 pub mod d1_cli;
@@ -282,69 +283,19 @@ impl WorkerJob {
 /// Temporary host seam required by the verbatim JS adapter. The runtime
 /// adapter will construct the real shared Worker queue; lifecycle policy does
 /// not move into this type.
-/// Compatibility switches copied with the JS adapter. These are runtime
-/// semantics, not lifecycle decisions.
+/// The compatibility switches of a deployed Worker, from its manifest's
+/// compatibility date and flags. `celld deploy` refused what celld cannot
+/// run, so a name this celld does not know has no effect here.
 pub fn worker_compat(metadata: &serde_json::Value) -> js::Compat {
-    let flags = metadata
+    let flags: Vec<&str> = metadata
         .get("compatibility_flags")
-        .and_then(serde_json::Value::as_array);
-    let has_flag = |name: &str| {
-        flags.is_some_and(|flags| {
-            flags
-                .iter()
-                .any(|flag| flag.as_str().is_some_and(|flag| flag == name))
-        })
-    };
+        .and_then(serde_json::Value::as_array)
+        .map(|flags| flags.iter().filter_map(serde_json::Value::as_str).collect())
+        .unwrap_or_default();
     let date = metadata
         .get("compatibility_date")
         .and_then(serde_json::Value::as_str);
-    let switch = |enable: &str, disable: &str, since: &str| {
-        if has_flag(enable) {
-            return true;
-        }
-        if has_flag(disable) {
-            return false;
-        }
-        date.is_some_and(|date| date >= since)
-    };
-    // workerd's `$impliedByAfterDate`: on from `since` while `by` is on,
-    // unless the disable flag is set.
-    let implied = |by: bool, disable: &str, since: &str| {
-        by && !has_flag(disable) && date.is_some_and(|date| date >= since)
-    };
-    let nodejs_compat = switch("nodejs_compat", "no_nodejs_compat", "2026-08-04");
-    let nodejs_compat_v2 = switch("nodejs_compat_v2", "no_nodejs_compat_v2", "2026-08-04")
-        || implied(nodejs_compat, "no_nodejs_compat_v2", "2024-09-23");
-    js::Compat {
-        delete_all_deletes_alarm: switch(
-            "delete_all_deletes_alarm",
-            "delete_all_preserves_alarm",
-            "2026-02-24",
-        ),
-        js_rpc: has_flag("js_rpc"),
-        fetcher_get_put_delete: !switch(
-            "fetcher_no_get_put_delete",
-            "fetcher_has_get_put_delete",
-            "2024-03-26",
-        ),
-        sqlite_vec: has_flag("sqlite_vec"),
-        websocket_standard_binary_type: has_flag("websocket_standard_binary_type"),
-        queue_json_messages: switch("queue_json_messages", "queue_v8_messages", "2024-03-18"),
-        allow_irrevocable_stub_storage: has_flag("allow_irrevocable_stub_storage"),
-        nodejs_als: has_flag("nodejs_als"),
-        rpc_params_dup_stubs: switch(
-            "rpc_params_dup_stubs",
-            "rpc_params_transfer_stubs",
-            "2026-01-20",
-        ),
-        nodejs_compat: nodejs_compat || nodejs_compat_v2,
-        populate_process_env: has_flag("nodejs_compat_populate_process_env")
-            || implied(
-                nodejs_compat,
-                "nodejs_compat_do_not_populate_process_env",
-                "2025-04-01",
-            ),
-    }
+    js::Compat::from_flags(compat_flags::compile_lenient(date, &flags))
 }
 
 #[cfg(test)]

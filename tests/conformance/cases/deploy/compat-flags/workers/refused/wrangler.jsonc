@@ -1,0 +1,8 @@
+// A flag that selects a behaviour celld lacks, and the disable flag of one
+// that celld always has on.
+{
+  "name": "refused",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["enhanced_error_serialization", "url_original"]
+}

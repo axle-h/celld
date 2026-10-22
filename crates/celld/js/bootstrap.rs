@@ -571,9 +571,12 @@ pub(super) fn inject_kv_limits(scope: &mut v8::PinScope) -> Result<()> {
     Ok(())
 }
 
-/// `globalThis.Cloudflare.compatibilityFlags`. Only flags Cells actually
-/// honours are listed; a flag Cells does not model is absent (falsy) rather
-/// than reported as enabled.
+/// `globalThis.Cloudflare.compatibilityFlags`: as in workerd, a sealed object
+/// without a prototype whose read-only properties are enable flag names.
+/// celld lists the flags it honours, with the values workerd computes, and
+/// the flags it always behaves as on where workerd computes them on (see
+/// [`crate::compat_flags::CompatFlags::reported`]). Any other flag is absent
+/// (falsy) rather than reported with a value celld does not act on.
 ///
 /// Built through the V8 object API rather than by compiling a snippet: this
 /// runs on every isolate load, and a separate `Script::compile` there cost
@@ -582,41 +585,19 @@ pub(super) fn inject_compatibility_flags(scope: &mut v8::PinScope, compat: Compa
     let context = scope.get_current_context();
     let global = context.global(scope);
     let flags = v8::Object::new(scope);
-    let set_flag = |scope: &mut v8::PinScope, name: &str, value: bool| {
+    let null = v8::null(scope).into();
+    flags.set_prototype(scope, null);
+    for (name, value) in compat.flags.reported() {
         let key = v8::String::new(scope, name).unwrap();
         let value = v8::Boolean::new(scope, value);
-        flags.set(scope, key.into(), value.into());
-    };
-    set_flag(scope, "upper_case_all_http_methods", true);
-    // Cells' async stream/pipe methods return rejected promises
-    // rather than throwing synchronously, which is exactly the
-    // behavior this flag names.
-    set_flag(scope, "capture_async_api_throws", true);
-    set_flag(
-        scope,
-        "delete_all_deletes_alarm",
-        compat.delete_all_deletes_alarm,
-    );
-    set_flag(scope, "js_rpc", compat.js_rpc);
-    set_flag(scope, "sqlite_vec", compat.sqlite_vec);
-    // Honoured as far as celld goes: it adds the ctx.restore() that rejects.
-    set_flag(
-        scope,
-        "allow_irrevocable_stub_storage",
-        compat.allow_irrevocable_stub_storage,
-    );
-    set_flag(
-        scope,
-        "fetcher_no_get_put_delete",
-        !compat.fetcher_get_put_delete,
-    );
-    set_flag(scope, "nodejs_als", compat.nodejs_als);
-    set_flag(scope, "rpc_params_dup_stubs", compat.rpc_params_dup_stubs);
-    set_flag(
-        scope,
-        "nodejs_compat_populate_process_env",
-        compat.populate_process_env,
-    );
+        flags.define_own_property(
+            scope,
+            key.into(),
+            value.into(),
+            v8::PropertyAttribute::READ_ONLY,
+        );
+    }
+    flags.set_integrity_level(scope, v8::IntegrityLevel::Sealed);
     let cloudflare = v8::Object::new(scope);
     let key = v8::String::new(scope, "compatibilityFlags").unwrap();
     cloudflare.set(scope, key.into(), flags.into());
@@ -1188,6 +1169,8 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
          c.compat.websocketStandardBinaryType = {};\n\
          c.compat.queueJsonMessages = {};\n\
          c.compat.allowIrrevocableStubStorage = {};\n\
+         c.compat.disallowImportableEnv = {};\n\
+         c.compat.serviceBindingExtraHandlers = {};\n\
          c.compat.rpcParamsDupStubs = {};",
         compat.delete_all_deletes_alarm,
         compat.js_rpc,
@@ -1195,6 +1178,8 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
         compat.websocket_standard_binary_type,
         compat.queue_json_messages,
         compat.allow_irrevocable_stub_storage,
+        compat.disallow_importable_env,
+        compat.service_binding_extra_handlers,
         compat.rpc_params_dup_stubs,
     );
     run_internal_snippet(scope, &source).ok_or_else(|| anyhow!("compatibility install failed"))?;

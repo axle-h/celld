@@ -1,0 +1,7 @@
+// Before 2024-03-26 a service binding has the helpers.
+{
+  "name": "before",
+  "main": "index.js",
+  "compatibility_date": "2024-03-25",
+  "services": [{ "binding": "BACK", "service": "back" }]
+}

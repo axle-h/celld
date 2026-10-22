@@ -1,0 +1,12 @@
+// queues_json_messages is on from 2024-03-18.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2024-03-18",
+  "services": [
+    { "binding": "BEFORE", "service": "before" },
+    { "binding": "V8", "service": "v8" },
+    { "binding": "JSON", "service": "json" }
+  ],
+  "queues": { "producers": [{ "binding": "QUEUE", "queue": "messages-front" }] }
+}

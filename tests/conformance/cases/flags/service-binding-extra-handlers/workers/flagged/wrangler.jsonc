@@ -1,0 +1,9 @@
+// With service_binding_extra_handlers, `scheduled()` runs the target's
+// scheduled handler and reports the outcome.
+{
+  "name": "flagged",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["service_binding_extra_handlers"],
+  "services": [{ "binding": "SELF", "service": "flagged" }]
+}

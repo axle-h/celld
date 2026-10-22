@@ -1,0 +1,10 @@
+// The flags a date turns on, with no flags set.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "services": [
+    { "binding": "OLD", "service": "old" },
+    { "binding": "MIXED", "service": "mixed" }
+  ]
+}

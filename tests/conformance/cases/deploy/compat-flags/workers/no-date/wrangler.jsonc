@@ -1,0 +1,5 @@
+// No compatibility_date, which Wrangler requires too.
+{
+  "name": "no-date",
+  "main": "index.js"
+}

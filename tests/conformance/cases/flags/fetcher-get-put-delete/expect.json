@@ -1,0 +1,57 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "get": {
+          "value": "back GET /item "
+        },
+        "put": {
+          "value": "<undefined>"
+        },
+        "delete": {
+          "value": "<undefined>"
+        },
+        "reported": false,
+        "storeGet": {
+          "value": "store GET /item"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "get": {
+          "value": "rpc get http://back/item"
+        },
+        "put": {
+          "value": "rpc put http://back/item body"
+        },
+        "delete": {
+          "value": "rpc delete http://back/item"
+        },
+        "reported": true,
+        "storeGet": {
+          "value": "rpc get http://store/item"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "get": {
+          "value": "back GET /item "
+        },
+        "put": {
+          "value": "<undefined>"
+        },
+        "delete": {
+          "value": "<undefined>"
+        },
+        "reported": false
+      }
+    }
+  ]
+}

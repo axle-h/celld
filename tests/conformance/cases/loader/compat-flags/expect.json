@@ -1,0 +1,28 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "accepted": "loaded",
+        "unknown": "Error: No such compatibility flag: no_such_flag",
+        "twice": "Error: Compatibility flag specified multiple times: nodejs_als",
+        "contradictory": "Error: Compatibility flags are mutually contradictory: rpc_params_dup_stubs vs rpc_params_transfer_stubs",
+        "invalidDate": "Error: Invalid compatibility date: 2026-02",
+        "notStrings": "Error: No such compatibility flag: 1",
+        "notArray": "TypeError: Incorrect type for the 'compatibilityFlags' field on 'WorkerCode': the provided value is not of type 'Array'.",
+        "dateNumber": "Error: Invalid compatibility date: 20260201",
+        "noDate": "Error: Invalid compatibility date: undefined",
+        "shortDate": "Error: Invalid compatibility date: 2026-2-1",
+        "shortDay": "Error: Invalid compatibility date: 2026-02-1",
+        "experimental": "Error: The compatibility flag experimental is experimental and may break or be removed in a future version of workerd. To use this flag, you must pass --experimental on the command line.",
+        "extraHandlers": "Error: The compatibility flag service_binding_extra_handlers is experimental and may break or be removed in a future version of workerd. To use this flag, you must pass --experimental on the command line.",
+        "symbolFlag": "TypeError: Cannot convert a Symbol value to a string",
+        "symbolDate": "TypeError: Cannot convert a Symbol value to a string",
+        "hole": "Error: No such compatibility flag: undefined",
+        "nullFlags": "TypeError: Incorrect type for the 'compatibilityFlags' field on 'WorkerCode': the provided value is not of type 'Array'."
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "kind": "celld-only",
+  "reason": "celld refuses these flags and dates in a Dynamic Worker, which workerd runs",
+  "workers": ["app"],
+  "steps": [
+    {"path": "/"}
+  ]
+}

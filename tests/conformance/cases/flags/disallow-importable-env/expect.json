@@ -1,0 +1,90 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "atLoad": {
+          "secret": null,
+          "hasSecret": false,
+          "envKeys": [],
+          "hasHelper": false,
+          "helperType": "undefined",
+          "exportKeys": []
+        },
+        "now": {
+          "secret": null,
+          "hasSecret": false,
+          "envKeys": [],
+          "hasHelper": false,
+          "helperType": "undefined",
+          "exportKeys": []
+        },
+        "argSecret": "app-secret",
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "now": {
+          "secret": "plain-secret",
+          "hasSecret": true,
+          "envKeys": [
+            "SECRET"
+          ],
+          "hasHelper": true,
+          "helperType": "function"
+        },
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "disallow_importable_env,allow_irrevocable_stub_storage": {
+          "atLoad": {
+            "secret": null,
+            "hasSecret": false,
+            "envKeys": [],
+            "hasHelper": false,
+            "helperType": "undefined"
+          },
+          "now": {
+            "secret": null,
+            "hasSecret": false,
+            "envKeys": [],
+            "hasHelper": false,
+            "helperType": "undefined"
+          },
+          "written": null,
+          "argSecret": "dynamic-secret"
+        },
+        "none": {
+          "atLoad": {
+            "secret": "dynamic-secret",
+            "hasSecret": true,
+            "envKeys": [
+              "SECRET"
+            ],
+            "hasHelper": false,
+            "helperType": "undefined"
+          },
+          "now": {
+            "secret": "dynamic-secret",
+            "hasSecret": true,
+            "envKeys": [
+              "SECRET",
+              "WRITTEN"
+            ],
+            "hasHelper": true,
+            "helperType": "function"
+          },
+          "written": "x",
+          "argSecret": "dynamic-secret"
+        }
+      }
+    }
+  ]
+}

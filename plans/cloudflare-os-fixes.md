@@ -366,8 +366,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 26 | 1.31 isolate limits during module load (security) | done | `9b0c9c1` |
 | 27 | 1.32 heap limit at request time (security) | done | `17b9c27` |
 | 28 | 1.33 ArrayBuffer memory limits (security) | done | `cede9c5` |
-| 28b | 1.35 Wasm and resizable growth within a turn (security) | done | see log |
-| 29+ | Phase 1 in plan order (1.16-1.34), and the 1.4 props key-order follow-up | queued | |
+| 28b | 1.35 Wasm and resizable growth within a turn (security) | done | `5ff3e96` |
+| 29 | 1.16 compatibility-flag audit | done | see log; starter adapter drops `experimental` |
+| 30+ | Phase 1 in plan order (1.17-1.30, 1.34, 1.36, 1.37), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -1764,6 +1765,88 @@ showed.
 - Integration: a `deploy/` case where a refused flag stops the deploy, and one
   per honoured flag.
 
+**As built (done).**
+- One table, `crates/celld/compat_flags.rs`, classifies all 336 flag names of
+  the vendored `compat_flags/compatibility-date.capnp` (v1.20261001.1):
+  43 honoured (plus celld's `sqlite_vec`), 164 no-op, 129 refused (35 of them
+  experimental). It computes workerd's values, including implied-by chains.
+  Unit tests fail on any new or changed upstream flag, on a `WORKERD_VERSION`
+  that differs from the conformance lockfile, and on a docs section whose
+  flag set differs from the table (each docs list is exact).
+- Deploy and the Worker Loader refuse unknown, duplicate and contradictory
+  flags, refused flags, malformed dates (exactly `YYYY-MM-DD`), and dates after
+  2026-09-04 or in the future, with workerd's texts. Deploy also refuses a
+  missing `compatibility_date`, as wrangler does. Deploy reports every error;
+  the Loader rejects with the first, refuses every experimental flag (as
+  workerd's Loader does), and converts the date and flags as JSG does.
+- **Decision:** experimental flags are refused unless honoured; at deploy
+  `js_rpc` and `service_binding_extra_handlers` are honoured. The latter is
+  partial: `queue()` throws, and `scheduled()` works only on a binding to the
+  Worker's own default export (documented). Without it, Fetcher
+  `queue`/`scheduled` are RPC methods, as in workerd.
+- Newly honoured: `disallow_importable_env`, the Fetcher get/put/delete
+  helpers (now on service bindings too), the real `queues_json_messages`
+  names, the `websocket_standard_binary_type` date.
+- `Cloudflare.compatibilityFlags` lists honoured flags, plus always-on flags
+  where workerd also computes them on, as a sealed null-prototype object.
+- **Decision:** behaviour a date selects but celld lacks is documented under
+  "Differences selected by compatibility date", not refused; refusing it would
+  refuse every date. Those flags become 1.36.
+- Starter: the integration adapter drops the `gatekeeper-test` fixture's
+  `experimental` flag, with a note (the fixture uses none of its APIs).
+- Cases: `deploy/compat-flags`, `loader/compat-flags`,
+  `loader/compat-flags-refused`, and `flags/*` for each honoured flag
+  (9 failed before, 4 pin existing behaviour). The runner sends a step with a
+  `sec-fetch-` header through node:http, since fetch() overrides it.
+
+### 1.36 Behaviour selected by the Cloudflare OS date that celld lacks (found by 1.16)
+
+Each is on by date at 2026-09-04, so every Cloudflare OS Worker differs
+silently today (listed in the docs). Implement each as honoured, with a
+differential case:
+1. Errors keep their own properties, across RPC too
+   (`enhanced_error_serialization`).
+2. Node.js Timeout objects from the global timers
+   (`enable_nodejs_global_timers`).
+3. The Request `cache` option, `no-store` and `no-cache`
+   (`cache_option_enabled`, `cache_no_cache`).
+4. Iterable bodies (`fetch_iterable_type_support` and its override
+   adjustment).
+5. Stream backpressure (`encoder_stream_spec_compliant_backpressure`, and the
+   TransformStream backpressure behind `fixup-transform-stream-backpressure`).
+6. Blob MIME normalisation (`blob_standard_mime_type`).
+7. `Symbol.toStringTag` on every API class (`set_tostring_tag`).
+8. Accessors on prototypes (`workers_api_getters_setters_on_prototype`).
+9. Content-Encoding gzip and br, including `brotli_content_encoding`.
+10. Workflow instance ids from `newUniqueId`
+    (`workflows_enable_fast_engine_creation`).
+11. Verify and model `enable_fast_jsg_struct`, `queue_expose_error_codes`,
+    `unhandled_rejection_after_microtask_checkpoint`,
+    `bind_asynclocalstorage_snapshot_to_request`,
+    `handle_cross_request_promise_resolution`,
+    `throw_on_unrecognized_import_assertion` and
+    `internal_writable_stream_abort_clears_queue`.
+12. WebSocket permessage-deflate (`web_socket_compression`).
+13. `enable_request_signal` (always on in celld; off by default in workerd).
+14. Optional: the old-date states of recent always-on flags
+    (`strip_bom_in_read_all_text`, `text_decoder_replace_surrogates`,
+    `websocket_close_reason_byte_limit`,
+    `writable_stream_spec_compliant_writer`).
+15. Raise `NEWEST_DATE` once the three flags dated after 2026-09-04 are
+    modelled.
+
+### 1.37 Gaps found by 1.16 that no flag gates
+
+- `import { env }` at module scope in a top-level Worker is empty; workerd
+  has the env. Importable `exports` lacks `default`.
+- `eval` and `new Function` work during a request; workerd throws EvalError.
+- Missing: `reportError`, `navigator.sendBeacon`, the Performance* classes,
+  `node:timers` `setTimeout`.
+- Queue JSON errors are Error where workerd throws TypeError.
+- WebCrypto: an empty HMAC key is accepted; RSA exponent 3 is refused.
+- `Blob.text()` strips a BOM; workerd keeps it.
+- The Fetcher always exposes `getRpcMethodForTestOnly`.
+
 ### 1.17 Close replies on WebSockets with no close handler
 
 **Problem (found by 0.2).** celld always answers a peer's Close with an echo
@@ -1776,8 +1859,9 @@ showed.
   half-open until the Worker calls `close()`.
 
 **Design.** Match workerd: no automatic reply for hibernatable sockets, and
-for accepted sockets only when the flag is on. 1.16 classifies both flags as
-honoured.
+for accepted sockets only when the flag is on. 1.16 classified
+`web_socket_auto_reply_to_close` as always-on; promote it (and the manual
+disable name, now refused) to honoured.
 
 **Tests.** `websocket/close-without-handler` (compat date 2026-01-01) and
 `service-bindings/ws-101-client-close` lose their `xfail`; S11 then sees no

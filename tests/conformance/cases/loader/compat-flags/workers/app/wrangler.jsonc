@@ -1,0 +1,8 @@
+// The Worker Loader refuses a Dynamic Worker's compatibility flags as
+// workerd's WorkerLoader::extractCompatFlags does, with the first error.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "worker_loaders": [{ "binding": "LOADER" }]
+}

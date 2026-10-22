@@ -1,0 +1,8 @@
+{
+  "name": "disable",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["delete_all_preserves_alarm"],
+  "durable_objects": { "bindings": [{ "name": "OBJECT", "class_name": "DisableObject" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DisableObject"] }]
+}

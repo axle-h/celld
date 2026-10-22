@@ -1,0 +1,8 @@
+// An old date with flags that turn behaviours on, and an implication from
+// nodejs_compat.
+{
+  "name": "old",
+  "main": "index.js",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat", "nodejs_als", "js_rpc", "rpc_params_dup_stubs"]
+}

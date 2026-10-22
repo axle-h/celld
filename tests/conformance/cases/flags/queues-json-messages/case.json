@@ -1,0 +1,9 @@
+{
+  "workers": ["front", "before", "v8", "json"],
+  "steps": [
+    {"path": "/"},
+    {"path": "/before"},
+    {"path": "/v8"},
+    {"path": "/json"}
+  ]
+}

@@ -93,9 +93,14 @@ pub struct PythonCompat {
 /// Refuse a configuration that Cloudflare would not run on the Pyodide 0.28
 /// line with the vendored SDK and `Default` entrypoint classes.
 ///
-/// The dates are workerd's `compatibility-date.capnp` at commit
-/// da46ad950c54b19158c5ea5cb997a9727491ca17 (v1.20260926.1).
+/// The flags' dates and implications are [`crate::compat_flags`]'s, which
+/// `celld deploy` checked before this runs.
 pub fn python_compat(object: &Map<String, Value>) -> anyhow::Result<PythonCompat> {
+    use crate::compat_flags::{compile_lenient, id, FlagId};
+    const PYTHON_WORKERS: FlagId = id("python_workers");
+    const PROCESS_PTH_FILES: FlagId = id("python_process_pth_files");
+    const REQUEST_HEADERS_PRESERVE_COMMAS: FlagId = id("python_request_headers_preserve_commas");
+    const WORKFLOWS_IMPLICIT_DEPENDENCIES: FlagId = id("python_workflows_implicit_dependencies");
     // A dropped flag would silently select another runtime behavior.
     let flags: Vec<&str> = match object.get("compatibility_flags") {
         None => Vec::new(),
@@ -108,98 +113,42 @@ pub fn python_compat(object: &Map<String, Value>) -> anyhow::Result<PythonCompat
             .collect::<anyhow::Result<_>>()?,
         Some(_) => bail!("config `compatibility_flags` must be an array"),
     };
-    let has = |flag: &str| flags.contains(&flag);
-    let date = object
-        .get("compatibility_date")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("Python Workers need a `compatibility_date`"))?;
-    // The dates below are compared as text, which orders only this form:
-    // "2026-4-3" would sort after "2026-04-21" and select later behavior.
-    let well_formed = date.len() == 10
-        && date.bytes().enumerate().all(|(index, byte)| match index {
-            4 | 7 => byte == b'-',
-            _ => byte.is_ascii_digit(),
-        });
-    if !well_formed {
-        bail!("compatibility_date {date:?} must have the form YYYY-MM-DD");
-    }
-    let since = |day: &str| date >= day;
-    let switch =
-        |enable: &str, disable: &str, day: &str| has(enable) || (!has(disable) && since(day));
-    if !has("python_workers") {
+    let date = object.get("compatibility_date").and_then(Value::as_str);
+    let computed = compile_lenient(date, &flags);
+    if !computed.get(PYTHON_WORKERS) {
         bail!("Python entries require the python_workers compatibility flag");
     }
-    for flag in [
-        "python_workers_314",
-        "python_workers_20260610",
-        "python_workers_development",
-    ] {
-        if has(flag) {
+    for flag in ["python_workers_314", "python_workers_20260610"] {
+        if flags.contains(&flag) {
             bail!(
                 "celld runs Python Workers on Pyodide {PYODIDE_VERSION} (Python 3.13); \
                  remove the `{flag}` compatibility flag"
             );
         }
     }
-    if switch("python_workers_314", "no_python_workers_314", "2026-09-08") {
-        bail!(
-            "compatibility_date {date} selects Pyodide 314 (Python 3.14) on Cloudflare, and \
-             celld runs Pyodide {PYODIDE_VERSION} (Python 3.13); use a date before 2026-09-08 \
-             or add the `no_python_workers_314` compatibility flag"
-        );
-    }
-    // Everything below is on by date from 2026-04-21, so each check only
-    // rejects an explicit opt-out or an older date.
+    // Each of these is on by date or by python_workers from 2026-04-21 at the
+    // latest, so each check rejects only an explicit opt-out or an older date.
     let required = [
-        (
-            "python_workers_20250116",
-            "no_python_workers_20250116",
-            "2025-09-29",
-            "Pyodide 0.28",
-        ),
-        (
-            "enable_python_external_sdk",
-            "disable_python_external_sdk",
-            "2026-04-21",
-            "the vendored Workers SDK",
-        ),
-        (
-            "python_no_global_handlers",
-            "disable_python_no_global_handlers",
-            "2025-08-14",
-            "`Default` entrypoint classes",
-        ),
+        ("python_workers_20250116", "Pyodide 0.28"),
+        ("enable_python_external_sdk", "the vendored Workers SDK"),
+        ("python_no_global_handlers", "`Default` entrypoint classes"),
         (
             "python_workers_force_new_vendor_path",
-            "",
-            "2025-08-11",
             "the `python_modules` search path",
         ),
     ];
-    for (enable, disable, day, behavior) in required {
-        if !switch(enable, disable, day) {
+    for (flag, behavior) in required {
+        if !computed.get(id(flag)) {
             bail!(
-                "celld runs Python Workers only with {behavior} ({enable}); use a \
+                "celld runs Python Workers only with {behavior} ({flag}); use a \
                  compatibility_date from 2026-04-21 without opting out of it"
             );
         }
     }
     Ok(PythonCompat {
-        process_pth_files: switch(
-            "python_process_pth_files",
-            "disable_python_process_pth_files",
-            "2026-05-26",
-        ),
-        request_headers_preserve_commas: switch(
-            "python_request_headers_preserve_commas",
-            "disable_python_request_headers_preserve_commas",
-            "2026-02-17",
-        ),
-        workflows_implicit_dependencies: switch(
-            "python_workflows_implicit_dependencies",
-            "no_python_workflows_implicit_dependencies",
-            "2026-02-25",
-        ),
+        process_pth_files: computed.get(PROCESS_PTH_FILES),
+        request_headers_preserve_commas: computed.get(REQUEST_HEADERS_PRESERVE_COMMAS),
+        workflows_implicit_dependencies: computed.get(WORKFLOWS_IMPLICIT_DEPENDENCIES),
     })
 }
 
@@ -711,5 +660,72 @@ mod tests {
             { "tag": "v1", "new_sqlite_classes": [] }
         ] })))
         .unwrap();
+    }
+
+    fn compat(date: &str, flags: &[&str]) -> anyhow::Result<PythonCompat> {
+        python_compat(&config(json!({
+            "compatibility_date": date,
+            "compatibility_flags": flags,
+        })))
+    }
+
+    /// The Python flags follow their dates and `python_workers`, as workerd
+    /// computes them.
+    #[test]
+    fn python_flags_follow_their_dates() {
+        let on = compat("2026-09-04", &["python_workers"]).unwrap();
+        assert_eq!(
+            on,
+            PythonCompat {
+                process_pth_files: true,
+                request_headers_preserve_commas: true,
+                workflows_implicit_dependencies: true,
+            }
+        );
+        let off = compat(
+            "2026-04-21",
+            &[
+                "python_workers",
+                "disable_python_process_pth_files",
+                "disable_python_request_headers_preserve_commas",
+                "no_python_workflows_implicit_dependencies",
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            off,
+            PythonCompat {
+                process_pth_files: false,
+                request_headers_preserve_commas: false,
+                workflows_implicit_dependencies: false,
+            }
+        );
+        let early = compat("2026-04-21", &["python_workers"]).unwrap();
+        assert!(!early.process_pth_files && early.request_headers_preserve_commas);
+    }
+
+    #[test]
+    fn python_workers_refuses_a_runtime_celld_lacks() {
+        let message = |date: &str, flags: &[&str]| compat(date, flags).unwrap_err().to_string();
+        assert_eq!(
+            message("2026-09-04", &[]),
+            "Python entries require the python_workers compatibility flag"
+        );
+        assert!(
+            message("2026-09-04", &["python_workers", "python_workers_314"])
+                .ends_with("remove the `python_workers_314` compatibility flag")
+        );
+        assert!(message("2026-04-20", &["python_workers"])
+            .contains("only with the vendored Workers SDK (enable_python_external_sdk)"));
+        assert!(message(
+            "2026-09-04",
+            &["python_workers", "disable_python_no_global_handlers"]
+        )
+        .contains("(python_no_global_handlers)"));
+        assert!(message(
+            "2026-09-04",
+            &["python_workers", "no_python_workers_20250116"]
+        )
+        .contains("(python_workers_20250116)"));
     }
 }

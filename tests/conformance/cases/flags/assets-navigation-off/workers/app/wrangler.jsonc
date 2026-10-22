@@ -1,0 +1,8 @@
+// assets_navigation_has_no_effect: a navigation reaches the Worker.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["assets_navigation_has_no_effect"],
+  "assets": { "directory": "public", "not_found_handling": "single-page-application" }
+}

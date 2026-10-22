@@ -1,0 +1,10 @@
+// js_rpc, an experimental flag celld honours.
+{
+  "name": "flagged",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["js_rpc"],
+  "services": [{ "binding": "PLAIN", "service": "plain" }],
+  "durable_objects": { "bindings": [{ "name": "COUNTER", "class_name": "FlaggedCounter" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["FlaggedCounter"] }]
+}

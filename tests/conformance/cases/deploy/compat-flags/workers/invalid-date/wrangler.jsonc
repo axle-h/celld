@@ -1,0 +1,6 @@
+// A date workerd cannot parse.
+{
+  "name": "invalid-date",
+  "main": "index.js",
+  "compatibility_date": "2026-09"
+}

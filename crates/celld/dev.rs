@@ -1635,7 +1635,7 @@ mod tests {
         // `main` is a source the build reads, not its output: a codegen step.
         std::fs::write(
             &config,
-            r#"{"name":"app","main":"src/index.ts",
+            r#"{"name":"app","compatibility_date":"2026-09-04","main":"src/index.ts",
                 "build":{"command":"npm run codegen","watch_dir":["src","../shared"]}}"#,
         )
         .unwrap();
@@ -1678,12 +1678,16 @@ mod tests {
         let config = app.join("wrangler.jsonc");
         let console = Console { color: false };
         let plan = || WatchPlan::for_configs(std::slice::from_ref(&config), true, &console);
-        std::fs::write(&config, r#"{"name":"app","main":"index.js"}"#).unwrap();
+        std::fs::write(
+            &config,
+            r#"{"name":"app","compatibility_date":"2026-09-04","main":"index.js"}"#,
+        )
+        .unwrap();
         let before = plan().unwrap();
         assert_eq!(before, WatchPlan::projects(std::slice::from_ref(&app)));
         std::fs::write(
             &config,
-            r#"{"name":"app","main":"index.js","build":{"command":"make","watch_dir":"../shared"}}"#,
+            r#"{"name":"app","compatibility_date":"2026-09-04","main":"index.js","build":{"command":"make","watch_dir":"../shared"}}"#,
         )
         .unwrap();
         let after = plan().unwrap();
@@ -1720,6 +1724,7 @@ mod tests {
             &config,
             json!({
                 "name": "site",
+                "compatibility_date": "2026-09-04",
                 "assets": { "directory": "public" },
                 "build": { "command": command },
             })

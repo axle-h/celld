@@ -1,0 +1,26 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "rpc": {
+          "value": "hello rpc"
+        },
+        "fetch": "counter",
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "rpc": {
+          "error": "TypeError: The receiving Durable Object does not support RPC, because its class was not declared with `extends DurableObject`. In order to enable RPC, make sure your class extends the special class `DurableObject`, which can be imported from the module \"cloudflare:workers\"."
+        },
+        "fetch": "counter",
+        "reported": false
+      }
+    }
+  ]
+}

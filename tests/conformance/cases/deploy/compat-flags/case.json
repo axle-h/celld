@@ -1,0 +1,44 @@
+{
+  "kind": "celld-only",
+  "reason": "celld deploy --dry-run refusals of compatibility dates and flags; workerd has no deploy step",
+  "workers": [
+    "refused",
+    "unknown",
+    "contradictory",
+    "experimental",
+    "newest-date",
+    "invalid-date",
+    "accepted",
+    "no-date",
+    "short-date"
+  ],
+  "steps": [
+    {
+      "deploy": "refused"
+    },
+    {
+      "deploy": "unknown"
+    },
+    {
+      "deploy": "contradictory"
+    },
+    {
+      "deploy": "experimental"
+    },
+    {
+      "deploy": "newest-date"
+    },
+    {
+      "deploy": "invalid-date"
+    },
+    {
+      "deploy": "no-date"
+    },
+    {
+      "deploy": "short-date"
+    },
+    {
+      "deploy": "accepted"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+// A date not in the form YYYY-MM-DD, which workerd refuses.
+{
+  "name": "short-date",
+  "main": "index.js",
+  "compatibility_date": "2026-9-4"
+}

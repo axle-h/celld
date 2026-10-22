@@ -603,7 +603,15 @@ const CLOUDFLARE_WORKERS_EXPORTS: &[&str] = &[
 fn cloudflare_workers_source() -> String {
     let mut out = internals_import();
     for name in CLOUDFLARE_WORKERS_EXPORTS {
-        out.push_str(&format!("export const {name} = __celld.__cf.{name};\n"));
+        // `env` and `exports` honour disallow_importable_env; see
+        // `__cfImportable` in harness.js.
+        if matches!(*name, "env" | "exports") {
+            out.push_str(&format!(
+                "export const {name} = __celld.__cfImportable({name:?});\n"
+            ));
+        } else {
+            out.push_str(&format!("export const {name} = __celld.__cf.{name};\n"));
+        }
     }
     out
 }
@@ -1164,14 +1172,19 @@ mod tests {
         assert_eq!(sorted, CLOUDFLARE_WORKERS_EXPORTS);
     }
 
-    /// Known and unimplemented names alike bind to `__celld.__cf`; scanned
-    /// names off the list, `default` included, are not exported, so they
-    /// fail to link.
+    /// Known and unimplemented names alike bind to `__celld.__cf`, and `env`
+    /// and `exports` through `__cfImportable`; scanned names off the list,
+    /// `default` included, are not exported, so they fail to link.
     #[test]
     fn cloudflare_workers_stub_is_the_full_surface_whatever_was_scanned() {
         let mut expected = internals_import();
         for name in CLOUDFLARE_WORKERS_EXPORTS {
-            expected.push_str(&format!("export const {name} = __celld.__cf.{name};\n"));
+            let value = match *name {
+                "env" => "__celld.__cfImportable(\"env\")".to_string(),
+                "exports" => "__celld.__cfImportable(\"exports\")".to_string(),
+                _ => format!("__celld.__cf.{name}"),
+            };
+            expected.push_str(&format!("export const {name} = {value};\n"));
         }
         for scanned in [
             names(&[]),

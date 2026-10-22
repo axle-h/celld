@@ -1,0 +1,73 @@
+{
+  "steps": [
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: The compatibility flag url_original is not supported by celld: celld always behaves as url_standard does: URL follows the WHATWG URL Standard.",
+        "The compatibility flag enhanced_error_serialization is not supported by celld: structuredClone() and RPC carry an Error's name, message, stack and cause, but not its other own properties."
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: Compatibility flag specified multiple times: no_such_flag",
+        "No such compatibility flag: no_such_flag"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: Compatibility flags are mutually contradictory: nodejs_compat vs no_nodejs_compat"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: The compatibility flag experimental is experimental and cannot be used with celld."
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: This Worker requires compatibility date \"2026-09-05\", but the newest date supported by this server binary is \"2026-09-04\"."
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: Invalid compatibility date: 2026-09"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: A compatibility_date is required when publishing. Add one to the Wrangler configuration file, such as \"compatibility_date\": \"2026-09-04\""
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: Invalid compatibility date: 2026-9-4"
+      ]
+    },
+    {
+      "exit": 0,
+      "worker": "accepted",
+      "output": [
+        " celld <version>",
+        "───────────────────────────────────────────────",
+        "Total Upload: <size> / gzip: <size>",
+        "Your Worker has no bindings.",
+        "Bundled accepted (<time>)"
+      ]
+    }
+  ]
+}

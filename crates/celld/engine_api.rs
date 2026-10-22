@@ -241,10 +241,12 @@ impl std::fmt::Display for CellOverloaded {
 impl std::error::Error for CellOverloaded {}
 
 /// Per-worker compatibility switches, derived from the manifest's
-/// compatibility date and flags (Workerd compatibility-date.capnp). `Default`
-/// is every switch off; production derives real values in `main`.
+/// compatibility date and flags by [`crate::compat_flags`]. `Default` is every
+/// switch off; production derives real values with [`Compat::from_flags`].
 #[derive(Clone, Copy, Default)]
 pub struct Compat {
+    /// Every computed flag, for `Cloudflare.compatibilityFlags`.
+    pub flags: crate::compat_flags::CompatFlags,
     pub delete_all_deletes_alarm: bool,
     /// `js_rpc`: RPC on a Durable Object class that does not extend
     /// `DurableObject` (Workerd worker-rpc.c++ getTargetInfo()).
@@ -253,25 +255,32 @@ pub struct Compat {
     /// default on for dates >= 2024-03-26): the deprecated `get()`/`put()`/
     /// `delete()` HTTP helpers on stubs (Workerd http.c++ Fetcher).
     pub fetcher_get_put_delete: bool,
+    /// `service_binding_extra_handlers`: a service binding has `queue()` and
+    /// `scheduled()`, which run the target's handlers. Without it both names
+    /// are RPC methods (Workerd http.h Fetcher).
+    pub service_binding_extra_handlers: bool,
     /// `sqlite_vec`: expose the pre-v1 sqlite-vec extension to SQLite-backed
     /// Durable Objects. This switch is explicit and has no date default.
     pub sqlite_vec: bool,
-    /// `websocket_standard_binary_type`: `binaryType` defaults to `"blob"` and
-    /// a binary message arrives as a `Blob`, per the WHATWG default. Without
-    /// it celld keeps the historical `"arraybuffer"`.
+    /// `websocket_standard_binary_type` (off =
+    /// `no_websocket_standard_binary_type`, default on for dates >=
+    /// 2026-03-17): `binaryType` defaults to `"blob"` and a binary message
+    /// arrives as a `Blob`, per the WHATWG default. Without it `binaryType` is
+    /// `"arraybuffer"`.
     pub websocket_standard_binary_type: bool,
-    /// Queue bodies default to JSON on compatibility dates after 2024-03-18;
-    /// older deployments retain the V8 structured-clone default.
+    /// `queues_json_messages` (off = `no_queues_json_messages`, default on for
+    /// dates >= 2024-03-18): queue bodies default to JSON; older deployments
+    /// retain the V8 structured-clone default.
     pub queue_json_messages: bool,
     /// `allow_irrevocable_stub_storage`: workerd adds `ctx.restore()` to
     /// `ExecutionContext` and `DurableObjectState` (global-scope.h,
     /// actor-state.h). celld defines the method, which rejects as not
     /// implemented, so a Worker that sets the flag fails at first use.
     pub allow_irrevocable_stub_storage: bool,
-    /// `nodejs_als`: `node:async_hooks` with `AsyncLocalStorage` without the
-    /// rest of `nodejs_compat`. celld offers the module whatever the flags
-    /// say, so only `Cloudflare.compatibilityFlags` reads this.
-    pub nodejs_als: bool,
+    /// `disallow_importable_env` (off = `allow_importable_env`): `env` and
+    /// `exports` from `cloudflare:workers` read as empty (Workerd modules.c++
+    /// EnvModule).
+    pub disallow_importable_env: bool,
     /// `rpc_params_dup_stubs` (off = `rpc_params_transfer_stubs`, default on
     /// for dates >= 2026-01-20): a stub in an RPC call's params is duplicated
     /// rather than transferred, and a param with its own `dup()` crosses as
@@ -291,6 +300,27 @@ pub struct Compat {
     /// holds the env's strings and JSON values as text before the main
     /// module evaluates (workerd internal_process.ts getInitialEnv).
     pub populate_process_env: bool,
+}
+
+impl Compat {
+    pub fn from_flags(flags: crate::compat_flags::CompatFlags) -> Compat {
+        use crate::compat_flags as f;
+        Compat {
+            flags,
+            delete_all_deletes_alarm: flags.get(f::DELETE_ALL_DELETES_ALARM),
+            js_rpc: flags.get(f::JS_RPC),
+            fetcher_get_put_delete: !flags.get(f::FETCHER_NO_GET_PUT_DELETE),
+            service_binding_extra_handlers: flags.get(f::SERVICE_BINDING_EXTRA_HANDLERS),
+            sqlite_vec: flags.get(f::SQLITE_VEC),
+            websocket_standard_binary_type: flags.get(f::WEBSOCKET_STANDARD_BINARY_TYPE),
+            queue_json_messages: flags.get(f::QUEUES_JSON_MESSAGES),
+            allow_irrevocable_stub_storage: flags.get(f::ALLOW_IRREVOCABLE_STUB_STORAGE),
+            disallow_importable_env: flags.get(f::DISALLOW_IMPORTABLE_ENV),
+            rpc_params_dup_stubs: flags.get(f::RPC_PARAMS_DUP_STUBS),
+            nodejs_compat: flags.get(f::NODEJS_COMPAT) || flags.get(f::NODEJS_COMPAT_V2),
+            populate_process_env: flags.get(f::NODEJS_COMPAT_POPULATE_PROCESS_ENV),
+        }
+    }
 }
 
 /// A non-main module the worker's main module may import, tagged by how the
