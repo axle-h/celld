@@ -85,6 +85,7 @@ pub mod peer_auth;
 pub mod peer_probe;
 pub mod pool;
 pub mod protocol;
+pub mod public_egress;
 pub(crate) mod queue_batching;
 pub mod queue_cli;
 pub mod queue_policy;
@@ -311,5 +312,6 @@ pub fn worker_compat(metadata: &serde_json::Value) -> js::Compat {
         websocket_standard_binary_type: has_flag("websocket_standard_binary_type"),
         queue_json_messages: switch("queue_json_messages", "queue_v8_messages", "2024-03-18"),
         allow_irrevocable_stub_storage: has_flag("allow_irrevocable_stub_storage"),
+        nodejs_als: has_flag("nodejs_als"),
     }
 }

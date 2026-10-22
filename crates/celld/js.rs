@@ -719,17 +719,27 @@ impl CellJob {
 
 thread_local! {
     // One outbound HTTP client per JS thread — building it per fetch rebuilds
-    // the TLS stack every call (async-op-hazards.md).
-    static HTTP: reqwest::Client = reqwest::Client::new();
-    static HTTP_MANUAL: reqwest::Client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    // the TLS stack every call (async-op-hazards.md). Each one applies the
+    // egress policy (`public_egress`), so each follow goes through its check.
+    static HTTP: reqwest::Client = crate::public_egress::client(
+        reqwest::redirect::Policy::custom(|attempt| {
+            // reqwest's default limit: `previous` starts with the first URL.
+            if attempt.previous().len() > 10 {
+                return attempt.error("too many redirects");
+            }
+            crate::public_egress::follow(attempt)
+        }),
+    );
+    static HTTP_MANUAL: reqwest::Client =
+        crate::public_egress::client(reqwest::redirect::Policy::none());
     // A separate policy stops an `error` request before reqwest can replay it
     // at the destination. Inspecting the final response would be too late:
     // the method, body, and credentials could already have left the process.
-    static HTTP_ERROR: reqwest::Client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+    static HTTP_ERROR: reqwest::Client = crate::public_egress::client(
+        reqwest::redirect::Policy::custom(|attempt| {
             attempt.error("fetch redirect mode is error")
-        })).build().unwrap();
+        }),
+    );
 }
 
 #[derive(Debug)]
@@ -9130,6 +9140,12 @@ fn op_fetch(
     // An absent argument is `false`, so a direct caller gets the uncancellable
     // request it asked for.
     let cancellable = args.get(6).boolean_value(scope);
+    // A container's `getTcpPort()` fetch names its port, and the host looks
+    // up the address the egress policy then lets this one request reach.
+    let exempt = match container::port_address_arg(scope, args.get(7)) {
+        Ok(exempt) => exempt,
+        Err(error) => return loader_throw(scope, &error),
+    };
     let mut body_guard = match body.as_ref().and_then(RequestBody::stream_id) {
         Some(stream_id) => match current_context().transfer_body_stream(stream_id) {
             Some(guard) => guard,
@@ -9272,6 +9288,19 @@ fn op_fetch(
                 crate::telemetry::record(span);
             }
         };
+        // A refusal leaves nothing to wait for: no byte goes out.
+        let checked = match crate::public_egress::Request::check(&url, exempt) {
+            Ok(checked) => checked,
+            Err(crate::public_egress::CheckError::Refused(refused)) => {
+                finish(false, None, Some(refused.to_string()));
+                return Ok(serde_json::json!({ "refused": refused.to_string() }).to_string());
+            }
+            Err(crate::public_egress::CheckError::Invalid(error)) => {
+                let error = format!("fetch: {error}");
+                finish(false, None, Some(error.clone()));
+                return Err(error);
+            }
+        };
         await_egress_gate(gate).await.inspect_err(|error| {
             finish(false, None, Some(error.clone()));
         })?;
@@ -9322,9 +9351,9 @@ fn op_fetch(
                 "a cancel that is ready wins a tie, so an aborted request never \
                  hands back a response and never leaves a body stream nobody reads";
                 _ = cancel => None,
-                result = rb.send() => Some(result),
+                result = checked.send(rb.send()) => Some(result),
             },
-            None => Some(rb.send().await),
+            None => Some(checked.send(rb.send()).await),
         };
         let Some(sent) = sent else {
             let error = "fetch: the request was aborted".to_string();
@@ -9360,6 +9389,11 @@ fn op_fetch(
                 .to_string())
             }
             Err(e) => {
+                if let Some(refused) = crate::public_egress::refusal(&e) {
+                    let refused = refused.to_string();
+                    finish(false, None, Some(refused.clone()));
+                    return Ok(serde_json::json!({ "refused": refused }).to_string());
+                }
                 let error = fetch_request_error(&e);
                 finish(false, None, Some(error.clone()));
                 Err(error)
@@ -11245,20 +11279,17 @@ impl IoContext {
         self.redirect_client
             .get_or_init(|| {
                 let context = Arc::downgrade(self);
-                reqwest::Client::builder()
-                    .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-                        if attempt.previous().len() >= 10 {
-                            return attempt.error("too many redirects");
+                crate::public_egress::client(reqwest::redirect::Policy::custom(move |attempt| {
+                    if attempt.previous().len() >= 10 {
+                        return attempt.error("too many redirects");
+                    }
+                    if let Some(context) = context.upgrade() {
+                        if let Err(error) = context.charge_subrequest() {
+                            return attempt.error(RedirectSubrequestLimit(error));
                         }
-                        if let Some(context) = context.upgrade() {
-                            if let Err(error) = context.charge_subrequest() {
-                                return attempt.error(RedirectSubrequestLimit(error));
-                            }
-                        }
-                        attempt.follow()
-                    }))
-                    .build()
-                    .expect("build the redirect-counting HTTP client")
+                    }
+                    crate::public_egress::follow(attempt)
+                }))
             })
             .clone()
     }

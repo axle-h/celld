@@ -245,7 +245,7 @@ impl CellContainer {
             return Err("the container is not running".to_string());
         }
         match &state.address {
-            Address::Ip(ip) => Ok(format!("{ip}:{port}")),
+            Address::Ip(ip) => Ok(ip_port(ip, port)),
             Address::Published(ports) => ports
                 .get(&port)
                 .map(|host| format!("127.0.0.1:{host}"))
@@ -1540,6 +1540,15 @@ async fn demux(
     }
 }
 
+/// `ip:port` as a URL authority and a socket address both read it: an IPv6
+/// address goes in brackets.
+fn ip_port(ip: &str, port: u16) -> String {
+    match ip.parse::<std::net::IpAddr>() {
+        Ok(ip) => std::net::SocketAddr::new(ip, port).to_string(),
+        Err(_) => format!("{ip}:{port}"),
+    }
+}
+
 fn address_of(info: &Value) -> Address {
     if cfg!(target_os = "linux") {
         let ip = info
@@ -1585,4 +1594,14 @@ fn container_name(node: &str, scope: &str) -> String {
     use sha2::Digest;
     let digest = sha2::Sha256::digest(format!("{node}\n{scope}").as_bytes());
     format!("celld-{:x}", digest)[..30].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_container_address_is_a_valid_authority() {
+        assert_eq!(super::ip_port("172.17.0.2", 8080), "172.17.0.2:8080");
+        assert_eq!(super::ip_port("fd00::2", 8080), "[fd00::2]:8080");
+        assert!("[fd00::2]:8080".parse::<std::net::SocketAddr>().is_ok());
+    }
 }

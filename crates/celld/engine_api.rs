@@ -268,6 +268,10 @@ pub struct Compat {
     /// actor-state.h). celld defines the method, which rejects as not
     /// implemented, so a Worker that sets the flag fails at first use.
     pub allow_irrevocable_stub_storage: bool,
+    /// `nodejs_als`: `node:async_hooks` with `AsyncLocalStorage` without the
+    /// rest of `nodejs_compat`. celld offers the module whatever the flags
+    /// say, so only `Cloudflare.compatibilityFlags` reads this.
+    pub nodejs_als: bool,
 }
 
 /// A non-main module the worker's main module may import, tagged by how the

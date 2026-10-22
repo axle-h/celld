@@ -54,6 +54,21 @@ pub enum Error {
     Declined(Box<Declined>),
     /// No answer to read -- DNS, TCP, TLS, or a malformed handshake.
     Failed(anyhow::Error),
+    /// A Worker's socket to an address the egress policy refuses. Nothing
+    /// was sent.
+    Refused(crate::public_egress::Refused),
+}
+
+/// Whose connection this is, which decides where it may go.
+pub enum Dial {
+    /// The node's own connection, such as the control plane's: it connects
+    /// wherever the URL says.
+    Node,
+    /// A Worker's outbound socket, which the egress policy checks. `exempt` is
+    /// the container address a `getTcpPort()` upgrade may reach past it.
+    Worker {
+        exempt: Option<std::net::SocketAddr>,
+    },
 }
 
 impl From<anyhow::Error> for Error {
@@ -69,6 +84,7 @@ impl std::fmt::Display for Error {
                 write!(f, "server refused the upgrade: {}", declined.status)
             }
             Error::Failed(error) => write!(f, "{error}"),
+            Error::Refused(refused) => write!(f, "{refused}"),
         }
     }
 }
@@ -108,7 +124,7 @@ fn accept_key(key: &str) -> String {
 ///
 /// The caller owns the timeout: nothing here bounds how long a server may take
 /// to answer.
-pub async fn connect(url: &str, extra: HeaderMap) -> Result<Connection, Error> {
+pub async fn connect(url: &str, extra: HeaderMap, dial: Dial) -> Result<Connection, Error> {
     let url = url::Url::parse(url).context("parse WebSocket URL")?;
     // `fetch("http://…", { headers: { Upgrade: "websocket" } })` is the
     // Workers idiom for an outbound socket, and the only form a container
@@ -132,9 +148,22 @@ pub async fn connect(url: &str, extra: HeaderMap) -> Result<Connection, Error> {
         None => url.path().to_string(),
     };
 
-    let tcp = tokio::net::TcpStream::connect((host.as_str(), port))
-        .await
-        .with_context(|| format!("connect {authority}"))?;
+    let tcp = match dial {
+        Dial::Node => tokio::net::TcpStream::connect((host.as_str(), port))
+            .await
+            .with_context(|| format!("connect {authority}"))?,
+        Dial::Worker { exempt } => match crate::public_egress::connect(&url, exempt).await {
+            Ok(tcp) => tcp,
+            Err(crate::public_egress::ConnectError::Refused(refused)) => {
+                return Err(Error::Refused(refused))
+            }
+            Err(crate::public_egress::ConnectError::Io(error)) => {
+                return Err(anyhow::Error::new(error)
+                    .context(format!("connect {authority}"))
+                    .into())
+            }
+        },
+    };
     let stream: Box<dyn Stream> = if tls {
         let name = rustls::pki_types::ServerName::try_from(host.clone())
             .map_err(|_| anyhow!("invalid TLS server name: {host}"))?;

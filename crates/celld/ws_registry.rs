@@ -36,6 +36,9 @@ pub struct OutboundWsReq {
     /// op derives it from the running event, so the socket routes through
     /// the facet's root and never names the facet as a cell.
     pub facet: Option<FacetSocket>,
+    /// The container address a `getTcpPort()` upgrade may reach past the
+    /// egress policy, looked up by the host. `None` for any other socket.
+    pub exempt: Option<std::net::SocketAddr>,
     pub reply: tokio::sync::oneshot::Sender<Result<OutboundWsOpen>>,
     /// Releases what the op registered for `id` unless the connector takes
     /// the socket over and disarms it. It travels with the request, so a

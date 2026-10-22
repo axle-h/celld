@@ -1,0 +1,9 @@
+{
+  "kind": "celld-only",
+  "reason": "the egress policy (plan 1.9): on Cloudflare a Worker can't reach a private address because its outbound WebSocket leaves from the edge onto the public internet, which workerd run locally doesn't model",
+  "workers": ["app"],
+  "upstream": true,
+  "steps": [
+    {"path": "/run?port=${UPSTREAM_PORT}"}
+  ]
+}

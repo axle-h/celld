@@ -1,0 +1,35 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "allowedHop": {
+          "status": 200,
+          "location": null,
+          "body": "{\"landed\":\"?from=redirect\"}"
+        },
+        "literal": {
+          "error": "TypeError",
+          "message": "celld egress policy: 127.0.0.1:${UPSTREAM_PORT_2} is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 127.0.0.1:${UPSTREAM_PORT_2} to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        "metadata": {
+          "error": "TypeError",
+          "message": "celld egress policy: 169.254.169.254:80 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 169.254.169.254:80 to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        "mapped": {
+          "error": "TypeError",
+          "message": "celld egress policy: [::ffff:7f00:1]:${UPSTREAM_PORT_2} is not a public address, so this node refuses to connect to it. A node operator can allow it by adding [::ffff:7f00:1]:${UPSTREAM_PORT_2} to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        "name": {
+          "error": "TypeError",
+          "message": "celld egress policy: localhost:${UPSTREAM_PORT_2} is not a public address, so this node refuses to connect to it. A node operator can allow it by adding localhost:${UPSTREAM_PORT_2} to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        "manual": {
+          "status": 302,
+          "location": "http://127.0.0.1:${UPSTREAM_PORT_2}/",
+          "body": "redirect"
+        }
+      }
+    }
+  ]
+}

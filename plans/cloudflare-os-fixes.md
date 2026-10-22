@@ -353,8 +353,10 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 14 | 1.21 part 1: host WebSocket owner map | done | `184054a` |
 | 14b | 1.21 part 2: harness private state, target grants | done | `324563e` |
 | 15 | 0.5 integration adapter | done | starter `fb97f16` |
-| 16 | 1.8 BYOB readers on platform streams | done | see log |
-| 17+ | Phase 1 in plan order (1.9-1.26), and the 1.4 props key-order follow-up | queued | |
+| 16 | 1.8 BYOB readers on platform streams | done | `e8e6459` |
+| 17 | 1.9 egress policy (part A), node-address always-block (part B) | done | see log |
+| 18 | 1.27 container scope (security) | queued | |
+| 19+ | Phase 1 in plan order (1.10-1.26), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -1383,6 +1385,34 @@ not only ones that set the flag.
 - **`nodejs_als`:** AsyncLocalStorage already works without gating. Classify
   it as honoured in 1.16 and pin it with a case.
 
+**As built.**
+- `crates/celld/public_egress.rs`:
+  - Each Worker fetch runs in a task-local scope holding the hop's host and
+    port. A custom resolver returns only addresses that pass, which also
+    covers DNS rebinding.
+  - IP literals are checked before the request and at every redirect hop.
+  - Connections outside a scope are refused.
+- The range table is IANA's non-global ranges. Mapped, NAT64
+  (`64:ff9b::/96`, `64:ff9b:1::/48`) and 6to4 addresses are judged by their
+  embedded IPv4. Teredo is refused.
+- `new WebSocket()` and fetch upgrades use the same checks.
+- Containers: `getTcpPort().fetch()` may reach exactly its container's
+  address, and only as a literal.
+- `CELLD_FETCH_PRIVATE_ALLOW` is validated at startup. Public IPs and
+  numeric-tail names are refused as entries.
+- The node's **public** listener is not always blocked: a Worker on Cloudflare
+  can fetch its own hostname, and it reaches nothing a Worker can't reach
+  through `ctx.exports`.
+- **Part B (separate commit):** the internal listener and advertise
+  addresses are refused for `fetch()`, WebSockets **and** `connect()`, even
+  when allowlisted. Wildcard binds are checked against `getifaddrs`, and the
+  check fails closed. `connect()` is otherwise unrestricted.
+- The runner gains placeholders (`${UPSTREAM_PORT}`, `${PUBLIC_PORT}`,
+  `${INTERNAL_PORT}`) and an `upstream` server, clears an inherited
+  `CELLD_FETCH_PRIVATE_ALLOW`, and `celld dev` gains `--internal-port`.
+- Fixed on the way: a failed `new WebSocket()` dial now fires `close` (1006)
+  after `error`.
+
 **On by default (D16).** Every Worker gets the policy with no flag. Local development (a mock LLM, Ollama, the integration adapter's mock upstream) adds `CELLD_FETCH_PRIVATE_ALLOW` entries.
 
 **Tests.**
@@ -1570,6 +1600,9 @@ showed.
   - **refused at deploy:** unimplemented behaviour a Worker would silently
     lose
 - Unknown flags are refused at deploy, as workerd refuses them.
+- Already classified: `global_fetch_strictly_public` is no-op by design
+  (1.9). `nodejs_als` is honoured and reported in
+  `Cloudflare.compatibilityFlags` (`flags/nodejs-als`).
 - Known gap (found by 1.4): celld always exposes Fetcher `scheduled()`.
   Without `service_binding_extra_handlers`, workerd treats
   `env.X.scheduled(...)` as an RPC call to a method named `scheduled`.
@@ -1742,9 +1775,8 @@ legitimate cross-event uses.
 - The Response constructor checks no status range except 101.
 - `close()` before `accept()` on a handoff socket is never sent.
 - The `globalOutbound` broker path for a 101 is untested.
-- A failed `new WebSocket(url)` dial fires `error` but never `close`:
-  `readyState` is set to CLOSED before `_dispatchClose`, which then returns
-  early.
+- ~~A failed `new WebSocket(url)` dial fires `error` but never `close`~~:
+  fixed in 1.9.
 - Outbound frame channels (`outputs`) and the pre-upgrade `WsMeta.pending`
   buffer are unbounded for every socket. Add a per-socket byte budget with
   backpressure (a `bufferedAmount` model) or a close on overflow (1009/1011),
@@ -1781,6 +1813,21 @@ celld does not run") is out of date.
 - `IdentityTransformStream`: BYOB returns the view's type, `tee()` branches
   can't take a BYOB reader, and `releaseLock` with a read pending rejects
   the read instead of throwing.
+
+### 1.27 Container scope comes from JS (found by 1.9) — security
+
+**Problem.** `ContainerPort._scope` is a writable property (`harness.js`
+~2620), and the container ops (`port_address_arg` in `js/container.rs`,
+start, exec, `__container_address`) trust the scope that JS sends. So a
+Worker can name another Durable Object's container, which reaches its
+address, its lifecycle and the 1.9 egress exemption.
+
+**Design.** Bind container operations to the running cell on the host, as
+1.21 does for sockets: a DO reaches only its own container, and the scope
+never comes from JS. Keep harness state private.
+
+**Tests.** A celld-only isolation case that expects the refusal, and unit
+tests for each op.
 
 ### Phase 1 gate
 

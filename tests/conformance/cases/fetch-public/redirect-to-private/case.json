@@ -1,0 +1,10 @@
+{
+  "kind": "celld-only",
+  "reason": "the egress policy (plan 1.9): on Cloudflare a Worker can't reach a private address because fetch() leaves from the edge onto the public internet, which workerd run locally doesn't model",
+  "workers": ["app"],
+  "upstream": true,
+  "env": {"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}"},
+  "steps": [
+    {"path": "/run?port=${UPSTREAM_PORT}&other=${UPSTREAM_PORT_2}"}
+  ]
+}

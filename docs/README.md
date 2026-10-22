@@ -703,6 +703,7 @@ unset variable selects its default. A Boolean variable accepts only `0` or
 | `CELLD_INTERNAL_ADDR` | The peer and operator listener. The same as `--internal-listen` |
 | `CELLD_ADVERTISE` | The internal address that peers can reach. The same as `--advertise` |
 | `CELLD_UNSAFE_PUBLIC_ADVERTISE` | Set to `1` to permit a literal public IP in `CELLD_ADVERTISE`. It does not resolve a DNS name or restrict the internal listener |
+| `CELLD_FETCH_PRIVATE_ALLOW` | Comma-separated `host:port` entries that a Worker's `fetch()` and `new WebSocket()` can reach although they are not public addresses (default: none). See [Limit Worker egress](security.md#limit-worker-egress) |
 | `CELLD_NODE` | An explicit node-session ID: 1 to 128 ASCII letters, numbers, dots, dashes, or underscores, but not `.` or `..` |
 | `CELLD_WATCH` | The local work directory for SQLite and replication |
 | `CELLD_ESBUILD` | The path of the esbuild executable |

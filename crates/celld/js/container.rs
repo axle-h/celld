@@ -44,6 +44,29 @@ pub(super) fn op_container_running(
     rv.set(v8::Boolean::new(scope, running).into());
 }
 
+/// The address a `getTcpPort()` request may reach past the egress policy,
+/// from the op argument `[scope, port]` the port's `fetch()` passes; `None`
+/// for any other request. The host looks the address up, so a request can
+/// name only a running container's port, never an address of its choosing.
+pub(super) fn port_address_arg(
+    scope: &mut v8::PinScope,
+    value: v8::Local<v8::Value>,
+) -> Result<Option<std::net::SocketAddr>, String> {
+    if value.is_undefined() {
+        return Ok(None);
+    }
+    let (cell, port): (String, u16) = serde_json::from_str(&value.to_rust_string_lossy(scope))
+        .map_err(|error| format!("fetch: the container port is not [scope, port]: {error}"))?;
+    let address = container::engine_if_ready()
+        .and_then(|engine| engine.cell(&cell))
+        .ok_or_else(|| "this Durable Object has no container".to_string())
+        .and_then(|cell| cell.address(port))?;
+    address
+        .parse()
+        .map(Some)
+        .map_err(|error| format!("container address {address:?} is not ip:port: {error}"))
+}
+
 /// `host:port` the node dials for `getTcpPort(port)`, or a throw.
 pub(super) fn op_container_address(
     scope: &mut v8::PinScope,

@@ -2,6 +2,7 @@
   "kind": "celld-only",
   "reason": "workerd sends its spans to Miniflare's collector, which the runner cannot read; this pins what celld exports over OTLP",
   "observability": true,
+  "env": {"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${PUBLIC_PORT}"},
   "workers": ["exporter"],
   "steps": [
     {"path": "/spans"},

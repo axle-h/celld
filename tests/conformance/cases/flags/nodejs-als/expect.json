@@ -1,0 +1,65 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "reported": true,
+        "outside": null,
+        "run": {
+          "before": {
+            "label": "outer",
+            "seen": [
+              "outer",
+              "outer",
+              "outer",
+              "outer"
+            ]
+          },
+          "nested": {
+            "label": "inner",
+            "seen": [
+              "inner",
+              "inner",
+              "inner",
+              "inner"
+            ]
+          },
+          "after": "outer",
+          "exited": null
+        },
+        "concurrent": [
+          {
+            "label": "a",
+            "seen": [
+              "a",
+              "a",
+              "a",
+              "a"
+            ]
+          },
+          {
+            "label": "b",
+            "seen": [
+              "b",
+              "b",
+              "b",
+              "b"
+            ]
+          },
+          {
+            "label": "c",
+            "seen": [
+              "c",
+              "c",
+              "c",
+              "c"
+            ]
+          }
+        ],
+        "afterRuns": null
+      }
+    }
+  ]
+}

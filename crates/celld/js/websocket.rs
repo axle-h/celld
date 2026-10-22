@@ -634,6 +634,7 @@ struct Dial {
     headers: Vec<(String, String)>,
     want_response: bool,
     target: Option<WsTarget>,
+    exempt: Option<std::net::SocketAddr>,
 }
 
 type DialReply = tokio::sync::oneshot::Receiver<anyhow::Result<OutboundWsOpen>>;
@@ -688,6 +689,7 @@ fn start_dial(
             want_response: false,
             target: Some(target),
             facet: None,
+            exempt: None,
             reply: tx,
             release: WsDialGuard::new(id),
         },
@@ -701,6 +703,7 @@ fn start_dial(
             want_response: dial.want_response,
             target: None,
             facet,
+            exempt: dial.exempt,
             reply: tx,
             release: WsDialGuard::new(id),
         },
@@ -742,10 +745,12 @@ fn egress_refusal(scope: &mut v8::PinScope) -> Option<&'static str> {
     }
 }
 
-/// `__ws_upgrade(url, headers)`: `fetch(url, { headers: { Upgrade:
+/// `__ws_upgrade(url, headers, container)`: `fetch(url, { headers: { Upgrade:
 /// "websocket" } })`. Returns `{ id, ready }`, where `ready` resolves with a
-/// JSON envelope: either an upgraded socket, or the ordinary response a
-/// server sent instead, which the caller returns unchanged.
+/// JSON envelope: an upgraded socket, the ordinary response a server sent
+/// instead, which the caller returns unchanged, or the egress policy's
+/// refusal. `container` is the `[scope, port]` of a container's `getTcpPort()`
+/// upgrade, whose address the host lets past the policy.
 pub(super) fn op_ws_upgrade(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -777,6 +782,10 @@ pub(super) fn op_ws_upgrade(
         .find(|(name, _)| name.eq_ignore_ascii_case("sec-websocket-protocol"))
         .map(|(_, value)| value.split(',').map(|p| p.trim().to_string()).collect())
         .unwrap_or_default();
+    let exempt = match super::container::port_address_arg(scope, args.get(2)) {
+        Ok(exempt) => exempt,
+        Err(error) => return loader_throw(scope, &error),
+    };
     let (id, rx) = start_dial(
         &context,
         cell,
@@ -787,6 +796,7 @@ pub(super) fn op_ws_upgrade(
             headers,
             want_response: true,
             target: None,
+            exempt,
         },
     );
     let async_id = asyncrt::enqueue(async move {
@@ -795,7 +805,14 @@ pub(super) fn op_ws_upgrade(
         };
         let open = match rx.await {
             Ok(Ok(open)) => open,
-            Ok(Err(error)) => return Err(format!("WebSocket upgrade failed: {error}")),
+            Ok(Err(error)) => {
+                return match error.downcast_ref::<crate::public_egress::Refused>() {
+                    Some(refused) => {
+                        Ok(serde_json::json!({ "refused": refused.to_string() }).to_string())
+                    }
+                    None => Err(format!("WebSocket upgrade failed: {error}")),
+                }
+            }
             Err(error) => return Err(format!("WebSocket connector dropped: {error}")),
         };
         Ok(match open.declined {
@@ -855,7 +872,9 @@ pub(super) fn op_ws_next(
 }
 
 /// `__ws_connect(url, protocols)`: `new WebSocket(url, protocols)`. Returns
-/// `{ id, ready }`, where `ready` resolves with the chosen subprotocol.
+/// `{ id, ready }`, where `ready` resolves with a JSON envelope: the chosen
+/// subprotocol, or the egress policy's refusal, which the caller reports as a
+/// `TypeError`.
 pub(super) fn op_ws_connect(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -892,6 +911,7 @@ pub(super) fn op_ws_connect(
             headers: Vec::new(),
             want_response: false,
             target: None,
+            exempt: None,
         },
     );
     let async_id = asyncrt::enqueue(async move {
@@ -899,8 +919,15 @@ pub(super) fn op_ws_connect(
             return Err("no outbound WebSocket channel".into());
         };
         match rx.await {
-            Ok(Ok(open)) => Ok(open.protocol.unwrap_or_default()),
-            Ok(Err(error)) => Err(format!("WebSocket connection failed: {error}")),
+            Ok(Ok(open)) => Ok(
+                serde_json::json!({ "protocol": open.protocol.unwrap_or_default() }).to_string(),
+            ),
+            Ok(Err(error)) => match error.downcast_ref::<crate::public_egress::Refused>() {
+                Some(refused) => {
+                    Ok(serde_json::json!({ "refused": refused.to_string() }).to_string())
+                }
+                None => Err(format!("WebSocket connection failed: {error}")),
+            },
             Err(error) => Err(format!("WebSocket connector dropped: {error}")),
         }
     });
@@ -949,6 +976,7 @@ pub(super) fn op_ws_bind_target(
             headers: Vec::new(),
             want_response: false,
             target: Some(target),
+            exempt: None,
         },
     );
     // Nothing observes the outcome: the socket is already open, so there is
@@ -1651,6 +1679,7 @@ mod tests {
                     headers: Vec::new(),
                     want_response: false,
                     target,
+                    exempt: None,
                 },
             );
             assert!(reply.is_none());
@@ -1686,6 +1715,7 @@ mod tests {
             want_response: false,
             target: None,
             facet: None,
+            exempt: None,
             reply,
             release: WsDialGuard::new(id),
         };

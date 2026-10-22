@@ -1,6 +1,7 @@
 {
   "kind": "celld-only",
   "reason": "a Worker that dials its own origin; workerd under the test harness cannot reach it, so websocket/socket-ids covers the rest differentially",
+  "env": {"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${PUBLIC_PORT}"},
   "workers": ["app"],
   "steps": [
     {"path": "/dial"},

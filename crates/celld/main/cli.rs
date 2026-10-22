@@ -333,6 +333,9 @@ ENVIRONMENT:
                                   or restrict CELLD_INTERNAL_ADDR
   CELLD_TRUST_FORWARDED_HEADERS   `1` trusts X-Forwarded-Host and
                                   X-Forwarded-Proto
+  CELLD_FETCH_PRIVATE_ALLOW       host:port entries, comma-separated, that a
+                                  Worker's fetch() and WebSocket may reach
+                                  although they are not public addresses
   CELLD_NODE                      Node-session ID (default: generated)
   CELLD_WATCH                     Local SQLite/replication working directory
   CELLD_ESBUILD                   Override esbuild executable path

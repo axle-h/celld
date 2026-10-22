@@ -1,11 +1,12 @@
 // A Worker that forwards the request it received to the network with
 // `fetch(request)` gets a redirect back instead of following it, because an
-// incoming request has redirect mode "manual". `/bounce`, on this Worker's own
-// origin, is the redirecting server the forwarded requests reach over the
-// network; each target of `/outside` receives a request for it.
+// incoming request has redirect mode "manual". The runner's upstream server
+// (`lib/upstream.mjs`) is the redirecting server the forwarded requests reach
+// over the network: its `/bounce` answers 302 to `/landed`. Each target of
+// `/outside` receives a request for it.
 //
-// The redirecting server is on loopback. Once plan 1.9 refuses private
-// addresses, the runner has to allowlist this node's public address for it.
+// The upstream is on loopback, which celld's egress policy refuses, so the
+// case allows exactly its address with CELLD_FETCH_PRIVATE_ALLOW.
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 
 async function summary(response) {
@@ -31,16 +32,12 @@ export class Local extends WorkerEntrypoint {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const bounce = new URL("/bounce", url).href;
+    const bounce = `http://127.0.0.1:${url.searchParams.get("upstream")}/bounce`;
     // The caller's own mode, so that only the target's mode decides whether
     // the 302 is followed. With the default mode, workerd's Durable Object
     // stub would follow the 302 itself, and celld's doesn't yet (plan 1.20).
     const manual = { redirect: "manual" };
     switch (url.pathname) {
-      case "/bounce":
-        return new Response("bounce", { status: 302, headers: { location: "/landed?from=bounce" } });
-      case "/landed":
-        return Response.json({ landed: url.search });
       case "/outside":
         return Response.json({
           // The control: a request made with the default mode follows.

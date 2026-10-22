@@ -1,0 +1,8 @@
+{
+  "kind": "celld-only",
+  "reason": "the egress policy (plan 1.9) is celld's; this pins that it lets a public address through. The run reaches the internet when it can, and records the same transcript when it can't: a network error is not a refusal",
+  "workers": ["app"],
+  "steps": [
+    {"path": "/run"}
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": [
+        {
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/",
+          "error": "TypeError",
+          "message": "celld egress policy: 127.0.0.1:${UPSTREAM_PORT} is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 127.0.0.1:${UPSTREAM_PORT} to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "https://127.0.0.1:${UPSTREAM_PORT}/",
+          "error": "TypeError",
+          "message": "celld egress policy: 127.0.0.1:${UPSTREAM_PORT} is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 127.0.0.1:${UPSTREAM_PORT} to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://2130706433:${UPSTREAM_PORT}/",
+          "error": "TypeError",
+          "message": "celld egress policy: 127.0.0.1:${UPSTREAM_PORT} is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 127.0.0.1:${UPSTREAM_PORT} to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://0.0.0.0:${UPSTREAM_PORT}/",
+          "error": "TypeError",
+          "message": "celld egress policy: 0.0.0.0:${UPSTREAM_PORT} is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 0.0.0.0:${UPSTREAM_PORT} to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://10.1.2.3/",
+          "error": "TypeError",
+          "message": "celld egress policy: 10.1.2.3:80 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 10.1.2.3:80 to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://172.16.0.1/",
+          "error": "TypeError",
+          "message": "celld egress policy: 172.16.0.1:80 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 172.16.0.1:80 to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://192.168.1.1/",
+          "error": "TypeError",
+          "message": "celld egress policy: 192.168.1.1:80 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 192.168.1.1:80 to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://100.64.0.1/",
+          "error": "TypeError",
+          "message": "celld egress policy: 100.64.0.1:80 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 100.64.0.1:80 to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://169.254.169.254/latest/meta-data/",
+          "error": "TypeError",
+          "message": "celld egress policy: 169.254.169.254:80 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 169.254.169.254:80 to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://224.0.0.1/",
+          "error": "TypeError",
+          "message": "celld egress policy: 224.0.0.1:80 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 224.0.0.1:80 to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://255.255.255.255/",
+          "error": "TypeError",
+          "message": "celld egress policy: 255.255.255.255:80 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 255.255.255.255:80 to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://[::1]:${UPSTREAM_PORT}/",
+          "error": "TypeError",
+          "message": "celld egress policy: [::1]:${UPSTREAM_PORT} is not a public address, so this node refuses to connect to it. A node operator can allow it by adding [::1]:${UPSTREAM_PORT} to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://[::ffff:127.0.0.1]:${UPSTREAM_PORT}/",
+          "error": "TypeError",
+          "message": "celld egress policy: [::ffff:7f00:1]:${UPSTREAM_PORT} is not a public address, so this node refuses to connect to it. A node operator can allow it by adding [::ffff:7f00:1]:${UPSTREAM_PORT} to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://[::ffff:169.254.169.254]/",
+          "error": "TypeError",
+          "message": "celld egress policy: [::ffff:a9fe:a9fe]:80 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding [::ffff:a9fe:a9fe]:80 to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://[64:ff9b::a9fe:a9fe]/",
+          "error": "TypeError",
+          "message": "celld egress policy: [64:ff9b::a9fe:a9fe]:80 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding [64:ff9b::a9fe:a9fe]:80 to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://[fd00::1]/",
+          "error": "TypeError",
+          "message": "celld egress policy: [fd00::1]:80 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding [fd00::1]:80 to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://[fe80::1]/",
+          "error": "TypeError",
+          "message": "celld egress policy: [fe80::1]:80 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding [fe80::1]:80 to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://[ff02::1]/",
+          "error": "TypeError",
+          "message": "celld egress policy: [ff02::1]:80 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding [ff02::1]:80 to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://[::]/",
+          "error": "TypeError",
+          "message": "celld egress policy: [::]:80 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding [::]:80 to CELLD_FETCH_PRIVATE_ALLOW."
+        }
+      ]
+    }
+  ]
+}

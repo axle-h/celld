@@ -1,0 +1,34 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": [
+        {
+          "url": "http://localhost:${UPSTREAM_PORT}/",
+          "status": 200,
+          "body": "upstream"
+        },
+        {
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/",
+          "error": "TypeError",
+          "message": "celld egress policy: 127.0.0.1:${UPSTREAM_PORT} is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 127.0.0.1:${UPSTREAM_PORT} to CELLD_FETCH_PRIVATE_ALLOW."
+        },
+        {
+          "url": "http://127.0.0.1:${UPSTREAM_PORT_2}/",
+          "status": 200,
+          "body": "upstream"
+        },
+        {
+          "url": "http://localhost:${UPSTREAM_PORT_2}/",
+          "status": 200,
+          "body": "upstream"
+        },
+        {
+          "url": "http://[::1]:${UPSTREAM_PORT_2}/",
+          "error": "TypeError",
+          "message": "celld egress policy: [::1]:${UPSTREAM_PORT_2} is not a public address, so this node refuses to connect to it. A node operator can allow it by adding [::1]:${UPSTREAM_PORT_2} to CELLD_FETCH_PRIVATE_ALLOW."
+        }
+      ]
+    }
+  ]
+}

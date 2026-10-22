@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { CaseError, findCases, loadCase } from "./lib/case.mjs";
 import { startCelld, startDeploySession } from "./lib/celld.mjs";
-import { describeStep, runSteps } from "./lib/steps.mjs";
+import { bindPlaceholders, describeStep, freePort, runSteps } from "./lib/steps.mjs";
+import { startUpstream } from "./lib/upstream.mjs";
 import { startWorkerd } from "./lib/workerd.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -177,25 +178,37 @@ async function execute(runtime, testCase, tools) {
   });
   const run = { runtime, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
   let session;
+  let upstream;
   try {
+    upstream = testCase.upstream ? await startUpstream() : undefined;
+    const ports = {
+      UPSTREAM_PORT: upstream?.ports[0],
+      UPSTREAM_PORT_2: upstream?.ports[1],
+      // celld's own listener, for celld-only cases.
+      PUBLIC_PORT: testCase.publicPort && runtime === "celld" ? await freePort() : undefined,
+    };
+    const { env, steps, normalize } = bindPlaceholders(testCase, ports);
     session =
       runtime === "celld" && testCase.deployOnly
-        ? startDeploySession({ binary: tools.celld, esbuild: tools.esbuild, dir, env: testCase.env })
+        ? startDeploySession({ binary: tools.celld, esbuild: tools.esbuild, dir, env })
         : runtime === "celld"
         ? await startCelld({
             binary: tools.celld,
             esbuild: tools.esbuild,
             dir,
             workers: testCase.workers,
-            env: testCase.env,
+            env,
+            publicPort: ports.PUBLIC_PORT,
             observability: testCase.observability,
           })
         : await startWorkerd({ dir, workers: testCase.workers, observability: testCase.observability });
-    run.transcript = await runSteps(session, testCase.steps, testCase.normalize);
+    run.transcript = await runSteps(session, steps, normalize);
     await session.stop();
   } catch (error) {
     run.error = `${runtime}: ${error.message}`;
     await Promise.resolve(session?.kill()).catch(() => {});
+  } finally {
+    await upstream?.close();
   }
   run.logs = session?.logs();
   return run;

@@ -1,6 +1,8 @@
 // Runs a case's steps against a started runtime and returns the transcript:
 // one entry per step, in the shape expect.json stores.
 
+import { createServer } from "node:net";
+
 const STEP_TIMEOUT_MS = 30_000;
 
 // Both runtimes listen on a port the OS picks, so a Worker that echoes its
@@ -26,6 +28,40 @@ export async function runSteps(session, steps, normalize) {
     transcript.push(normalizeStrings(entry, session.origin, normalize));
   }
   return transcript;
+}
+
+/**
+ * Puts the ports the runner picked for this run into the case's `env` values
+ * and step paths, where they appear as `${NAME}`. Each port also gets a
+ * normalize rule that turns it back into its placeholder in the transcript,
+ * as the origin becomes http://origin.test, so a Worker or an error message
+ * that names one records the same text on every run.
+ */
+export function bindPlaceholders(testCase, ports) {
+  const bind = (text) =>
+    text.replace(/\$\{([^}]*)\}/g, (placeholder, name) => {
+      const port = ports[name];
+      if (port === undefined) throw new Error(`${placeholder} has no value on this runtime`);
+      return String(port);
+    });
+  const env = Object.fromEntries(Object.entries(testCase.env).map(([name, value]) => [name, bind(value)]));
+  const steps = testCase.steps.map((step) => (step.path === undefined ? step : { ...step, path: bind(step.path) }));
+  const rules = Object.entries(ports)
+    .filter(([, port]) => port !== undefined)
+    .map(([name, port]) => ({ regex: new RegExp(`(?<=[:=])${port}(?![0-9])`, "g"), replace: `\${${name}}` }));
+  return { env, steps, normalize: [...rules, ...testCase.normalize] };
+}
+
+/** A port nothing listens on now. Another process can take it before use. */
+export function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      server.close(() => resolve(port));
+    });
+  });
 }
 
 export function describeStep(step) {

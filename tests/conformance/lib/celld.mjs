@@ -5,6 +5,8 @@ import { createInterface } from "node:readline";
 import { FLUSH_MS, startOtlpReceiver } from "./otlp.mjs";
 
 const READY_TIMEOUT_MS = 120_000;
+// Variables a case's run never inherits from the shell.
+const RUNNER_OWNED = /^(CELLD_OTEL|OTEL_|CELLD_FETCH_PRIVATE_ALLOW$)/;
 const EXIT_TIMEOUT_MS = 45_000;
 
 const running = new Set();
@@ -26,19 +28,21 @@ for (const [signal, number] of [["SIGHUP", 1], ["SIGINT", 2], ["SIGTERM", 15]]) 
  * Starts the case's workers from `dir` (a temp copy of the case) and returns a
  * session for runSteps. `logs()` returns the supervisor's stderr so far. With
  * `observability`, celld exports telemetry to a receiver the session owns.
+ * The public listener takes `publicPort`, or a free port when it is 0.
  */
-export async function startCelld({ binary, esbuild, dir, workers, env, observability }) {
+export async function startCelld({ binary, esbuild, dir, workers, env, publicPort = 0, observability }) {
   const configs = workers.flatMap((name) => ["-c", `workers/${name}/wrangler.jsonc`]);
   const stderr = [];
-  // Telemetry is off unless the case turns it on, whatever the shell has.
-  const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(CELLD_OTEL|OTEL_)/.test(name)));
+  // Telemetry is off unless the case turns it on, and the egress allowlist
+  // is empty unless the case sets one, whatever the shell has.
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !RUNNER_OWNED.test(name)));
   const otlp = observability ? await startOtlpReceiver() : undefined;
   const telemetry = otlp ? { CELLD_OTEL: otlp.url, CELLD_OTEL_FLUSH_MS: String(FLUSH_MS) } : {};
   const environment = { ...inherited, ...env, ...telemetry, CELLD_ESBUILD: esbuild };
   // A failed start has no session to read the logs from, so its error
   // carries them.
   const start = (args) =>
-    launch({ binary, dir, env: environment, args, stderr }).catch((error) => {
+    launch({ binary, dir, env: environment, args: ["--port", String(publicPort), ...args], stderr }).catch((error) => {
       throw new Error(`${error.message}\n--- celld dev stderr ---\n${stderr.join("").trim()}`, { cause: error });
     });
   let node;
@@ -73,7 +77,7 @@ export async function startCelld({ binary, esbuild, dir, workers, env, observabi
 }
 
 async function launch({ binary, dir, env, args, stderr }) {
-  const child = spawn(binary, ["dev", "--no-watch", "--port", "0", ...args], {
+  const child = spawn(binary, ["dev", "--no-watch", ...args], {
     cwd: dir,
     env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -166,7 +170,7 @@ async function stop({ child, ready, exited, stray }) {
  * normalized: the case directory, the celld version, sizes and times.
  */
 export function startDeploySession({ binary, esbuild, dir, env }) {
-  const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(CELLD_OTEL|OTEL_)/.test(name)));
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !RUNNER_OWNED.test(name)));
   const environment = { ...inherited, ...env, CELLD_ESBUILD: esbuild };
   const log = [];
   return {

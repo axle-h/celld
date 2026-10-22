@@ -27,7 +27,9 @@ case is malformed or the setup is incomplete. Each run works in a copy of the
 case under `.run/`, which is deleted unless the case fails.
 
 - On celld, the runner starts `target/<profile>/celld dev --no-watch --clean
-  --port 0 -c <first worker> -c …` and reads the ready line from stdout. Any
+  --port 0 -c <first worker> -c …` and reads the ready line from stdout. The
+  node gets the shell's environment without `CELLD_OTEL*`, `OTEL_*` and
+  `CELLD_FETCH_PRIVATE_ALLOW`, and with the case's `env`. Any
   other line on stdout fails the case: stdout carries only ready records. When
   the steps finish, it sends `POST /shutdown?handoff=preserve` to the
   internal origin. `CELLD_ESBUILD` points at this package's esbuild.
@@ -54,7 +56,8 @@ nondeterministic case shows up when it is recorded. A case runs as it would unde
 {
   "kind": "differential",
   "workers": ["front", "back"],
-  "env": { "CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:9000" },
+  "env": { "CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}" },
+  "upstream": true,
   "xfail": "1.7",
   "steps": [
     { "path": "/run" },
@@ -75,6 +78,25 @@ nondeterministic case shows up when it is recorded. A case runs as it would unde
   be valid environment variable names. workerd
   doesn't use it. Telemetry variables (`CELLD_OTEL*`, `OTEL_*`) are refused:
   the runner sets them, from `observability`.
+- `upstream` (default `false`) starts the runner's local HTTP server,
+  `lib/upstream.mjs`, for the case's Workers to fetch as "the network". It
+  listens on two loopback ports. `/bounce` answers 302 to
+  `/landed?from=bounce`, `/landed` answers `{"landed": <query>}`,
+  `/redirect?to=<url>` answers 302 to that URL, and every other path answers
+  `upstream`. celld's egress policy refuses loopback, so a case that fetches
+  the upstream on celld allows it in `env`, as in
+  `"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}"`.
+- Placeholders name the ports the runner picks for a run, in `env` values and
+  in `path` and `ws` steps:
+  - `${UPSTREAM_PORT}` and `${UPSTREAM_PORT_2}`: the upstream's two ports.
+    They need `"upstream": true`.
+  - `${PUBLIC_PORT}`: celld's public listener, for a Worker that fetches its
+    own origin and has to allow it. The runner picks a free port and passes it
+    as `--port`, so another process can take it first. It needs a
+    `celld-only` case.
+
+  The runner writes each port back as its placeholder wherever the transcript
+  has it after a `:` or a `=`, as it writes the origin as `http://origin.test`.
 - `observability` (default `false`) turns tracing on for both runtimes. On
   celld the runner starts an OTLP/HTTP receiver (`lib/otlp.mjs`) and sets
   `CELLD_OTEL` to it, with `CELLD_OTEL_FLUSH_MS=100`; otherwise it clears
@@ -152,7 +174,8 @@ whose support hasn't landed yet: `nodes` greater than 1 or a step's `node`
   differential case fails on a different installed workerd until it is
   re-recorded. Use this kind whenever workerd can run the scenario.
 - **`celld-only`**: for behaviour workerd can't show locally, such as OTLP
-  export, the egress allowlist, deploy refusals, multi-node or celld limits.
+  export, the egress policy (`fetch-public/*`), deploy refusals, multi-node or
+  celld limits.
   `reason` is required and says why. `expect.json` is written by hand and
   reviewed. `--update` and `--runtime=workerd` skip these cases.
 

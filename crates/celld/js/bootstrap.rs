@@ -610,6 +610,7 @@ pub(super) fn inject_compatibility_flags(scope: &mut v8::PinScope, compat: Compa
         "fetcher_no_get_put_delete",
         !compat.fetcher_get_put_delete,
     );
+    set_flag(scope, "nodejs_als", compat.nodejs_als);
     let cloudflare = v8::Object::new(scope);
     let key = v8::String::new(scope, "compatibilityFlags").unwrap();
     cloudflare.set(scope, key.into(), flags.into());

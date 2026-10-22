@@ -71,6 +71,10 @@ An unsupported feature that does not cause an error is a defect.
   starts because celld keeps no replay copy.
 - A remote Durable Object call waits for a rejected owner generation to change
   for at most `CELLD_OPERATION_DEADLINE_MS`.
+- Global `fetch()` and `new WebSocket()` reach only public addresses unless
+  the node's `CELLD_FETCH_PRIVATE_ALLOW` names the `host:port`, as Cloudflare's
+  network allows only public ones. A refusal is a `TypeError` that Cloudflare
+  cannot produce. See [Limit Worker egress](security.md#limit-worker-egress).
 
 ### [Bindings](https://developers.cloudflare.com/workers/runtime-apis/bindings/)
 
@@ -253,8 +257,10 @@ celld provides an always-miss cache because it has no shared edge cache.
 - A socket cannot outlive its event. A Durable Object must reconnect during a
   later event.
 - celld verifies a TLS server against its bundled Mozilla root store.
-- celld does not block the destination ports that Cloudflare blocks. The fleet
-  network controls the egress policy.
+- celld does not block the destination ports that Cloudflare blocks, and
+  `connect()` can reach private addresses, which the
+  [egress policy](security.md#limit-worker-egress) of `fetch()` refuses. The
+  fleet network controls where a socket can go.
 
 ### BroadcastChannel
 
@@ -272,6 +278,14 @@ celld honors these compatibility flags:
 - The static-assets navigation flags
 - `allow_irrevocable_stub_storage`, which adds only a `ctx.restore()` that
   rejects (see [Context](#context)). Stubs still cannot be stored.
+- `nodejs_als`. celld offers `node:async_hooks` with `AsyncLocalStorage`
+  with or without the flag.
+
+`global_fetch_strictly_public` has no effect by design. On Cloudflare it
+decides whether a `fetch()` to the Worker's own zone goes to the zone's origin
+server. celld has no zone origin, and its
+[egress policy](security.md#limit-worker-egress) applies whatever the flag
+says.
 
 celld accepts every other flag without effect.
 `Cloudflare.compatibilityFlags` reports only the honored flags.

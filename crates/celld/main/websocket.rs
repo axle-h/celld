@@ -572,6 +572,7 @@ pub(crate) async fn outbound_websocket_task(
         want_response,
         target,
         facet,
+        exempt,
         reply,
         release,
     } = request;
@@ -617,7 +618,11 @@ pub(crate) async fn outbound_websocket_task(
         );
     }
     let timeout = std::time::Duration::from_secs(10);
-    let connected = tokio::time::timeout(timeout, celld::ws_client::connect(&url, handshake)).await;
+    let connected = tokio::time::timeout(
+        timeout,
+        celld::ws_client::connect(&url, handshake, celld::ws_client::Dial::Worker { exempt }),
+    )
+    .await;
     let connection = match connected {
         Ok(Ok(connection)) => connection,
         Ok(Err(celld::ws_client::Error::Declined(declined))) if want_response => {
@@ -639,6 +644,12 @@ pub(crate) async fn outbound_websocket_task(
                 protocol: None,
                 declined: Some(declined),
             }));
+            return Ok(());
+        }
+        // The op reports a refusal as the egress policy's TypeError, so it
+        // keeps its type.
+        Ok(Err(celld::ws_client::Error::Refused(refused))) => {
+            let _ = reply.send(Err(anyhow::Error::new(refused)));
             return Ok(());
         }
         Ok(Err(error)) => {

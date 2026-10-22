@@ -1,0 +1,8 @@
+// `nodejs_als` alone, without `nodejs_compat`: workerd then offers
+// `node:async_hooks` with AsyncLocalStorage and nothing else from Node.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_als"]
+}

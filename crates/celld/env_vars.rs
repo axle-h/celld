@@ -314,10 +314,128 @@ pub fn validate() -> anyhow::Result<()> {
             bail!("CELLD_PRESSURE_OWNERSHIP must be release or sticky, not {value:?}");
         }
     }
+    fetch_private_allow()?;
     if let Some(node) = value("CELLD_NODE")? {
         crate::machine::validate_node_name(&node).map_err(|error| anyhow!("CELLD_NODE {error}"))?;
     }
     Ok(())
+}
+
+/// `CELLD_FETCH_PRIVATE_ALLOW`: the `host:port` entries a Worker's global
+/// `fetch()` and `new WebSocket()` may reach although they are not public
+/// addresses. Unset or empty allows none.
+///
+/// Parsed once: the egress policy reads it while a request connects, where a
+/// configuration error has no one to go to.
+pub fn fetch_private_allow() -> anyhow::Result<&'static [crate::public_egress::AllowEntry]> {
+    static ALLOW: std::sync::OnceLock<Result<Vec<crate::public_egress::AllowEntry>, String>> =
+        std::sync::OnceLock::new();
+    ALLOW
+        .get_or_init(|| {
+            value("CELLD_FETCH_PRIVATE_ALLOW")
+                .and_then(|value| parse_fetch_private_allow(value.as_deref().unwrap_or_default()))
+                .map_err(|error| error.to_string())
+        })
+        .as_deref()
+        .map_err(|message| anyhow!("{message}"))
+}
+
+/// A comma-separated list of `host:port` entries. The host is an IPv4
+/// address, a bracketed IPv6 address, or a DNS name; the port is required.
+/// An entry the policy would ignore is refused, so a typo cannot leave an
+/// operator believing a service is allowed when it is not.
+pub fn parse_fetch_private_allow(
+    value: &str,
+) -> anyhow::Result<Vec<crate::public_egress::AllowEntry>> {
+    use crate::public_egress::{AllowEntry, AllowHost};
+    const NAME: &str = "CELLD_FETCH_PRIVATE_ALLOW";
+    if value.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    value
+        .split(',')
+        .map(|entry| {
+            let entry = entry.trim();
+            let refuse = |why: &str| anyhow!("{NAME} entry {entry:?} {why}");
+            if entry.is_empty() {
+                bail!("{NAME} has an empty entry in {value:?}");
+            }
+            if entry.contains('/') {
+                return Err(refuse("must be host:port, without a scheme or a path"));
+            }
+            let (host, port) = match entry.strip_prefix('[') {
+                Some(rest) => {
+                    let (address, port) = rest
+                        .split_once("]:")
+                        .ok_or_else(|| refuse("must be [IPv6 address]:port"))?;
+                    let address = address
+                        .parse::<std::net::Ipv6Addr>()
+                        .map_err(|_| refuse("has no valid IPv6 address in its brackets"))?;
+                    (AllowHost::Ip(address.into()), port)
+                }
+                None => {
+                    let (host, port) = entry
+                        .rsplit_once(':')
+                        .ok_or_else(|| refuse("must be host:port"))?;
+                    if host.contains(':') {
+                        return Err(refuse(
+                            "needs brackets around its IPv6 address, as [::1]:port",
+                        ));
+                    }
+                    let host = match host.parse::<std::net::Ipv4Addr>() {
+                        Ok(address) => AllowHost::Ip(address.into()),
+                        Err(_) => AllowHost::Name(allow_name(host).map_err(|why| refuse(&why))?),
+                    };
+                    (host, port)
+                }
+            };
+            let port = match port.parse::<u16>() {
+                Ok(port) if port > 0 => port,
+                _ => return Err(refuse("must end in a port from 1 to 65535")),
+            };
+            if let AllowHost::Ip(address) = host {
+                if crate::public_egress::non_public(address).is_none() {
+                    return Err(refuse(
+                        "is a public address, which the egress policy already allows",
+                    ));
+                }
+            }
+            Ok(AllowEntry { host, port })
+        })
+        .collect()
+}
+
+/// A DNS name as an allowlist entry spells it, which is how the URL parser
+/// spells a host: lower-case, without a trailing dot.
+fn allow_name(host: &str) -> Result<String, String> {
+    let name = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
+    if name.is_empty() || name.len() > 253 {
+        return Err("needs a host name of 1 to 253 characters".into());
+    }
+    for label in name.split('.') {
+        let valid = (1..=63).contains(&label.len())
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+        if !valid {
+            return Err(
+                "needs a host name of letters, digits, hyphens and underscores, \
+                 in dot-separated labels of 1 to 63 characters"
+                    .into(),
+            );
+        }
+    }
+    // A URL whose host ends in a number is an IPv4 address in another
+    // spelling (`10.1`, `0x7f.1`), never this name.
+    let last = name.rsplit('.').next().unwrap_or_default();
+    let numeric = last.bytes().all(|byte| byte.is_ascii_digit())
+        || (last.starts_with("0x") && last[2..].bytes().all(|byte| byte.is_ascii_hexdigit()));
+    if numeric {
+        return Err("is not a valid IPv4 address".into());
+    }
+    Ok(name)
 }
 
 /// Resolve all shutdown timing from the operator's complete process bound.
@@ -409,4 +527,78 @@ where
     T::Err: std::fmt::Display,
 {
     Ok(positive(name)?.unwrap_or(default))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::public_egress::{AllowEntry, AllowHost};
+
+    #[test]
+    fn the_private_allowlist_parses_host_port_entries() {
+        assert_eq!(parse_fetch_private_allow("").unwrap(), vec![]);
+        assert_eq!(parse_fetch_private_allow("  ").unwrap(), vec![]);
+        assert_eq!(
+            parse_fetch_private_allow(
+                "127.0.0.1:11434, [::1]:8080,Models.Internal.:443,db_1:5432,[::ffff:10.0.0.1]:80"
+            )
+            .unwrap(),
+            vec![
+                AllowEntry {
+                    host: AllowHost::Ip("127.0.0.1".parse().unwrap()),
+                    port: 11434
+                },
+                AllowEntry {
+                    host: AllowHost::Ip("::1".parse().unwrap()),
+                    port: 8080
+                },
+                AllowEntry {
+                    host: AllowHost::Name("models.internal".into()),
+                    port: 443
+                },
+                AllowEntry {
+                    host: AllowHost::Name("db_1".into()),
+                    port: 5432
+                },
+                AllowEntry {
+                    host: AllowHost::Ip("::ffff:10.0.0.1".parse().unwrap()),
+                    port: 80
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn the_private_allowlist_refuses_invalid_entries() {
+        for (value, message) in [
+            ("127.0.0.1", "must be host:port"),
+            ("127.0.0.1:", "must end in a port from 1 to 65535"),
+            ("127.0.0.1:0", "must end in a port from 1 to 65535"),
+            ("127.0.0.1:65536", "must end in a port from 1 to 65535"),
+            ("127.0.0.1:*", "must end in a port from 1 to 65535"),
+            ("::1:80", "needs brackets around its IPv6 address"),
+            ("[::1]", "must be [IPv6 address]:port"),
+            ("[::1]80", "must be [IPv6 address]:port"),
+            ("[localhost]:80", "has no valid IPv6 address"),
+            ("127.0.0.1:80,", "has an empty entry"),
+            ("127.0.0.1:80,,10.0.0.1:80", "has an empty entry"),
+            ("http://127.0.0.1:80", "without a scheme or a path"),
+            ("127.0.0.1:80/path", "without a scheme or a path"),
+            ("*.internal:80", "needs a host name of letters"),
+            (":80", "needs a host name of 1 to 253 characters"),
+            ("-bad.internal:80", "needs a host name of letters"),
+            ("10.1:80", "is not a valid IPv4 address"),
+            ("0x7f.1:80", "is not a valid IPv4 address"),
+            ("999.1.1.1:80", "is not a valid IPv4 address"),
+            ("1.1.1.1:80", "is a public address"),
+            ("[2606:4700::1111]:443", "is a public address"),
+        ] {
+            let error = parse_fetch_private_allow(value).unwrap_err().to_string();
+            assert!(
+                error.starts_with("CELLD_FETCH_PRIVATE_ALLOW "),
+                "{value}: {error}"
+            );
+            assert!(error.contains(message), "{value}: {error}");
+        }
+    }
 }

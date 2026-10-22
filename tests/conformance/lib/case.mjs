@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
-const CASE_KEYS = new Set(["kind", "reason", "workers", "env", "observability", "nodes", "xfail", "steps", "normalize"]);
+const CASE_KEYS = new Set(["kind", "reason", "workers", "env", "upstream", "observability", "nodes", "xfail", "steps", "normalize"]);
 const STEP_KEYS = {
   path: new Set(["path", "method", "headers", "body", "chunked", "responseHeaders"]),
   ws: new Set(["ws", "send", "receive", "close", "protocols"]),
@@ -19,6 +19,11 @@ const DEPLOY_ARGS = new Set(["--no-build"]);
 const OTLP_KEYS = new Set(["spans"]);
 // The runner owns telemetry: "observability" turns it on for both runtimes.
 const RUNNER_ENV = /^(CELLD_OTEL|OTEL_)/;
+// Ports the runner picks for a run, which `env` values and step paths name as
+// `${NAME}`. The upstream ports need "upstream": true. The public port is
+// celld's own listener, so it needs a celld-only case.
+const PLACEHOLDER = /\$\{([^}]*)\}/g;
+const PLACEHOLDERS = new Set(["UPSTREAM_PORT", "UPSTREAM_PORT_2", "PUBLIC_PORT"]);
 const NORMALIZE_KEYS = new Set(["pattern", "replace", "why"]);
 
 export class CaseError extends Error {}
@@ -88,6 +93,9 @@ export function loadCase(root, id) {
     if (RUNNER_ENV.test(name)) fail(`"env.${name}" is the runner's to set; use "observability"`);
   }
 
+  if ("upstream" in raw && typeof raw.upstream !== "boolean") fail(`"upstream" must be true or false`);
+  const upstream = raw.upstream ?? false;
+
   if ("observability" in raw && typeof raw.observability !== "boolean") fail(`"observability" must be true or false`);
   const observability = raw.observability ?? false;
 
@@ -126,6 +134,23 @@ export function loadCase(root, id) {
     if (!observability) fail(`steps[${index}]: an "otlp" step needs "observability": true`);
   });
 
+  const placeholderSources = [
+    ...Object.entries(env).map(([name, value]) => [`"env.${name}"`, value]),
+    ...steps.flatMap((step, index) => (step.path === undefined ? [] : [[`steps[${index}]`, step.path]])),
+  ];
+  const placeholders = new Set();
+  for (const [where, text] of placeholderSources) {
+    for (const [, name] of text.matchAll(PLACEHOLDER)) {
+      if (!PLACEHOLDERS.has(name)) fail(`${where} names \${${name}}, which is not one of ${[...PLACEHOLDERS].map((p) => `\${${p}}`).join(", ")}`);
+      if (name.startsWith("UPSTREAM_") && !upstream) fail(`${where} names \${${name}}, which needs "upstream": true`);
+      if (!name.startsWith("UPSTREAM_") && kind !== "celld-only") fail(`${where} names \${${name}}, a celld listener, so the case needs "kind": "celld-only"`);
+      placeholders.add(name);
+    }
+  }
+  if (upstream && ![...placeholders].some((name) => name.startsWith("UPSTREAM_"))) {
+    fail(`"upstream": true starts a server that no \${UPSTREAM_PORT} or \${UPSTREAM_PORT_2} names`);
+  }
+
   const normalize = raw.normalize ?? [];
   if (!Array.isArray(normalize)) fail(`"normalize" must be an array`);
   const rules = normalize.map((rule, index) => {
@@ -154,6 +179,8 @@ export function loadCase(root, id) {
     reason: raw.reason,
     workers: raw.workers,
     env,
+    upstream,
+    publicPort: placeholders.has("PUBLIC_PORT"),
     observability,
     xfail: raw.xfail,
     steps,

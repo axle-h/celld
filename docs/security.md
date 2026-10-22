@@ -51,6 +51,92 @@ Every path to a runtime class therefore demands the fleet secret. The HMAC
 does not authenticate tunnel bytes after establishment and does not encrypt
 traffic, so it does not replace the private network.
 
+## Limit Worker egress
+
+On Cloudflare, a Worker's global `fetch()` leaves from the edge onto the
+public internet, so it cannot reach a private address. A celld node runs inside
+your network, so it enforces the same limit itself. A Worker's global `fetch()`
+and `new WebSocket()`, and a `fetch()` with `Upgrade: websocket`, reach only
+public addresses. The policy is always on and applies to every Worker on the
+node, Dynamic Workers included.
+
+celld refuses these destinations:
+
+- IPv4: the unspecified range `0.0.0.0/8`, loopback `127.0.0.0/8`, the private
+  ranges `10.0.0.0/8`, `172.16.0.0/12` and `192.168.0.0/16`, the shared range
+  `100.64.0.0/10` (CGNAT), link-local `169.254.0.0/16` (which holds the cloud
+  metadata address `169.254.169.254`), multicast `224.0.0.0/4`, the reserved
+  range `240.0.0.0/4` (which holds the broadcast address), and IANA's protocol,
+  documentation, 6to4-relay and benchmarking ranges (`192.0.0.0/24`,
+  `192.0.2.0/24`, `192.88.99.0/24`, `198.18.0.0/15`, `198.51.100.0/24`,
+  `203.0.113.0/24`).
+- IPv6: `::` and `::1`, the IPv4-compatible range `::/96`, unique local
+  `fc00::/7`, link-local `fe80::/10`, site-local `fec0::/10`, multicast
+  `ff00::/8`, and the IPv4-translated, local-use NAT64, discard, IETF protocol
+  (Teredo included), documentation and segment-routing ranges.
+- An IPv6 address that embeds an IPv4 address is judged by the IPv4 address:
+  IPv4-mapped (`::ffff:0:0/96`), NAT64 (`64:ff9b::/96`) and 6to4
+  (`2002::/16`).
+- celld recognizes only the well-known NAT64 prefix `64:ff9b::/96` and the
+  local-use prefix `64:ff9b:1::/48`, which it refuses whole. A network-specific
+  NAT64 prefix that your network routes to private IPv4 addresses looks like a
+  public IPv6 address to celld. If your node uses one, block it in the node's
+  firewall.
+
+celld checks the address it connects to. It checks an IP literal before the
+request and at every redirect hop, in any spelling the URL parser accepts, such
+as `http://2130706433/`. It checks a name inside its resolver, and connects
+only to the resolved addresses that pass, so a name that resolves differently
+on a second lookup (DNS rebinding) cannot pass the check with one address and
+connect to another. A name that resolves to no allowed address is refused.
+Worker egress ignores `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY`,
+because a proxy would connect to an address that the check never saw.
+
+A refused `fetch()` rejects with a `TypeError` before anything leaves the
+node. The message names the URL's host and port:
+
+```text
+celld egress policy: 10.0.0.5:8080 is not a public address, so this node refuses to connect to it. A node operator can allow it by adding 10.0.0.5:8080 to CELLD_FETCH_PRIVATE_ALLOW.
+```
+
+`new WebSocket()` reports the same `TypeError` as the `error` of its `error`
+event, followed by a `close` event with code 1006.
+
+### Allow an internal service
+
+`CELLD_FETCH_PRIVATE_ALLOW` lets Workers reach specific non-public services,
+such as a model server on the node in development or a service on your
+private network. It is a comma-separated list of `host:port` entries:
+
+```sh
+CELLD_FETCH_PRIVATE_ALLOW=127.0.0.1:11434,[fd00::5]:8080,models.internal:443
+```
+
+- An IP entry allows that address on that port, however the URL reached it.
+  Write an IPv6 address in brackets.
+- A name entry allows a URL whose host is that name, on that port, and every
+  address the name resolves to. You trust your DNS for that name.
+- Every entry needs a port. celld has no wildcard and no range.
+- celld exits at startup on an invalid entry, or an entry for a public address,
+  which the policy already allows.
+
+The list is node-wide: every Worker on the node, Dynamic Workers included, can
+reach every entry.
+
+### What the policy does not cover
+
+- Service bindings, `ctx.exports`, Durable Object stubs and a Worker Loader's
+  `globalOutbound` Fetcher are bindings, not network requests. A Fetcher's own
+  `fetch()` is checked.
+- A container's `getTcpPort()` reaches the address of that container's port,
+  which the host looks up, as that IP address only. A redirect from the
+  container is checked, and a name never reaches the container's address.
+- `connect()` from `cloudflare:sockets` is not restricted. It is the API for
+  databases and other services on your network, and it reaches any address the
+  node can. A Dynamic Worker inherits it from its loader unless the loader sets
+  `globalOutbound` to `null` or a Fetcher, so give code that you do not trust a
+  `globalOutbound` of `null` or a Fetcher.
+
 ## Use the internal operator API
 
 The operator API is an alpha interface. A release can change its paths or

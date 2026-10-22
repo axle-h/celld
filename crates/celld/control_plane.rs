@@ -895,7 +895,8 @@ async fn presence_session(
         &runtime.listen,
         hostname,
     )?;
-    let socket = match crate::ws_client::connect(&url, headers).await {
+    let socket = match crate::ws_client::connect(&url, headers, crate::ws_client::Dial::Node).await
+    {
         Ok(connection) => connection.socket,
         Err(crate::ws_client::Error::Declined(declined))
             if matches!(declined.status.as_u16(), 401 | 403) =>

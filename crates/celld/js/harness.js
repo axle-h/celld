@@ -843,7 +843,11 @@ const __dataUrlResponse = (url) => {
     headers: { "content-type": meta || "text/plain;charset=US-ASCII" },
   });
 };
-globalThis.fetch = async (input, init) => {
+globalThis.fetch = (input, init) => __fetchNetwork(input, init);
+// Global fetch(), and the fetch() of a container's getTcpPort(), which names
+// its `[scope, port]` as `container`: the host then lets that one container
+// address past the egress policy. Nothing else can pass it.
+const __fetchNetwork = async (input, init, container) => {
   const rawUrl = typeof input === "string" ? input : input?.url;
   if (typeof rawUrl === "string" && rawUrl.startsWith("data:")) {
     return __dataUrlResponse(rawUrl);
@@ -852,7 +856,7 @@ globalThis.fetch = async (input, init) => {
   // `fetch(url, { headers: { Upgrade: "websocket" } })` is the other way
   // Cloudflare opens an outbound socket, and the one most examples use.
   if ((req.headers.get("upgrade") ?? "").toLowerCase() === "websocket") {
-    return await __fetchWebSocketUpgrade(req);
+    return await __fetchWebSocketUpgrade(req, container);
   }
   // The caller's signal, never the incoming request's own.
   const signal = req._signalForSubrequests;
@@ -874,6 +878,7 @@ globalThis.fetch = async (input, init) => {
       req.method, req.url, body,
       JSON.stringify(req.headers.__celldHeaderList), req.redirect,
       streamId, signal != null,
+      container === undefined ? undefined : JSON.stringify(container),
     );
     if (signal) {
       // An abort and the response can cross, leaving a body stream nobody
@@ -898,6 +903,9 @@ globalThis.fetch = async (input, init) => {
     throw error;
   }
   const r = __jsonParse(raw);
+  // The node's egress policy refused the destination, before anything left.
+  // A network error, so a TypeError, with the host's message.
+  if (r.refused !== undefined) throw new TypeError(r.refused);
   // A server may answer 101 to a request that did not ask to upgrade. There
   // is no socket to give the caller, so say what happened instead of
   // letting the Response constructor refuse the status.
@@ -926,7 +934,7 @@ globalThis.fetch = async (input, init) => {
   return response;
 };
 const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
-  async (req) => {
+  async (req, container) => {
   const scope = __currentActorScope();
   // The host allocates the id as it registers the socket.
   const socket = __wsCreate({
@@ -951,6 +959,7 @@ const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
       // what the peer must see. Moving this to the header list needs the
       // host to append instead, so it is a separate change.
       JSON.stringify(Array.from(req.headers)),
+      container === undefined ? undefined : JSON.stringify(container),
     );
     id = upgrade.id;
     state.id = id;
@@ -959,6 +968,10 @@ const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
   } catch (error) {
     __socketDelete(id);
     throw error;
+  }
+  if (raw.refused !== undefined) {
+    __socketDelete(id);
+    throw new TypeError(raw.refused);
   }
   if (!raw.upgraded) {
     // The server answered without upgrading. That is an ordinary response,
@@ -2621,7 +2634,7 @@ class ContainerPort {
     const forwarded = new Request(url.toString(), request);
     forwarded.headers.set("host", authority);
     try {
-      return await fetch(forwarded);
+      return await __fetchNetwork(forwarded, undefined, [this._scope, this._port]);
     } catch (error) {
       // A refused or reset connection is the port not listening yet, which
       // the `@cloudflare/containers` start loop recognizes by this phrase
@@ -10903,7 +10916,14 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
     const connection = dial.ready;
     __registerWaitUntil(connection);
     if (s.polled) this.#startPump();
-    connection.then((protocol) => {
+    // The egress policy's refusal arrives as an outcome, so that it can
+    // reach the error event as the TypeError fetch() would throw.
+    const opened = connection.then((raw) => {
+      const outcome = __jsonParse(raw);
+      if (outcome.refused !== undefined) throw new TypeError(outcome.refused);
+      return outcome.protocol;
+    });
+    opened.then((protocol) => {
       if (s.readyState === __WS_CLOSING) {
         if (s.pendingClose) {
           const [code, reason] = s.pendingClose;
@@ -10916,10 +10936,16 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       s.readyState = __WS_OPEN;
       this.dispatchEvent(new Event("open"));
     }, (error) => {
+      if (s.readyState === __WS_CLOSED) return;
       s.readyState = __WS_CLOSED;
       __socketDelete(s.id);
+      // The connection's own error, then the abnormal close. Not through
+      // #dispatchClose, which returns for a closed socket and would add its
+      // generic error event: a failed dial fired the error and never the close.
       this.dispatchEvent(new ErrorEvent("error", { message: String(error?.message || error), error }));
-      this.#dispatchClose(1006, "", false);
+      const event = new CloseEvent("close", { code: 1006, reason: "", wasClean: false });
+      event._trust();
+      this.dispatchEvent(event);
     });
   }
   get readyState() { return this.#s.readyState; }
