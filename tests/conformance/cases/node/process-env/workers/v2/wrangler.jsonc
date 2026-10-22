@@ -1,0 +1,8 @@
+// nodejs_compat_v2 alone gives a process, but the date implies the flag only through nodejs_compat.
+{
+  "name": "v2",
+  "main": "index.js",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat_v2"],
+  "vars": { "TEXT": "text", "JSON": { "list": [1, "two"] } }
+}

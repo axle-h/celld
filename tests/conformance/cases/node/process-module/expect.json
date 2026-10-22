@@ -1,0 +1,31 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "defaultIsGlobal": true,
+        "bareIsGlobal": true,
+        "namespaceDefaultIsGlobal": true,
+        "namespaceEnv": true,
+        "namespaceNextTick": true,
+        "namedEnv": true,
+        "namedEnvText": "text",
+        "namedNextTick": true,
+        "versionsNode": "string",
+        "requireBare": true,
+        "requirePrefixed": true,
+        "dynamicDefault": true,
+        "dynamicEnv": true,
+        "getBuiltin": {
+          "sameForBothNames": true,
+          "env": true,
+          "nextTick": true,
+          "exit": true,
+          "getBuiltinModule": true
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+// No Node.js compatibility: workerd has no process, celld's process.env stays empty.
+{
+  "name": "no-compat",
+  "main": "index.js",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": [],
+  "vars": { "TEXT": "text", "JSON": { "list": [1, "two"] } }
+}

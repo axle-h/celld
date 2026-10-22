@@ -361,8 +361,10 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 21 | 1.12 DO stub calls return an RpcPromise | done | `caa42f6` |
 | 22 | 1.13 stubs passed as params are duplicated | done | `5b67c22` |
 | 23 | 1.14 transactions on root storage; reset semantics | done | see log |
-| 24 | fix the workerd-side flake in `streams/byob-request-body` | done | see log |
-| 25+ | Phase 1 in plan order (1.15-1.30), and the 1.4 props key-order follow-up | queued | |
+| 24 | fix the workerd-side flake in `streams/byob-request-body` | done | `ed11b98` |
+| 25 | 1.15 `process.env` and `node:process` | done | see log |
+| 26 | 1.31 isolate heap limit during module load (security) | next | |
+| 27+ | Phase 1 in plan order (1.16-1.30), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -1689,6 +1691,25 @@ that the nested and concurrent cases stay green.
   be the JSON string.
 - Map `node:process` to the global.
 
+**As built (done).**
+- The env is populated only when Node compatibility is on (`nodejs_compat`
+  or `_v2`) and `populateProcessEnv` is, by flag or implied by
+  `nodejs_compat` after 2025-04-01. `nodejs_compat` and `_v2` are on by
+  default from 2026-08-04.
+- Strings are copied as they are, and JSON-serialisable values
+  re-stringified, so `1.0` becomes `"1"`. A port of workerd's `process.env`
+  Proxy enforces its rules.
+- A Dynamic Worker's `process.env` comes only from its own `env`, which is now
+  installed before module evaluation.
+- `process` and `node:process` are the global. `getBuiltinModule` returns the
+  global too, where workerd returns a separate object with the same fields
+  (documented).
+- Also fixed: `build_env` used Rust `{:?}` for binding names and text vars,
+  so NUL followed by a digit became a legacy octal escape. It now uses
+  `js_string_literal`.
+- Cases: `node/process-env` (a 9-Worker date and flag matrix) and
+  `node/process-module`.
+
 **Prior art.** Rework mertdogar `6d8e461` and take `cde80c7`, dropping the
 FORK.md hunks.
 
@@ -1714,6 +1735,10 @@ showed.
   - **refused at deploy:** unimplemented behaviour a Worker would silently
     lose
 - Unknown flags are refused at deploy, as workerd refuses them.
+- Already classified: `nodejs_compat_populate_process_env` (and its disable
+  flag) are honoured and reported (1.15). `nodejs_compat`, `nodejs_compat_v2`
+  and `no_nodejs_compat` are partly modelled: they gate only `process.env`.
+  Classify them, and decide whether to report `nodejs_compat`.
 - Already classified: `rpc_params_dup_stubs` / `rpc_params_transfer_stubs`
   are honoured (1.13). `global_fetch_strictly_public` is no-op by design
   (1.9). `nodejs_als` is honoured and reported in
@@ -2031,6 +2056,21 @@ still differ from workerd:
   transaction discards it. This predates 1.14.
 - Transaction views still have `transactionSync`, `sql`, `kv` and `sync`,
   which workerd's `DurableObjectTransaction` lacks.
+
+### 1.31 Isolate heap limit during module load (found by 1.15) — security
+
+**Problem.** The isolate heap limit is not enforced while a module loads. An
+untrusted Dynamic Worker's top-level code retained 1.5 GB of RSS, despite
+the 128 MiB isolate limit. Copying a 1 MiB Loader env that aliases one large
+object from many keys into `process.env` reaches about 1.4 GB the same way.
+For model-written code (code mode) this is a host memory exhaustion path.
+
+**Design.** Enforce the heap limit (and the CPU limit, if it's missing too)
+during module compile, evaluation and env install, failing the load loudly,
+as at request time. Check what workerd does on startup and match its error.
+
+**Tests.** A celld-only case: a Dynamic Worker that allocates past the limit at
+module scope is refused with a clear error, and the node stays healthy.
 
 ### Phase 1 gate
 

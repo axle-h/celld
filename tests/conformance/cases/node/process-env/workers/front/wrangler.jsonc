@@ -1,0 +1,38 @@
+// On nodejs_compat_populate_process_env's date with nodejs_compat: string
+// vars (NUL_DIGIT is a NUL before a digit, which a JavaScript string literal
+// must not write as `\0`), JSON vars and `.dev.vars` entries reach
+// `process.env`; the KV
+// namespace, service bindings and Worker Loader do not. The service bindings
+// reach one Worker for each other date and flag combination.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "TEXT": "text",
+    "SEPARATORS": "line para end </script> \"quoted\" \\ é 😀",
+    "EMPTY": "",
+    "NUL_DIGIT": "a\u00001b",
+    "LOOKS_JSON": "[\"a\"]",
+    "LIST": ["a", "b"],
+    "OBJECT": { "z": 1, "a": { "nested": [true, null, -1.5, 1.0, 1e3] }, "text": "line para" },
+    "NUMBER": 42,
+    "FALSE": false,
+    "NULL": null,
+    "OVERRIDDEN": { "from": "config" }
+  },
+  "kv_namespaces": [{ "binding": "KV", "id": "process-env-kv" }],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "services": [
+    { "binding": "BEFORE", "service": "before" },
+    { "binding": "ENABLE", "service": "enable" },
+    { "binding": "DISABLE", "service": "disable" },
+    { "binding": "NO_COMPAT", "service": "no-compat" },
+    { "binding": "NO_COMPAT_ENABLE", "service": "no-compat-enable" },
+    { "binding": "V2", "service": "v2" },
+    { "binding": "V2_ENABLE", "service": "v2-enable" },
+    { "binding": "DEFAULT_DATE", "service": "default-date" },
+    { "binding": "DEFAULT_DATE_NO_COMPAT", "service": "default-date-no-compat" }
+  ]
+}

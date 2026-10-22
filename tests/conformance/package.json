@@ -8,7 +8,8 @@
   },
   "imports": {
     "#byob": "./lib/worker/byob.js",
-    "#params-dup": "./lib/worker/params-dup.js"
+    "#params-dup": "./lib/worker/params-dup.js",
+    "#process-env": "./lib/worker/process-env.js"
   },
   "scripts": {
     "test": "node run.mjs --runtime=both",

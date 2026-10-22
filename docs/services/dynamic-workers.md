@@ -65,9 +65,13 @@ Containers page.
 
 The loaded Worker gets no binding and no `vars` entry of the deployment, and no
 Worker Loader binding, so it cannot load another Worker. It reaches only the
-`env` of its `WorkerCode`. A capability call is an RPC into the isolate of the
-loader. celld passes host operations to its internal scripts as function
-parameters, never as globals, so `globalThis` exposes none.
+`env` of its `WorkerCode`, from the time its main module evaluates. Under its
+own compatibility date and flags, its `process.env` is copied from that `env`
+too, never from the loader's `vars` (see
+[Node.js compatibility](../cloudflare-compat.md#nodejs-compatibility)). A
+capability call is an RPC into the isolate of the loader. celld passes host
+operations to its internal scripts as function parameters, never as globals,
+so `globalThis` exposes none.
 
 When `WorkerCode` omits `globalOutbound`, the loaded Worker inherits the egress
 policy of the loader. A `null` value makes `fetch()` and `connect()` throw. A

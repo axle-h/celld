@@ -1,0 +1,8 @@
+// The enable flag before the date: the vars are copied.
+{
+  "name": "enable",
+  "main": "index.js",
+  "compatibility_date": "2025-03-31",
+  "compatibility_flags": ["nodejs_compat", "nodejs_compat_populate_process_env"],
+  "vars": { "TEXT": "text", "JSON": { "list": [1, "two"] } }
+}

@@ -1,0 +1,21 @@
+{
+  "workers": [
+    "front",
+    "before",
+    "enable",
+    "disable",
+    "no-compat",
+    "no-compat-enable",
+    "v2",
+    "v2-enable",
+    "default-date",
+    "default-date-no-compat"
+  ],
+  "steps": [
+    {"path": "/"},
+    {"path": "/values"},
+    {"path": "/mutate"},
+    {"path": "/workers"},
+    {"path": "/dynamic"}
+  ]
+}

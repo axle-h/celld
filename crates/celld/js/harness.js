@@ -4156,6 +4156,11 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
   // directly at the binding is context-free (ctx null): awaiting it
   // starts a fresh session, as in Workerd.
   const rpcEntrypoint = entrypoint === null ? "default" : entrypoint;
+  // Read once, here. A loaded Worker's env is revived before its module
+  // evaluates (install_loader_env), when `__cell.script` is still unset, so
+  // `local` is false for those bindings. That is also their answer once it is
+  // set: they route to the loader's scripts, never to the loaded Worker's own
+  // `__loader:<id>`, which did not exist when the loader minted them.
   const session = __entrypointSession(
     rpcEntrypoint, script === __cell.script, script, propsSc);
   const binding = new Proxy(target, {
@@ -11970,6 +11975,77 @@ if (!globalThis.structuredClone) {
 }
 // Web Crypto is installed after the rest of the harness so it can use
 // DOMException, structuredClone, and Buffer.
+// `process.env` follows workerd's src/node/internal/internal_process.ts at
+// v1.20261001.1: Node's rules, so whatever is stored reads back as a string,
+// and a descriptor must be a plain, writable, enumerable, configurable value.
+const __processEnvTarget = {};
+// node:util's ERR_INVALID_ARG_VALUE, loading that module on first use.
+const __processEnvError = (name, value, reason) => {
+  __builtin_module("node:util");
+  return new __celld.__utilErrors.ERR_INVALID_ARG_VALUE(name, value, reason);
+};
+const __processEnv = new Proxy(__processEnvTarget, {
+  set(target, prop, value) {
+    if (typeof prop === "symbol" || typeof value === "symbol")
+      throw new TypeError("Cannot convert a symbol value to a string");
+    return Reflect.set(target, prop, `${value}`);
+  },
+  defineProperty(target, prop, descriptor) {
+    if (Reflect.has(descriptor, "get") || Reflect.has(descriptor, "set"))
+      throw __processEnvError("descriptor", descriptor,
+        "process.env value must not have getter/setter");
+    for (const field of ["configurable", "enumerable", "writable"]) {
+      if (!descriptor[field])
+        throw __processEnvError(`descriptor.${field}`, descriptor,
+          `process.env value must be ${field}`);
+    }
+    if (!Reflect.has(descriptor, "value"))
+      throw __processEnvError("descriptor.value", descriptor,
+        "process.env value must be specified explicitly");
+    if (typeof prop === "symbol" || typeof descriptor.value === "symbol")
+      throw new TypeError("Cannot convert a symbol value to a string");
+    descriptor.value = `${descriptor.value}`;
+    return Reflect.defineProperty(target, prop, descriptor);
+  },
+});
+// Whether JSON carries `value` without losing anything: no cycles or aliases,
+// and only plain objects and arrays (workerd's isJsonSerializable). A binding
+// object, such as a service binding, is left out rather than read as "{}".
+const __jsonSerializable = (value, seen = new Set()) => {
+  switch (typeof value) {
+    case "boolean":
+    case "number":
+    case "string":
+      return true;
+    case "object":
+      if (value === null) return true;
+      if (seen.has(value)) return false;
+      seen.add(value);
+      switch (Object.getPrototypeOf(value)) {
+        case Object.prototype:
+          return Object.values(value).every(
+            (item) => __jsonSerializable(item, seen));
+        case Array.prototype:
+          return value.every((item) => __jsonSerializable(item, seen));
+        default:
+          return false;
+      }
+    default:
+      return false;
+  }
+};
+// `nodejs_compat_populate_process_env`, before the main module evaluates:
+// copy the env installed so far (a loaded Worker's own `env`) and then
+// `vars`, a [name, value] list, as workerd's getInitialEnv copies `env`. A
+// string stays as it is, a value JSON can carry becomes its JSON text, and
+// anything else is left out.
+__celld.__populateProcessEnv = (vars) => {
+  for (const [name, value] of [...Object.entries(__cell.env), ...vars]) {
+    if (typeof value === "string") __processEnvTarget[name] = value;
+    else if (__jsonSerializable(value))
+      __processEnvTarget[name] = JSON.stringify(value);
+  }
+};
 // A Node dependency reads a `process` field at module scope and passes it
 // straight to something that rejects `undefined` -- `dirname(process.execPath)`
 // is one such case. Workerd defines every field
@@ -11984,7 +12060,7 @@ if (!globalThis.structuredClone) {
 // `cpuUsage` -- stays absent, because it fails on both runtimes and a stub
 // here would only change the message.
 if (!globalThis.process) globalThis.process = {
-  env: {}, platform: "linux", arch: "x64", version: "v20.0.0",
+  env: __processEnv, platform: "linux", arch: "x64", version: "v20.0.0",
   versions: { node: "20.0.0" }, cwd: () => "/",
   title: "workerd", argv: ["workerd"], argv0: "workerd", execArgv: [],
   execPath: "", pid: 1, ppid: 0, exitCode: undefined,
@@ -12018,6 +12094,8 @@ globalThis.process.exit = (code = 0) => {
 };
 globalThis.process.getBuiltinModule =
   (id) => __builtin_module(String(id));
+// `node:process` and `process` resolve to this object (modules.rs).
+__celld.__process = globalThis.process;
 if (!globalThis.global) globalThis.global = globalThis;
 // Events belong to the request, and the host owns the request. `__event_*`
 // and `__wait_until` operate on whichever context the host has made current

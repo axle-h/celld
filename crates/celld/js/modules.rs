@@ -547,6 +547,7 @@ fn eager_module_global(spec: &str) -> Option<&'static str> {
     Some(match spec {
         "fs" | "node:fs" => "__fs",
         "fs/promises" | "node:fs/promises" => "__fsPromises",
+        "process" | "node:process" => "__process",
         _ => return None,
     })
 }

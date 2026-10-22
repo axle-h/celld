@@ -1,0 +1,8 @@
+// The enable flag without nodejs_compat: the flag is on, but workerd has no process to copy into.
+{
+  "name": "no-compat-enable",
+  "main": "index.js",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat_populate_process_env"],
+  "vars": { "TEXT": "text", "JSON": { "list": [1, "two"] } }
+}

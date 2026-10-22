@@ -1,0 +1,8 @@
+// nodejs_compat_v2 with the enable flag: the vars are copied.
+{
+  "name": "v2-enable",
+  "main": "index.js",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat_v2", "nodejs_compat_populate_process_env"],
+  "vars": { "TEXT": "text", "JSON": { "list": [1, "two"] } }
+}

@@ -1,0 +1,301 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "flag": true,
+        "atLoad": {
+          "LIST": "[\"a\",\"b\"]",
+          "OBJECT": "{\"z\":1,\"a\":{\"nested\":[true,null,-1.5,1,1000]},\"text\":\"line para\"}",
+          "NUMBER": "42",
+          "FALSE": "false",
+          "NULL": "null",
+          "TEXT": "text",
+          "SEPARATORS": "line para end </script> \"quoted\" \\ é 😀",
+          "EMPTY": "",
+          "NUL_DIGIT": "a\u00001b",
+          "LOOKS_JSON": "[\"a\"]",
+          "OVERRIDDEN": "{\"from\":\"dotenv\"}",
+          "DOTENV_ONLY": "dotenv"
+        },
+        "now": {
+          "LIST": "[\"a\",\"b\"]",
+          "OBJECT": "{\"z\":1,\"a\":{\"nested\":[true,null,-1.5,1,1000]},\"text\":\"line para\"}",
+          "NUMBER": "42",
+          "FALSE": "false",
+          "NULL": "null",
+          "TEXT": "text",
+          "SEPARATORS": "line para end </script> \"quoted\" \\ é 😀",
+          "EMPTY": "",
+          "NUL_DIGIT": "a\u00001b",
+          "LOOKS_JSON": "[\"a\"]",
+          "OVERRIDDEN": "{\"from\":\"dotenv\"}",
+          "DOTENV_ONLY": "dotenv"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "keys": [
+          "DOTENV_ONLY",
+          "EMPTY",
+          "FALSE",
+          "LIST",
+          "LOOKS_JSON",
+          "NULL",
+          "NUL_DIGIT",
+          "NUMBER",
+          "OBJECT",
+          "OVERRIDDEN",
+          "SEPARATORS",
+          "TEXT"
+        ],
+        "list": "[\"a\",\"b\"]",
+        "envListIsArray": true,
+        "object": "{\"z\":1,\"a\":{\"nested\":[true,null,-1.5,1,1000]},\"text\":\"line para\"}",
+        "separators": [
+          108,
+          105,
+          110,
+          101,
+          8232,
+          112,
+          97,
+          114,
+          97,
+          8233,
+          101,
+          110,
+          100,
+          32,
+          60,
+          47,
+          115,
+          99,
+          114,
+          105,
+          112,
+          116,
+          62,
+          32,
+          34,
+          113,
+          117,
+          111,
+          116,
+          101,
+          100,
+          34,
+          32,
+          92,
+          32,
+          233,
+          32,
+          128512
+        ],
+        "nulDigit": [
+          97,
+          0,
+          49,
+          98
+        ],
+        "nulDigitSame": true,
+        "number": [
+          "string",
+          "42"
+        ],
+        "false": "false",
+        "null": "null",
+        "overridden": "{\"from\":\"dotenv\"}",
+        "dotenvOnly": "dotenv",
+        "kv": false,
+        "loader": false,
+        "service": false,
+        "sameObject": true,
+        "prototype": true,
+        "json": "text"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "setNumber": [
+          "string",
+          "5"
+        ],
+        "setUndefined": "undefined",
+        "setObject": "[object Object]",
+        "setNull": "null",
+        "deleted": true,
+        "stillThere": false,
+        "text": [
+          "changed",
+          "text"
+        ],
+        "symbolKey": {
+          "error": "TypeError: Cannot convert a symbol value to a string",
+          "code": null,
+          "string": "TypeError: Cannot convert a symbol value to a string"
+        },
+        "symbolValue": {
+          "error": "TypeError: Cannot convert a symbol value to a string",
+          "code": null,
+          "string": "TypeError: Cannot convert a symbol value to a string"
+        },
+        "getter": {
+          "error": "TypeError: The argument 'descriptor' process.env value must not have getter/setter. Received { get: [Function: get], enumerable: true, configurable: true }",
+          "code": "ERR_INVALID_ARG_VALUE",
+          "string": "TypeError [ERR_INVALID_ARG_VALUE]: The argument 'descriptor' process.env value must not have getter/setter. Received { get: [Function: get], enumerable: true, configurable: true }"
+        },
+        "notConfigurable": {
+          "error": "TypeError: The property 'descriptor.configurable' process.env value must be configurable. Received { value: 'x', writable: true, enumerable: true }",
+          "code": "ERR_INVALID_ARG_VALUE",
+          "string": "TypeError [ERR_INVALID_ARG_VALUE]: The property 'descriptor.configurable' process.env value must be configurable. Received { value: 'x', writable: true, enumerable: true }"
+        },
+        "notEnumerable": {
+          "error": "TypeError: The property 'descriptor.enumerable' process.env value must be enumerable. Received { value: 'x', writable: true, configurable: true }",
+          "code": "ERR_INVALID_ARG_VALUE",
+          "string": "TypeError [ERR_INVALID_ARG_VALUE]: The property 'descriptor.enumerable' process.env value must be enumerable. Received { value: 'x', writable: true, configurable: true }"
+        },
+        "notWritable": {
+          "error": "TypeError: The property 'descriptor.writable' process.env value must be writable. Received { value: 'x', enumerable: true, configurable: true }",
+          "code": "ERR_INVALID_ARG_VALUE",
+          "string": "TypeError [ERR_INVALID_ARG_VALUE]: The property 'descriptor.writable' process.env value must be writable. Received { value: 'x', enumerable: true, configurable: true }"
+        },
+        "noValue": {
+          "error": "TypeError: The property 'descriptor.value' process.env value must be specified explicitly. Received { writable: true, enumerable: true, configurable: true }",
+          "code": "ERR_INVALID_ARG_VALUE",
+          "string": "TypeError [ERR_INVALID_ARG_VALUE]: The property 'descriptor.value' process.env value must be specified explicitly. Received { writable: true, enumerable: true, configurable: true }"
+        },
+        "symbolDefined": {
+          "error": "TypeError: Cannot convert a symbol value to a string",
+          "code": null,
+          "string": "TypeError: Cannot convert a symbol value to a string"
+        },
+        "defined": [
+          "string",
+          "7"
+        ],
+        "leftovers": []
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "BEFORE": {
+          "flag": false,
+          "atLoad": {},
+          "now": {}
+        },
+        "ENABLE": {
+          "flag": true,
+          "atLoad": {
+            "JSON": "{\"list\":[1,\"two\"]}",
+            "TEXT": "text"
+          },
+          "now": {
+            "JSON": "{\"list\":[1,\"two\"]}",
+            "TEXT": "text"
+          }
+        },
+        "DISABLE": {
+          "flag": false,
+          "atLoad": {},
+          "now": {}
+        },
+        "NO_COMPAT": {
+          "flag": false,
+          "atLoad": {},
+          "now": {}
+        },
+        "NO_COMPAT_ENABLE": {
+          "flag": true,
+          "atLoad": {},
+          "now": {}
+        },
+        "V2": {
+          "flag": false,
+          "atLoad": {},
+          "now": {}
+        },
+        "V2_ENABLE": {
+          "flag": true,
+          "atLoad": {
+            "JSON": "{\"list\":[1,\"two\"]}",
+            "TEXT": "text"
+          },
+          "now": {
+            "JSON": "{\"list\":[1,\"two\"]}",
+            "TEXT": "text"
+          }
+        },
+        "DEFAULT_DATE": {
+          "flag": true,
+          "atLoad": {
+            "JSON": "{\"list\":[1,\"two\"]}",
+            "TEXT": "text"
+          },
+          "now": {
+            "JSON": "{\"list\":[1,\"two\"]}",
+            "TEXT": "text"
+          }
+        },
+        "DEFAULT_DATE_NO_COMPAT": {
+          "flag": false,
+          "atLoad": {},
+          "now": {}
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "withoutEnv": {
+          "value": {
+            "atLoad": {},
+            "now": {},
+            "envAtLoad": []
+          }
+        },
+        "withEnv": {
+          "value": {
+            "atLoad": {
+              "TEXT": "loaded",
+              "NUMBER": "1",
+              "OBJECT": "{\"list\":[1,null,\"x\"]}"
+            },
+            "now": {
+              "TEXT": "loaded",
+              "NUMBER": "1",
+              "OBJECT": "{\"list\":[1,null,\"x\"]}"
+            },
+            "envAtLoad": [
+              "ALIASED",
+              "CYCLE",
+              "DATE",
+              "MAP",
+              "NESTED_SERVICE",
+              "NUMBER",
+              "OBJECT",
+              "SERVICE",
+              "TEXT",
+              "UNDEFINED"
+            ]
+          }
+        },
+        "beforeDate": {
+          "value": {
+            "atLoad": {},
+            "now": {},
+            "envAtLoad": [
+              "TEXT"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

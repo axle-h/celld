@@ -1,0 +1,8 @@
+// nodejs_compat is on by default from 2026-08-04, and with it this flag.
+{
+  "name": "default-date",
+  "main": "index.js",
+  "compatibility_date": "2026-08-04",
+  "compatibility_flags": [],
+  "vars": { "TEXT": "text", "JSON": { "list": [1, "two"] } }
+}

@@ -4631,4 +4631,6 @@ const utilModule = {
 utilModule.default = utilModule;
 __celld.__utilModule = utilModule;
 __celld.__utilTypesModule = { ...types, default: types };
+// Node's error classes, for harness code that throws them (process.env).
+__celld.__utilErrors = { ERR_INVALID_ARG_VALUE };
 })();

@@ -296,6 +296,14 @@ pub fn worker_compat(metadata: &serde_json::Value) -> js::Compat {
         }
         date.is_some_and(|date| date >= since)
     };
+    // workerd's `$impliedByAfterDate`: on from `since` while `by` is on,
+    // unless the disable flag is set.
+    let implied = |by: bool, disable: &str, since: &str| {
+        by && !has_flag(disable) && date.is_some_and(|date| date >= since)
+    };
+    let nodejs_compat = switch("nodejs_compat", "no_nodejs_compat", "2026-08-04");
+    let nodejs_compat_v2 = switch("nodejs_compat_v2", "no_nodejs_compat_v2", "2026-08-04")
+        || implied(nodejs_compat, "no_nodejs_compat_v2", "2024-09-23");
     js::Compat {
         delete_all_deletes_alarm: switch(
             "delete_all_deletes_alarm",
@@ -318,6 +326,13 @@ pub fn worker_compat(metadata: &serde_json::Value) -> js::Compat {
             "rpc_params_transfer_stubs",
             "2026-01-20",
         ),
+        nodejs_compat: nodejs_compat || nodejs_compat_v2,
+        populate_process_env: has_flag("nodejs_compat_populate_process_env")
+            || implied(
+                nodejs_compat,
+                "nodejs_compat_do_not_populate_process_env",
+                "2025-04-01",
+            ),
     }
 }
 
@@ -346,5 +361,70 @@ mod tests {
             &["rpc_params_transfer_stubs"]
         ));
         assert!(!worker_compat(&serde_json::json!({})).rpc_params_dup_stubs);
+    }
+
+    /// (`nodejs_compat`, `nodejs_compat_populate_process_env`) as workerd
+    /// computes them for a date and flags.
+    fn process_env(date: &str, flags: &[&str]) -> (bool, bool) {
+        let compat = worker_compat(&serde_json::json!({
+            "compatibility_date": date,
+            "compatibility_flags": flags,
+        }));
+        (compat.nodejs_compat, compat.populate_process_env)
+    }
+
+    #[test]
+    fn process_env_follows_nodejs_compat_its_date_and_flags() {
+        assert_eq!(process_env("2025-03-31", &["nodejs_compat"]), (true, false));
+        assert_eq!(process_env("2025-04-01", &["nodejs_compat"]), (true, true));
+        assert_eq!(
+            process_env(
+                "2025-03-31",
+                &["nodejs_compat", "nodejs_compat_populate_process_env"]
+            ),
+            (true, true)
+        );
+        assert_eq!(
+            process_env(
+                "2025-04-01",
+                &["nodejs_compat", "nodejs_compat_do_not_populate_process_env"]
+            ),
+            (true, false)
+        );
+        // Without Node.js compatibility the flag can be on, but workerd has
+        // no `process` to fill.
+        assert_eq!(process_env("2025-04-01", &[]), (false, false));
+        assert_eq!(
+            process_env("2025-04-01", &["nodejs_compat_populate_process_env"]),
+            (false, true)
+        );
+        // `nodejs_compat_v2` alone gives a `process`, but the date implies
+        // the flag only through `nodejs_compat`.
+        assert_eq!(
+            process_env("2025-04-01", &["nodejs_compat_v2"]),
+            (true, false)
+        );
+        assert_eq!(
+            process_env(
+                "2025-04-01",
+                &["nodejs_compat_v2", "nodejs_compat_populate_process_env"]
+            ),
+            (true, true)
+        );
+        // From 2026-08-04 `nodejs_compat` and `nodejs_compat_v2` are on by
+        // date. `no_nodejs_compat` turns off the first, and with it the
+        // flag, but not the second.
+        assert_eq!(process_env("2026-08-03", &[]), (false, false));
+        assert_eq!(process_env("2026-08-04", &[]), (true, true));
+        assert_eq!(
+            process_env("2026-08-04", &["no_nodejs_compat"]),
+            (true, false)
+        );
+        assert_eq!(
+            process_env("2026-08-04", &["no_nodejs_compat", "no_nodejs_compat_v2"]),
+            (false, false)
+        );
+        // `nodejs_compat` before 2024-09-23 still offers `node:process`.
+        assert_eq!(process_env("2024-09-22", &["nodejs_compat"]), (true, false));
     }
 }

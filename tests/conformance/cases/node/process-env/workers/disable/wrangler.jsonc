@@ -1,0 +1,8 @@
+// The disable flag on the date: nothing is copied.
+{
+  "name": "disable",
+  "main": "index.js",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat", "nodejs_compat_do_not_populate_process_env"],
+  "vars": { "TEXT": "text", "JSON": { "list": [1, "two"] } }
+}

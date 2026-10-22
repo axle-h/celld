@@ -1,0 +1,8 @@
+// no_nodejs_compat on 2026-08-04: nodejs_compat_v2 still gives a process, but nothing is copied.
+{
+  "name": "default-date-no-compat",
+  "main": "index.js",
+  "compatibility_date": "2026-08-04",
+  "compatibility_flags": ["no_nodejs_compat"],
+  "vars": { "TEXT": "text", "JSON": { "list": [1, "two"] } }
+}

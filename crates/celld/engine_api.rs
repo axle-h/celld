@@ -278,6 +278,19 @@ pub struct Compat {
     /// what `dup()` returns (Workerd worker-rpc.c++ RpcSerializerExternalHandler
     /// DUPLICATE). Return values transfer either way.
     pub rpc_params_dup_stubs: bool,
+    /// Node.js compatibility as workerd computes it: `nodejs_compat` (off =
+    /// `no_nodejs_compat`, default on for dates >= 2026-08-04), or
+    /// `nodejs_compat_v2`, which the same date or `nodejs_compat` from
+    /// 2024-09-23 implies. workerd has a `process` only with it. celld
+    /// offers its Node.js modules whatever the flags say, so only
+    /// `process.env` reads this.
+    pub nodejs_compat: bool,
+    /// `nodejs_compat_populate_process_env` (off =
+    /// `nodejs_compat_do_not_populate_process_env`), which `nodejs_compat`
+    /// implies from 2025-04-01. With [`Compat::nodejs_compat`], `process.env`
+    /// holds the env's strings and JSON values as text before the main
+    /// module evaluates (workerd internal_process.ts getInitialEnv).
+    pub populate_process_env: bool,
 }
 
 /// A non-main module the worker's main module may import, tagged by how the

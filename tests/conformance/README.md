@@ -53,7 +53,9 @@ nondeterministic case shows up when it is recorded. A case runs as it would unde
 `imports`: `#byob` is `lib/worker/byob.js`, the BYOB reader checks the
 `streams/byob-*` cases share, and `#params-dup` is `lib/worker/params-dup.js`,
 the stub-ownership checks the `rpc/params-dup*` cases run under different
-compatibility dates and flags.
+compatibility dates and flags, and `#process-env` is
+`lib/worker/process-env.js`, the `process.env` report each
+`node/process-env` Worker gives under its own date and flags.
 
 ```json
 {

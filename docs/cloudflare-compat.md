@@ -275,7 +275,25 @@ the global `scheduler.wait`, as on workerd.
   `/bundle` that contains the Worker modules.
 - The global `process` matches workerd for each field that it defines, such
   as `process.execPath`, `process.argv`, and `process.title`. Other fields,
-  such as `process.kill` and `process.features`, are undefined.
+  such as `process.kill` and `process.features`, are undefined. celld
+  defines `process` whatever the flags say, where workerd has it only with
+  Node.js compatibility.
+- `node:process` and `process` resolve to the global `process`, as its
+  default export and as named exports. `process.getBuiltinModule("process")`
+  also returns the global, where workerd returns a separate object with the
+  same fields.
+- `process.env` holds the Worker's `vars` under
+  `nodejs_compat_populate_process_env` (see
+  [Compatibility flags](#compatibility-flags)), copied before the main module
+  evaluates. A string var appears as it is, and a JSON var as the text
+  `JSON.stringify` gives, so `process.env.ADMINS` is `'["admin"]'` where
+  `env.ADMINS` is an array. A `.dev.vars` or `.env` entry under `celld dev`
+  appears as a string. celld secrets are vars, so they appear too, as
+  Cloudflare secrets do. Other bindings don't appear. A Dynamic Worker's
+  `process.env` comes from the `env` its parent gives it, under the Dynamic
+  Worker's own compatibility date and flags, never from the parent's vars.
+  As in Node.js, a value stored in `process.env` reads back as a string, and
+  changes stay in the isolate.
 - The celld bundler supports a synchronous CommonJS `require()` of a Node.js
   built-in module. A raw ESM Worker has no global `require()`.
 - A Node.js built-in module object is writable, so a dependency such as
@@ -323,6 +341,13 @@ celld honors these compatibility flags:
   params instead of transferring them, and a param with its own `dup()`
   crosses as what `dup()` returns. Return values transfer their stubs either
   way. This applies within one isolate (see [RPC](#rpc)).
+- `nodejs_compat_populate_process_env`, which `nodejs_compat` turns on from
+  compatibility date 2025-04-01 and
+  `nodejs_compat_do_not_populate_process_env` turns off. With Node.js
+  compatibility (`nodejs_compat` or `nodejs_compat_v2`, on by default from
+  2026-08-04), `process.env` holds the env's strings and JSON values (see
+  [Node.js compatibility](#nodejs-compatibility)). Without it, `process.env`
+  stays empty, because workerd has no `process` to fill.
 
 `global_fetch_strictly_public` has no effect by design. On Cloudflare it
 decides whether a `fetch()` to the Worker's own zone goes to the zone's origin

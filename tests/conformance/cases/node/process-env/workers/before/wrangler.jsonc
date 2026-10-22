@@ -1,0 +1,8 @@
+// The day before nodejs_compat_populate_process_env's date: nothing is copied.
+{
+  "name": "before",
+  "main": "index.js",
+  "compatibility_date": "2025-03-31",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": { "TEXT": "text", "JSON": { "list": [1, "two"] } }
+}

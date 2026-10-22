@@ -1,0 +1,8 @@
+// Every way to reach `node:process` resolves to the global `process`.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": { "TEXT": "text" }
+}

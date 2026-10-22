@@ -612,6 +612,11 @@ pub(super) fn inject_compatibility_flags(scope: &mut v8::PinScope, compat: Compa
     );
     set_flag(scope, "nodejs_als", compat.nodejs_als);
     set_flag(scope, "rpc_params_dup_stubs", compat.rpc_params_dup_stubs);
+    set_flag(
+        scope,
+        "nodejs_compat_populate_process_env",
+        compat.populate_process_env,
+    );
     let cloudflare = v8::Object::new(scope);
     let key = v8::String::new(scope, "compatibilityFlags").unwrap();
     cloudflare.set(scope, key.into(), flags.into());
@@ -632,18 +637,25 @@ pub(super) fn build_env(scope: &mut v8::PinScope, config: &WorkerConfig) -> Resu
     let services = config.services.as_slice();
     let asset_binding = config.asset_binding.as_deref();
     // call the harness: for each binding, env[bindingName] = makeNamespace(className)
+    // Every name and value is a JavaScript string literal, never Rust's
+    // `{:?}`, whose escapes are not JavaScript's: a NUL before a digit would
+    // read as a legacy octal escape.
+    let lit = |text: &str| js_string_literal(text);
     let src = {
         let mut lines = String::from("const e = __celld.__cell.env;\n");
         for (bname, cname) in bindings {
             lines.push_str(&format!(
-                "e[{:?}] = __celld.__cell.makeNamespace({:?});\n",
-                bname, cname
+                "e[{}] = __celld.__cell.makeNamespace({});\n",
+                lit(bname)?,
+                lit(cname)?
             ));
         }
         for (name, bucket) in r2_bindings {
             lines.push_str(&format!(
-                "e[{:?}] = __celld.__makeR2Bucket({:?}, {:?});\n",
-                name, name, bucket
+                "e[{}] = __celld.__makeR2Bucket({}, {});\n",
+                lit(name)?,
+                lit(name)?,
+                lit(bucket)?
             ));
         }
         for (binding, id) in kv_bindings {
@@ -655,36 +667,38 @@ pub(super) fn build_env(scope: &mut v8::PinScope, config: &WorkerConfig) -> Resu
             // rather than fail. When shards outnumber one, this becomes a name
             // per shard and the choice moves here too.
             lines.push_str(&format!(
-                "e[{:?}] = __celld.__makeKvNamespace({:?}, {:?});\n",
-                binding,
-                id,
-                celld_logic::kv::cell_name(id, 0),
+                "e[{}] = __celld.__makeKvNamespace({}, {});\n",
+                lit(binding)?,
+                lit(id)?,
+                lit(&celld_logic::kv::cell_name(id, 0))?,
             ));
         }
         for binding in queue_bindings {
             lines.push_str(&format!(
-                "e[{:?}] = __celld.__makeQueue({:?}, {:?}, {});\n",
-                binding.environment,
-                binding.queue,
-                celld_logic::queue::cell_name(&binding.queue),
+                "e[{}] = __celld.__makeQueue({}, {}, {});\n",
+                lit(&binding.environment)?,
+                lit(&binding.queue)?,
+                lit(celld_logic::queue::cell_name(&binding.queue))?,
                 binding.delivery_delay,
             ));
         }
         for (name, database) in d1_bindings {
             lines.push_str(&format!(
-                "e[{:?}] = __celld.__makeD1Database({:?});\n",
-                name, database
+                "e[{}] = __celld.__makeD1Database({});\n",
+                lit(name)?,
+                lit(database)?
             ));
         }
         for binding in workflow_bindings {
             lines.push_str(&format!(
-                "e[{:?}] = __celld.__makeWorkflow({:?});\n",
-                binding.environment, binding.workflow
+                "e[{}] = __celld.__makeWorkflow({});\n",
+                lit(&binding.environment)?,
+                lit(&binding.workflow)?
             ));
         }
         for service in services {
             let entrypoint = match &service.entrypoint {
-                Some(name) => format!("{name:?}"),
+                Some(name) => lit(name)?,
                 None => "null".to_string(),
             };
             // Encoded once, here, into the bytes every call on the binding
@@ -692,38 +706,42 @@ pub(super) fn build_env(scope: &mut v8::PinScope, config: &WorkerConfig) -> Resu
             // same-script call to the default export keeps its direct path.
             let props = match &service.props {
                 Some(props) => format!(
-                    "__celld.__propsBytes({:?}, {})",
-                    service.environment,
+                    "__celld.__propsBytes({}, {})",
+                    lit(&service.environment)?,
                     json_text_literal(props)?
                 ),
                 None => "undefined".to_string(),
             };
             lines.push_str(&format!(
-                "e[{:?}] = __celld.__makeServiceBinding({:?}, {}, {});\n",
-                service.environment, service.script, entrypoint, props
+                "e[{}] = __celld.__makeServiceBinding({}, {}, {});\n",
+                lit(&service.environment)?,
+                lit(&service.script)?,
+                entrypoint,
+                props
             ));
         }
         for (name, value) in vars {
             match value {
                 WorkerVar::Text(text) => {
-                    lines.push_str(&format!("e[{:?}] = {:?};\n", name, text));
+                    lines.push_str(&format!("e[{}] = {};\n", lit(name)?, lit(text)?));
                 }
                 // Parsed, as workerd parses a JSON binding, rather than
                 // spliced in as a literal: JSON text is not always the same
                 // value as a JavaScript literal (a `"__proto__"` key).
                 WorkerVar::Json(text) => {
                     lines.push_str(&format!(
-                        "e[{:?}] = JSON.parse({});\n",
-                        name,
-                        js_string_literal(text)?
+                        "e[{}] = JSON.parse({});\n",
+                        lit(name)?,
+                        lit(text)?
                     ));
                 }
             }
         }
         if let Some(name) = asset_binding {
             lines.push_str(&format!(
-                "e[{:?}] = __celld.__makeAssetsBinding({:?});\n",
-                name, script_name
+                "e[{}] = __celld.__makeAssetsBinding({});\n",
+                lit(name)?,
+                lit(script_name)?
             ));
         }
         // One `__makeLoader()` call for each binding. Each call builds its own
@@ -731,7 +749,7 @@ pub(super) fn build_env(scope: &mut v8::PinScope, config: &WorkerConfig) -> Resu
         // workerd. Sharing one loader object between the names would merge the
         // caches and return one Worker for two different `get()` calls.
         for name in &config.loader_bindings {
-            lines.push_str(&format!("e[{:?}] = __celld.__makeLoader();\n", name));
+            lines.push_str(&format!("e[{}] = __celld.__makeLoader();\n", lit(name)?));
         }
         lines
     };
@@ -741,31 +759,77 @@ pub(super) fn build_env(scope: &mut v8::PinScope, config: &WorkerConfig) -> Resu
         run_internal_snippet(tc, &src)
             .ok_or_else(|| anyhow!("env install failed: {}", exc!(tc)))?;
     }
-    if let Some(env) = &config.loader_env {
-        let installer = internal_function(scope, "__installLoaderEnv")?;
-        // A flat [script, entrypoint, props, ...] array avoids one V8 array
-        // allocation for every capability that the parent transfers.
-        let routes = v8::Array::new(scope, env.routes.len().saturating_mul(3) as i32);
-        for (index, route) in env.routes.iter().enumerate() {
-            let offset = (index * 3) as u32;
-            let script = v8::String::new(scope, &route.script).unwrap();
-            routes.set_index(scope, offset, script.into());
-            let entrypoint: v8::Local<v8::Value> = match &route.entrypoint {
-                Some(name) => v8::String::new(scope, name).unwrap().into(),
-                None => v8::null(scope).into(),
-            };
-            routes.set_index(scope, offset + 1, entrypoint);
-            let props = super::bytes_value(scope, route.props.clone());
-            routes.set_index(scope, offset + 2, props);
-        }
-        let bytes = super::bytes_value(scope, env.bytes.clone());
-        let tc = std::pin::pin!(v8::TryCatch::new(scope));
-        let tc = &mut tc.init();
-        let receiver = v8::undefined(tc).into();
-        installer
-            .call(tc, receiver, &[bytes, routes.into()])
-            .ok_or_else(|| anyhow!("loader env install: {}", exc!(tc)))?;
+    Ok(())
+}
+
+/// A loaded Worker's `env`, from the bytes its parent sent. Installed before
+/// the main module evaluates, as workerd binds `env` before then: the module
+/// can read it at module scope, and `process.env` is copied from it.
+pub(super) fn install_loader_env(scope: &mut v8::PinScope, config: &WorkerConfig) -> Result<()> {
+    let Some(env) = &config.loader_env else {
+        return Ok(());
+    };
+    let installer = internal_function(scope, "__installLoaderEnv")?;
+    // A flat [script, entrypoint, props, ...] array avoids one V8 array
+    // allocation for every capability that the parent transfers.
+    let routes = v8::Array::new(scope, env.routes.len().saturating_mul(3) as i32);
+    for (index, route) in env.routes.iter().enumerate() {
+        let offset = (index * 3) as u32;
+        let script = v8::String::new(scope, &route.script).unwrap();
+        routes.set_index(scope, offset, script.into());
+        let entrypoint: v8::Local<v8::Value> = match &route.entrypoint {
+            Some(name) => v8::String::new(scope, name).unwrap().into(),
+            None => v8::null(scope).into(),
+        };
+        routes.set_index(scope, offset + 1, entrypoint);
+        let props = super::bytes_value(scope, route.props.clone());
+        routes.set_index(scope, offset + 2, props);
     }
+    let bytes = super::bytes_value(scope, env.bytes.clone());
+    let tc = std::pin::pin!(v8::TryCatch::new(scope));
+    let tc = &mut tc.init();
+    let receiver = v8::undefined(tc).into();
+    installer
+        .call(tc, receiver, &[bytes, routes.into()])
+        .ok_or_else(|| anyhow!("loader env install: {}", exc!(tc)))?;
+    Ok(())
+}
+
+/// `nodejs_compat_populate_process_env`: copy the env into `process.env`
+/// before the main module evaluates, so a dependency that reads it at module
+/// scope sees it, as on workerd. `build_env` runs after evaluation, because
+/// service bindings and Durable Object namespaces need the module's exports,
+/// so this copies what is known before then: a loaded Worker's own env
+/// (`install_loader_env`) and the vars. No other binding is a string or plain
+/// data, which are all that `process.env` takes.
+///
+/// The values cross as V8 values rather than as source text, and a JSON var
+/// goes through V8's JSON parser, as `build_env` installs it. Through the V8
+/// API rather than a compiled snippet because this runs on every isolate load.
+pub(super) fn populate_process_env(scope: &mut v8::PinScope, config: &WorkerConfig) -> Result<()> {
+    let populate = internal_function(scope, "__populateProcessEnv")?;
+    let vars = v8::Array::new(scope, config.vars.len().try_into()?);
+    for (index, (name, value)) in config.vars.iter().enumerate() {
+        let key = v8::String::new(scope, name).ok_or_else(|| anyhow!("var {name} is too long"))?;
+        let value: v8::Local<v8::Value> = match value {
+            WorkerVar::Text(text) => v8::String::new(scope, text)
+                .ok_or_else(|| anyhow!("var {name} is too long"))?
+                .into(),
+            WorkerVar::Json(text) => {
+                let text = v8::String::new(scope, text)
+                    .ok_or_else(|| anyhow!("var {name} is too long"))?;
+                v8::json::parse(scope, text).ok_or_else(|| anyhow!("var {name} is not JSON"))?
+            }
+        };
+        let pair = v8::Array::new_with_elements(scope, &[key.into(), value]);
+        vars.set_index(scope, index.try_into()?, pair.into());
+    }
+    let tc = std::pin::pin!(v8::TryCatch::new(scope));
+    let tc = &mut tc.init();
+    let receiver = v8::undefined(tc).into();
+    populate
+        .call(tc, receiver, &[vars.into()])
+        .ok_or_else(|| anyhow!("process.env install: {}", exc!(tc)))?;
     Ok(())
 }
 
