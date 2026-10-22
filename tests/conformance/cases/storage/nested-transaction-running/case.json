@@ -1,0 +1,8 @@
+{
+  "workers": ["store"],
+  "steps": [
+    {"path": "/rollback-while-child"},
+    {"path": "/end-while-child"},
+    {"path": "/throw-while-child"}
+  ]
+}

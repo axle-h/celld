@@ -1,0 +1,9 @@
+{
+  "workers": ["store"],
+  "steps": [
+    {"path": "/block-throws"},
+    {"path": "/abort"},
+    {"path": "/abort-in-transaction"},
+    {"path": "/abort-in-sync-transaction"}
+  ]
+}

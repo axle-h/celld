@@ -1,0 +1,80 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "events": {
+          "b": "fulfilled",
+          "a": "fulfilled"
+        },
+        "final": {
+          "a": "a",
+          "b": "b",
+          "b2": "b2",
+          "late": null,
+          "late2": null,
+          "late3": null,
+          "late4": null,
+          "lateTable": false,
+          "order": [
+            "a:open",
+            "b:open",
+            "a:rollback:Cannot roll back an outer transaction while a nested transaction is still running.",
+            "b:end",
+            "b:ok",
+            "a:end",
+            "a:ok"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "events": {
+          "b": "rejected",
+          "a": "rejected"
+        },
+        "final": {
+          "a": null,
+          "b": null,
+          "b2": null,
+          "late": null,
+          "late2": null,
+          "late3": null,
+          "late4": null,
+          "lateTable": false,
+          "order": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "events": {
+          "b": "fulfilled",
+          "a": "rejected"
+        },
+        "final": {
+          "a": null,
+          "b": null,
+          "b2": null,
+          "late": null,
+          "late2": null,
+          "late3": null,
+          "late4": null,
+          "lateTable": false,
+          "order": [
+            "a:open",
+            "b:open",
+            "b:saw-a-settled",
+            "b:end",
+            "b:ok"
+          ]
+        }
+      }
+    }
+  ]
+}

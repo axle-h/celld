@@ -1629,13 +1629,6 @@ class SqlStorage {
   }
   exec(query, ...binds) {
     this._storage._assertTransactionActive("sql.exec");
-    // A callback that outlived its block runs on an object that was reset,
-    // whose replacement uses the same connection: a statement from it
-    // would land in the replacement's state. The KV surface drops such
-    // writes silently; SQL refuses aloud, since a cursor can carry reads.
-    if (this._state._aborted) {
-      throw new Error("the Durable Object was reset; this event's storage is closed");
-    }
     const jsonBinds = [];
     const byteBinds = [];
     for (let index = 0; index < binds.length; index++) {
@@ -1776,7 +1769,21 @@ class SyncKvStorage {
     );
   }
 }
-class DurableObjectStorage {
+// workerd's text (ExplicitTxn::rollback()).
+const __NESTED_TRANSACTION_RUNNING_ROLLBACK =
+  "Cannot roll back an outer transaction while a nested transaction is still running.";
+// workerd fails this case with an internal error.
+const __NESTED_TRANSACTION_RUNNING_COMMIT =
+  "Cannot commit an outer transaction while a nested transaction is still running.";
+// Resolves after the current turn: the microtasks queued so far have run and
+// the event loop has moved on, which is when workerd lets a nested critical
+// section start.
+const __afterTurn = () => __op_timer(__timer_alloc(), 0);
+// What `ctx.storage` and a transaction callback's view share. Only the root,
+// a DurableObjectStorage, has transaction(): workerd's DurableObjectTransaction
+// (actor-state.h) has none, and a nested transaction starts through
+// `ctx.storage`, which places it inside the innermost open layer.
+class __DurableObjectStorageBase {
   constructor(
     scope,
     state = null,
@@ -1793,7 +1800,6 @@ class DurableObjectStorage {
     if (!transactionRoot) {
       this._transactionSerial = 0;
       this._transactionTail = Promise.resolve();
-      this._transactionOwner = "";
       this._activeTransaction = null;
       this._activeSyncTransaction = null;
       this._syncKvListGeneration = 0;
@@ -1810,6 +1816,10 @@ class DurableObjectStorage {
     return status;
   }
   _assertTransactionActive(operation) {
+    // A reset object's storage is closed, as a broken actor's is in workerd:
+    // the replacement uses the same connection, so a write from an event of
+    // the old instance would land in its state, or inside its transaction.
+    if (this._state && this._state._aborted) throw this._state._resetFailure();
     const status = this._transactionStatus();
     // workerd's wording, which applications match on.
     if (status === "committed")
@@ -1965,7 +1975,7 @@ class DurableObjectStorage {
     );
   }
   _transactionView(transactionControl) {
-    return new DurableObjectStorage(
+    return new DurableObjectTransaction(
       this._scope,
       this._state,
       this._transactionRoot,
@@ -1979,10 +1989,10 @@ class DurableObjectStorage {
       throw new TypeError("rollback() must be called on a transaction");
     if (control.rolledBack) return;
     this._assertTransactionActive("rollback");
-    // An asynchronous child can still own a nested savepoint. Mark this view
-    // terminal now, but let its runner release the child before it rolls this
-    // layer back.
-    if (control.pending.size === 0) control.rollback();
+    // A running nested transaction holds a savepoint inside this layer's.
+    // workerd's ExplicitTxn::rollback() refuses, and this layer stays open.
+    if (control.hasChild) throw new Error(__NESTED_TRANSACTION_RUNNING_ROLLBACK);
+    control.rollback();
     control.rolledBack = true;
   }
   transactionSync(f) {
@@ -1998,22 +2008,22 @@ class DurableObjectStorage {
       // becomes a savepoint: an inner rollback then discards only the inner
       // writes, and an outer rollback discards both layers.
       //
+      // The open layer belongs to the object, not to the event that opened
+      // it: an event already in flight when another event's asynchronous
+      // transaction opened nests its transaction inside that one too, as
+      // workerd's savepoint stack does. See `transaction()`.
+      //
       // The synchronous transaction is preferred over an asynchronous one,
       // because it is the innermost open layer whenever both are open.
       if (root._activeSyncTransaction !== null)
         return root._activeSyncTransaction.transactionSync(f);
-      const owner = String(__io_context_id());
-      if (owner !== "" && root._transactionOwner === owner &&
-          root._activeTransaction !== null)
+      if (root._activeTransaction !== null)
         return root._activeTransaction.transactionSync(f);
     }
     const savepoint = this._transactionStart();
     const control = this._newTransactionControl(savepoint);
     const view = this._transactionView(control);
-    // No owner check guards this slot, unlike `_activeTransaction`, which an
-    // asynchronous transaction publishes across awaits and must therefore keep
-    // with the event that opened it. The callback below runs to its end before
-    // any other event starts, so only that event can read the slot, and the
+    // The callback below runs to its end before any other code runs, so the
     // restore below runs at exactly the point the savepoint ends.
     const previousSync = root._activeSyncTransaction;
     root._activeSyncTransaction = view;
@@ -2021,6 +2031,8 @@ class DurableObjectStorage {
       // workerd hands the callback nothing: the root's own methods write
       // inside the transaction, and a throw rolls it back.
       const value = f();
+      // The object was reset under the callback, which rolled this back.
+      if (control.failure !== null) throw control.failure;
       if (!control.rolledBack) {
         this._transactionCommit(savepoint);
         control.committed = true;
@@ -2046,7 +2058,17 @@ class DurableObjectStorage {
       rollbackPerformed: false,
       committed: false,
       parent: this._transactionControl,
-      pending: new Set(),
+      // A nested transaction has started inside this layer and not ended,
+      // and the promise that resolves when it does.
+      hasChild: false,
+      childEnded: null,
+      // Set when the callback failed while a nested transaction ran: the
+      // layer's rollback, which waits for that transaction to end.
+      ended: null,
+      // The error the object was reset with when this layer was abandoned.
+      failure: null,
+      // Orders the nested transactions started inside this layer.
+      childTail: Promise.resolve(),
       rollback: () => {
         this._transactionRollback(savepoint, true);
         control.rollbackPerformed = true;
@@ -2054,24 +2076,14 @@ class DurableObjectStorage {
     };
     return control;
   }
-  async _drainNestedTransactions(control) {
-    while (control.pending.size !== 0)
-      await Promise.allSettled(Array.from(control.pending));
-  }
   async _runTransactionWith(f, savepoint, control) {
     const view = this._transactionView(control);
     const root = this._transactionRoot;
-    const owner = String(__io_context_id());
-    const installsActive = owner !== "" && root._transactionOwner === owner;
     const previousActive = root._activeTransaction;
-    if (installsActive) root._activeTransaction = view;
+    root._activeTransaction = view;
     try {
       const value = await f(view);
-      // A helper can start a reentrant transaction through the root storage
-      // handle and omit the returned promise. That child already owns a
-      // savepoint, so ending this layer first would make SQLite release the
-      // child's savepoint and let its continuation run against a false owner.
-      await this._drainNestedTransactions(control);
+      this._requireNoRunningChild(control);
       if (!control.rolledBack) {
         this._transactionCommit(savepoint);
         control.committed = true;
@@ -2080,25 +2092,42 @@ class DurableObjectStorage {
       }
       return value;
     } catch (error) {
-      await this._drainNestedTransactions(control);
-      if (!control.rollbackPerformed) {
-        // The flag records a rollback that happened, not one that was
-        // attempted: a rollback that fails leaves the savepoint open, and a
-        // later transaction on the same connection would commit its writes.
-        // Nothing can be said about the connection then, so the object is
-        // aborted rather than left to serve from it.
-        try {
-          this._transactionRollback(savepoint);
-          control.rolledBack = true;
-          control.rollbackPerformed = true;
-        } catch (rollbackError) {
-          this._abortAfterFailedRollback(rollbackError, error);
-        }
+      if (control.failure !== null) throw control.failure;
+      // workerd rejects a failed layer at once, but the nested transaction
+      // still holds it: the layer rolls back, with the nested writes, only
+      // when that one ends. `ended` is that rollback; whoever started this
+      // layer waits for it before treating the layer as gone, and keeps the
+      // gate shut until then.
+      if (control.hasChild) {
+        control.ended = (async () => {
+          while (control.hasChild) await control.childEnded;
+          if (control.failure === null && !control.rollbackPerformed)
+            this._rollbackLayer(savepoint, control, error);
+          if (root._activeTransaction === view)
+            root._activeTransaction = previousActive;
+        })();
+        throw error;
       }
+      if (!control.rollbackPerformed) this._rollbackLayer(savepoint, control, error);
       throw error;
     } finally {
-      if (installsActive && root._activeTransaction === view)
+      if (root._activeTransaction === view)
         root._activeTransaction = previousActive;
+    }
+  }
+  // Rolls one layer back after its callback failed with `cause`.
+  _rollbackLayer(savepoint, control, cause) {
+    // The flag records a rollback that happened, not one that was attempted:
+    // a rollback that fails leaves the savepoint open, and a later
+    // transaction on the same connection would commit its writes. Nothing
+    // can be said about the connection then, so the object is aborted
+    // rather than left to serve from it.
+    try {
+      this._transactionRollback(savepoint);
+      control.rolledBack = true;
+      control.rollbackPerformed = true;
+    } catch (rollbackError) {
+      this._abortAfterFailedRollback(rollbackError, cause);
     }
   }
   // `cause` is the failure that led to the rollback; the abort's error keeps
@@ -2112,7 +2141,7 @@ class DurableObjectStorage {
     try { console.error("transaction rollback failed", rollbackError); } catch {}
     const state = this._transactionRoot._state;
     if (state && !state._aborted) {
-      state.abort(
+      state._abort(
         new Error(
           "a transaction rollback failed: " + __describeFailure(rollbackError),
           { cause },
@@ -2120,27 +2149,94 @@ class DurableObjectStorage {
       );
     }
   }
-  async _runTransaction(f) {
-    const savepoint = this._transactionStart();
-    return this._runTransactionWith(f, savepoint, this._newTransactionControl(savepoint));
-  }
-  async transaction(f) {
-    this._assertTransactionActive("transaction");
-    if (this._transactionDepth > 0) {
-      const nested = this._runTransaction(f);
-      const pending = this._transactionControl.pending;
-      pending.add(nested);
-      nested.then(
-        () => pending.delete(nested),
-        () => pending.delete(nested),
-      );
-      return nested;
-    }
+  // A nested transaction starts once the current turn has ended, as workerd's
+  // nested critical section does, and only then picks its place: inside the
+  // innermost layer still open, or on its own when the layer it was started
+  // in has ended by then. So a layer whose callback finishes in the turn
+  // that started a nested transaction commits without it, and a nested
+  // transaction started inside `transactionSync()` begins after that
+  // savepoint has ended rather than inside it. Nested transactions started
+  // in one layer run one after another, in call order.
+  async _nestedTransaction(parent, f) {
     const root = this._transactionRoot;
-    const owner = String(__io_context_id());
-    if (owner !== "" && root._transactionOwner === owner &&
-        root._activeTransaction !== null)
-      return root._activeTransaction.transaction(f);
+    const previous = parent.childTail;
+    let release;
+    parent.childTail = new Promise((resolve) => { release = resolve; });
+    // A child that failed under its own nested transaction is rejected at
+    // once, but holds its layer and the sibling slot until its deferred
+    // rollback ends.
+    let ended = null;
+    try {
+      await __afterTurn();
+      await previous;
+      if (root._state._aborted)
+        throw new Error("the Durable Object was reset before the transaction started");
+      const current = root._activeTransaction;
+      if (current === null) return await this._topLevelTransaction(f);
+      const control = current._transactionControl;
+      let childEnded;
+      control.hasChild = true;
+      control.childEnded = new Promise((resolve) => { childEnded = resolve; });
+      let child = null;
+      try {
+        const savepoint = current._transactionStart();
+        child = current._newTransactionControl(savepoint);
+        return await current._runTransactionWith(f, savepoint, child);
+      } finally {
+        const end = () => {
+          control.hasChild = false;
+          childEnded();
+        };
+        if (child !== null && child.ended !== null) {
+          ended = child.ended;
+          ended.then(end);
+        } else {
+          end();
+        }
+      }
+    } finally {
+      if (ended === null) release();
+      else ended.then(release);
+    }
+  }
+  // A layer whose callback has returned cannot commit while a nested
+  // transaction still runs inside it: the nested savepoint would end with
+  // it. workerd fails the critical section there (ExplicitTxn::commit()
+  // requires no child), which resets the object, so celld rolls the whole
+  // transaction back and resets the object as a failed block does. The
+  // transaction's block then fails with the same error.
+  _requireNoRunningChild(control) {
+    if (control.failure !== null) throw control.failure;
+    if (!control.hasChild) return;
+    const error = new Error(__NESTED_TRANSACTION_RUNNING_COMMIT);
+    this._abandonOpenTransactions(error);
+    this._transactionRoot._state._resetAfterConcurrencyFailure(error);
+    throw error;
+  }
+  // Ends every open layer at once, from the innermost one up the chain of
+  // its parents: the outermost rollback discards them all on the connection,
+  // and each layer's runner then reports `error` instead of touching SQLite.
+  _abandonOpenTransactions(error) {
+    const root = this._transactionRoot;
+    // A synchronous layer is the innermost whenever one is open.
+    const active = root._activeSyncTransaction ?? root._activeTransaction;
+    let outermost = null;
+    for (let control = active && active._transactionControl; control; control = control.parent) {
+      control.failure = error;
+      if (!control.rolledBack) outermost = control;
+      control.rolledBack = true;
+    }
+    if (outermost === null) return;
+    try {
+      outermost.rollback();
+    } catch (rollbackError) {
+      this._abortAfterFailedRollback(rollbackError, error);
+    }
+    for (let control = active._transactionControl; control; control = control.parent)
+      control.rollbackPerformed = true;
+  }
+  async _topLevelTransaction(f) {
+    const root = this._transactionRoot;
     // Workerd runs the callback under blockConcurrencyWhile: the input gate
     // shuts, so no other event starts in the object while the transaction is
     // open. Without it another event's reads saw uncommitted rows, its
@@ -2165,6 +2261,10 @@ class DurableObjectStorage {
     let control = null;
     let started = false;
     let abandoned = null;
+    // Settles the caller's promise before the block ends, when the callback
+    // failed while a nested transaction ran: workerd rejects the transaction
+    // at once, and the block holds the gate until the deferred rollback.
+    const early = Promise.withResolvers();
     const guarded = async () => {
       started = true;
       let ownsTransaction = false;
@@ -2178,13 +2278,6 @@ class DurableObjectStorage {
         if (root._state._aborted) {
           return { error: new Error("the Durable Object was reset before the transaction started") };
         }
-        // A callback can compose a helper which reaches the root
-        // `ctx.storage` handle instead of the transaction view. The input
-        // gate excludes other events, but an event which entered before the
-        // gate closed can still be waiting for this slot. Keep the owner with
-        // the open transaction so only the callback's event takes the
-        // savepoint path; another event still waits on the tail.
-        root._transactionOwner = owner;
         ownsTransaction = true;
         // The start is a host op that can fail like any other statement, and
         // a failure there is the transaction's to report, not the block's:
@@ -2194,50 +2287,78 @@ class DurableObjectStorage {
           control = this._newTransactionControl(savepoint);
           return { value: await this._runTransactionWith(f, savepoint, control) };
         } catch (error) {
+          // A layer that ended under a running nested transaction aborted
+          // the object; the block fails with it, as workerd's does.
+          if (control !== null && control.failure === error) throw error;
+          if (control !== null && control.ended !== null) {
+            early.resolve({ error });
+            await control.ended;
+          }
           return { error };
         }
       } finally {
-        if (ownsTransaction && root._transactionOwner === owner) {
-          root._activeTransaction = null;
-          root._transactionOwner = "";
-        }
+        if (ownsTransaction) root._activeTransaction = null;
         release();
       }
     };
-    let outcome;
-    try {
-      outcome = await root._state.blockConcurrencyWhile(guarded);
-    } catch (error) {
-      // The block itself failed: its limit ended the callback while it still
-      // ran, or the block ahead of it failed and this one never started. A
-      // transaction the callback still holds would otherwise stay open on
-      // the connection the object's replacement uses, and the callback's
-      // late commit would carry the replacement's writes with it. Roll it
-      // back now, unless the callback's continuation committed in the same
-      // tick the limit won; the callback's own commit is skipped from here
-      // on. The slot stays with the callback until it settles: the callback
-      // still runs on the connection, and a transaction started beside it
-      // would interleave with its remaining statements. A routed child must
-      // release its savepoint before this layer rolls back, so a live child
-      // leaves the rollback for `_runTransactionWith`. A block that failed
-      // before the callback started holds nothing, so its slot is released
-      // here or nothing ever would.
-      abandoned = error;
-      if (control && !control.rolledBack && !control.committed) {
-        try {
-          if (control.pending.size === 0) control.rollback();
-          control.rolledBack = true;
-        } catch (rollbackError) {
-          this._abortAfterFailedRollback(rollbackError, error);
+    const block = (async () => {
+      try {
+        return await root._state.blockConcurrencyWhile(guarded);
+      } catch (error) {
+        // The block itself failed: its limit ended the callback while it still
+        // ran, or the block ahead of it failed and this one never started. A
+        // transaction the callback still holds would otherwise stay open on
+        // the connection the object's replacement uses, and the callback's
+        // late commit would carry the replacement's writes with it. Roll it
+        // back now, unless the callback's continuation committed in the same
+        // tick the limit won; the callback's own commit is skipped from here
+        // on. The slot stays with the callback until it settles: the callback
+        // still runs on the connection, and a transaction started beside it
+        // would interleave with its remaining statements. Nested transactions
+        // still running end with it. A block that failed before the callback
+        // started holds nothing, so its slot is released here or nothing ever
+        // would.
+        abandoned = error;
+        if (control && !control.rolledBack && !control.committed) {
+          if (control.hasChild) {
+            this._abandonOpenTransactions(error);
+          } else {
+            try {
+              control.rollback();
+              control.rolledBack = true;
+            } catch (rollbackError) {
+              this._abortAfterFailedRollback(rollbackError, error);
+            }
+          }
         }
+        if (!started) release();
+        throw error;
       }
-      if (!started) release();
-      throw error;
-    }
+    })();
+    // The block can fail after `early` has answered the caller.
+    block.catch(() => {});
+    const outcome = await Promise.race([early.promise, block]);
     if ("error" in outcome) throw outcome.error;
     return outcome.value;
   }
 }
+class DurableObjectStorage extends __DurableObjectStorageBase {
+  async transaction(f) {
+    this._assertTransactionActive("transaction");
+    const root = this._transactionRoot;
+    // A transaction started while another is open nests inside it, whichever
+    // event started it: the callback's own helpers reach the root handle
+    // instead of its view, and an event that was already in flight when the
+    // gate shut can resume inside the transaction. Workerd keeps one
+    // savepoint stack per object, so both join it: each sees the other's
+    // uncommitted writes, and the outer layer's rollback discards both.
+    if (root._activeTransaction !== null)
+      return this._nestedTransaction(root._activeTransaction._transactionControl, f);
+    return this._topLevelTransaction(f);
+  }
+}
+// The view a transaction callback receives.
+class DurableObjectTransaction extends __DurableObjectStorageBase {}
 class DurableObjectId {
   constructor(className, value, name = undefined) {
     Object.defineProperties(this, {
@@ -2841,10 +2962,28 @@ class Container {
     return Promise.reject(new Error("interceptOutboundTcp() is not implemented in celld"));
   }
 }
+// Objects reset by a turn that was then terminated, whose running events
+// still have to fail. The host calls `__wakeResetEvents` after it handled
+// the termination, and runs the microtasks it queues. Each object leaves
+// the set before its events fail, so a pass cut short resumes after it.
+const __resetWakes = new Set();
+__celld.__resetWakesPending = () => __resetWakes.size;
+__celld.__wakeResetEvents = () => {
+  for (const state of __resetWakes) {
+    __resetWakes.delete(state);
+    state._failRunningEvents();
+  }
+};
 class DurableObjectState {
   constructor(scope) {
     this._scope = scope;
     this._aborted = false;
+    // The error this instance was reset with. In workerd a reset breaks the
+    // actor: its storage refuses further operations, and every event still
+    // running on it fails. Storage throws `_resetError`, and each running
+    // event holds a deferred here that a reset rejects (see `_untilReset`).
+    this._resetError = null;
+    this._runningEvents = new Set();
     this.storage = new DurableObjectStorage(scope, this);
     this.facets = new DurableObjectFacets(this);
     this._gate = Promise.resolve();
@@ -2897,7 +3036,15 @@ class DurableObjectState {
       // block that fails resets the object as any block does, and the outer
       // release must carry that failure, or the waiters would be admitted to
       // an object that no longer exists: the drain records it.
-      const nested = this._runConcurrencyBlock(f);
+      //
+      // The callback starts once the current turn has ended, as a nested
+      // critical section does in workerd: it waits for the hold the turn
+      // runs under. An object reset in the meantime never runs it.
+      const nested = __afterTurn().then(() => {
+        if (this._aborted)
+          throw new Error("the Durable Object was reset before the block started");
+        return this._runConcurrencyBlock(f);
+      });
       (this._nestedBlocks ||= []).push(nested.then(() => null, __describeFailure));
       return nested;
     }
@@ -3023,9 +3170,51 @@ class DurableObjectState {
       },
     );
   }
+  // `terminating`: the caller is about to terminate the running turn, and
+  // V8 drops the microtasks queued in it, so rejecting the running events
+  // now would lose their reactions. The host rejects them once the turn has
+  // ended instead (`__wakeResetEvents`).
+  _markReset(error, terminating = false) {
+    this._aborted = true;
+    this._resetError = error;
+    // A transaction still open would otherwise stay open on the connection
+    // the replacement uses, and commit with its first write.
+    this.storage._abandonOpenTransactions(error);
+    if (terminating) __resetWakes.add(this);
+    else this._failRunningEvents();
+  }
+  _failRunningEvents() {
+    const events = this._runningEvents;
+    this._runningEvents = new Set();
+    for (const event of events) event.reject(this._resetError);
+  }
+  _resetFailure() {
+    return this._resetError ??
+      new Error("the Durable Object was reset; this event's storage is closed");
+  }
+  // An event's result, unless the instance resets first. A reset rejects
+  // the event's deferred in the resetting turn, so even the event that reset
+  // the object and caught the error fails, as in workerd.
+  _untilReset(result) {
+    if (this._resetError !== null) return Promise.reject(this._resetError);
+    const event = Promise.withResolvers();
+    const events = this._runningEvents;
+    events.add(event);
+    Promise.resolve(result).then(
+      (value) => {
+        events.delete(event);
+        event.resolve(value);
+      },
+      (error) => {
+        events.delete(event);
+        event.reject(error);
+      },
+    );
+    return event.promise;
+  }
   _resetAfterConcurrencyFailure(error) {
     if (this._aborted) return;
-    this._aborted = true;
+    this._markReset(error);
     __storage_cancel_pending_puts(this._scope);
     const instance = __cell.instances[this._scope];
     if (instance && instance.__celldState === this)
@@ -3038,24 +3227,27 @@ class DurableObjectState {
       __actorBreak(this._scope, error);
   }
   abort(reason) {
+    // workerd takes the reason as a string (DurableObjectState::abort()).
+    this._abort(new Error(reason === undefined
+      ? "Application called abort() to reset Durable Object."
+      : String(reason)));
+  }
+  _abort(error) {
     if (this._aborted) return;
-    this._aborted = true;
+    const terminating = __currentActorScope() === this._scope;
+    this._markReset(error, terminating);
     __storage_cancel_pending_puts(this._scope);
     const instance = __cell.instances[this._scope];
     if (instance && instance.__celldState === this)
       delete __cell.instances[this._scope];
-    const message = reason instanceof Error
-      ? reason.message
-      : String(reason);
     // Direct host-dispatched event on this actor: the uncatchable
     // terminate_execution path. Under a same-isolate stub caller,
     // termination would unwind the caller too, so break in JS.
-    if (__currentActorScope() === this._scope) {
-      __actor_abort(this._scope, message);
+    if (terminating) {
+      __actor_abort(this._scope, error.message);
       return;
     }
-    __actorBreak(this._scope,
-      reason instanceof Error ? reason : new Error(message));
+    __actorBreak(this._scope, error);
   }
   _ready() { return this._gate; }
   // The WebSocket methods act on the running Durable Object, whichever
@@ -3249,7 +3441,11 @@ __celld.__retireInputGateContext = (context) => {
       "the cell's critical section ended without releasing",
     );
     const instance = __cell.instances[scope];
-    if (instance !== undefined) instance.__celldState._aborted = true;
+    if (instance !== undefined && !instance.__celldState._aborted) {
+      instance.__celldState._markReset(
+        new Error("the cell's critical section ended without releasing"),
+      );
+    }
     __storage_cancel_pending_puts(scope);
     if (instance !== undefined && __cell.instances[scope] === instance)
       delete __cell.instances[scope];
@@ -5857,7 +6053,7 @@ const __dispatchTo = __celld.__dispatchTo = async (
   try {
     const dispatch = (async () => {
       const inst = await _readyInstance(scope);
-      return await __ctxRun(undefined, () => inst.fetch(
+      return await __ctxRun(undefined, () => inst.__celldState._untilReset(inst.fetch(
         __makeRequest(
           url,
           method,
@@ -5865,7 +6061,7 @@ const __dispatchTo = __celld.__dispatchTo = async (
           headersJson,
           requestController.signal,
           true,
-        )));
+        ))));
     })();
     // The caller's abandonment reaches the target through
     // __do_call_cancel/__abortIncomingRequest, which aborts the fresh incoming
@@ -5928,7 +6124,7 @@ __celld.__dispatchRpc = async (scope, method, args) => {
     // Answer in kind.
     if (typeof args === "string") {
       const [inst, fn] = await __rpcTargetMethod(scope, method);
-      const result = await fn.apply(inst, JSON.parse(args));
+      const result = await inst.__celldState._untilReset(fn.apply(inst, JSON.parse(args)));
       return JSON.stringify(result) ?? "null";
     }
     return await __ctxRun(undefined, () => (async () => {
@@ -5942,7 +6138,7 @@ __celld.__dispatchRpc = async (scope, method, args) => {
             if (broken !== undefined) throw broken;
           }
           const [inst, fn] = await __rpcTargetMethod(scope, method);
-          return fn.apply(inst, decoded.args);
+          return inst.__celldState._untilReset(fn.apply(inst, decoded.args));
         }, true);
       } finally {
         __disposeReceived(decoded.received);
@@ -6312,7 +6508,7 @@ __celld.__wsMessage = async (scope, wsId, msg) => {
     if (__wsIsSocket(socket) && !__wsState(socket).hibernatable)
       __wsDispatchMessage(socket, msg);
     else if (typeof inst.webSocketMessage === "function")
-      await inst.webSocketMessage(socket, msg);
+      await inst.__celldState._untilReset(inst.webSocketMessage(socket, msg));
   } finally {
     __endActorEvent(actorEvent);
   }
@@ -6326,7 +6522,7 @@ __celld.__wsBinary = async (scope, wsId, data) => {
     if (__wsIsSocket(socket) && !__wsState(socket).hibernatable)
       __wsDispatchMessage(socket, bytes);
     else if (typeof inst.webSocketMessage === "function")
-      await inst.webSocketMessage(socket, bytes);
+      await inst.__celldState._untilReset(inst.webSocketMessage(socket, bytes));
   } finally {
     __endActorEvent(actorEvent);
   }
@@ -6342,12 +6538,12 @@ __celld.__wsClosed = async (scope, wsId, code, reason, wasClean) => {
       // A hibernatable socket reports an abnormal closure through
       // webSocketError, which celld listed as a handler name and never
       // called.
-      await inst.webSocketError(
+      await inst.__celldState._untilReset(inst.webSocketError(
         socket,
         new Error(reason ? `WebSocket closed abnormally: ${reason}` : "WebSocket closed abnormally"),
-      );
+      ));
     else if (typeof inst.webSocketClose === "function")
-      await inst.webSocketClose(socket, code, reason, wasClean);
+      await inst.__celldState._untilReset(inst.webSocketClose(socket, code, reason, wasClean));
   } finally {
     __endActorEvent(actorEvent);
   }
@@ -6358,7 +6554,8 @@ __celld.__fireAlarm = async (scope, scheduledTime, retryCount) => {
   try {
     const inst = await _readyInstance(scope);
     if (typeof inst.alarm !== "function") return;
-    await inst.alarm({ scheduledTime, retryCount, isRetry: retryCount > 0 });
+    await inst.__celldState._untilReset(
+      inst.alarm({ scheduledTime, retryCount, isRetry: retryCount > 0 }));
   } finally {
     __endActorEvent(actorEvent);
   }
@@ -9357,7 +9554,7 @@ const __WorkflowCell = (() => {
     // A callback can still be awaiting application I/O when deletion lands.
     // Reset the object after the deletion commit so that callback cannot
     // recreate an old-generation ledger entry after delete() reports success.
-    this._state.abort(new Error("WORKFLOW_INSTANCE_DELETED"));
+    this._state._abort(new Error("WORKFLOW_INSTANCE_DELETED"));
   }
   async __wfPause() {
     const storage = this._state.storage;

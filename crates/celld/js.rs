@@ -2841,7 +2841,22 @@ fn cell_registry_has(scope: &mut v8::PinScope, registry: &str, name: &str) -> Re
         .unwrap_or(false))
 }
 
+/// Take a pending termination, and then fail the events still running on an
+/// object it reset (`wake_reset_events`), so no reset object is left with
+/// events waiting whichever path noticed the termination.
 fn take_execution_termination_in_context(
+    scope: &mut v8::PinScope,
+    context: Option<&IoContext>,
+) -> Option<anyhow::Error> {
+    let error = take_one_execution_termination(scope, context)?;
+    match context {
+        Some(context) => wake_reset_events(scope, context),
+        None => wake_reset_events(scope, &current_context()),
+    }
+    Some(error)
+}
+
+fn take_one_execution_termination(
     scope: &mut v8::PinScope,
     context: Option<&IoContext>,
 ) -> Option<anyhow::Error> {
@@ -4479,6 +4494,61 @@ fn finish_turn(tc: &mut v8::PinScope, entry: &mut InFlight) -> Vec<Op> {
         entry.context.close_sockets();
     }
     ops
+}
+
+/// Fail the events still running on objects that a terminated turn reset.
+///
+/// `ctx.abort()` resets the object and terminates the turn, and V8 drops the
+/// microtasks queued in it, so the rejections that would have failed the
+/// object's other events never run. This rejects them again in a checkpoint
+/// of its own, under the CPU watchdog of `context`, and hands what their
+/// continuations enqueued to those events' drivers. A continuation can end
+/// in a termination of its own, such as an abort that resets another object,
+/// so the wake repeats while objects wait and each pass makes progress. A
+/// pass that makes none, its budget spent, leaves the rest for the next
+/// termination. Taking a termination calls this.
+fn wake_reset_events(tc: &mut v8::PinScope, context: &IoContext) {
+    loop {
+        let before = reset_wakes_pending(tc);
+        if before == 0 {
+            return;
+        }
+        let Ok(function) = internal_function(tc, "__wakeResetEvents") else {
+            return;
+        };
+        let from = asyncrt::spawn_count();
+        {
+            let _cpu_watchdog = cpu_watchdog_for_context(tc, context);
+            let recv = v8::undefined(tc).into();
+            let _ = function.call(tc, recv, &[]);
+            tc.perform_microtask_checkpoint();
+        }
+        let terminated = take_one_execution_termination(tc, Some(context)).is_some();
+        let state = actor_runtime_state(tc);
+        for (id, future, lifetime, owner) in asyncrt::drain_spawns_from(from) {
+            let delivered = owner
+                .and_then(|owner| state.io_context(owner))
+                .is_some_and(|owner| owner.hand_op(id, future, lifetime));
+            if !delivered {
+                state.promises.lock().unwrap().remove(&id);
+            }
+        }
+        if terminated && reset_wakes_pending(tc) >= before {
+            return;
+        }
+    }
+}
+
+/// How many reset objects still wait for `wake_reset_events`.
+fn reset_wakes_pending(tc: &mut v8::PinScope) -> u32 {
+    let Ok(function) = internal_function(tc, "__resetWakesPending") else {
+        return 0;
+    };
+    let recv = v8::undefined(tc).into();
+    function
+        .call(tc, recv, &[])
+        .and_then(|count| count.uint32_value(tc))
+        .unwrap_or(0)
 }
 
 /// An op the JS enqueued, and the id whose promise it resolves.

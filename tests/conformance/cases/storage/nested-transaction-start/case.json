@@ -1,0 +1,13 @@
+{
+  "workers": ["store"],
+  "steps": [
+    {"path": "/same-turn"},
+    {"path": "/same-turn-throw"},
+    {"path": "/async-in-sync"},
+    {"path": "/sync-in-joined"},
+    {"path": "/siblings"},
+    {"path": "/unawaited"},
+    {"path": "/nested-block"},
+    {"path": "/view"}
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "events": {
+          "b": "rejected: block threw",
+          "a": "rejected: block threw"
+        },
+        "final": {
+          "a": null,
+          "late": null,
+          "late2": null,
+          "late3": null,
+          "late4": null,
+          "lateTable": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "events": {
+          "b": "rejected: Error: aborted",
+          "a": "rejected: Error: aborted"
+        },
+        "final": {
+          "a": null,
+          "late": null,
+          "late2": null,
+          "late3": null,
+          "late4": null,
+          "lateTable": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "events": {
+          "b": "rejected: Error: aborted",
+          "a": "rejected: Error: aborted"
+        },
+        "final": {
+          "a": null,
+          "late": null,
+          "late2": null,
+          "late3": null,
+          "late4": null,
+          "lateTable": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "events": {
+          "b": "rejected: Error: aborted",
+          "a": "rejected: Error: aborted"
+        },
+        "final": {
+          "a": null,
+          "late": null,
+          "late2": null,
+          "late3": null,
+          "late4": null,
+          "lateTable": false
+        }
+      }
+    }
+  ]
+}

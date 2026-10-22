@@ -85,8 +85,30 @@ the client must reconnect.
 A class that a `new_sqlite_classes` migration declares can use the key-value
 methods and `ctx.storage.sql.exec()`. The `transactionSync()` callback receives
 no argument, as in workerd, and a throw rolls it back. A transaction can start
-a nested transaction; a failed nested transaction discards only its own
-writes, and the enclosing transaction can still commit.
+a nested transaction through `ctx.storage`; a failed nested transaction
+discards only its own writes, and the enclosing transaction can still commit.
+As in workerd, the transaction callback's argument has no `transaction()`
+method.
+
+Nesting follows workerd. A `transaction()` started while another is open
+starts once the current turn of JavaScript has ended, and then nests inside
+the innermost transaction still open. If the enclosing transaction has ended
+by then, it runs on its own afterwards. Nested transactions started together
+run one after another. A nested transaction can come from another event that
+was already running when the enclosing one began: the two events then see each
+other's uncommitted writes, and the enclosing rollback discards both. While a
+nested transaction runs:
+
+- `rollback()` on the enclosing transaction throws "Cannot roll back an outer
+  transaction while a nested transaction is still running."
+- An enclosing callback that throws rejects its transaction at once. The
+  transaction rolls back when the nested one ends, and discards the nested
+  transaction's writes too; the input gate stays closed until then.
+- An enclosing callback that returns cannot commit. The transaction rolls
+  back, the object resets, and both transactions reject.
+
+`blockConcurrencyWhile()` inside another block likewise starts its callback
+once the current turn has ended.
 
 The synchronous `ctx.storage.kv.list()` iterator reads one entry per step and
 does not block later writes. Each step resumes after the last returned key, so
@@ -103,6 +125,20 @@ celld does not answer a successful `setAlarm()` until a durable wake entry in
 the bucket covers the alarm. A hibernated cell fires its alarm on its owner
 node. One node holds the waker role, and it wakes only a cell whose owner
 stopped.
+
+### Resets
+
+A `blockConcurrencyWhile()` callback that throws or exceeds its limit,
+`ctx.abort(reason)`, and a transaction that cannot commit reset the object, as
+in workerd:
+
+- Every event still running on the object fails with the reset's error, even
+  one that caught it. `ctx.abort(reason)` fails them with `String(reason)` as
+  the message, or "Application called abort() to reset Durable Object."
+  without a reason.
+- An open transaction rolls back.
+- The old instance's storage refuses every later operation with the reset's
+  error. The next event gets a new instance.
 
 ## Differences from Cloudflare
 
@@ -146,6 +182,9 @@ stopped.
   Without an object store, it resolves after the local commit.
 - A transaction and `blockConcurrencyWhile()` have a 30-second limit. A timeout
   resets the object and rolls back an open transaction.
+- When a transaction's callback returns while a nested transaction runs,
+  workerd reports an internal error, and celld "Cannot commit an outer
+  transaction while a nested transaction is still running."
 - A failed handler still waits for the durability of any value or write that it
   can expose. A celld-generated failure that exposes no object value returns
   immediately.

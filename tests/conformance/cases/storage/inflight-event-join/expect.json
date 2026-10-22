@@ -1,0 +1,195 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "tag": "b",
+            "seen": {
+              "a": "a",
+              "a2": null,
+              "b": "b"
+            },
+            "caught": null
+          },
+          {
+            "tag": "a",
+            "seen": {
+              "a": "a",
+              "a2": null,
+              "b": "b"
+            },
+            "caught": null
+          }
+        ],
+        "final": {
+          "a": "a",
+          "a2": null,
+          "b": "b",
+          "order": [
+            "a:open",
+            "b:resumed",
+            "b:open",
+            "b:settled",
+            "a:end",
+            "a:settled"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "tag": "b",
+            "seen": {
+              "a": "a",
+              "a2": null,
+              "b": "b"
+            },
+            "caught": "b failed"
+          },
+          {
+            "tag": "a",
+            "seen": {
+              "a": "a",
+              "a2": null,
+              "b": null
+            },
+            "caught": null
+          }
+        ],
+        "final": {
+          "a": "a",
+          "a2": null,
+          "b": null,
+          "order": [
+            "a:open",
+            "b:resumed",
+            "b:open",
+            "b:settled",
+            "a:end",
+            "a:settled"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "tag": "b",
+            "seen": {
+              "a": "a",
+              "b": "b"
+            },
+            "caught": "b failed"
+          },
+          {
+            "tag": "a",
+            "seen": {
+              "a": "a",
+              "a2": null,
+              "b": null
+            },
+            "caught": null
+          }
+        ],
+        "final": {
+          "a": "a",
+          "a2": null,
+          "b": null,
+          "order": [
+            "a:open",
+            "b:resumed",
+            "b:settled",
+            "a:end",
+            "a:settled"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "tag": "b",
+            "seen": {
+              "a": "a",
+              "a2": null,
+              "b": "b"
+            },
+            "caught": null
+          },
+          {
+            "tag": "a",
+            "seen": {
+              "a": "a",
+              "a2": null,
+              "b": null
+            },
+            "caught": null
+          }
+        ],
+        "final": {
+          "a": "a",
+          "a2": null,
+          "b": null,
+          "order": [
+            "a:open",
+            "b:resumed",
+            "b:open",
+            "b:settled",
+            "a:end",
+            "a:settled"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "tag": "b",
+            "seen": {
+              "a": "a",
+              "a2": "a2",
+              "b": "b"
+            },
+            "caught": "b failed"
+          },
+          {
+            "tag": "a",
+            "seen": {
+              "a": "a",
+              "a2": null,
+              "b": null
+            },
+            "caught": null
+          }
+        ],
+        "final": {
+          "a": "a",
+          "a2": null,
+          "b": null,
+          "order": [
+            "a:open",
+            "b:resumed",
+            "b:open",
+            "a:wrote-a2",
+            "b:settled",
+            "a:end",
+            "a:settled"
+          ]
+        }
+      }
+    }
+  ]
+}

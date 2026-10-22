@@ -359,8 +359,10 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 19 | 1.10 small built-in fixes | done | `c7295a0` |
 | 20 | 1.11 method lookup on get-only Proxies | done | `a927af1` |
 | 21 | 1.12 DO stub calls return an RpcPromise | done | `caa42f6` |
-| 22 | 1.13 stubs passed as params are duplicated | done | see log |
-| 23+ | Phase 1 in plan order (1.14-1.29), and the 1.4 props key-order follow-up | queued | |
+| 22 | 1.13 stubs passed as params are duplicated | done | `5b67c22` |
+| 23 | 1.14 transactions on root storage; reset semantics | done | see log |
+| 24 | fix the workerd-side flake in `streams/byob-request-body` | next | |
+| 25+ | Phase 1 in plan order (1.15-1.30), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -559,7 +561,7 @@ record the resolved workerd version in each `expect.json` header.
 - `examples/dynamic-worker-tails`
 - `examples/counter`
 - `storage/nested-root-transactions` (see 1.14), green on both runtimes
-- `storage/inflight-event-{async,sync}-transaction` (xfail until 1.14)
+- `storage/inflight-event-{async,sync}-transaction`
 - `websocket/accept-websocket-echo`, and `websocket/close-without-handler`
   (xfail until 1.17)
 
@@ -1638,6 +1640,34 @@ that the nested and concurrent cases stay green.
 
 **Tests.** Remove `xfail` from both in-flight cases.
 
+**As built (done).**
+- The owner scoping is gone. An in-flight event joins the innermost open
+  layer.
+- A nested transaction or nested `blockConcurrencyWhile` takes its slot
+  synchronously but starts after the current turn, as workerd's critical
+  sections do. That fixed an async transaction inside `transactionSync`
+  corrupting the savepoint stack.
+- An outer rollback while a nested transaction runs throws workerd's text,
+  and both commit.
+- An outer callback that ends while a nested one runs fails loudly: all is
+  rolled back and the object resets. Only celld's error text differs from
+  workerd's "internal error".
+- A throwing outer rejects at once and rolls back when the nested one ends.
+- Transaction views have no `transaction()`.
+- **Resets now match workerd (pre-existing bugs fixed here):**
+  - every storage op on a reset instance throws the reset error;
+  - an open transaction is rolled back;
+  - in-flight events reject promptly;
+  - `ctx.abort()` no longer hangs other events, and uses workerd's text.
+
+  Events track per-event deferreds. After a termination, the host wakes them
+  under the CPU watchdog.
+- **Overhead (5000 sequential calls, median, against HEAD):** RPC +1.0%,
+  stub fetch −2.2%. RSS stays flat over 400k RPCs.
+- Cases: `storage/inflight-event-join`, `nested-transaction-start`,
+  `nested-transaction-running`, `reset-in-flight`. The in-flight cases use a
+  "started" handshake rather than `Promise.all` order.
+
 ### 1.15 `process.env` and `node:process` (N9)
 
 **Problem.**
@@ -1983,6 +2013,20 @@ still differ from workerd:
 - Contradictory compatibility flags (enable and disable both set) are
   accepted, with the enable flag winning; workerd refuses them. 1.16 should
   refuse them for every switch.
+
+### 1.30 Durable Object reset follow-ups (found by 1.14)
+
+- **A DO caller never gets a callee's reset.** DO "caller" awaits
+  `stub.b()` on DO "target", and another event resets target (`abort()` or a
+  failed `blockConcurrencyWhile`). On workerd, the caller catches the error.
+  On celld the call never settles, and later calls to the caller, and to
+  fresh objects in the same run, time out. A stateless caller works. This
+  predates 1.14.
+- **Autocommit writes made before a reset survive it.** A write stepped
+  before the reset (e.g. `INSERT … RETURNING`) is kept; workerd's implicit
+  transaction discards it. This predates 1.14.
+- Transaction views still have `transactionSync`, `sql`, `kv` and `sync`,
+  which workerd's `DurableObjectTransaction` lacks.
 
 ### Phase 1 gate
 

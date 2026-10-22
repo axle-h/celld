@@ -2,9 +2,10 @@
 // the root storage, and that then starts a transaction of its own while the
 // first is open (plan 1.14, denoland/celld#226).
 //
-// Event "b" arrives first and waits on a promise that event "a" resolves from
-// inside its open transaction. So "b" resumes while "a"'s transaction is open
-// without any timer or I/O, which the input gate would hold back. "b" then
+// Event "b" starts first (the fetch handler calls "a" only once "b" runs)
+// and waits on a promise that event "a" resolves from inside its open
+// transaction. So "b" resumes while "a"'s transaction is open without any
+// timer or I/O, which the input gate would hold back. "b" then
 // opens a transaction (/async: transaction(), /sync: transactionSync()) and
 // writes "b"; "a" later rolls back. The transcript records what each event
 // saw, the order things ran in, and what the storage holds at the end.
@@ -19,6 +20,11 @@ const message = (error) => (error instanceof Error ? error.message : String(erro
 export class Store extends DurableObject {
   order = [];
   opened = Promise.withResolvers();
+  bRunning = Promise.withResolvers();
+
+  async bStarted() {
+    await this.bRunning.promise;
+  }
 
   async a() {
     const storage = this.ctx.storage;
@@ -45,6 +51,7 @@ export class Store extends DurableObject {
     let seen = null;
     let caught = null;
     this.order.push("b:waiting");
+    this.bRunning.resolve();
     await this.opened.promise;
     this.order.push("b:resumed");
     try {
@@ -78,8 +85,11 @@ export default {
     if (pathname !== "/async" && pathname !== "/sync") return new Response("not found", { status: 404 });
     const store = env.STORE.getByName(pathname);
     try {
-      // "b" is called first, so it is in flight before "a" starts.
-      const events = await Promise.all([store.b(pathname === "/sync"), store.a()]);
+      // "a" is called once "b" runs: two calls sent together can start in
+      // either order.
+      const b = store.b(pathname === "/sync");
+      await store.bStarted();
+      const events = await Promise.all([b, store.a()]);
       return Response.json({ events, final: await store.final() });
     } catch (error) {
       return Response.json({ error: message(error) }, { status: 500 });

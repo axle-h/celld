@@ -1,0 +1,163 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "a": "a",
+        "b": "b",
+        "c": null,
+        "s": null,
+        "s2": null,
+        "x": null,
+        "y": null,
+        "outer": null,
+        "inner": null,
+        "order": [
+          "a:open",
+          "b:resumed",
+          "a:ok",
+          "b:open",
+          "b:ok"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "a": null,
+        "b": "b",
+        "c": null,
+        "s": null,
+        "s2": null,
+        "x": null,
+        "y": null,
+        "outer": null,
+        "inner": null,
+        "order": [
+          "a:open",
+          "b:resumed",
+          "a:err:a threw",
+          "b:open",
+          "b:ok"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "a": "a",
+        "b": null,
+        "c": "c",
+        "s": "s",
+        "s2": null,
+        "x": null,
+        "y": null,
+        "outer": null,
+        "inner": null,
+        "order": [
+          "a:open",
+          "b:resumed",
+          "sync:end",
+          "c:open",
+          "c:ok",
+          "b:ok",
+          "a:end",
+          "a:ok"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "a": "a",
+        "b": "b",
+        "c": null,
+        "s": null,
+        "s2": "s2",
+        "x": null,
+        "y": null,
+        "outer": null,
+        "inner": null,
+        "order": [
+          "a:open",
+          "b:resumed",
+          "sync:sync failed",
+          "b:ok",
+          "a:end",
+          "a:ok"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "a": null,
+        "b": null,
+        "c": null,
+        "s": null,
+        "s2": null,
+        "x": "x",
+        "y": "y",
+        "outer": null,
+        "inner": null,
+        "order": [
+          "outer:open",
+          "x:open",
+          "x:end",
+          "y:open",
+          "y:end",
+          "outer:end"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "a": null,
+        "b": null,
+        "c": null,
+        "s": null,
+        "s2": null,
+        "x": null,
+        "y": null,
+        "outer": "outer",
+        "inner": "inner",
+        "order": [
+          "outer:end",
+          "outer:ok",
+          "inner:open",
+          "inner:ok"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "a": null,
+        "b": null,
+        "c": null,
+        "s": null,
+        "s2": null,
+        "x": null,
+        "y": null,
+        "outer": null,
+        "inner": null,
+        "order": [
+          "outer:start",
+          "outer:called",
+          "outer:after-microtask",
+          "inner",
+          "outer:end"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "type": "undefined"
+      }
+    }
+  ]
+}

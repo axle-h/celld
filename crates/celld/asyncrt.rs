@@ -565,10 +565,17 @@ pub(crate) fn enqueue_unrefed<T: Into<OpOut>>(
 }
 
 pub fn drain_spawns() -> Vec<(u64, OpFuture, OpLifetime, Option<u64>)> {
+    drain_spawns_from(0)
+}
+
+/// Take the operations enqueued since `from` (a `spawn_count()`), leaving the
+/// earlier ones for the turn that enqueued them.
+pub fn drain_spawns_from(from: usize) -> Vec<(u64, OpFuture, OpLifetime, Option<u64>)> {
     SPAWNS.with(|spawns| {
+        let mut spawns = spawns.borrow_mut();
+        let from = from.min(spawns.len());
         spawns
-            .borrow_mut()
-            .drain(..)
+            .drain(from..)
             .map(|spawn| (spawn.id, spawn.future, spawn.lifetime, spawn.owner))
             .collect()
     })

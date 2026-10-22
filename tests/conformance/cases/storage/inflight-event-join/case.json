@@ -1,0 +1,10 @@
+{
+  "workers": ["store"],
+  "steps": [
+    {"path": "/commit"},
+    {"path": "/throw"},
+    {"path": "/sync-throw"},
+    {"path": "/rollback"},
+    {"path": "/interleaved"}
+  ]
+}
