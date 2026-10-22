@@ -1,0 +1,1144 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "relative": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "back",
+            "url": "http://target.test/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "absolute": {
+          "status": 200,
+          "url": "http://other.test:8080/echo",
+          "redirected": true,
+          "body": {
+            "who": "back",
+            "url": "http://other.test:8080/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "manual": {
+          "status": 302,
+          "url": "http://target.test/redirect?status=302&to=%2Fecho",
+          "redirected": false,
+          "body": "redirect"
+        },
+        "post307": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "back",
+            "url": "http://target.test/echo",
+            "method": "POST",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": "text/plain",
+              "transfer-encoding": null
+            },
+            "body": "payload"
+          }
+        },
+        "stream307": {
+          "error": "TypeError",
+          "message": "A request with a one-time-use body (it was initialized from a stream, not a buffer) encountered a redirect requiring the body to be retransmitted. To avoid this error in the future, construct this request from a buffer-like body initializer."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "relative": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "back-named",
+            "url": "http://target.test/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "absolute": {
+          "status": 200,
+          "url": "http://other.test:8080/echo",
+          "redirected": true,
+          "body": {
+            "who": "back-named",
+            "url": "http://other.test:8080/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "manual": {
+          "status": 302,
+          "url": "http://target.test/redirect?status=302&to=%2Fecho",
+          "redirected": false,
+          "body": "redirect"
+        },
+        "post307": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "back-named",
+            "url": "http://target.test/echo",
+            "method": "POST",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": "text/plain",
+              "transfer-encoding": null
+            },
+            "body": "payload"
+          }
+        },
+        "stream307": {
+          "error": "TypeError",
+          "message": "A request with a one-time-use body (it was initialized from a stream, not a buffer) encountered a redirect requiring the body to be retransmitted. To avoid this error in the future, construct this request from a buffer-like body initializer."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "relative": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "self",
+            "url": "http://target.test/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "absolute": {
+          "status": 200,
+          "url": "http://other.test:8080/echo",
+          "redirected": true,
+          "body": {
+            "who": "self",
+            "url": "http://other.test:8080/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "manual": {
+          "status": 302,
+          "url": "http://target.test/redirect?status=302&to=%2Fecho",
+          "redirected": false,
+          "body": "redirect"
+        },
+        "post307": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "self",
+            "url": "http://target.test/echo",
+            "method": "POST",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": "text/plain",
+              "transfer-encoding": null
+            },
+            "body": "payload"
+          }
+        },
+        "stream307": {
+          "error": "TypeError",
+          "message": "A request with a one-time-use body (it was initialized from a stream, not a buffer) encountered a redirect requiring the body to be retransmitted. To avoid this error in the future, construct this request from a buffer-like body initializer."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "relative": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "loopback",
+            "url": "http://target.test/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "absolute": {
+          "status": 200,
+          "url": "http://other.test:8080/echo",
+          "redirected": true,
+          "body": {
+            "who": "loopback",
+            "url": "http://other.test:8080/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "manual": {
+          "status": 302,
+          "url": "http://target.test/redirect?status=302&to=%2Fecho",
+          "redirected": false,
+          "body": "redirect"
+        },
+        "post307": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "loopback",
+            "url": "http://target.test/echo",
+            "method": "POST",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": "text/plain",
+              "transfer-encoding": null
+            },
+            "body": "payload"
+          }
+        },
+        "stream307": {
+          "error": "TypeError",
+          "message": "A request with a one-time-use body (it was initialized from a stream, not a buffer) encountered a redirect requiring the body to be retransmitted. To avoid this error in the future, construct this request from a buffer-like body initializer."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "relative": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "object",
+            "url": "http://target.test/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "absolute": {
+          "status": 200,
+          "url": "http://other.test:8080/echo",
+          "redirected": true,
+          "body": {
+            "who": "object",
+            "url": "http://other.test:8080/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "manual": {
+          "status": 302,
+          "url": "http://target.test/redirect?status=302&to=%2Fecho",
+          "redirected": false,
+          "body": "redirect"
+        },
+        "post307": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "object",
+            "url": "http://target.test/echo",
+            "method": "POST",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": "text/plain",
+              "transfer-encoding": null
+            },
+            "body": "payload"
+          }
+        },
+        "stream307": {
+          "error": "TypeError",
+          "message": "A request with a one-time-use body (it was initialized from a stream, not a buffer) encountered a redirect requiring the body to be retransmitted. To avoid this error in the future, construct this request from a buffer-like body initializer."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "relative": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "facet",
+            "url": "http://target.test/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "absolute": {
+          "status": 200,
+          "url": "http://other.test:8080/echo",
+          "redirected": true,
+          "body": {
+            "who": "facet",
+            "url": "http://other.test:8080/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "manual": {
+          "status": 302,
+          "url": "http://target.test/redirect?status=302&to=%2Fecho",
+          "redirected": false,
+          "body": "redirect"
+        },
+        "post307": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "facet",
+            "url": "http://target.test/echo",
+            "method": "POST",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": "text/plain",
+              "transfer-encoding": null
+            },
+            "body": "payload"
+          }
+        },
+        "stream307": {
+          "error": "TypeError",
+          "message": "A request with a one-time-use body (it was initialized from a stream, not a buffer) encountered a redirect requiring the body to be retransmitted. To avoid this error in the future, construct this request from a buffer-like body initializer."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "relative": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "loader",
+            "url": "http://target.test/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "absolute": {
+          "status": 200,
+          "url": "http://other.test:8080/echo",
+          "redirected": true,
+          "body": {
+            "who": "loader",
+            "url": "http://other.test:8080/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "manual": {
+          "status": 302,
+          "url": "http://target.test/redirect?status=302&to=%2Fecho",
+          "redirected": false,
+          "body": "redirect"
+        },
+        "post307": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "loader",
+            "url": "http://target.test/echo",
+            "method": "POST",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": "text/plain",
+              "transfer-encoding": null
+            },
+            "body": "payload"
+          }
+        },
+        "stream307": {
+          "error": "TypeError",
+          "message": "A request with a one-time-use body (it was initialized from a stream, not a buffer) encountered a redirect requiring the body to be retransmitted. To avoid this error in the future, construct this request from a buffer-like body initializer."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "methods": {
+          "301 POST": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "GET",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "301 PUT": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "PUT",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": "payload"
+            }
+          },
+          "301 HEAD": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "HEAD",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "302 POST": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "GET",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "302 PUT": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "PUT",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": "payload"
+            }
+          },
+          "302 HEAD": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "HEAD",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "303 POST": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "GET",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "303 PUT": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "GET",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "303 HEAD": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "HEAD",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "307 POST": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "POST",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": "payload"
+            }
+          },
+          "307 PUT": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "PUT",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": "payload"
+            }
+          },
+          "307 HEAD": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "HEAD",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "308 POST": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "POST",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": "payload"
+            }
+          },
+          "308 PUT": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "PUT",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": "payload"
+            }
+          },
+          "308 HEAD": {
+            "status": 200,
+            "url": "http://target.test/echo",
+            "redirected": true,
+            "body": {
+              "who": "back",
+              "url": "http://target.test/echo",
+              "method": "HEAD",
+              "redirect": "manual",
+              "headers": {
+                "host": null,
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          }
+        },
+        "sameOrigin": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "back",
+            "url": "http://target.test/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": "Bearer token",
+              "cookie": "session=1",
+              "proxy-authorization": "Basic cHJveHk=",
+              "x-custom": "kept",
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "crossOrigin": {
+          "status": 200,
+          "url": "http://other.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "back",
+            "url": "http://other.test/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": "session=1",
+              "proxy-authorization": "Basic cHJveHk=",
+              "x-custom": "kept",
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "crossScheme": {
+          "status": 200,
+          "url": "https://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "back",
+            "url": "https://target.test/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": "session=1",
+              "proxy-authorization": "Basic cHJveHk=",
+              "x-custom": "kept",
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "fragment": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "back",
+            "url": "http://target.test/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "fragmentPost307": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "back",
+            "url": "http://target.test/echo",
+            "method": "POST",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": "text/plain",
+              "transfer-encoding": null
+            },
+            "body": "payload"
+          }
+        },
+        "fragmentPut301": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "back",
+            "url": "http://target.test/echo",
+            "method": "PUT",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": "text/plain",
+              "transfer-encoding": null
+            },
+            "body": "payload"
+          }
+        },
+        "requestFragment": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": false,
+          "body": {
+            "who": "back",
+            "url": "http://target.test/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "noLocation": {
+          "status": 302,
+          "url": "http://target.test/redirect",
+          "redirected": false,
+          "body": "redirect"
+        },
+        "twentyRedirects": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "back",
+            "url": "http://target.test/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "twentyOneRedirects": {
+          "error": "TypeError",
+          "message": "Too many redirects.http://target.test/chain?n=20, http://target.test/chain?n=19, http://target.test/chain?n=18, http://target.test/chain?n=17, http://target.test/chain?n=16, http://target.test/chain?n=15, http://target.test/chain?n=14, http://target.test/chain?n=13, http://target.test/chain?n=12, http://target.test/chain?n=11, http://target.test/chain?n=10, http://target.test/chain?n=9, http://target.test/chain?n=8, http://target.test/chain?n=7, http://target.test/chain?n=6, http://target.test/chain?n=5, http://target.test/chain?n=4, http://target.test/chain?n=3, http://target.test/chain?n=2, http://target.test/chain?n=1, http://target.test/chain?n=0"
+        },
+        "loop": {
+          "error": "TypeError",
+          "message": "Too many redirects.http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop, http://target.test/loop"
+        },
+        "stream301": {
+          "error": "TypeError",
+          "message": "A request with a one-time-use body (it was initialized from a stream, not a buffer) encountered a redirect requiring the body to be retransmitted. To avoid this error in the future, construct this request from a buffer-like body initializer."
+        },
+        "stream303": {
+          "status": 200,
+          "url": "http://target.test/echo",
+          "redirected": true,
+          "body": {
+            "who": "back",
+            "url": "http://target.test/echo",
+            "method": "GET",
+            "redirect": "manual",
+            "headers": {
+              "host": null,
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "invalidLocation": {
+          "error": "TypeError",
+          "message": "Invalid Location header; unable to follow redirect."
+        },
+        "errorMode": {
+          "error": "TypeError",
+          "message": "Invalid redirect value, must be one of \"follow\" or \"manual\" (\"error\" won't be implemented since it does not make sense at the edge; use \"manual\" and check the response status code)."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "status": 200,
+        "url": "http://target.test/cf",
+        "redirected": true,
+        "body": "{\"colo\":\"TEST\"}"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "status": 200,
+        "url": "http://target.test/echo",
+        "redirected": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "TypeError",
+        "message": "A request with a one-time-use body (it was initialized from a stream, not a buffer) encountered a redirect requiring the body to be retransmitted. To avoid this error in the future, construct this request from a buffer-like body initializer."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "status": 200,
+        "url": "http://origin.test/echo",
+        "redirected": true,
+        "body": {
+          "who": "back",
+          "url": "http://origin.test/echo",
+          "method": "GET",
+          "redirect": "manual",
+          "headers": {
+            "host": "origin.test",
+            "authorization": null,
+            "cookie": null,
+            "proxy-authorization": null,
+            "x-custom": null,
+            "content-type": "text/plain;charset=UTF-8",
+            "transfer-encoding": null
+          },
+          "body": ""
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "TypeError",
+        "message": "A request with a one-time-use body (it was initialized from a stream, not a buffer) encountered a redirect requiring the body to be retransmitted. To avoid this error in the future, construct this request from a buffer-like body initializer."
+      }
+    }
+  ]
+}

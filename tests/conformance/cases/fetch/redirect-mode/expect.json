@@ -1,0 +1,59 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "default": {
+          "redirect": "follow"
+        },
+        "undefined": {
+          "redirect": "follow"
+        },
+        "follow": {
+          "redirect": "follow"
+        },
+        "manual": {
+          "redirect": "manual"
+        },
+        "upperCase": {
+          "redirect": "follow"
+        },
+        "mixedCase": {
+          "redirect": "manual"
+        },
+        "error": {
+          "error": "TypeError",
+          "message": "Invalid redirect value, must be one of \"follow\" or \"manual\" (\"error\" won't be implemented since it does not make sense at the edge; use \"manual\" and check the response status code)."
+        },
+        "other": {
+          "error": "TypeError",
+          "message": "Invalid redirect value, must be one of \"follow\" or \"manual\" (\"error\" won't be implemented since it does not make sense at the edge; use \"manual\" and check the response status code)."
+        },
+        "null": {
+          "error": "TypeError",
+          "message": "Invalid redirect value, must be one of \"follow\" or \"manual\" (\"error\" won't be implemented since it does not make sense at the edge; use \"manual\" and check the response status code)."
+        },
+        "fromRequest": {
+          "error": "TypeError",
+          "message": "Invalid redirect value, must be one of \"follow\" or \"manual\" (\"error\" won't be implemented since it does not make sense at the edge; use \"manual\" and check the response status code)."
+        },
+        "inherited": {
+          "redirect": "manual"
+        },
+        "requestAsInit": {
+          "redirect": "manual"
+        },
+        "fetchError": {
+          "rejected": "TypeError",
+          "message": "Invalid redirect value, must be one of \"follow\" or \"manual\" (\"error\" won't be implemented since it does not make sense at the edge; use \"manual\" and check the response status code)."
+        },
+        "fetchOther": {
+          "rejected": "TypeError",
+          "message": "Invalid redirect value, must be one of \"follow\" or \"manual\" (\"error\" won't be implemented since it does not make sense at the edge; use \"manual\" and check the response status code)."
+        }
+      }
+    }
+  ]
+}

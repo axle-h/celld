@@ -1,0 +1,12 @@
+// A service binding to another script, a Durable Object and a Worker Loader.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "durable_objects": {
+    "bindings": [{ "name": "OBJ", "class_name": "Obj" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Obj"] }]
+}

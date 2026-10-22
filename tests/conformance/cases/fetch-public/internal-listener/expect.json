@@ -29,6 +29,11 @@
           "message": "celld egress policy: 0.0.0.0:${INTERNAL_PORT} is this node's internal listener, which no Worker can reach, even when CELLD_FETCH_PRIVATE_ALLOW names it."
         },
         {
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/redirect?to=http://127.0.0.1:${INTERNAL_PORT}/state",
+          "error": "TypeError",
+          "message": "celld egress policy: 127.0.0.1:${INTERNAL_PORT} is this node's internal listener, which no Worker can reach, even when CELLD_FETCH_PRIVATE_ALLOW names it."
+        },
+        {
           "url": "ws://127.0.0.1:${INTERNAL_PORT}/",
           "events": [
             {

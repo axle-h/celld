@@ -1,0 +1,517 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "relative": {
+          "status": 200,
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+          "redirected": true,
+          "body": {
+            "method": "GET",
+            "path": "/echo",
+            "headers": {
+              "host": "127.0.0.1:${UPSTREAM_PORT}",
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "content-length": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "fragment": {
+          "status": 200,
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+          "redirected": true,
+          "body": {
+            "method": "GET",
+            "path": "/echo",
+            "headers": {
+              "host": "127.0.0.1:${UPSTREAM_PORT}",
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "content-length": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "fragmentPost307": {
+          "status": 200,
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+          "redirected": true,
+          "body": {
+            "method": "POST",
+            "path": "/echo",
+            "headers": {
+              "host": "127.0.0.1:${UPSTREAM_PORT}",
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": "text/plain",
+              "content-length": "7",
+              "transfer-encoding": null
+            },
+            "body": "payload"
+          }
+        },
+        "fragmentPut301": {
+          "status": 200,
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+          "redirected": true,
+          "body": {
+            "method": "PUT",
+            "path": "/echo",
+            "headers": {
+              "host": "127.0.0.1:${UPSTREAM_PORT}",
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": "text/plain",
+              "content-length": "7",
+              "transfer-encoding": null
+            },
+            "body": "payload"
+          }
+        },
+        "requestFragment": {
+          "status": 200,
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+          "redirected": false,
+          "body": {
+            "method": "GET",
+            "path": "/echo",
+            "headers": {
+              "host": "127.0.0.1:${UPSTREAM_PORT}",
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "content-length": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "manual": {
+          "status": 302,
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/redirect?status=302&to=%2Fecho",
+          "redirected": false,
+          "body": "redirect"
+        },
+        "methods": {
+          "301 POST": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "GET",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": null,
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "301 PUT": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "PUT",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": "7",
+                "transfer-encoding": null
+              },
+              "body": "payload"
+            }
+          },
+          "301 HEAD": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "HEAD",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": null,
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "302 POST": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "GET",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": null,
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "302 PUT": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "PUT",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": "7",
+                "transfer-encoding": null
+              },
+              "body": "payload"
+            }
+          },
+          "302 HEAD": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "HEAD",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": null,
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "303 POST": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "GET",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": null,
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "303 PUT": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "GET",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": null,
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "303 HEAD": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "HEAD",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": null,
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "307 POST": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "POST",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": "7",
+                "transfer-encoding": null
+              },
+              "body": "payload"
+            }
+          },
+          "307 PUT": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "PUT",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": "7",
+                "transfer-encoding": null
+              },
+              "body": "payload"
+            }
+          },
+          "307 HEAD": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "HEAD",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": null,
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          },
+          "308 POST": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "POST",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": "7",
+                "transfer-encoding": null
+              },
+              "body": "payload"
+            }
+          },
+          "308 PUT": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "PUT",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": "7",
+                "transfer-encoding": null
+              },
+              "body": "payload"
+            }
+          },
+          "308 HEAD": {
+            "status": 200,
+            "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+            "redirected": true,
+            "body": {
+              "method": "HEAD",
+              "path": "/echo",
+              "headers": {
+                "host": "127.0.0.1:${UPSTREAM_PORT}",
+                "authorization": null,
+                "cookie": null,
+                "proxy-authorization": null,
+                "x-custom": null,
+                "content-type": "text/plain",
+                "content-length": null,
+                "transfer-encoding": null
+              },
+              "body": ""
+            }
+          }
+        },
+        "sameOrigin": {
+          "status": 200,
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+          "redirected": true,
+          "body": {
+            "method": "GET",
+            "path": "/echo",
+            "headers": {
+              "host": "127.0.0.1:${UPSTREAM_PORT}",
+              "authorization": "Bearer token",
+              "cookie": "session=1",
+              "proxy-authorization": "Basic cHJveHk=",
+              "x-custom": "kept",
+              "content-type": null,
+              "content-length": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "crossOrigin": {
+          "status": 200,
+          "url": "http://127.0.0.1:${UPSTREAM_PORT_2}/echo",
+          "redirected": true,
+          "body": {
+            "method": "GET",
+            "path": "/echo",
+            "headers": {
+              "host": "127.0.0.1:${UPSTREAM_PORT_2}",
+              "authorization": null,
+              "cookie": "session=1",
+              "proxy-authorization": "Basic cHJveHk=",
+              "x-custom": "kept",
+              "content-type": null,
+              "content-length": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "twentyRedirects": {
+          "status": 200,
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/landed?n=0",
+          "redirected": true,
+          "body": "{\"landed\":\"?n=0\"}"
+        },
+        "twentyOneRedirects": {
+          "error": "TypeError",
+          "message": "Too many redirects.http://127.0.0.1:${UPSTREAM_PORT}/chain?n=20, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=19, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=18, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=17, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=16, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=15, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=14, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=13, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=12, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=11, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=10, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=9, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=8, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=7, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=6, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=5, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=4, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=3, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=2, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=1, http://127.0.0.1:${UPSTREAM_PORT}/chain?n=0"
+        },
+        "loop": {
+          "error": "TypeError",
+          "message": "Too many redirects.http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop, http://127.0.0.1:${UPSTREAM_PORT}/loop"
+        },
+        "stream301": {
+          "error": "TypeError",
+          "message": "A request with a one-time-use body (it was initialized from a stream, not a buffer) encountered a redirect requiring the body to be retransmitted. To avoid this error in the future, construct this request from a buffer-like body initializer."
+        },
+        "stream303": {
+          "status": 200,
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/echo",
+          "redirected": true,
+          "body": {
+            "method": "GET",
+            "path": "/echo",
+            "headers": {
+              "host": "127.0.0.1:${UPSTREAM_PORT}",
+              "authorization": null,
+              "cookie": null,
+              "proxy-authorization": null,
+              "x-custom": null,
+              "content-type": null,
+              "content-length": null,
+              "transfer-encoding": null
+            },
+            "body": ""
+          }
+        },
+        "stream307": {
+          "error": "TypeError",
+          "message": "A request with a one-time-use body (it was initialized from a stream, not a buffer) encountered a redirect requiring the body to be retransmitted. To avoid this error in the future, construct this request from a buffer-like body initializer."
+        },
+        "invalidLocation": {
+          "error": "TypeError",
+          "message": "Invalid Location header; unable to follow redirect."
+        },
+        "upgrade": {
+          "status": 101,
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/ws/close-first?id=follow",
+          "redirected": true,
+          "socket": true,
+          "location": null
+        },
+        "upgradeManual": {
+          "status": 302,
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/redirect?to=/ws/close-first?id=manual",
+          "redirected": false,
+          "socket": false,
+          "location": "/ws/close-first?id=manual"
+        }
+      }
+    }
+  ]
+}

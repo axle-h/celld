@@ -1,0 +1,91 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "back": {
+          "direct": {
+            "colo": "TEST",
+            "custom": {
+              "nested": [
+                1,
+                2
+              ]
+            }
+          },
+          "redirected": {
+            "colo": "TEST",
+            "custom": {
+              "nested": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        "loopback": {
+          "direct": {
+            "colo": "TEST",
+            "custom": {
+              "nested": [
+                1,
+                2
+              ]
+            }
+          },
+          "redirected": {
+            "colo": "TEST",
+            "custom": {
+              "nested": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        "object": {
+          "direct": {
+            "colo": "TEST",
+            "custom": {
+              "nested": [
+                1,
+                2
+              ]
+            }
+          },
+          "redirected": {
+            "colo": "TEST",
+            "custom": {
+              "nested": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        "loader": {
+          "direct": {
+            "colo": "TEST",
+            "custom": {
+              "nested": [
+                1,
+                2
+              ]
+            }
+          },
+          "redirected": {
+            "colo": "TEST",
+            "custom": {
+              "nested": [
+                1,
+                2
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

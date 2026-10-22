@@ -1,7 +1,8 @@
 // A local HTTP server for cases whose Workers fetch "the network": the
-// redirecting server of `service-bindings/redirect-outside`, and the private
-// address the `fetch-public/*` cases try to reach. It listens on two loopback
-// ports, so a case can allow one and show that the other is still refused.
+// redirecting server of `service-bindings/redirect-outside` and
+// `fetch/redirect-follow`, and the private address the `fetch-public/*` cases
+// try to reach. It listens on two loopback ports, so a case can allow one and
+// show that the other is still refused.
 
 import { createServer } from "node:http";
 import { BINARY, CLOSE, TEXT, acceptKey, closePayload, encodeFrame, frameReader, isFragment, readClose } from "./ws-frames.mjs";
@@ -11,7 +12,16 @@ import { BINARY, CLOSE, TEXT, acceptKey, closePayload, encodeFrame, frameReader,
  *
  * - `/bounce` answers 302 to `/landed?from=bounce`.
  * - `/landed` answers JSON `{"landed": <the query string>}`.
- * - `/redirect?to=<url>` answers 302 to that URL.
+ * - `/redirect?to=<url>&status=<code>` answers that status, 302 by default,
+ *   with that URL as its Location.
+ * - `/chain?n=<n>` answers 302 to `/chain?n=<n - 1>`, and `/landed?n=0`
+ *   when `n` reaches 0. `/loop` answers 302 to itself.
+ * - `/echo` answers JSON describing the request it received: its method,
+ *   path, body, and the headers in `ECHOED`. A `HEAD` response has no body,
+ *   so the same JSON is also the `x-echo` header.
+ * - A WebSocket upgrade to `/redirect?to=<url>` answers 302 to that URL, and
+ *   one to `/chain?n=<n>` redirects `n` times and lands on
+ *   `/ws/close-first?id=chain`.
  * - A WebSocket upgrade to `/ws/close-first?id=<id>&code=<code>&reason=<reason>`
  *   is accepted, and the server sends its Close at once: with that code and
  *   reason, or empty (no status) without `code`. It records the text frames
@@ -20,6 +30,25 @@ import { BINARY, CLOSE, TEXT, acceptKey, closePayload, encodeFrame, frameReader,
  *   ended}`, once the connection has ended or after 3 s.
  * - Anything else answers `upstream`.
  */
+// The request headers `/echo` reports, `null` when absent. The rest depend on
+// the HTTP client, which differs between runtimes.
+const ECHOED = [
+  "host", "authorization", "cookie", "proxy-authorization", "x-custom",
+  "content-type", "content-length", "transfer-encoding",
+];
+
+async function echo(request, url, response) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  const report = JSON.stringify({
+    method: request.method,
+    path: url.pathname + url.search,
+    headers: Object.fromEntries(ECHOED.map((name) => [name, request.headers[name] ?? null])),
+    body: Buffer.concat(chunks).toString(),
+  });
+  response.writeHead(200, { "content-type": "application/json", "x-echo": report }).end(report);
+}
+
 export async function startUpstream() {
   const records = new Map();
   const record = (id) => {
@@ -47,7 +76,20 @@ export async function startUpstream() {
         response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ landed: url.search }));
         return;
       case "/redirect":
-        response.writeHead(302, { location: url.searchParams.get("to") ?? "/" }).end("redirect");
+        response
+          .writeHead(Number(url.searchParams.get("status") ?? 302), { location: url.searchParams.get("to") ?? "/" })
+          .end("redirect");
+        return;
+      case "/chain": {
+        const n = Number(url.searchParams.get("n"));
+        response.writeHead(302, { location: n > 0 ? `/chain?n=${n - 1}` : "/landed?n=0" }).end("chain");
+        return;
+      }
+      case "/loop":
+        response.writeHead(302, { location: "/loop" }).end("loop");
+        return;
+      case "/echo":
+        await echo(request, url, response);
         return;
       default:
         response.writeHead(200, { "content-type": "text/plain" }).end("upstream");
@@ -59,6 +101,17 @@ export async function startUpstream() {
     upgraded.add(socket);
     socket.on("error", () => {});
     const url = new URL(request.url, "http://upstream");
+    const n = Number(url.searchParams.get("n"));
+    const location =
+      url.pathname === "/redirect"
+        ? url.searchParams.get("to") ?? "/"
+        : url.pathname === "/chain"
+          ? n > 0 ? `/chain?n=${n - 1}` : "/ws/close-first?id=chain"
+          : null;
+    if (location !== null) {
+      socket.end(`HTTP/1.1 302 Found\r\nLocation: ${location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
+      return;
+    }
     if (url.pathname !== "/ws/close-first") return socket.destroy();
     const entry = record(url.searchParams.get("id") ?? "");
     socket.write(

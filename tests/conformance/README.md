@@ -89,10 +89,15 @@ replies the `flags/websocket-*-reply` cases check under different flags.
   `lib/upstream.mjs`, for the case's Workers to fetch as "the network". It
   listens on two loopback ports. `/bounce` answers 302 to
   `/landed?from=bounce`, `/landed` answers `{"landed": <query>}`,
-  `/redirect?to=<url>` answers 302 to that URL, and every other path answers
-  `upstream`. A WebSocket upgrade to `/ws/close-first?id=<id>` (with optional
-  `code` and `reason`) sends the server's Close at once and records the
-  reply, which `/ws/log?id=<id>` answers as JSON once the connection ends.
+  `/redirect?to=<url>&status=<code>` answers that status (302 by default) to
+  that URL, `/chain?n=<n>` redirects `n` times and lands, `/loop` redirects
+  to itself, `/echo` answers JSON describing the request it received, and
+  every other path answers `upstream`. A WebSocket upgrade to
+  `/redirect?to=<url>` answers 302 to that URL, and one to `/chain?n=<n>`
+  redirects `n` times and lands on `/ws/close-first`. A WebSocket upgrade to
+  `/ws/close-first?id=<id>` (with optional `code` and `reason`) sends the
+  server's Close at once and records the reply, which `/ws/log?id=<id>`
+  answers as JSON once the connection ends.
   celld's egress policy refuses loopback, so a case that fetches
   the upstream on celld allows it in `env`, as in
   `"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}"`.
@@ -229,6 +234,14 @@ such step a case of its own, as `streams/byob-request-body-held-cancel` and
   celld limits.
   `reason` is required and says why. `expect.json` is written by hand and
   reviewed. `--update` and `--runtime=workerd` skip these cases.
+  A celld-only case that workerd can run, but wrangler's harness can't show,
+  can be recorded from workerd run directly. `fetch/redirect-follow` is one:
+  the harness follows every global `fetch()` redirect in Node. Give the case
+  a `workerd.capnp` beside `case.json`, a workerd config whose socket is
+  named `http`, and run `node lib/workerd-direct.mjs <case> --write`. It
+  starts the upstream, runs `workerd serve` on that config with the socket on
+  a free port, runs the case's `path` steps as the runner does, and writes
+  `expect.json`. Review the result before committing it.
 
 ### Expected failures
 

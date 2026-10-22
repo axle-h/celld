@@ -11,9 +11,10 @@
 //! `CELLD_FETCH_PRIVATE_ALLOW`.
 //!
 //! The check is on the address celld actually connects to. An IP literal is
-//! checked before the request and at every redirect hop; a name is checked
-//! inside the resolver, which hands the connector only the addresses that
-//! passed. A name that resolves differently a second time (DNS rebinding)
+//! checked before the request; a name is checked inside the resolver, which
+//! hands the connector only the addresses that passed. The client never
+//! follows a redirect: the harness sends each hop as a request of its own, so
+//! each one is checked in full. A name that resolves differently a second time (DNS rebinding)
 //! therefore cannot pass the check with one address and connect to another.
 //!
 //! The node's own internal listener and advertise address are refused to
@@ -30,7 +31,6 @@ use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
 use std::net::SocketAddr;
-use std::sync::Mutex;
 use std::sync::OnceLock;
 
 /// One `CELLD_FETCH_PRIVATE_ALLOW` entry: a host and the one port it allows.
@@ -576,17 +576,15 @@ async fn resolve(
     }
 }
 
-/// The request one `fetch()` is making: where its current hop goes, and the
-/// container address its binding may reach as an IP literal.
+/// The request one `fetch()` hop is making: where it goes.
 struct Checked {
-    hop: Mutex<Destination>,
-    exempt: Option<SocketAddr>,
+    hop: Destination,
 }
 
 tokio::task_local! {
-    /// The request whose future is being polled. The resolver and the redirect
-    /// policy run inside that poll, so this is how they learn the port and the
-    /// hop. A connection started outside it finds nothing and is refused.
+    /// The request whose future is being polled. The resolver runs inside
+    /// that poll, so this is how it learns the port and the host. A
+    /// connection started outside it finds nothing and is refused.
     static CHECKED: Checked;
 }
 
@@ -594,12 +592,12 @@ tokio::task_local! {
 /// `getTcpPort()` fetch may reach, as that IP literal only, and nothing else.
 pub(crate) struct Request {
     destination: Destination,
-    exempt: Option<SocketAddr>,
 }
 
 impl Request {
-    /// Check the first hop of a request to `url`. An IP literal is checked
-    /// here; a name is checked when the resolver answers.
+    /// Check a request to `url`. An IP literal is checked here; a name is
+    /// checked when the resolver answers. A redirect's next hop is a request
+    /// of its own.
     pub(crate) fn check(url: &str, exempt: Option<SocketAddr>) -> Result<Self, CheckError> {
         let parsed =
             url::Url::parse(url).map_err(|error| CheckError::Invalid(format!("{url}: {error}")))?;
@@ -607,20 +605,16 @@ impl Request {
         destination
             .check_literal(exempt)
             .map_err(CheckError::Refused)?;
-        Ok(Self {
-            destination,
-            exempt,
-        })
+        Ok(Self { destination })
     }
 
     /// Run `send`, the request's future, with this request's checks in force
-    /// for every connection and redirect it makes.
+    /// for every connection it makes.
     pub(crate) async fn send<F: std::future::Future>(self, send: F) -> F::Output {
         CHECKED
             .scope(
                 Checked {
-                    hop: Mutex::new(self.destination),
-                    exempt: self.exempt,
+                    hop: self.destination,
                 },
                 send,
             )
@@ -633,36 +627,13 @@ pub(crate) enum CheckError {
     Refused(Refused),
 }
 
-/// Follow a redirect that the request's redirect mode allows, if the next hop
-/// passes the policy. Every redirect policy of a client from [`client`] that
-/// follows must follow through this.
-pub(crate) fn follow(attempt: reqwest::redirect::Attempt) -> reqwest::redirect::Action {
-    match check_hop(attempt.url()) {
-        Ok(()) => attempt.follow(),
-        Err(error) => attempt.error(error),
-    }
-}
-
-/// Check a redirect's next hop, and make it the hop the resolver checks.
-fn check_hop(url: &url::Url) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let hop = Destination::of(url)?;
-    CHECKED
-        .try_with(|checked| {
-            hop.check_literal(checked.exempt)?;
-            *checked.hop.lock().unwrap() = hop.clone();
-            Ok(())
-        })
-        .unwrap_or_else(|_| Err(hop.refused(Reason::Unchecked)))?;
-    Ok(())
-}
-
 /// Resolves only within a checked request, to the addresses that pass.
 struct Resolver;
 
 impl reqwest::dns::Resolve for Resolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         // Read now: the connector calls this while the request is polled.
-        let checked = CHECKED.try_with(|checked| checked.hop.lock().unwrap().clone());
+        let checked = CHECKED.try_with(|checked| checked.hop.clone());
         let name = name.as_str().to_string();
         Box::pin(async move {
             let hop = match checked {
@@ -683,14 +654,15 @@ impl reqwest::dns::Resolve for Resolver {
 
 /// A client for Worker egress, to send through [`Request::send`]. It resolves
 /// through the policy and ignores the proxy environment variables: a proxy
-/// would connect on the Worker's behalf to an address no check saw. A
-/// `redirect` policy that follows must follow through [`follow`], because an
-/// IP literal in a `Location` reaches no resolver.
-pub(crate) fn client(redirect: reqwest::redirect::Policy) -> reqwest::Client {
+/// would connect on the Worker's behalf to an address no check saw. It never
+/// follows a redirect, because an IP literal in a `Location` reaches no
+/// resolver: each hop must be a request of its own, checked by
+/// [`Request::check`].
+pub(crate) fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .dns_resolver(std::sync::Arc::new(Resolver))
         .no_proxy()
-        .redirect(redirect)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("build the Worker egress HTTP client")
 }
@@ -959,33 +931,34 @@ mod tests {
     }
 
     #[test]
-    fn the_exempt_address_holds_for_literal_hops_and_never_for_names() {
+    fn the_exempt_address_holds_for_literals_and_never_for_names() {
         crate::asyncrt::test_host_runtime().block_on(async {
             // A container port on loopback, so `localhost` resolves to it.
             let container: SocketAddr = "127.0.0.1:9".parse().unwrap();
-            let request = Request::check("http://127.0.0.1:9/", Some(container))
-                .ok()
-                .unwrap();
-            let (back, other, name) = request
+            assert!(Request::check("http://127.0.0.1:9/b", Some(container)).is_ok());
+            let Err(CheckError::Refused(other)) =
+                Request::check("http://127.0.0.1:10/", Some(container))
+            else {
+                panic!("another port of the container's address passed");
+            };
+            assert_eq!(other.reason, Reason::NotPublic);
+            // A name that resolves to the container's address: its connection
+            // would join the shared pool under the name, so the resolver
+            // refuses it.
+            let Ok(name) = Request::check("http://localhost:9/", Some(container)) else {
+                panic!("a name was checked as a literal");
+            };
+            // In an async block: the resolver reads the request when it is
+            // called, which must be inside `send`.
+            let resolved = name
                 .send(async {
-                    let back = check_hop(&url::Url::parse("http://127.0.0.1:9/b").unwrap());
-                    let other = check_hop(&url::Url::parse("http://127.0.0.1:10/").unwrap());
-                    // A redirect to a name that resolves to the container's
-                    // address: its connection would join the shared pool
-                    // under the name, so the resolver refuses it.
-                    let name =
-                        check_hop(&url::Url::parse("http://localhost:9/").unwrap()).map(|_| ());
-                    let resolved =
-                        reqwest::dns::Resolve::resolve(&Resolver, "localhost".parse().unwrap())
-                            .await;
-                    (back, other, name.and(resolved.map(|_| ())))
+                    reqwest::dns::Resolve::resolve(&Resolver, "localhost".parse().unwrap()).await
                 })
                 .await;
-            assert!(back.is_ok());
-            let other = other.unwrap_err();
-            assert_eq!(refusal(other.as_ref()).unwrap().reason, Reason::NotPublic);
-            let name = name.unwrap_err();
-            let refused = refusal(name.as_ref()).unwrap();
+            let Err(error) = resolved else {
+                panic!("the resolver let a name reach the container's address");
+            };
+            let refused = refusal(error.as_ref()).unwrap();
             assert_eq!(refused.reason, Reason::NotPublic);
             assert_eq!(refused.authority, "localhost:9");
         });

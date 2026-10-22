@@ -1,0 +1,25 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "follow": {
+          "status": 200,
+          "url": "http://assets.test/about",
+          "redirected": true,
+          "location": null,
+          "body": "<p>about</p>\n"
+        },
+        "manual": {
+          "status": 307,
+          "url": "http://assets.test/about.html",
+          "redirected": false,
+          "location": "/about",
+          "body": ""
+        }
+      }
+    }
+  ]
+}

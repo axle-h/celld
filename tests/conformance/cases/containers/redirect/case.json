@@ -1,0 +1,9 @@
+{
+  "kind": "celld-only",
+  "reason": "needs a Docker or Podman daemon, which the runner does not give workerd",
+  "requires": ["docker"],
+  "workers": ["app"],
+  "steps": [
+    {"path": "/"}
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/basics/back"},
+    {"path": "/basics/backNamed"},
+    {"path": "/basics/self"},
+    {"path": "/basics/loopback"},
+    {"path": "/basics/object"},
+    {"path": "/basics/facet"},
+    {"path": "/basics/loader"},
+    {"path": "/details"},
+    {"path": "/cf"},
+    {"path": "/globals"},
+    {"path": "/redirect?status=307&to=/echo&forward", "method": "POST", "body": "payload"},
+    {"path": "/redirect?status=303&to=/echo&forward", "method": "POST", "body": "payload"},
+    {"path": "/forward-init/307", "method": "POST", "body": "payload"}
+  ]
+}

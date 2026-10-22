@@ -1,0 +1,51 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "back": {
+          "bytes": {
+            "contentLength": "7",
+            "transferEncoding": null
+          },
+          "empty": {
+            "contentLength": "0",
+            "transferEncoding": null
+          }
+        },
+        "loopback": {
+          "bytes": {
+            "contentLength": "7",
+            "transferEncoding": null
+          },
+          "empty": {
+            "contentLength": "0",
+            "transferEncoding": null
+          }
+        },
+        "object": {
+          "bytes": {
+            "contentLength": "7",
+            "transferEncoding": null
+          },
+          "empty": {
+            "contentLength": "0",
+            "transferEncoding": null
+          }
+        },
+        "loader": {
+          "bytes": {
+            "contentLength": "7",
+            "transferEncoding": null
+          },
+          "empty": {
+            "contentLength": "0",
+            "transferEncoding": null
+          }
+        }
+      }
+    }
+  ]
+}

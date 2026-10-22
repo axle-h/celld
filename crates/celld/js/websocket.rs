@@ -776,6 +776,11 @@ pub(super) fn op_ws_upgrade(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
+    // Each dial is a subrequest, as `op_fetch` is, and so is each hop of a
+    // followed redirect, which dials again.
+    if let Err(error) = event_context(scope).charge_subrequest() {
+        return loader_throw(scope, &error);
+    }
     if let Some(refusal) = egress_refusal(scope) {
         return loader_throw(scope, refusal);
     }
@@ -937,6 +942,11 @@ pub(super) fn op_ws_connect(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
+    // Each dial is a subrequest, as `op_fetch` is, and so is each hop of a
+    // followed redirect, which dials again.
+    if let Err(error) = event_context(scope).charge_subrequest() {
+        return loader_throw(scope, &error);
+    }
     if let Some(refusal) = egress_refusal(scope) {
         return loader_throw(scope, refusal);
     }

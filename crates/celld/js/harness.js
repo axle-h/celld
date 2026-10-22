@@ -606,7 +606,16 @@ globalThis.Response = class Response {
 // every Request construction, which is the HTTP hot path.
 const __HTTP_METHODS = new Set(
   ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]);
-const __FETCH_REDIRECT_MODES = new Set(["follow", "manual", "error"]);
+// workerd parses a redirect mode ignoring ASCII case (`tryParseRedirect` in
+// api/http.c++), and has no "error" mode.
+const __parseRedirectMode = (value) => {
+  const mode = String(value).replace(/[A-Z]/g, (c) => c.toLowerCase());
+  if (mode === "follow" || mode === "manual") return mode;
+  throw new TypeError(
+    'Invalid redirect value, must be one of "follow" or "manual" ("error" ' +
+    "won't be implemented since it does not make sense at the edge; use " +
+    '"manual" and check the response status code).');
+};
 globalThis.Request = class Request {
   constructor(input, init = {}) {
     const prior = input instanceof Request ? input : null;
@@ -653,6 +662,11 @@ globalThis.Request = class Request {
       : hasBody
         ? (typed ? typed.bytes : __bodyBytes(body))
         : (prior ? prior._bodyBytes.slice() : new Uint8Array());
+    // An incoming request's body is a one-time stream in workerd, even when
+    // celld holds it as bytes, so a redirect can't send it again
+    // (see __fetchThrough). A copy that adopts the body keeps that.
+    this._oneTimeBody = init.__celldOneTimeBody === true ||
+      (!hasBody && prior !== null && prior._oneTimeBody);
     // Body text is decoded on the first text()/json(), not here: a request
     // whose body is never read never pays the decode.
     this._body = undefined;
@@ -693,12 +707,9 @@ globalThis.Request = class Request {
       ? stream
       : ["GET", "HEAD"].includes(this.method)
         ? null : new CelldBodyStream(this);
-    this.redirect = String(init.redirect === undefined
+    this.redirect = init.redirect === undefined
       ? (prior ? prior.redirect : "follow")
-      : init.redirect);
-    if (!__FETCH_REDIRECT_MODES.has(this.redirect)) {
-      throw new TypeError(`Invalid redirect mode: ${this.redirect}`);
-    }
+      : __parseRedirectMode(init.redirect);
     const cf = init.cf === undefined
       ? (prior ? prior.cf : undefined) : init.cf;
     if (cf !== undefined) this.cf = cf;
@@ -780,7 +791,7 @@ const __makeRequest = __celld.__makeRequest = (
   // it received then hands a redirect back to its own client instead of
   // following it.
   method, body, __headersJson: headersJson, signal, cf: {}, redirect: "manual",
-  __celldIncomingSignal: incomingSignal,
+  __celldIncomingSignal: incomingSignal, __celldOneTimeBody: true,
 });
 const __fmt = (a) => a.map((x) => {
   if (typeof x === "string") return x;
@@ -880,16 +891,139 @@ const __dataUrlResponse = (url) => {
     headers: { "content-type": meta || "text/plain;charset=US-ASCII" },
   });
 };
-globalThis.fetch = (input, init) => __fetchNetwork(input, init);
-// Global fetch(), and the fetch() of a container's getTcpPort(), which names
-// its port as `container`: the host then lets that port of the running
-// object's own container past the egress policy. Nothing else can pass it.
-const __fetchNetwork = async (input, init, container) => {
+// Intrinsics the redirect loop uses, captured before any application code
+// runs: workerd follows natively, so a Worker that replaces Request, URL or a
+// Headers method doesn't change how a redirect is followed.
+const __Request = Request;
+const __Headers = Headers;
+const __URL = URL;
+const __URLHref = Object.getOwnPropertyDescriptor(URL.prototype, "href").get;
+const __URLOrigin = Object.getOwnPropertyDescriptor(URL.prototype, "origin").get;
+const __HeadersGet = Headers.prototype.get;
+const __HeadersDelete = Headers.prototype.delete;
+const __HeadersList =
+  Object.getOwnPropertyDescriptor(Headers.prototype, "__celldHeaderList").get;
+const __StreamCancel = ReadableStream.prototype.cancel;
+const __StringIndexOf = String.prototype.indexOf;
+const __StringSlice = String.prototype.slice;
+// workerd's limit (MAX_REDIRECT_COUNT in api/http.c++, the Fetch Standard's
+// 20).
+const __MAX_REDIRECTS = 20;
+const __ONE_TIME_BODY_REDIRECT =
+  "A request with a one-time-use body (it was initialized from a stream, not " +
+  "a buffer) encountered a redirect requiring the body to be retransmitted. " +
+  "To avoid this error in the future, construct this request from a " +
+  "buffer-like body initializer.";
+// The statuses a Fetcher follows.
+const __isRedirectStatus = (status) =>
+  status === 301 || status === 302 || status === 303 || status === 307 ||
+  status === 308;
+// A URL as a Fetcher sends it and a response reports it: without a fragment.
+const __withoutFragment = (url) => {
+  const at = __ReflectApply(__StringIndexOf, url, ["#"]);
+  return at === -1 ? url : __ReflectApply(__StringSlice, url, [0, at]);
+};
+// Send `req` through one Fetcher, following redirects through that same
+// Fetcher, as workerd's fetchImpl does (api/http.c++). `send(request, chain)`
+// makes one request and never follows; `chain` is one object per call, for
+// state a Fetcher keeps across its hops. So a service binding's Location goes
+// back to the same service whatever host it names, and each hop of a global
+// fetch() is a request of its own, which the host checks against the egress
+// policy and charges as a subrequest. The rules are workerd's: the method and
+// body each status keeps, Authorization dropped on a hop to another origin
+// (strip_authorization_on_cross_origin_redirect, which celld always has), and
+// no second send of a body that can't be replayed. `req` is the caller's own
+// copy, made by its fetch(), so it is changed in place.
+const __fetchThrough = async (req, send) => {
+  // A Fetcher sends no fragment.
+  req.url = __withoutFragment(req.url);
+  const chain = { __proto__: null };
+  if (req.redirect !== "follow")
+    return __fetchedFrom(await send(req, chain), [req.url]);
+  // What a hop sends again, read before `send`, which can take over the body.
+  // A byte body is never consumed in place: every send copies it. No send
+  // changes `req`'s headers, so they are read only once a redirect needs them.
+  const replayable = req.body === null ||
+    (req._bodyBytes !== null && !req._oneTimeBody);
+  let body = req.body === null ? undefined : req._bodyBytes;
+  let method = req.method;
+  const signal = req._signalForSubrequests;
+  const cf = req.cf;
+  const urls = [req.url];
+  let response = await send(req, chain);
+  let headers = null;
+  for (;;) {
+    const status = response.status;
+    if (!__isRedirectStatus(status)) break;
+    const location = __ReflectApply(__HeadersGet, response.headers, ["location"]);
+    if (location === null) break;
+    // Nobody can read the redirect's body after this. Cancelling it releases
+    // a cross-isolate body stream instead of waiting for its idle TTL.
+    if (response.body !== null) {
+      try {
+        await __ReflectApply(__StreamCancel, response.body, []);
+      } catch { /* the redirect still wins */ }
+    }
+    const current = urls[urls.length - 1];
+    let next;
+    try {
+      next = new __URL(location, current);
+    } catch {
+      throw new TypeError("Invalid Location header; unable to follow redirect.");
+    }
+    if (urls.length - 1 >= __MAX_REDIRECTS) {
+      let list = urls[0];
+      for (let at = 1; at < urls.length; at++) list += ", " + urls[at];
+      throw new TypeError("Too many redirects." + list);
+    }
+    headers ??= new __Headers(req._headersJson !== undefined
+      ? __jsonParse(req._headersJson)
+      : __ReflectApply(__HeadersList, req.headers, []));
+    if (__ReflectApply(__URLOrigin, next, []) !==
+        __ReflectApply(__URLOrigin, new __URL(current), []))
+      __ReflectApply(__HeadersDelete, headers, ["authorization"]);
+    urls[urls.length] = __withoutFragment(__ReflectApply(__URLHref, next, []));
+    if (status !== 303 && !replayable)
+      throw new TypeError(__ONE_TIME_BODY_REDIRECT);
+    // Only the method and the body change: workerd keeps every header,
+    // Content-Type and Content-Length included.
+    if ((status === 301 || status === 302) && method === "POST" ||
+        status === 303 && method !== "HEAD") {
+      method = "GET";
+      body = undefined;
+    }
+    const init = {
+      __proto__: null,
+      method,
+      headers: __ReflectApply(__HeadersList, headers, []),
+      redirect: "follow",
+    };
+    if (body !== undefined) init.body = body;
+    if (signal !== null) init.signal = signal;
+    if (cf !== undefined) init.cf = cf;
+    response = await send(new __Request(urls[urls.length - 1], init), chain);
+  }
+  return __fetchedFrom(response, urls);
+};
+const __fetchedFrom = (response, urls) => {
+  response.url = urls[urls.length - 1];
+  response.redirected = urls.length > 1;
+  return response;
+};
+globalThis.fetch = async (input, init) => {
   const rawUrl = typeof input === "string" ? input : input?.url;
   if (typeof rawUrl === "string" && rawUrl.startsWith("data:")) {
     return __dataUrlResponse(rawUrl);
   }
-  const req = new Request(input, init);
+  return __fetchThrough(new __Request(input, init), __fetchNetwork);
+};
+// One request to the network, which never follows a redirect: global fetch(),
+// and the fetch() of a container's getTcpPort(), which names its port as
+// `container`: the host then lets that port of the running object's own
+// container past the egress policy. Nothing else can pass it. The host answers
+// with the fetch()'s deadline, which `chain` carries to the next hop, so one
+// CELLD_FETCH_TIMEOUT_S bounds every hop together.
+const __fetchNetwork = async (req, chain, container) => {
   // `fetch(url, { headers: { Upgrade: "websocket" } })` is the other way
   // Cloudflare opens an outbound socket, and the one most examples use.
   if ((req.headers.get("upgrade") ?? "").toLowerCase() === "websocket") {
@@ -909,37 +1043,25 @@ const __fetchNetwork = async (input, init, container) => {
   // for two appends and put celld's casing on the wire in place of the
   // author's. `op_fetch` builds the request with `RequestBuilder::header`,
   // which appends, so repeats survive.
-  let raw;
-  try {
-    const dispatch = __op_fetch(
-      req.method, req.url, body,
-      JSON.stringify(req.headers.__celldHeaderList), req.redirect,
-      streamId, signal != null,
-      container,
-    );
-    if (signal) {
-      // An abort and the response can cross, leaving a body stream nobody
-      // reads holding its upstream connection until the sweeper expires it.
-      // Every arm is silenced because the caller already owns both outcomes.
-      dispatch.then((late) => {
-        if (!signal.aborted) return;
-        const abandoned = JSON.parse(late).streamId;
-        if (abandoned !== undefined) __http_stream_cancel(abandoned);
-      }, () => {}).catch(() => {});
-    }
-    raw = await (signal ? __awaitCancellableDoCall(dispatch, signal) : dispatch);
-  } catch (error) {
-    // An abort is the caller's reason, not a network error, so it skips
-    // every translation below.
-    if (signal?.aborted && error === signal.reason) throw error;
-    // The Fetch API represents a redirect refusal as a network error, which
-    // rejects with TypeError. Keep the host message for diagnostics.
-    if (req.redirect === "error") {
-      throw new TypeError(error?.message ?? String(error));
-    }
-    throw error;
+  const dispatch = __op_fetch(
+    req.method, req.url, body,
+    JSON.stringify(req.headers.__celldHeaderList),
+    streamId, signal != null,
+    container, chain.deadline,
+  );
+  if (signal) {
+    // An abort and the response can cross, leaving a body stream nobody
+    // reads holding its upstream connection until the sweeper expires it.
+    // Every arm is silenced because the caller already owns both outcomes.
+    dispatch.then((late) => {
+      if (!signal.aborted) return;
+      const abandoned = JSON.parse(late).streamId;
+      if (abandoned !== undefined) __http_stream_cancel(abandoned);
+    }, () => {}).catch(() => {});
   }
-  const r = __jsonParse(raw);
+  const r = __jsonParse(
+    await (signal ? __awaitCancellableDoCall(dispatch, signal) : dispatch));
+  if (r.deadline !== undefined) chain.deadline = r.deadline;
   // The node's egress policy refused the destination, before anything left.
   // A network error, so a TypeError, with the host's message.
   if (r.refused !== undefined) throw new TypeError(r.refused);
@@ -1026,9 +1148,10 @@ const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
   response.url = req.url;
   return response;
 };
-__celld.__makeAssetsBinding = (script) => ({
-  async fetch(input, init) {
-    const req = input instanceof Request ? new Request(input, init) : new Request(input, init);
+__celld.__makeAssetsBinding = (script) => {
+  // One request to the assets; fetch() follows their redirects back through
+  // them (see __fetchThrough).
+  const send = async (req) => {
     const r = JSON.parse(await __asset_fetch(
       script,
       req.method,
@@ -1038,14 +1161,17 @@ __celld.__makeAssetsBinding = (script) => ({
     const responseBody = r.streamId !== undefined
       ? new CelldHttpBodyStream(r.streamId)
       : r.body !== undefined ? r.body : Uint8Array.from(r.bodyBytes || []);
-    const response = new Response(
+    return new Response(
       responseBody,
       { status: r.status, headers: r.headers },
     );
-    response.url = req.url;
-    return response;
-  },
-});
+  };
+  return {
+    async fetch(input, init) {
+      return __fetchThrough(new __Request(input, init), send);
+    },
+  };
+};
 // An `r2_buckets` binding, served out of the fleet bucket under the
 // reserved `r2/<bucketName>/` prefix. celld runs on blob storage rather
 // than providing it, so a binding gets the store the node already holds
@@ -2575,27 +2701,30 @@ class DurableObjectFacets {
     // Arrow closures retain the manager because `target.fetch`'s method
     // receiver is the target object, not the DurableObjectFacets instance.
     const manager = this;
+    // One request to the facet; fetch() follows its redirects back through
+    // it (see __fetchThrough).
+    const send = async ([loader, className, id, propsSc], req) => {
+      const headers = JSON.stringify(req.headers.__celldHeaderList);
+      const { body, streamId } = await __subrequestBody(req);
+      const response = __jsonParse(await __facet_fetch(
+        loader, className, manager._state._scope, record.owner, name, id,
+        propsSc, req.url, req.method, body, headers, streamId));
+      const responseBody = response.streamId !== undefined
+        ? new CelldHttpBodyStream(response.streamId)
+        : response.body !== undefined ? response.body
+        : Uint8Array.from(response.bodyBytes || []);
+      // The facet's socket lives in the facet's isolate. The target lets
+      // the root return the upgrade, or accept the client end that the
+      // wrapper binds to the facet's socket.
+      return __wrapServiceResponse(new Response(responseBody, {
+        status: response.status,
+        headers: response.headers,
+        webSocket: __responseSocket(response),
+      }), req.url);
+    };
     target.fetch = async function(input, init) {
-      return invoke(async ([loader, className, id, propsSc]) => {
-        const req = new Request(input, init);
-        const headers = JSON.stringify(req.headers.__celldHeaderList);
-        const { body, streamId } = await __subrequestBody(req);
-        const response = __jsonParse(await __facet_fetch(
-          loader, className, manager._state._scope, record.owner, name, id,
-          propsSc, req.url, req.method, body, headers, streamId));
-        const responseBody = response.streamId !== undefined
-          ? new CelldHttpBodyStream(response.streamId)
-          : response.body !== undefined ? response.body
-          : Uint8Array.from(response.bodyBytes || []);
-        // The facet's socket lives in the facet's isolate. The target lets
-        // the root return the upgrade, or accept the client end that the
-        // wrapper binds to the facet's socket.
-        return __wrapServiceResponse(new Response(responseBody, {
-          status: response.status,
-          headers: response.headers,
-          webSocket: __responseSocket(response),
-        }), req.url);
-      });
+      return invoke((started) => __fetchThrough(
+        new __Request(input, init), (req) => send(started, req)));
     };
     record.stub = new Proxy(target, {
       get(base, prop) {
@@ -2793,32 +2922,36 @@ class ContainerPort {
   }
   async fetch(input, init) {
     const port = this.#port;
-    const request = new Request(input, init);
-    const url = new URL(request.url);
-    if (url.protocol === "https:")
-      throw new Error(
-        "Connecting to a container using HTTPS is not currently supported; use HTTP " +
-        "instead. TLS is unnecessary anyway, as the connection is already secure by default.",
-      );
-    if (url.protocol !== "http:") throw new TypeError(`Fetch API cannot load: ${url}`);
-    const authority = url.host;
-    url.host = __container_address(this.#owner, port);
-    const forwarded = new Request(url.toString(), request);
-    forwarded.headers.set("host", authority);
-    try {
-      return await __fetchNetwork(forwarded, undefined, port);
-    } catch (error) {
-      // A refused or reset connection is the port not listening yet, which
-      // the `@cloudflare/containers` start loop recognizes by this phrase
-      // and retries; any other failure keeps its own message.
-      const message = error?.message ?? __String(error);
-      if (__ReflectApply(__RegExpTest, /error sending request|connection|connect/i, [message])) {
+    // Every hop goes to this port, whatever host its URL names, so a
+    // redirect comes back to the container, as through any other Fetcher.
+    const send = async (hop, chain) => {
+      const url = new URL(hop.url);
+      if (url.protocol === "https:")
         throw new Error(
-          `The container is not listening on port ${port}: ${message}`,
+          "Connecting to a container using HTTPS is not currently supported; use HTTP " +
+          "instead. TLS is unnecessary anyway, as the connection is already secure by default.",
         );
+      if (url.protocol !== "http:") throw new TypeError(`Fetch API cannot load: ${url}`);
+      const authority = url.host;
+      url.host = __container_address(this.#owner, port);
+      const forwarded = new Request(url.toString(), hop);
+      forwarded.headers.set("host", authority);
+      try {
+        return await __fetchNetwork(forwarded, chain, port);
+      } catch (error) {
+        // A refused or reset connection is the port not listening yet, which
+        // the `@cloudflare/containers` start loop recognizes by this phrase
+        // and retries; any other failure keeps its own message.
+        const message = error?.message ?? __String(error);
+        if (__ReflectApply(__RegExpTest, /error sending request|connection|connect/i, [message])) {
+          throw new Error(
+            `The container is not listening on port ${port}: ${message}`,
+          );
+        }
+        throw error;
       }
-      throw error;
-    }
+    };
+    return __fetchThrough(new __Request(input, init), send);
   }
   connect(address, options) {
     if (options?.secureTransport === "on")
@@ -3615,70 +3748,6 @@ const __wrapServiceResponse = (res, url) => {
   }
   return wrapped;
 };
-const __SERVICE_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
-const __REQUEST_BODY_HEADERS = [
-  "content-encoding", "content-language", "content-length",
-  "content-location", "content-type", "transfer-encoding",
-];
-const __CROSS_ORIGIN_SENSITIVE_HEADERS = [
-  "authorization", "cookie", "proxy-authorization",
-];
-// A service target only produces the first response. Fetch redirect handling
-// belongs to the caller, because the Location leaves through the caller's
-// ambient outbound policy rather than gaining the target service's authority.
-// Capture the replayable request state before dispatch: a same-isolate target
-// takes over a stream body and can consume it before it redirects. A byte body
-// is copied to the target.
-const __serviceRedirectState = (req) => ({
-  method: req.method,
-  headers: req.headers.__celldHeaderList,
-  body: req.body === null ? undefined
-    : req._bodyBytes === null ? null : req._bodyBytes.slice(),
-  signal: req._signalForSubrequests,
-});
-const __finishServiceFetch = async (res, req, replay) => {
-  const response = __wrapServiceResponse(res, req.url);
-  if (!__SERVICE_REDIRECT_STATUSES.has(response.status)) return response;
-  const location = response.headers.get("location");
-  if (location === null) return response;
-  if (req.redirect === "manual") return response;
-
-  // Nobody can consume the redirect response after this branch. Cancelling it
-  // releases a cross-isolate body stream instead of waiting for its idle TTL.
-  if (response.body !== null) {
-    try { await response.body.cancel(); } catch { /* the redirect still wins */ }
-  }
-  if (req.redirect === "error")
-    throw new TypeError("A redirect was returned for a request with redirect mode error.");
-
-  const url = new URL(location, req.url).href;
-  let method = replay.method;
-  let body = replay.body;
-  const headers = new Headers(replay.headers);
-  if ((response.status === 301 || response.status === 302) && method === "POST" ||
-      response.status === 303 && method !== "GET" && method !== "HEAD") {
-    method = "GET";
-    body = undefined;
-    for (const name of __REQUEST_BODY_HEADERS) headers.delete(name);
-  } else if (body === null) {
-    // A transferred or live JavaScript stream has no replay copy. Fetch treats
-    // the redirect as a network error instead of sending an empty replacement.
-    throw new TypeError("Cannot follow a redirect with a non-replayable request body.");
-  }
-  // The ambient fetch starts a new native request, so its HTTP client cannot
-  // know that these credentials came from another origin and remove them. Do
-  // that at the service-to-network boundary before they can leak to Location.
-  if (new URL(req.url).origin !== new URL(url).origin) {
-    for (const name of __CROSS_ORIGIN_SENSITIVE_HEADERS) headers.delete(name);
-  }
-  const init = { method, headers, redirect: "follow" };
-  if (body !== undefined) init.body = body;
-  if (replay.signal !== null) init.signal = replay.signal;
-  const followed = await globalThis.fetch(url, init);
-  followed.redirected = true;
-  if (followed.url === "") followed.url = url;
-  return followed;
-};
 // `[[services]]` binding: a Fetcher pointed at another Worker in this
 // process. No identity to resolve, so it goes straight to __svc_call.
 // Worker Loader (Code Mode): spawn a fresh isolate from supplied code and
@@ -3731,55 +3800,60 @@ __celld.__makeLoader = () => {
     };
   };
   const makeEntrypoint = (loadPromise, entrypoint, propsSc, limitsJson) => {
+    // One request to the entrypoint; fetch() follows its redirects back
+    // through it (see __fetchThrough).
+    const send = async (id, tails, req) => {
+      // The caller's signal, never the incoming request's own, as for a
+      // service binding.
+      const signal = req._signalForSubrequests;
+      if (signal?.aborted) throw signal.reason;
+      // The verbatim header list; see the note on the outbound `fetch`.
+      // The loaded worker rebuilds a `Headers` from these pairs, so a
+      // repeat and its casing survive the isolate boundary.
+      const headers = JSON.stringify(req.headers.__celldHeaderList);
+      const { body, streamId } = await __subrequestBody(req);
+      const loaded = __loader_fetch(
+        id, req.url, req.method, body, headers, streamId, entrypoint,
+        propsSc === undefined ? new Uint8Array() : propsSc,
+        limitsJson, tails.length !== 0, signal != null);
+      const dispatch = tails.length === 0 ? loaded : loaded[0];
+      const response = signal
+        ? __awaitCancellableDoCall(dispatch, signal)
+        : dispatch;
+      if (tails.length !== 0) {
+        const delivery = loaded[1]
+          .then((report) => JSON.parse(report))
+          .then((events) => Promise.allSettled(
+            tails.map((tail) => tail.tail(events))))
+          .then((results) => {
+            for (const result of results) {
+              if (result.status === "rejected")
+                console.error("Tail Worker failed:", result.reason);
+            }
+          })
+          .catch((error) => console.error("Tail delivery failed:", error));
+        // The loaded fetch answers before its report because the child can
+        // still have waitUntil work. Keep this chain on the loader event so
+        // its IoContext cannot retire and abort the report operation.
+        __registerWaitUntil(delivery);
+      }
+      const r = __jsonParse(await response);
+      const responseBody = r.streamId !== undefined
+        ? new CelldHttpBodyStream(r.streamId)
+        : r.body !== undefined ? r.body : Uint8Array.from(r.bodyBytes || []);
+      return __wrapServiceResponse(
+        new Response(responseBody, {
+          status: r.status,
+          headers: r.headers,
+          webSocket: __responseSocket(r),
+        }),
+        req.url);
+    };
     const target = {
       async fetch(input, init) {
         const { id, tails } = await loadPromise;
-        const req = new Request(input, init);
-        // The caller's signal, never the incoming request's own, as for a
-        // service binding.
-        const signal = req._signalForSubrequests;
-        if (signal?.aborted) throw signal.reason;
-        // The verbatim header list; see the note on the outbound `fetch`.
-        // The loaded worker rebuilds a `Headers` from these pairs, so a
-        // repeat and its casing survive the isolate boundary.
-        const headers = JSON.stringify(req.headers.__celldHeaderList);
-        const { body, streamId } = await __subrequestBody(req);
-        const loaded = __loader_fetch(
-          id, req.url, req.method, body, headers, streamId, entrypoint,
-          propsSc === undefined ? new Uint8Array() : propsSc,
-          limitsJson, tails.length !== 0, signal != null);
-        const dispatch = tails.length === 0 ? loaded : loaded[0];
-        const response = signal
-          ? __awaitCancellableDoCall(dispatch, signal)
-          : dispatch;
-        if (tails.length !== 0) {
-          const delivery = loaded[1]
-            .then((report) => JSON.parse(report))
-            .then((events) => Promise.allSettled(
-              tails.map((tail) => tail.tail(events))))
-            .then((results) => {
-              for (const result of results) {
-                if (result.status === "rejected")
-                  console.error("Tail Worker failed:", result.reason);
-              }
-            })
-            .catch((error) => console.error("Tail delivery failed:", error));
-          // The loaded fetch answers before its report because the child can
-          // still have waitUntil work. Keep this chain on the loader event so
-          // its IoContext cannot retire and abort the report operation.
-          __registerWaitUntil(delivery);
-        }
-        const r = __jsonParse(await response);
-        const responseBody = r.streamId !== undefined
-          ? new CelldHttpBodyStream(r.streamId)
-          : r.body !== undefined ? r.body : Uint8Array.from(r.bodyBytes || []);
-        return __wrapServiceResponse(
-          new Response(responseBody, {
-            status: r.status,
-            headers: r.headers,
-            webSocket: __responseSocket(r),
-          }),
-          req.url);
+        return __fetchThrough(
+          new __Request(input, init), (req) => send(id, tails, req));
       },
     };
     // Both the default and named entrypoints expose RPC: property access is a
@@ -4052,22 +4126,27 @@ __celld.__propsBytes = (binding, json) => {
 
 const __makeServiceBinding = __celld.__makeServiceBinding =
   (script, entrypoint = null, propsSc = undefined) => {
-  const target = {
-  async fetch(input, init) {
-    const req = new Request(input, init);
+  // One request to the target. fetch() follows its redirects back through
+  // it (see __fetchThrough).
+  const send = async (req) => {
     const signal = req._signalForSubrequests;
     if (signal?.aborted) throw signal.reason;
     // A stream body advertises its length the way the HTTP layer
-    // would: known length -> Content-Length, unknown -> chunked.
+    // would: known length -> Content-Length, unknown -> chunked. On the
+    // target's copy only: a redirect sends the caller's headers again.
+    let framing = null;
     if (req._bodyBytes === null &&
         !req.headers.has("content-length") &&
         !req.headers.has("transfer-encoding")) {
       const length = req.body._expectedLength;
-      if (length === undefined)
-        req.headers.set("transfer-encoding", "chunked");
-      else req.headers.set("content-length", String(length));
+      framing = length === undefined
+        ? ["transfer-encoding", "chunked"]
+        : ["content-length", String(length)];
     }
-    const redirectState = __serviceRedirectState(req);
+    const framed = (copy) => {
+      if (framing !== null) copy.headers.set(framing[0], framing[1]);
+      return copy;
+    };
     // Fast path: the target is this same script, so its handler lives in
     // this isolate. Skip the op + pool-thread hop and call it directly,
     // inside its own event so the target's waitUntil does not attach to
@@ -4085,11 +4164,11 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
       const requestController = new AbortController();
       const dispatch = __dispatchEntrypointFetch(
         entrypoint ?? "default",
-        new Request(req, {
+        framed(new Request(req, {
           signal: requestController.signal,
           redirect: "manual",
           __celldIncomingSignal: true,
-        }),
+        })),
         propsSc ?? null);
       const response = signal
         ? await __raceCallerAbort(dispatch, signal, () =>
@@ -4098,7 +4177,7 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
         : await dispatch;
       __attachResponseRequestCancellation(
         response, requestController, true);
-      return __finishServiceFetch(response, req, redirectState);
+      return __wrapServiceResponse(response, req.url);
     }
     if (script === __cell.script && entrypoint === null &&
         typeof __cell.selfFetch === "function") {
@@ -4111,11 +4190,11 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
         // The target gets an incoming request's redirect mode (see
         // __makeRequest), so it needs its own Request rather than the
         // caller's.
-        const incoming = new Request(req, { redirect: "manual" });
-        return __finishServiceFetch(
+        const incoming = framed(new Request(req, { redirect: "manual" }));
+        return __wrapServiceResponse(
           await __ctxRun(undefined,
             () => __cell.selfFetch(incoming, __cell.env, ctx)),
-          req, redirectState);
+          req.url);
       } finally {
         __cell.svcDepth--;
         __endEvent();
@@ -4124,7 +4203,9 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
     // The verbatim header list; see the note on the outbound `fetch`. The
     // target isolate rebuilds a `Headers` from these pairs, so a repeat and
     // its casing survive the crossing.
-    const headers = JSON.stringify(req.headers.__celldHeaderList);
+    const list = req.headers.__celldHeaderList;
+    if (framing !== null) list.push(framing);
+    const headers = JSON.stringify(list);
     // Cross-isolate calls carry exact bytes. A host-backed stream transfers
     // its one source to the target, and another stream uses the byte fallback.
     const { body, streamId } = await __subrequestBody(req);
@@ -4142,12 +4223,16 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
       : r.body !== undefined
         ? r.body
         : Uint8Array.from(r.bodyBytes || []);
-    return __finishServiceFetch(
+    return __wrapServiceResponse(
       new Response(responseBody, {
         status: r.status, headers: r.headers,
         webSocket: __responseSocket(r),
       }),
-      req, redirectState);
+      req.url);
+  };
+  const target = {
+  async fetch(input, init) {
+    return __fetchThrough(new __Request(input, init), send);
   },
   // Under service_binding_extra_handlers, Fetcher.queue() runs the target's
   // queue handler. celld does not implement it, so it fails at first use.
@@ -5940,8 +6025,11 @@ class DurableObjectNamespace {
         throw new Error(brokenReason);
       }
     };
-    const doFetch = async (input, init) => {
-        const req = new Request(input, init);
+    const doFetch = async (input, init) =>
+      __fetchThrough(new __Request(input, init), send);
+    // One request to the object; fetch() follows its redirects back through
+    // this stub (see __fetchThrough).
+    const send = async (req) => {
         const signal = req._signalForSubrequests;
         if (signal?.aborted) throw signal.reason;
         // A body already backed by a host stream forwards to the cell as its

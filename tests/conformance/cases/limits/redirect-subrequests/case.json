@@ -1,0 +1,14 @@
+{
+  "kind": "celld-only",
+  "reason": "the subrequest limit a Worker Loader entrypoint sets, against the runner's upstream: wrangler's harness follows a global fetch()'s redirects in Node, so on workerd the hops never reach the loaded Worker's count. On workerd each hop is a subrequest of its own (fetchImplNoOutputLock in api/http.c++ makes a new client for every hop).",
+  "workers": ["app"],
+  "upstream": true,
+  "env": {"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}"},
+  "steps": [
+    {"path": "/fetch-within?port=${UPSTREAM_PORT}"},
+    {"path": "/fetch-beyond?port=${UPSTREAM_PORT}"},
+    {"path": "/upgrade-within?port=${UPSTREAM_PORT}"},
+    {"path": "/upgrade-beyond?port=${UPSTREAM_PORT}"},
+    {"path": "/websocket-after?port=${UPSTREAM_PORT}"}
+  ]
+}

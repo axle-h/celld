@@ -86,11 +86,12 @@ celld refuses these destinations:
   firewall.
 
 celld checks the address it connects to. It checks an IP literal before the
-request and at every redirect hop, in any spelling the URL parser accepts, such
-as `http://2130706433/`. It checks a name inside its resolver, and connects
-only to the resolved addresses that pass, so a name that resolves differently
-on a second lookup (DNS rebinding) cannot pass the check with one address and
-connect to another. A name that resolves to no allowed address is refused.
+request, in any spelling the URL parser accepts, such as `http://2130706433/`.
+It checks a name inside its resolver, and connects only to the resolved
+addresses that pass, so a name that resolves differently on a second lookup
+(DNS rebinding) cannot pass the check with one address and connect to another.
+A name that resolves to no allowed address is refused. A followed redirect's
+next hop is a request of its own, checked in full in the same way.
 Worker egress ignores `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY`,
 because a proxy would connect to an address that the check never saw.
 
@@ -162,8 +163,13 @@ the allowlist names it.
   `fetch()` is checked.
 - A container's `getTcpPort()` reaches the address of that port on the running
   Durable Object's own container, which the host looks up, as that IP address
-  only. See [container ownership](#container-ownership). A redirect from the
-  container is checked, and a name never reaches the container's address.
+  only. See [container ownership](#container-ownership). A name never
+  reaches the container's address.
+- A Fetcher follows a redirect through itself, as on Cloudflare: a service
+  binding's, a Durable Object stub's, a Worker Loader entrypoint's or a
+  container port's `Location` goes back to the same target, whatever host it
+  names. So following a redirect never reaches anything the Worker couldn't
+  reach without it.
 - `connect()` from `cloudflare:sockets` is restricted only by the
   [internal-listener rule](#the-nodes-internal-listener-is-always-refused). It
   is the API for databases and other services on your network, and it reaches

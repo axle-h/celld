@@ -34,8 +34,9 @@ export default {
     const url = new URL(request.url);
     const bounce = `http://127.0.0.1:${url.searchParams.get("upstream")}/bounce`;
     // The caller's own mode, so that only the target's mode decides whether
-    // the 302 is followed. With the default mode, workerd's Durable Object
-    // stub would follow the 302 itself, and celld's doesn't yet (plan 1.20).
+    // the 302 is followed. With the default mode, the binding would follow
+    // the 302 itself, back through the same target
+    // (service-bindings/redirect-follow).
     const manual = { redirect: "manual" };
     switch (url.pathname) {
       case "/outside":

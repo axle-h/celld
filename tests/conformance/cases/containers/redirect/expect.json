@@ -1,0 +1,23 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "follow": {
+          "status": 200,
+          "url": "http://elsewhere.test:9999/landed",
+          "redirected": true,
+          "location": null,
+          "body": "host=elsewhere.test:9999 path=/landed"
+        },
+        "manual": {
+          "status": 302,
+          "url": "http://container/redirect",
+          "redirected": false,
+          "location": "http://elsewhere.test:9999/landed",
+          "body": ""
+        }
+      }
+    }
+  ]
+}

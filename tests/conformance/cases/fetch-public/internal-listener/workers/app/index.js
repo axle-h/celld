@@ -1,8 +1,8 @@
 // The node's internal listener carries the unauthenticated operator routes,
 // so no Worker reaches it, even though CELLD_FETCH_PRIVATE_ALLOW names it
-// here: by its address, through a name, through the unspecified address, or
-// over a WebSocket. The upstream entry beside it still works, so the
-// allowlist itself is in force.
+// here: by its address, through a name, through the unspecified address, as
+// a redirect's next hop, or over a WebSocket. The upstream entry beside it
+// still works, so the allowlist itself is in force.
 async function probe(url) {
   try {
     const response = await fetch(url);
@@ -37,6 +37,7 @@ export default {
       await probe(`http://localhost:${internal}/state`),
       await probe(`http://[::ffff:127.0.0.1]:${internal}/state`),
       await probe(`http://0.0.0.0:${internal}/state`),
+      await probe(`http://127.0.0.1:${params.get("upstream")}/redirect?to=http://127.0.0.1:${internal}/state`),
       await dial(`ws://127.0.0.1:${internal}/`),
     ]);
   },

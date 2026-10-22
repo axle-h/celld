@@ -729,51 +729,11 @@ impl CellJob {
 
 thread_local! {
     // One outbound HTTP client per JS thread — building it per fetch rebuilds
-    // the TLS stack every call (async-op-hazards.md). Each one applies the
-    // egress policy (`public_egress`), so each follow goes through its check.
-    static HTTP: reqwest::Client = crate::public_egress::client(
-        reqwest::redirect::Policy::custom(|attempt| {
-            // reqwest's default limit: `previous` starts with the first URL.
-            if attempt.previous().len() > 10 {
-                return attempt.error("too many redirects");
-            }
-            crate::public_egress::follow(attempt)
-        }),
-    );
-    static HTTP_MANUAL: reqwest::Client =
-        crate::public_egress::client(reqwest::redirect::Policy::none());
-    // A separate policy stops an `error` request before reqwest can replay it
-    // at the destination. Inspecting the final response would be too late:
-    // the method, body, and credentials could already have left the process.
-    static HTTP_ERROR: reqwest::Client = crate::public_egress::client(
-        reqwest::redirect::Policy::custom(|attempt| {
-            attempt.error("fetch redirect mode is error")
-        }),
-    );
-}
-
-#[derive(Debug)]
-struct RedirectSubrequestLimit(String);
-
-impl std::fmt::Display for RedirectSubrequestLimit {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for RedirectSubrequestLimit {}
-
-fn fetch_request_error(error: &reqwest::Error) -> String {
-    let mut source: &(dyn std::error::Error + 'static) = error;
-    loop {
-        if let Some(limit) = source.downcast_ref::<RedirectSubrequestLimit>() {
-            return limit.0.clone();
-        }
-        let Some(next) = source.source() else {
-            return format!("fetch: {error}");
-        };
-        source = next;
-    }
+    // the TLS stack every call (async-op-hazards.md). It never follows a
+    // redirect: the harness follows each one as a request of its own, through
+    // the same Fetcher (`__fetchThrough`), so every hop passes the egress
+    // policy (`public_egress`) and is a subrequest.
+    static HTTP: reqwest::Client = crate::public_egress::client();
 }
 
 #[doc(hidden)]
@@ -10740,6 +10700,13 @@ fn op_rpc_call(
     rv.set(p);
 }
 
+/// Milliseconds on a monotonic clock that starts with the process: the unit
+/// of the deadline `op_fetch` hands back for a redirect's next hop.
+fn fetch_clock_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
 /// Outbound `fetch` — the op behind the harness's `fetch()`. Resolves to a JSON
 /// `{status, body, headers}` string.
 fn op_fetch(
@@ -10768,7 +10735,7 @@ fn op_fetch(
     // `__loader_fetch`. `None` and an empty body are different requests — one
     // carries no `Content-Length` — so the absent case stays distinct.
     let body_arg = args.get(2);
-    let stream_arg = args.get(5);
+    let stream_arg = args.get(4);
     let body: Option<RequestBody> = if body_arg.is_undefined() || body_arg.is_null() {
         None
     } else if stream_arg.is_number() {
@@ -10796,16 +10763,24 @@ fn op_fetch(
             )
         }
     };
-    let redirect = args.get(4).to_rust_string_lossy(scope);
     // The harness passes `true` only when the caller supplied an AbortSignal.
     // An absent argument is `false`, so a direct caller gets the uncancellable
     // request it asked for.
-    let cancellable = args.get(6).boolean_value(scope);
+    let cancellable = args.get(5).boolean_value(scope);
     // A container's `getTcpPort()` fetch names its port, and the host looks
     // up the address the egress policy then lets this one request reach.
-    let exempt = match container::port_address_arg(scope, args.get(7)) {
+    let exempt = match container::port_address_arg(scope, args.get(6)) {
         Ok(exempt) => exempt,
         Err(refusal) => return refusal.throw(scope),
+    };
+    // The deadline a followed redirect's earlier hop answered with, so that
+    // CELLD_FETCH_TIMEOUT_S bounds the whole of one fetch(), every hop of it,
+    // as it did when the HTTP client followed redirects itself.
+    let chain_deadline = {
+        let deadline = args.get(7);
+        deadline
+            .is_number()
+            .then(|| deadline.number_value(scope).unwrap_or(0.0) as u64)
     };
     let mut body_guard = match body.as_ref().and_then(RequestBody::stream_id) {
         Some(stream_id) => match current_context().transfer_body_stream(stream_id) {
@@ -10814,13 +10789,6 @@ fn op_fetch(
         },
         None => RequestBodyGuard(None),
     };
-    // Request validates this value in the harness, but the native op is a
-    // separate trust boundary. Keep this match exhaustive so a future direct
-    // caller cannot turn an unknown mode into redirect-following behavior.
-    match redirect.as_str() {
-        "follow" | "manual" | "error" => {}
-        other => return loader_throw(scope, &format!("fetch: unknown redirect mode {other}")),
-    }
     if let EgressPolicy::Broker(broker) = egress {
         let (request_id, cancel, cancel_guard) = if cancellable {
             let request_id = next_do_request_id();
@@ -10875,13 +10843,7 @@ fn op_fetch(
     }
     // Select the client only for direct egress: a broker must not initialize
     // an unused network client and its TLS stack.
-    let client = match redirect.as_str() {
-        "follow" if context.subrequest_limit.is_some() => context.redirect_counting_client(),
-        "follow" => HTTP.with(|client| client.clone()),
-        "manual" => HTTP_MANUAL.with(|client| client.clone()),
-        "error" => HTTP_ERROR.with(|client| client.clone()),
-        _ => unreachable!("the redirect mode was validated above"),
-    };
+    let client = HTTP.with(|client| client.clone());
     // The creating context, read here while JS is still running: the op
     // future resolves on whatever worker polls it, far from any CPED.
     let trace = current_trace_context(scope);
@@ -10968,11 +10930,18 @@ fn op_fetch(
         let m = reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
         // a timeout bounds a black-hole host: the future settles (Err) instead
         // of parking run_loop forever — the hang the Drop guard can't catch.
-        let fetch_timeout = crate::env_vars::positive_or("CELLD_FETCH_TIMEOUT_S", 120)
+        let fetch_timeout: u64 = crate::env_vars::positive_or("CELLD_FETCH_TIMEOUT_S", 120)
             .expect("validated CELLD_FETCH_TIMEOUT_S");
+        let now = fetch_clock_ms();
+        let deadline = chain_deadline
+            .unwrap_or_else(|| now.saturating_add(fetch_timeout.saturating_mul(1000)));
+        // Never longer than one timeout, whatever deadline the harness passed.
+        let remaining = deadline
+            .saturating_sub(now)
+            .min(fetch_timeout.saturating_mul(1000));
         let mut rb = client
             .request(m, &url)
-            .timeout(std::time::Duration::from_secs(fetch_timeout));
+            .timeout(std::time::Duration::from_millis(remaining));
         // reqwest omits Content-Length for an empty Vec, which collapses the
         // wire representation of `Some([])` into the representation of
         // `None`. Install the zero length here unless the Worker supplied a
@@ -11046,6 +11015,7 @@ fn op_fetch(
                 finish(true, Some(status), None);
                 Ok(serde_json::json!({
                     "status": status, "streamId": stream_id, "headers": headers,
+                    "deadline": deadline,
                 })
                 .to_string())
             }
@@ -11055,7 +11025,7 @@ fn op_fetch(
                     finish(false, None, Some(refused.clone()));
                     return Ok(serde_json::json!({ "refused": refused }).to_string());
                 }
-                let error = fetch_request_error(&e);
+                let error = format!("fetch: {e}");
                 finish(false, None, Some(error.clone()));
                 Err(error)
             }
@@ -12830,10 +12800,6 @@ pub struct IoContext {
     /// spend one another's allowance.
     subrequest_limit: Option<u32>,
     subrequests: AtomicUsize,
-    /// A request-scoped client counts redirects against this request. A weak
-    /// capture avoids a client/context cycle, and one client retains the
-    /// connection pool across all fetches in the invocation.
-    redirect_client: OnceLock<reqwest::Client>,
     cpu_limit_nanos: Option<u64>,
     cpu_used_nanos: AtomicU64,
     cpu_turn: Mutex<Option<CpuTurnStart>>,
@@ -12955,25 +12921,6 @@ impl IoContext {
             .and_then(|limit| u32::try_from(limit / 1_000_000).ok())
     }
 
-    fn redirect_counting_client(self: &Arc<Self>) -> reqwest::Client {
-        self.redirect_client
-            .get_or_init(|| {
-                let context = Arc::downgrade(self);
-                crate::public_egress::client(reqwest::redirect::Policy::custom(move |attempt| {
-                    if attempt.previous().len() >= 10 {
-                        return attempt.error("too many redirects");
-                    }
-                    if let Some(context) = context.upgrade() {
-                        if let Err(error) = context.charge_subrequest() {
-                            return attempt.error(RedirectSubrequestLimit(error));
-                        }
-                    }
-                    crate::public_egress::follow(attempt)
-                }))
-            })
-            .clone()
-    }
-
     /// Spend one subrequest from this invocation before the operation leaves
     /// the isolate. The failed attempt is counted too, so repeated catches
     /// cannot retry an operation that already exhausted the budget.
@@ -13066,7 +13013,6 @@ impl IoContext {
             pending_events: Mutex::new(HashSet::new()),
             subrequest_limit: limits.and_then(|limits| limits.sub_requests),
             subrequests: AtomicUsize::new(0),
-            redirect_client: OnceLock::new(),
             cpu_limit_nanos: limits
                 .and_then(|limits| limits.cpu_ms)
                 .map(|milliseconds| u64::from(milliseconds).saturating_mul(1_000_000)),
@@ -13107,7 +13053,6 @@ impl IoContext {
                 .resource_limits
                 .and_then(|limits| limits.sub_requests),
             subrequests: AtomicUsize::new(0),
-            redirect_client: OnceLock::new(),
             cpu_limit_nanos: runtime_state
                 .resource_limits
                 .and_then(|limits| limits.cpu_ms)

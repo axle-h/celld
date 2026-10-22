@@ -370,8 +370,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 29 | 1.16 compatibility-flag audit | done | `2fe3f0d`, starter `779b1e2` |
 | 30 | 1.17 close replies on WebSockets; half-open sockets end on disconnect | done | `4d139d5` |
 | 31 | 1.18 Worker Loader startup error text | done | `fc845db` |
-| 32 | 1.19 trace context across RPC and the peer tunnel | done | see log |
-| 33+ | Phase 1 in plan order (1.20-1.30, 1.34, 1.36-1.40), and the 1.4 props key-order follow-up | queued | |
+| 32 | 1.19 trace context across RPC and the peer tunnel | done | `0477165` |
+| 33 | 1.20 redirect handling through the same Fetcher | done | see log |
+| 34+ | Phase 1 in plan order (1.22-1.30, 1.34, 1.36-1.41), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -2236,6 +2237,138 @@ Each one differs from workerd 1.20261001.1:
 
 **Tests.** Differential cases for each, in `service-bindings/` and
 `fetch/`.
+
+**As built.**
+- **What workerd does** (probed, and read in `api/http.c++`:
+  `fetchImplNoOutputLock`, `handleHttpResponse`,
+  `handleHttpRedirectResponse`). Every Fetcher follows through itself: the
+  redirected request goes back to the same Fetcher, global `fetch()`'s
+  network included. So a relative `Location` from a binding resolves
+  against the binding's URL, and an absolute one to another host goes back
+  to the same target, never to the network.
+  - `redirect` is parsed in the Request constructor, ignoring ASCII case.
+    `"error"` and every other value throw that `TypeError` there, so
+    `fetch()` and `Fetcher.fetch()` reject before anything leaves.
+  - Statuses 301, 302, 303, 307 and 308 with a `Location` are followed;
+    without one the response comes back as it is. 301 and 302 turn only a
+    `POST` into a `GET`; 303 turns everything but `HEAD` into a `GET`. The
+    body is dropped then, and every header stays, `Content-Type` and
+    `Content-Length` included. Other cases send the body again.
+  - On a hop to another origin only `Authorization` is dropped
+    (`strip_authorization_on_cross_origin_redirect`). `Cookie` and
+    `Proxy-Authorization` stay.
+  - At most 20 redirects. The 21st rejects with `TypeError: Too many
+    redirects.` followed directly by the URL list joined with `", "`
+    (`JSG_KJ_EXCEPTION` appends it). A loop gives the same error.
+  - A body that can't be replayed (a stream, including the body of a
+    request the Worker received, however small) fails on any status but
+    303 with workerd's "one-time-use body" `TypeError`, even for a 301
+    `POST` that would drop it.
+  - A `Location` that doesn't parse: `TypeError: Invalid Location header;
+    unable to follow redirect.`
+  - `response.url` is the last URL without its fragment, and `redirected`
+    is `true` once a redirect was followed. A Fetcher sends no fragment.
+  - A WebSocket upgrade request follows too.
+- **Design.** One harness helper, `__fetchThrough(req, send)`, implements
+  those rules for every Fetcher. `send` makes one request and never
+  follows: global `fetch()`, a service binding (and so `ctx.exports`), a
+  Durable Object stub, a Worker Loader entrypoint, a facet, the `ASSETS`
+  binding and a container's `getTcpPort()`. A loaded Worker's
+  `globalOutbound` Fetcher is reached through global `fetch()`, so its hops
+  go back to it. The old service-binding path, which followed through
+  global `fetch()`, is removed.
+  - The helper changes only the request its own `fetch()` made: it drops
+    the fragment by setting that request's URL, so a byte body stays
+    replayable. Each hop keeps the method, body, headers, signal and `cf`
+    the rules leave it.
+  - It reads the headers only once a redirect needs them. No `send` changes
+    the caller's headers: a service binding puts its stream-framing header
+    on the target's copy only.
+  - It uses intrinsics captured before any Worker code runs (`Request`,
+    `Headers`, `URL` and their methods, `ReadableStream#cancel`, the string
+    methods), so a Worker that replaces a global can't change how a
+    redirect is followed, as it can't on workerd, whose fetch is native.
+- **Host.** The outbound client never follows (`public_egress::client`
+  hard-codes `Policy::none()`), and `op_fetch` lost its redirect-mode
+  argument. The three clients per mode, the request-scoped
+  redirect-counting client and `public_egress::follow` are gone: each hop is
+  an `op_fetch` of its own, so it is checked by the egress policy in full
+  and charged as a subrequest.
+  - **Subrequests.** Before, only a followed redirect of a plain `fetch()`
+    was charged. A WebSocket dial was never charged, neither `new
+    WebSocket()` nor a `fetch()` upgrade, so one upgrade could make 21
+    uncounted dials. `op_ws_connect` and `op_ws_upgrade` now charge every
+    dial, and so every hop of an upgrade.
+  - **Timeout.** `CELLD_FETCH_TIMEOUT_S` bounds one whole `fetch()`, as it
+    did when the HTTP client followed. The first hop's answer carries its
+    deadline on a monotonic clock, and each later hop gets what is left,
+    never more than one timeout (`celld --help` says so).
+- **Security.** A redirect from global `fetch()` to a private address or the
+  internal listener was already refused at every hop (`reqwest`'s policy
+  ran `public_egress::follow`). It still is, now because every hop is a new
+  checked request: `fetch-public/redirect-to-private`, and a redirect to the
+  internal listener added to `fetch-public/internal-listener`. Following
+  through a Fetcher reaches only that Fetcher's own target, so it gives a
+  Worker nothing it couldn't reach directly. A container's redirect now
+  goes back to the container's port instead of out to the network.
+- **Incoming bodies.** A request the Worker received is marked as having a
+  one-time body (`_oneTimeBody`, kept by copies that adopt the body), since
+  celld may hold it as bytes where workerd has a stream.
+- **Differences kept.** The redirect response's body is cancelled, not read
+  to its end as workerd does, so a cross-isolate stream is released at
+  once. Nothing observable depends on it.
+- **Tests.**
+  - `fetch/redirect-mode` (differential): modes, case, `"error"`, other
+    values, from a Request, a Request as the init, and `fetch()` rejecting.
+  - `service-bindings/redirect-follow` (differential): a relative and an
+    absolute `Location`, `manual`, a 307 `POST` and a streamed 307 through
+    every Fetcher kind (service binding, named entrypoint, self binding,
+    `ctx.exports`, Durable Object, facet, loader); then, through one
+    binding, the status-and-method matrix, same- and cross-origin
+    credentials (a scheme change included), fragments (a `POST` 307 and a
+    `PUT` 301 to a URL with one), no `Location`, 20 and 21 redirects, a
+    loop, streamed 301 and 303, an invalid `Location` and `redirect:
+    "error"`; `cf` on every hop through `ctx.exports`; a redirect followed
+    while the Worker has replaced `Request`, `URL` and `Headers#get`; and a
+    received
+    request forwarded with `follow` (307 fails, 303 follows).
+  - `fetch/redirect-follow` (celld-only, against the runner's upstream):
+    the same rules for global `fetch()`, and a WebSocket upgrade. wrangler's
+    harness follows every global `fetch()` redirect in Node, so the
+    transcript is recorded from workerd run directly, by
+    `lib/workerd-direct.mjs` with the case's `workerd.capnp` (a network
+    service as `globalOutbound`).
+  - `fetch/assets-redirect` (differential): `ASSETS.fetch()` follows
+    html_handling's 307.
+  - `limits/redirect-subrequests` (celld-only): a loaded Worker limited to
+    3 subrequests follows a 2-redirect chain but not a 3-redirect one, by
+    `fetch()` and by a WebSocket upgrade, and can't dial `new WebSocket()`
+    once redirects spent its budget.
+  - `containers/redirect` (celld-only, Docker): an absolute `Location` to
+    another host goes back to the same container port.
+  - The runner's upstream gained `/echo`, `/chain`, `/loop`, a status on
+    `/redirect`, and redirects of a WebSocket upgrade.
+  - Unit: `public_egress::tests` checks the container exemption per request
+    instead of per redirect hop.
+  - Starter: the integration adapter's "reports the final URL of a followed
+    redirect" check, `it.fails` until now, is an `it`.
+- **Found.** A byte body, and a request's `cf`, reach a Fetcher's target
+  in another isolate without what workerd gives it: 1.41.
+
+### 1.41 What a Fetcher's request carries to its target (found by 1.20)
+
+- **`Content-Length`.** A request with a byte body (`"payload"`, or `""`)
+  reaches the target of a service binding, `ctx.exports`, a Durable Object
+  stub or a Worker Loader entrypoint with no `Content-Length` header.
+  workerd gives it `Content-Length: 7` (or `0`), as HTTP would. celld adds
+  the header only for a stream body. Pinned by
+  `service-bindings/body-length` (xfail).
+- **`cf`.** A request's `cf` reaches a target in another isolate (another
+  script's service binding, a Durable Object, a loaded Worker) as `{}`:
+  `__svc_call`, `__do_call` and `__loader_fetch` carry none, and neither
+  does the peer tunnel. workerd delivers it, on every hop of a redirect
+  too. A target in the caller's isolate gets it. Pinned by
+  `service-bindings/request-cf` (xfail).
 
 ### 1.21 WebSocket ids carry authority (found by 1.7) — security, next after 1.7
 
