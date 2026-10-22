@@ -1,0 +1,36 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "child": "module-scope",
+        "error": "Error",
+        "message": "Script startup exceeded CPU time limit."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "ok",
+        "status": 200,
+        "body": "loaded"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "handler-getter",
+        "error": "Error",
+        "message": "Script startup exceeded CPU time limit."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "ok",
+        "status": 200,
+        "body": "loaded"
+      }
+    }
+  ]
+}

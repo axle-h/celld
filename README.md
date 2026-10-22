@@ -379,6 +379,13 @@ isolate holds a dead heap until something allocates, so celld forces a
 collection when a measurement is above that share. A restart of the process
 is not necessary.
 
+While a Worker loads, celld stops the load at the limit: a load whose module
+scope reaches it fails with `Script startup exceeded memory limits.`, and a
+load that uses more than 1 second of CPU time fails with `Script startup
+exceeded CPU time limit.`, as on Cloudflare. The operation in progress at the
+limit finishes first, so the node can briefly hold more than the limit. See
+[Limitations](docs/limitations.md#isolate-limits).
+
 ## Contributions
 
 Pull requests are disabled. Coding agents make it too easy to send a large,

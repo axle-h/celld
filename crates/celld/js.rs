@@ -2380,6 +2380,23 @@ impl std::ops::DerefMut for Worker {
 const DEFAULT_V8_HEAP_LIMIT_BYTES: usize = 128 * 1024 * 1024;
 const V8_HEAP_EMERGENCY_BYTES: usize = 16 * 1024 * 1024;
 
+/// More than the largest single object V8 allocates: a `FixedArray` or
+/// `FixedDoubleArray` holds at most `kMaxFixedArrayCapacity` (128 Mi) 8-byte
+/// elements, and a two-byte string at most `String::kMaxLength` (2^29 - 24)
+/// characters, each about 1 GiB. The emergency reserve covers the headers and
+/// the small allocations around it.
+const V8_LARGEST_OBJECT_BYTES: usize = 1024 * 1024 * 1024 + V8_HEAP_EMERGENCY_BYTES;
+
+/// The CPU time a Worker gets to load, as Cloudflare's startup limit.
+const STARTUP_CPU_LIMIT: Duration = Duration::from_secs(1);
+
+/// Cloudflare's error for a Worker whose load runs past `STARTUP_CPU_LIMIT`
+/// (deploy validation, code 10021).
+const STARTUP_CPU_EXCEEDED: &str = "Script startup exceeded CPU time limit.";
+
+/// Cloudflare's error for a Worker whose load reaches the heap limit.
+const STARTUP_MEMORY_EXCEEDED: &str = "Script startup exceeded memory limits.";
+
 /// Share of the heap limit past which an isolate takes on no more retained
 /// state. It sits below the near-limit callback on purpose: this refuses one
 /// hibernatable socket while the isolate still works, where the callback
@@ -2404,6 +2421,15 @@ struct HeapLimitState {
     /// the current one.
     limit: usize,
     last_gc_nudge: Mutex<Option<Instant>>,
+    /// Whether the isolate is still loading its Worker. A load has no request
+    /// to fail and nothing to recover, so the callback terminates it at the
+    /// limit rather than letting module scope grow the heap without bound.
+    loading: AtomicBool,
+    /// Whether the load reached the limit, which turns whatever error the
+    /// terminated load produced into `STARTUP_MEMORY_EXCEEDED`.
+    load_exceeded: AtomicBool,
+    /// How the callback, which receives no isolate, terminates the load.
+    isolate: v8::IsolateHandle,
     /// An explicit admission refusal cannot use the condemnation flag because
     /// recovery clears that flag at the next turn.
     #[cfg(celld_internal_tests)]
@@ -2628,7 +2654,8 @@ struct CpuWatchdog {
 
 struct CpuWatch {
     limit: Duration,
-    declared_ms: u32,
+    /// The termination error, which names the limit that ran out.
+    error: String,
     target_clock: Option<TargetThreadCpuClock>,
     target_started: Option<u64>,
     next_check: Instant,
@@ -2669,11 +2696,39 @@ impl CpuWatchdog {
     ) -> Option<Self> {
         let limit = limit?;
         let declared_ms = declared_ms?;
+        Some(Self::watch(
+            limit,
+            format!("Worker exceeded CPU limit of {declared_ms} ms"),
+            isolate,
+            runtime_state,
+        ))
+    }
+
+    /// Bound the CPU time of loading a Worker: compiling and evaluating its
+    /// modules, and installing its env. A load serves no request whose limit
+    /// could apply, and without this a top-level `while (true) {}` holds its
+    /// thread for good.
+    fn startup(isolate: v8::IsolateHandle, runtime_state: Arc<ActorRuntimeState>) -> Self {
+        Self::watch(
+            STARTUP_CPU_LIMIT,
+            STARTUP_CPU_EXCEEDED.to_string(),
+            isolate,
+            runtime_state,
+        )
+    }
+
+    /// Watch the calling thread, which must be the one running the isolate.
+    fn watch(
+        limit: Duration,
+        error: String,
+        isolate: v8::IsolateHandle,
+        runtime_state: Arc<ActorRuntimeState>,
+    ) -> Self {
         let service = cpu_watchdog_service();
         let target_clock = TargetThreadCpuClock::current();
         let watch = CpuWatch {
             limit,
-            declared_ms,
+            error,
             target_clock,
             target_started: target_clock.and_then(TargetThreadCpuClock::nanos),
             next_check: Instant::now() + limit,
@@ -2687,7 +2742,7 @@ impl CpuWatchdog {
         state.watches.insert(id, watch);
         drop(state);
         wake.notify_one();
-        Some(Self { id })
+        Self { id }
     }
 
     #[cfg(all(test, celld_internal_tests))]
@@ -2765,7 +2820,7 @@ fn run_cpu_watchdog_service(shared: &Arc<(Mutex<CpuWatchdogState>, std::sync::Co
                 .expect("termination lock poisoned");
             if termination.is_none() {
                 *termination = Some(ExecutionTermination {
-                    error: format!("Worker exceeded CPU limit of {} ms", watch.declared_ms),
+                    error: watch.error,
                     actor_scope: None,
                     context_id: None,
                 });
@@ -2901,6 +2956,17 @@ extern "C" fn near_heap_limit(
     // removes this callback before the isolate (and its slots) are destroyed.
     let state = unsafe { &*(data as *const HeapLimitState) };
     state.excessively_exceeded.store(true, Ordering::Relaxed);
+    if state.loading.load(Ordering::Relaxed) {
+        // Termination is only a request: V8 acts on it at the load's next
+        // interrupt check, and the allocation that reached the limit must
+        // finish first or V8 aborts the process. One allocation can be as
+        // large as V8's largest object, so the extension covers that. The
+        // isolate is discarded once the termination lands, so the memory is
+        // held only until then.
+        state.load_exceeded.store(true, Ordering::Relaxed);
+        state.isolate.terminate_execution();
+        return current_heap_limit.saturating_add(V8_LARGEST_OBJECT_BYTES);
+    }
     // V8 fatally aborts the process if a near-limit callback does not extend
     // the limit. This reserve lets JS observe condemnation and unwind.
     //
@@ -5892,6 +5958,19 @@ enum Started<'s> {
     Threw,
 }
 
+/// The startup limit a load ran into, if any. It outranks the error the load
+/// itself returned, which for a terminated load names only the termination.
+fn startup_limit_exceeded(
+    heap: &HeapLimitState,
+    runtime: &ActorRuntimeState,
+) -> Option<anyhow::Error> {
+    if heap.load_exceeded.load(Ordering::Relaxed) {
+        return Some(anyhow!(STARTUP_MEMORY_EXCEEDED));
+    }
+    let termination = runtime.termination.lock().ok()?.take()?;
+    Some(anyhow!(termination.error))
+}
+
 fn settle_isolate_heap(isolate: &mut v8::Isolate) {
     #[cfg(all(test, celld_internal_tests))]
     let _observation = HeapSettlementObservationForTest::begin();
@@ -5911,10 +5990,7 @@ impl Worker {
     }
 
     pub fn load_config(config: Arc<WorkerConfig>) -> Result<Worker> {
-        let src = config.src.as_str();
         let script_name = config.script_name.as_str();
-        let do_classes = config.do_classes.as_slice();
-        let node = config.node.as_str();
         let compat = config.compat;
         let params = v8::CreateParams::default().heap_limits(0, v8_heap_limit_bytes());
         let mut isolate = v8::Isolate::new(params);
@@ -5925,6 +6001,9 @@ impl Worker {
             excessively_exceeded: AtomicBool::new(false),
             limit: original_heap_limit,
             last_gc_nudge: Mutex::new(None),
+            loading: AtomicBool::new(true),
+            load_exceeded: AtomicBool::new(false),
+            isolate: isolate.thread_safe_handle(),
             #[cfg(celld_internal_tests)]
             forced_admission_refusal: AtomicBool::new(false),
         });
@@ -5939,7 +6018,7 @@ impl Worker {
         let loader_owner = LoaderOwner::fresh(script_name, config.generation);
         let heap_limit_state_ptr =
             Arc::as_ptr(&heap_limit_state) as *mut HeapLimitState as *mut std::ffi::c_void;
-        isolate.set_slot(heap_limit_state);
+        isolate.set_slot(heap_limit_state.clone());
         isolate.set_slot(runtime_state.clone());
         isolate.set_slot(Arc::new(ModuleRegistry::default()));
         isolate.set_slot(loader_owner.clone());
@@ -5952,238 +6031,14 @@ impl Worker {
             tree: OnceLock::new(),
         }));
         isolate.add_near_heap_limit_callback(near_heap_limit, heap_limit_state_ptr);
-        let (context, fetch) = {
-            v8::scope!(let hs, &mut isolate);
-            let context = v8::Context::new(hs, Default::default());
-            let cs = &mut v8::ContextScope::new(hs, context);
-            let tc = std::pin::pin!(v8::TryCatch::new(cs));
-            let scope = &mut tc.init();
-
-            let arguments = install_ops(scope);
-            install_prelude(scope, &arguments)?; // Web Platform APIs
-            install_harness(scope, &arguments)?; // DO object model + minimal Response
-            install_lazy_globals(scope)?;
-            // A global, so it must exist before the module evaluates: bundles
-            // read Cloudflare.compatibilityFlags at module scope.
-            inject_compatibility_flags(scope, compat)?;
-            inject_storage_compatibility(scope, compat)?;
-            install_loader_env(scope, &config)?;
-            if compat.populate_process_env && compat.nodejs_compat {
-                populate_process_env(scope, &config)?;
-            }
-
-            let module = match compile_module(scope, &config.main_module_name, src) {
-                Some(m) => m,
-                None => return Err(anyhow!("compile: {}", exc!(scope))),
-            };
-            register_stubs(scope, &config); // cloudflare:*/node:* + text modules
-            register_wasm_modules(scope, &config.modules);
-            register_loader_modules(scope, &config, module);
-            module
-                .instantiate_module(scope, resolve_external)
-                .ok_or_else(|| anyhow!("instantiate: {}", exc!(scope)))?;
-            let ev = match module.evaluate(scope) {
-                Some(value) => value,
-                None => {
-                    if let Some(error) = take_execution_termination(scope) {
-                        return Err(error);
-                    }
-                    return Err(anyhow!("evaluate: {}", exc!(scope)));
-                }
-            };
-            if let Some(error) = take_execution_termination(scope) {
-                return Err(error);
-            }
-            if let Ok(p) = ev.try_cast::<v8::Promise>() {
-                if p.state() == v8::PromiseState::Rejected {
-                    let r = p.result(scope);
-                    let stk = r
-                        .to_object(scope)
-                        .and_then(|o| {
-                            let k = v8::String::new(scope, "stack")?;
-                            o.get(scope, k.into())
-                        })
-                        .map(|s| s.to_rust_string_lossy(scope))
-                        .unwrap_or_default();
-                    return Err(anyhow!(
-                        "top-level rejected: {}\n{}",
-                        r.to_rust_string_lossy(scope),
-                        stk
-                    ));
-                }
-            }
-
-            let ns = module
-                .get_module_namespace()
-                .to_object(scope)
-                .ok_or_else(|| anyhow!("ns"))?;
-            // workerd reads every export of the main module as a handler or
-            // a class, so a primitive export fails the Worker's start.
-            let names = ns
-                .get_own_property_names(scope, Default::default())
-                .ok_or_else(|| anyhow!("ns names"))?;
-            for index in 0..names.length() {
-                let name = names.get_index(scope, index).unwrap();
-                let value = ns.get(scope, name).unwrap();
-                if !value.is_object() {
-                    return Err(anyhow!(
-                        "Uncaught TypeError: Incorrect type for map entry '{}': the \
-                         provided value is not of type 'function or ExportedHandler'.",
-                        name.to_rust_string_lossy(scope)
-                    ));
-                }
-            }
-
-            // register each exported DO class into the harness registry
-            for cn in do_classes {
-                // The D1 class is the runtime's own and is never a worker
-                // export. It is in `do_classes` so that it gets a namespace
-                // key; reading it off the module namespace would find
-                // `undefined` and overwrite the harness's registration.
-                if crate::deploy::is_reserved_class(cn) {
-                    continue;
-                }
-                let key = v8::String::new(scope, cn).unwrap();
-                let cls = ns
-                    .get(scope, key.into())
-                    .filter(|value| value.is_function())
-                    .ok_or_else(|| unexported_class_error(cn))?;
-                register_class(scope, cn, cls)?;
-            }
-            inject_namespace_keys(scope, script_name, do_classes)?;
-            inject_crons(scope, &config.crons)?;
-            inject_workflows(scope, script_name, &config.workflow_bindings)?;
-            inject_containers(scope, &config.containers)?;
-            inject_kv_limits(scope)?;
-            inject_queue_config(scope, &config)?;
-            populate_cf_exports(scope, ns, do_classes)?;
-            register_entrypoints(scope, ns)?;
-            validate_workflow_classes(scope, ns, &config.workflow_bindings)?;
-            // build env from bindings and stash it in the harness
-            build_env(scope, &config)?;
-            // tell the harness which cells are local (route the rest cross-node)
-            inject_routing(scope, node)?;
-
-            // entry fetch. A loaded Worker often exists for its Durable
-            // Object class alone, and workerd loads such a module without a
-            // default export, so one reads as an empty object here. A
-            // deployment's own script keeps the refusal: a bundle that lost
-            // its handler must fail adoption, so the serving generation stays
-            // up instead of answering 500 to every request.
-            let loaded = config.origin == WorkerOrigin::Dynamic;
-            let dk = v8::String::new(scope, "default").unwrap();
-            let default_value = ns
-                .get(scope, dk.into())
-                .ok_or_else(|| anyhow!("no default export"))?;
-            let default = if default_value.is_object() {
-                default_value.to_object(scope).expect("an object")
-            } else if loaded && default_value.is_undefined() {
-                v8::Object::new(scope)
-            } else {
-                return Err(anyhow!("default not object"));
-            };
-            let fk = v8::String::new(scope, "fetch").unwrap();
-            let fetch_value = default
-                .get(scope, fk.into())
-                .ok_or_else(|| anyhow!("no fetch"))?;
-            let default_is_entrypoint =
-                default.is_function() && cell_registry_has(scope, "entrypoints", "default")?;
-            let class_fetch = default_is_entrypoint
-                && default
-                    .get(scope, v8::String::new(scope, "prototype").unwrap().into())
-                    .and_then(|prototype| prototype.to_object(scope))
-                    .and_then(|prototype| prototype.get(scope, fk.into()))
-                    .is_some_and(|handler| handler.is_function());
-            let qk = v8::String::new(scope, "queue").unwrap();
-            let own_queue = default
-                .get(scope, qk.into())
-                .is_some_and(|handler| handler.is_function());
-            let class_queue = default_is_entrypoint
-                && default
-                    .get(scope, v8::String::new(scope, "prototype").unwrap().into())
-                    .and_then(|prototype| prototype.to_object(scope))
-                    .and_then(|prototype| prototype.get(scope, qk.into()))
-                    .is_some_and(|handler| handler.is_function());
-            let has_queue_handler = own_queue || class_queue;
-            anyhow::ensure!(
-                !config.declares_queue_consumer || has_queue_handler,
-                "queue consumer has no queue handler"
-            );
-            let f: v8::Local<v8::Function> = if fetch_value.is_function() {
-                fetch_value.try_into().expect("function casts to Function")
-            } else if default_is_entrypoint && class_fetch {
-                // A class-based default entrypoint (extends WorkerEntrypoint)
-                // keeps fetch on the prototype, so route through the
-                // harness's invocation instance like a named entrypoint. Only a
-                // registered entrypoint dispatches that way — any other
-                // callable would load fine and then 500 on every request.
-                compile_fn(
-                    scope,
-                    "(req) => __celld.__dispatchEntrypointFetch('default', req)",
-                )?
-            } else if default.is_function() && cell_registry_has(scope, "doExports", "default")? {
-                return Err(anyhow!(
-                    "the default export is a Durable Object class; export a fetch \
-                     handler or a WorkerEntrypoint class as the default"
-                ));
-            } else if config.declares_queue_consumer {
-                // A push-consumer Worker needs no HTTP handler. Keep the
-                // stateless pool's fetch slot total, but fail closed if this
-                // deployment becomes the fleet's HTTP entry point. Test the
-                // prototype above before the entrypoint fallback below: a
-                // queue-only class is still a registered entrypoint, but
-                // routing fetch through it throws instead of returning 404.
-                compile_fn(scope, "() => new Response('Not found', { status: 404 })")?
-            } else if default_is_entrypoint {
-                // Preserve an RPC-only default entrypoint. Its HTTP path
-                // reports the harness's specific missing-fetch error, while
-                // its named methods remain callable through RPC.
-                compile_fn(
-                    scope,
-                    "(req) => __celld.__dispatchEntrypointFetch('default', req)",
-                )?
-            } else if loaded {
-                compile_fn(scope, NO_FETCH_HANDLER)?
-            } else {
-                return Err(anyhow!("fetch not fn"));
-            };
-
-            // Lets a self-targeted service binding invoke the handler in
-            // this isolate instead of crossing to a pool thread.
-            {
-                if let Ok(cell) = cell_state(scope) {
-                    let key = v8::String::new(scope, "selfFetch").unwrap();
-                    cell.set(scope, key.into(), f.into());
-                    // Optional scheduled handler, reached by a self-targeted
-                    // service binding's scheduled().
-                    let sk = v8::String::new(scope, "scheduled").unwrap();
-                    let key_ = v8::String::new(scope, "selfScheduled").unwrap();
-                    let own = default
-                        .get(scope, sk.into())
-                        .filter(|handler| handler.is_function());
-                    if let Some(handler) = own {
-                        cell.set(scope, key_.into(), handler);
-                    } else if default_is_entrypoint {
-                        // A class-based default entrypoint keeps scheduled on
-                        // the prototype; dispatch through an invocation instance
-                        // like fetch above.
-                        let pk = v8::String::new(scope, "prototype").unwrap();
-                        let proto_scheduled = default
-                            .get(scope, pk.into())
-                            .and_then(|proto| proto.to_object(scope))
-                            .and_then(|proto| proto.get(scope, sk.into()));
-                        if proto_scheduled.is_some_and(|handler| handler.is_function()) {
-                            let shim = compile_fn(
-                                scope,
-                                "(ctrl, env, ctx) => __celld.__dispatchEntrypointScheduled('default', ctrl, ctx.props)",
-                            )?;
-                            cell.set(scope, key_.into(), shim.into());
-                        }
-                    }
-                }
-            }
-            (v8::Global::new(scope, context), v8::Global::new(scope, f))
-        };
+        let startup = CpuWatchdog::startup(isolate.thread_safe_handle(), runtime_state.clone());
+        let realm = Self::load_realm(&mut isolate, &config);
+        drop(startup);
+        heap_limit_state.loading.store(false, Ordering::Relaxed);
+        if let Some(error) = startup_limit_exceeded(&heap_limit_state, &runtime_state) {
+            return Err(error);
+        }
+        let (context, fetch) = realm?;
         // Module evaluation and harness installation allocate temporary V8
         // objects. No request can reuse them after these scopes close, and a
         // new cell isolate can otherwise retain their pages indefinitely.
@@ -6227,6 +6082,252 @@ impl Worker {
                 cells: storage::Cells::default(),
             }),
         })
+    }
+
+    /// Set up a Worker's realm in a new isolate: the harness, its env, and its
+    /// modules, compiled and evaluated. Returns the context and the entry `fetch`.
+    ///
+    /// Everything here runs under the startup limits `Worker::load_config` arms,
+    /// so an error from a terminated load says only that it was terminated.
+    fn load_realm(
+        isolate: &mut v8::Isolate,
+        config: &WorkerConfig,
+    ) -> Result<(v8::Global<v8::Context>, v8::Global<v8::Function>)> {
+        let src = config.src.as_str();
+        let script_name = config.script_name.as_str();
+        let do_classes = config.do_classes.as_slice();
+        let node = config.node.as_str();
+        let compat = config.compat;
+        v8::scope!(let hs, isolate);
+        let context = v8::Context::new(hs, Default::default());
+        let cs = &mut v8::ContextScope::new(hs, context);
+        let tc = std::pin::pin!(v8::TryCatch::new(cs));
+        let scope = &mut tc.init();
+
+        let arguments = install_ops(scope);
+        install_prelude(scope, &arguments)?; // Web Platform APIs
+        install_harness(scope, &arguments)?; // DO object model + minimal Response
+        install_lazy_globals(scope)?;
+        // A global, so it must exist before the module evaluates: bundles
+        // read Cloudflare.compatibilityFlags at module scope.
+        inject_compatibility_flags(scope, compat)?;
+        inject_storage_compatibility(scope, compat)?;
+        install_loader_env(scope, config)?;
+        if compat.populate_process_env && compat.nodejs_compat {
+            populate_process_env(scope, config)?;
+        }
+
+        let module = match compile_module(scope, &config.main_module_name, src) {
+            Some(m) => m,
+            None => return Err(anyhow!("compile: {}", exc!(scope))),
+        };
+        register_stubs(scope, config); // cloudflare:*/node:* + text modules
+        register_wasm_modules(scope, &config.modules);
+        register_loader_modules(scope, config, module);
+        module
+            .instantiate_module(scope, resolve_external)
+            .ok_or_else(|| anyhow!("instantiate: {}", exc!(scope)))?;
+        let ev = match module.evaluate(scope) {
+            Some(value) => value,
+            None => {
+                if let Some(error) = take_execution_termination(scope) {
+                    return Err(error);
+                }
+                return Err(anyhow!("evaluate: {}", exc!(scope)));
+            }
+        };
+        if let Some(error) = take_execution_termination(scope) {
+            return Err(error);
+        }
+        if let Ok(p) = ev.try_cast::<v8::Promise>() {
+            if p.state() == v8::PromiseState::Rejected {
+                let r = p.result(scope);
+                let stk = r
+                    .to_object(scope)
+                    .and_then(|o| {
+                        let k = v8::String::new(scope, "stack")?;
+                        o.get(scope, k.into())
+                    })
+                    .map(|s| s.to_rust_string_lossy(scope))
+                    .unwrap_or_default();
+                return Err(anyhow!(
+                    "top-level rejected: {}\n{}",
+                    r.to_rust_string_lossy(scope),
+                    stk
+                ));
+            }
+        }
+
+        let ns = module
+            .get_module_namespace()
+            .to_object(scope)
+            .ok_or_else(|| anyhow!("ns"))?;
+        // workerd reads every export of the main module as a handler or
+        // a class, so a primitive export fails the Worker's start.
+        let names = ns
+            .get_own_property_names(scope, Default::default())
+            .ok_or_else(|| anyhow!("ns names"))?;
+        for index in 0..names.length() {
+            let name = names.get_index(scope, index).unwrap();
+            let value = ns.get(scope, name).unwrap();
+            if !value.is_object() {
+                return Err(anyhow!(
+                    "Uncaught TypeError: Incorrect type for map entry '{}': the \
+                         provided value is not of type 'function or ExportedHandler'.",
+                    name.to_rust_string_lossy(scope)
+                ));
+            }
+        }
+
+        // register each exported DO class into the harness registry
+        for cn in do_classes {
+            // The D1 class is the runtime's own and is never a worker
+            // export. It is in `do_classes` so that it gets a namespace
+            // key; reading it off the module namespace would find
+            // `undefined` and overwrite the harness's registration.
+            if crate::deploy::is_reserved_class(cn) {
+                continue;
+            }
+            let key = v8::String::new(scope, cn).unwrap();
+            let cls = ns
+                .get(scope, key.into())
+                .filter(|value| value.is_function())
+                .ok_or_else(|| unexported_class_error(cn))?;
+            register_class(scope, cn, cls)?;
+        }
+        inject_namespace_keys(scope, script_name, do_classes)?;
+        inject_crons(scope, &config.crons)?;
+        inject_workflows(scope, script_name, &config.workflow_bindings)?;
+        inject_containers(scope, &config.containers)?;
+        inject_kv_limits(scope)?;
+        inject_queue_config(scope, config)?;
+        populate_cf_exports(scope, ns, do_classes)?;
+        register_entrypoints(scope, ns)?;
+        validate_workflow_classes(scope, ns, &config.workflow_bindings)?;
+        // build env from bindings and stash it in the harness
+        build_env(scope, config)?;
+        // tell the harness which cells are local (route the rest cross-node)
+        inject_routing(scope, node)?;
+
+        // entry fetch. A loaded Worker often exists for its Durable
+        // Object class alone, and workerd loads such a module without a
+        // default export, so one reads as an empty object here. A
+        // deployment's own script keeps the refusal: a bundle that lost
+        // its handler must fail adoption, so the serving generation stays
+        // up instead of answering 500 to every request.
+        let loaded = config.origin == WorkerOrigin::Dynamic;
+        let dk = v8::String::new(scope, "default").unwrap();
+        let default_value = ns
+            .get(scope, dk.into())
+            .ok_or_else(|| anyhow!("no default export"))?;
+        let default = if default_value.is_object() {
+            default_value.to_object(scope).expect("an object")
+        } else if loaded && default_value.is_undefined() {
+            v8::Object::new(scope)
+        } else {
+            return Err(anyhow!("default not object"));
+        };
+        let fk = v8::String::new(scope, "fetch").unwrap();
+        let fetch_value = default
+            .get(scope, fk.into())
+            .ok_or_else(|| anyhow!("no fetch"))?;
+        let default_is_entrypoint =
+            default.is_function() && cell_registry_has(scope, "entrypoints", "default")?;
+        let class_fetch = default_is_entrypoint
+            && default
+                .get(scope, v8::String::new(scope, "prototype").unwrap().into())
+                .and_then(|prototype| prototype.to_object(scope))
+                .and_then(|prototype| prototype.get(scope, fk.into()))
+                .is_some_and(|handler| handler.is_function());
+        let qk = v8::String::new(scope, "queue").unwrap();
+        let own_queue = default
+            .get(scope, qk.into())
+            .is_some_and(|handler| handler.is_function());
+        let class_queue = default_is_entrypoint
+            && default
+                .get(scope, v8::String::new(scope, "prototype").unwrap().into())
+                .and_then(|prototype| prototype.to_object(scope))
+                .and_then(|prototype| prototype.get(scope, qk.into()))
+                .is_some_and(|handler| handler.is_function());
+        let has_queue_handler = own_queue || class_queue;
+        anyhow::ensure!(
+            !config.declares_queue_consumer || has_queue_handler,
+            "queue consumer has no queue handler"
+        );
+        let f: v8::Local<v8::Function> = if fetch_value.is_function() {
+            fetch_value.try_into().expect("function casts to Function")
+        } else if default_is_entrypoint && class_fetch {
+            // A class-based default entrypoint (extends WorkerEntrypoint)
+            // keeps fetch on the prototype, so route through the
+            // harness's invocation instance like a named entrypoint. Only a
+            // registered entrypoint dispatches that way — any other
+            // callable would load fine and then 500 on every request.
+            compile_fn(
+                scope,
+                "(req) => __celld.__dispatchEntrypointFetch('default', req)",
+            )?
+        } else if default.is_function() && cell_registry_has(scope, "doExports", "default")? {
+            return Err(anyhow!(
+                "the default export is a Durable Object class; export a fetch \
+                     handler or a WorkerEntrypoint class as the default"
+            ));
+        } else if config.declares_queue_consumer {
+            // A push-consumer Worker needs no HTTP handler. Keep the
+            // stateless pool's fetch slot total, but fail closed if this
+            // deployment becomes the fleet's HTTP entry point. Test the
+            // prototype above before the entrypoint fallback below: a
+            // queue-only class is still a registered entrypoint, but
+            // routing fetch through it throws instead of returning 404.
+            compile_fn(scope, "() => new Response('Not found', { status: 404 })")?
+        } else if default_is_entrypoint {
+            // Preserve an RPC-only default entrypoint. Its HTTP path
+            // reports the harness's specific missing-fetch error, while
+            // its named methods remain callable through RPC.
+            compile_fn(
+                scope,
+                "(req) => __celld.__dispatchEntrypointFetch('default', req)",
+            )?
+        } else if loaded {
+            compile_fn(scope, NO_FETCH_HANDLER)?
+        } else {
+            return Err(anyhow!("fetch not fn"));
+        };
+
+        // Lets a self-targeted service binding invoke the handler in
+        // this isolate instead of crossing to a pool thread.
+        {
+            if let Ok(cell) = cell_state(scope) {
+                let key = v8::String::new(scope, "selfFetch").unwrap();
+                cell.set(scope, key.into(), f.into());
+                // Optional scheduled handler, reached by a self-targeted
+                // service binding's scheduled().
+                let sk = v8::String::new(scope, "scheduled").unwrap();
+                let key_ = v8::String::new(scope, "selfScheduled").unwrap();
+                let own = default
+                    .get(scope, sk.into())
+                    .filter(|handler| handler.is_function());
+                if let Some(handler) = own {
+                    cell.set(scope, key_.into(), handler);
+                } else if default_is_entrypoint {
+                    // A class-based default entrypoint keeps scheduled on
+                    // the prototype; dispatch through an invocation instance
+                    // like fetch above.
+                    let pk = v8::String::new(scope, "prototype").unwrap();
+                    let proto_scheduled = default
+                        .get(scope, pk.into())
+                        .and_then(|proto| proto.to_object(scope))
+                        .and_then(|proto| proto.get(scope, sk.into()));
+                    if proto_scheduled.is_some_and(|handler| handler.is_function()) {
+                        let shim = compile_fn(
+                                scope,
+                                "(ctrl, env, ctx) => __celld.__dispatchEntrypointScheduled('default', ctrl, ctx.props)",
+                            )?;
+                        cell.set(scope, key_.into(), shim.into());
+                    }
+                }
+            }
+        }
+        Ok((v8::Global::new(scope, context), v8::Global::new(scope, f)))
     }
 
     /// Restore an idFromName() actor's human-readable identity before its

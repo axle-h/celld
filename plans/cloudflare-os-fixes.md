@@ -363,8 +363,10 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 23 | 1.14 transactions on root storage; reset semantics | done | see log |
 | 24 | fix the workerd-side flake in `streams/byob-request-body` | done | `ed11b98` |
 | 25 | 1.15 `process.env` and `node:process` | done | see log |
-| 26 | 1.31 isolate heap limit during module load (security) | next | |
-| 27+ | Phase 1 in plan order (1.16-1.30), and the 1.4 props key-order follow-up | queued | |
+| 26 | 1.31 isolate limits during module load (security) | done | see log |
+| 27 | 1.32 heap limit at request time (security) | next | |
+| 28 | 1.33 ArrayBuffer/Wasm memory limits (security) | queued | |
+| 29+ | Phase 1 in plan order (1.16-1.34), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -2071,6 +2073,65 @@ as at request time. Check what workerd does on startup and match its error.
 
 **Tests.** A celld-only case: a Dynamic Worker that allocates past the limit at
 module scope is refused with a clear error, and the node stays healthy.
+
+**As built (done).**
+- Every isolate load (deployed, DO cell, Dynamic Worker, and pools growing
+  later) runs under the heap limit and a 1 s startup CPU budget, measured as
+  thread CPU.
+- At the heap limit the load is terminated. The extension while loading
+  covers V8's largest single object (1 GiB), so one huge allocation finishes
+  and then the load stops, rather than aborting the node. Peak RSS can
+  briefly reach a few GB (measured 2.2 GB for a 1 GB array).
+- Errors use Cloudflare's text: "Script startup exceeded memory limits." and
+  "Script startup exceeded CPU time limit."
+- Cases: `loader/startup-memory` and `loader/startup-cpu`. Cloudflare OS's
+  largest load measured 137 ms CPU and 35 MB heap.
+
+### 1.32 Heap limit at request time (found by 1.31) — security, next
+
+**Problem.** `near_heap_limit` only flags the isolate and raises the limit
+(max(current+16 MiB, 2×limit)), so nothing ever terminates JS at request
+time. A Dynamic Worker whose `fetch` allocates about 1.4 GB crashes the whole
+node ("Fatal JavaScript out of memory: Reached heap limit", SIGTRAP). That
+takes down every Worker on the node.
+
+**Design.** On the callback, terminate the running event with workerd's text
+"Worker has exceeded memory limit." (`io-context.h`) and condemn the isolate,
+so no further event runs in it. Its in-flight events fail and the next event
+gets a fresh isolate. Reconcile this with the README's documented soft-limit
+design for DO cells: a DO condemned this way resets, as on Cloudflare.
+
+**Tests.** celld-only cases: a Dynamic Worker and a stateless Worker that
+allocate past the limit in a request get the error; the node keeps serving
+other Workers; and a DO that exceeds the limit resets.
+
+### 1.33 ArrayBuffer and Wasm memory outside every limit (found by 1.31) — security
+
+**Problem.** Backing stores (ArrayBuffer, typed arrays, Wasm memory) aren't
+counted by the heap limit. 40 × 64 MiB `Uint8Array`s at module scope loaded
+at 2.6 GB RSS, and the same works at request time. Cloudflare's 128 MB
+includes this memory.
+
+**Design.** A per-isolate counting array-buffer allocator
+(`v8::new_rust_allocator`) that refuses past the isolate's limit, together
+with 1.32's termination.
+
+**Tests.** Module-scope and request-time cases that exceed the limit with
+backing stores are refused, and the node stays healthy.
+
+### 1.34 Isolate limit follow-ups (found by 1.31)
+
+- Deployed Workers and DOs have no per-request CPU limit (only Dynamic
+  Workers with `cpuMs`).
+- A failed Loader load holds its registry slot until GC finalises the stub.
+- Check: `ns.get(...).unwrap()` in `load_realm` may panic if a module
+  namespace binding is still in its TDZ while top-level await is pending.
+- When 1.18 adds the "Failed to start Worker:" prefix, decide whether the two
+  startup-limit errors get it too.
+- A DO caller sees "route failed: RuntimeFailed" for any startup failure of
+  the callee's cell isolate, because `RequestError::RuntimeFailed` carries no
+  text. Carry a startup-failure kind and message through
+  `Event::RuntimeStarted`, `RequestError`, the shell and peer errors.
 
 ### Phase 1 gate
 

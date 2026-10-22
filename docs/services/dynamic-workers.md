@@ -54,6 +54,13 @@ Worker, not at `get()`.
 - When both `WorkerCode.limits` and `getEntrypoint()` set a limit, celld uses
   the lower value.
 
+The load must stay within the isolate's heap limit and 1 second of CPU time,
+as a deployed Worker's must (see [Limitations](../limitations.md#isolate-limits)).
+A load past either one fails, and the first call through the Worker rejects
+with `Script startup exceeded memory limits.` or `Script startup exceeded CPU
+time limit.`. Copying an `env` into `process.env` is part of the load, so it
+counts too.
+
 ## The isolation boundary
 
 The loaded isolate has its own context and heap, but it runs in the process of
@@ -126,7 +133,8 @@ compiles the code again.
 - Tail delivery starts after the response is available. A Tail Worker failure
   does not change the response, and celld writes the failure to the console.
 - celld enforces `cpuMs` and `subRequests` in `WorkerCode.limits` and in a
-  `getEntrypoint()` call. It rejects `allowExperimental`.
+  `getEntrypoint()` call. It rejects `allowExperimental`. `cpuMs` applies to
+  each invocation, not to the load, which has its own limit of 1 second.
 - `WorkerCode.env` accepts structured-clone values and Service Binding
   capabilities. The encoded values and the capability props can total 1 MiB.
 - A loaded Worker entrypoint cannot transfer to another Worker. Awaitable and

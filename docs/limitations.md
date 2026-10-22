@@ -43,6 +43,36 @@ APIs, and Wrangler configuration.
   Worker entrypoints and Durable Object calls only within one node. A Durable
   Object on another node cannot return one.
 
+## Isolate limits
+
+- A Worker must load within the V8 heap limit of its isolate
+  (`CELLD_V8_HEAP_LIMIT_MB`, 128 MB by default) and within 1 second of CPU
+  time, as on Cloudflare. The load covers compiling and evaluating the modules,
+  installing the `env` and `process.env`, and reading the handlers. A load past
+  either limit fails with Cloudflare's error, `Script startup exceeded memory
+  limits.` or `Script startup exceeded CPU time limit.`, and celld discards the
+  isolate.
+- Each isolate start is a load, so the limits apply whenever a pool adds an
+  isolate under load, or a Durable Object's isolate starts, and not only at a
+  deployment. A Worker whose load is close to a limit can fail later, when a
+  pool grows. A Durable Object request whose isolate fails to start rejects
+  with `route failed: RuntimeFailed`, and the node log names the limit.
+- celld stops a load at the memory limit when the operation in progress
+  finishes: a JavaScript loop stops at once, but one builtin call, such as a
+  single allocation of up to 1 GB (V8's largest object) or a `JSON.parse()`,
+  runs to its end first. The node can therefore briefly hold a few GB more
+  than the limit; a 1 GB array at module scope peaks at about 2.2 GB of
+  resident memory.
+- After the load, the heap limit is not a hard limit. An isolate over it
+  refuses new hibernatable WebSockets and stops materializing SQL result sets,
+  but celld does not stop a request that keeps allocating. V8 then ends the
+  node's process when it cannot grow the heap further, so every Worker on the
+  node stops.
+- `ArrayBuffer` and WebAssembly memory is outside the V8 heap, and no limit
+  counts it, during the load or after it.
+- A request has a CPU limit only when a Dynamic Worker sets `cpuMs`. See
+  [Dynamic Workers](services/dynamic-workers.md#differences-from-cloudflare).
+
 ## Platforms
 
 - The installer supplies binaries for Linux x86-64, Linux ARM64, and Apple

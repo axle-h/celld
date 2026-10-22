@@ -1,0 +1,16 @@
+{
+  "kind": "celld-only",
+  "reason": "celld limits (plan 1.31): workerd run locally enforces no isolate memory limit, so a Dynamic Worker whose module scope retains past it loads there",
+  "workers": ["app"],
+  "steps": [
+    {"path": "/load?child=ok"},
+    {"path": "/load?child=arrays"},
+    {"path": "/load?child=ok"},
+    {"path": "/load?child=strings"},
+    {"path": "/load?child=process-env"},
+    {"path": "/get?child=arrays"},
+    {"path": "/load?child=one-array"},
+    {"path": "/load?child=one-string"},
+    {"path": "/load?child=ok"}
+  ]
+}

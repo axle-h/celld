@@ -1,0 +1,76 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "child": "ok",
+        "status": 200,
+        "body": "loaded"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "arrays",
+        "error": "Error",
+        "message": "Script startup exceeded memory limits."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "ok",
+        "status": 200,
+        "body": "loaded"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "strings",
+        "error": "Error",
+        "message": "Script startup exceeded memory limits."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "process-env",
+        "error": "Error",
+        "message": "Script startup exceeded memory limits."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "arrays",
+        "error": "Error",
+        "message": "Script startup exceeded memory limits."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "one-array",
+        "error": "Error",
+        "message": "Script startup exceeded memory limits."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "one-string",
+        "error": "Error",
+        "message": "Script startup exceeded memory limits."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "ok",
+        "status": 200,
+        "body": "loaded"
+      }
+    }
+  ]
+}

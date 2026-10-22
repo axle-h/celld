@@ -1,0 +1,11 @@
+{
+  "kind": "celld-only",
+  "reason": "celld limits (plan 1.31): workerd run locally enforces no startup CPU limit, so a Dynamic Worker whose module scope never returns hangs there",
+  "workers": ["app"],
+  "steps": [
+    {"path": "/load?child=module-scope"},
+    {"path": "/load?child=ok"},
+    {"path": "/load?child=handler-getter"},
+    {"path": "/load?child=ok"}
+  ]
+}

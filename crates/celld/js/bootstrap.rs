@@ -1245,8 +1245,23 @@ mod tests {
         do_classes: &[&str],
         services: Vec<crate::js::ServiceBinding>,
     ) -> Result<(), String> {
+        let config = config(src, do_classes, services);
+        std::thread::spawn(move || {
+            Worker::load_config(config)
+                .map(drop)
+                .map_err(|error| error.to_string())
+        })
+        .join()
+        .expect("load thread panicked")
+    }
+
+    fn config(
+        src: &str,
+        do_classes: &[&str],
+        services: Vec<crate::js::ServiceBinding>,
+    ) -> Arc<WorkerConfig> {
         Engine::init();
-        let config = Arc::new(
+        Arc::new(
             WorkerConfig::new(WorkerConfigOptions {
                 src: src.to_string(),
                 script_name: "test".to_string(),
@@ -1264,14 +1279,7 @@ mod tests {
                 compat: Compat::default(),
             })
             .with_services(services),
-        );
-        std::thread::spawn(move || {
-            Worker::load_config(config)
-                .map(drop)
-                .map_err(|error| error.to_string())
-        })
-        .join()
-        .expect("load thread panicked")
+        )
     }
 
     const HANDLER: &str = "export default { fetch() { return new Response(); } };\n";
@@ -1371,5 +1379,107 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    /// Module scope that retains past the heap limit fails the load, where it
+    /// used to grow the process for as long as it allocated. The isolate is
+    /// discarded, so the next load starts clean. Each module retains about
+    /// four times the default limit, so a regression loads rather than
+    /// exhausting the machine.
+    #[test]
+    fn module_scope_past_the_heap_limit_fails_the_load() {
+        let arrays = format!(
+            "const keep = []; for (let i = 0; i < 8e6; i++) keep.push([i, 1, 2]);\n{HANDLER}"
+        );
+        assert_eq!(load(&arrays, &[]), Err(STARTUP_MEMORY_EXCEEDED.to_string()));
+        // toUpperCase() copies each string flat: a repeat() result shares its
+        // parts, so it would retain a tenth as much.
+        let strings = format!(
+            "const keep = []; for (let i = 0; i < 1.2e5; i++) keep.push((\"x\".repeat(4096) + i).toUpperCase());\n{HANDLER}"
+        );
+        assert_eq!(
+            load(&strings, &[]),
+            Err(STARTUP_MEMORY_EXCEEDED.to_string())
+        );
+        assert_eq!(load(HANDLER, &[]), Ok(()));
+    }
+
+    /// The same for a Durable Object class's module, which a cell isolate
+    /// loads through the same path.
+    #[test]
+    fn a_durable_object_module_past_the_heap_limit_fails_the_load() {
+        let src = format!(
+            "const keep = []; for (let i = 0; i < 8e6; i++) keep.push([i, 1, 2]);\n\
+             {HANDLER}export class Room {{}}\n"
+        );
+        assert_eq!(
+            load(&src, &["Room"]),
+            Err(STARTUP_MEMORY_EXCEEDED.to_string())
+        );
+    }
+
+    /// One allocation larger than the limit at module scope finishes before
+    /// the termination lands, rather than aborting the process: the 1 GB
+    /// array is V8's largest object, built while the 1 GB array it converts
+    /// is still live, and the string is a 512 MB two-byte one.
+    #[test]
+    fn one_allocation_past_the_heap_limit_fails_the_load() {
+        let array = format!("globalThis.keep = new Array(1.3e8).fill(1.5);\n{HANDLER}");
+        assert_eq!(load(&array, &[]), Err(STARTUP_MEMORY_EXCEEDED.to_string()));
+        let string =
+            format!("globalThis.keep = \"\\u1234\".repeat(2 ** 28).toLowerCase();\n{HANDLER}");
+        assert_eq!(load(&string, &[]), Err(STARTUP_MEMORY_EXCEEDED.to_string()));
+    }
+
+    /// A load that succeeds ends the load's limits: allocation past the heap
+    /// limit afterwards meets the request-time behaviour, which raises the
+    /// limit and condemns the isolate rather than terminating it.
+    #[test]
+    fn a_loaded_isolate_is_not_terminated_past_the_heap_limit() {
+        let config = config(HANDLER, &[], Vec::new());
+        let (length, load_exceeded, excessively_exceeded) = std::thread::spawn(move || {
+            let worker = Worker::load_config(config).expect("the handler loads");
+            let (mut locker, _cells) = worker.lock();
+            v8::scope!(let hs, &mut *locker);
+            let realm = worker.realm(hs);
+            let scope = &mut v8::ContextScope::new(hs, realm.context);
+            // About 180 MB retained, past the 128 MiB default.
+            let source = "globalThis.keep = []; \
+                          for (let i = 0; i < 3e6; i++) keep.push([i, 1, 2]); \
+                          keep.length";
+            let source = v8::String::new(scope, source).unwrap();
+            let length = v8::Script::compile(scope, source, None)
+                .and_then(|script| script.run(scope))
+                .map(|value| value.to_rust_string_lossy(scope));
+            let state = scope.get_slot::<Arc<HeapLimitState>>().unwrap().clone();
+            (
+                length,
+                state.load_exceeded.load(Ordering::Relaxed),
+                state.excessively_exceeded.load(Ordering::Relaxed),
+            )
+        })
+        .join()
+        .expect("the request thread panicked");
+        assert_eq!(length.as_deref(), Some("3000000"));
+        assert!(!load_exceeded);
+        assert!(
+            excessively_exceeded,
+            "the allocation never reached the limit"
+        );
+    }
+
+    /// Module scope that never returns, or a handler lookup that never does,
+    /// fails the load after the startup CPU limit instead of holding its
+    /// thread for good.
+    #[test]
+    fn a_load_past_the_startup_cpu_limit_fails() {
+        let module_scope = format!("while (true) {{}}\n{HANDLER}");
+        assert_eq!(
+            load(&module_scope, &[]),
+            Err(STARTUP_CPU_EXCEEDED.to_string())
+        );
+        let getter = "export default { get fetch() { while (true) {} } };\n";
+        assert_eq!(load(getter, &[]), Err(STARTUP_CPU_EXCEEDED.to_string()));
+        assert_eq!(load(HANDLER, &[]), Ok(()));
     }
 }
