@@ -28,10 +28,14 @@ for (const [signal, number] of [["SIGHUP", 1], ["SIGINT", 2], ["SIGTERM", 15]]) 
  * Starts the case's workers from `dir` (a temp copy of the case) and returns a
  * session for runSteps. `logs()` returns the supervisor's stderr so far. With
  * `observability`, celld exports telemetry to a receiver the session owns.
- * The public listener takes `publicPort`, or a free port when it is 0.
+ * The public listener takes `publicPort`, or a free port when it is 0, and
+ * the operator listener `internalPort`, or a free port at each start.
  */
-export async function startCelld({ binary, esbuild, dir, workers, env, publicPort = 0, observability }) {
-  const configs = workers.flatMap((name) => ["-c", `workers/${name}/wrangler.jsonc`]);
+export async function startCelld({ binary, esbuild, dir, workers, env, publicPort = 0, internalPort, observability }) {
+  const configs = [
+    ...workers.flatMap((name) => ["-c", `workers/${name}/wrangler.jsonc`]),
+    ...(internalPort === undefined ? [] : ["--internal-port", String(internalPort)]),
+  ];
   const stderr = [];
   // Telemetry is off unless the case turns it on, and the egress allowlist
   // is empty unless the case sets one, whatever the shell has.

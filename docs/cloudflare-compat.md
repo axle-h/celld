@@ -259,8 +259,9 @@ celld provides an always-miss cache because it has no shared edge cache.
 - celld verifies a TLS server against its bundled Mozilla root store.
 - celld does not block the destination ports that Cloudflare blocks, and
   `connect()` can reach private addresses, which the
-  [egress policy](security.md#limit-worker-egress) of `fetch()` refuses. The
-  fleet network controls where a socket can go.
+  [egress policy](security.md#limit-worker-egress) of `fetch()` refuses. Only
+  the node's internal listener is refused to it. The fleet network controls
+  where a socket can go.
 
 ### BroadcastChannel
 

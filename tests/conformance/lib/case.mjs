@@ -20,10 +20,10 @@ const OTLP_KEYS = new Set(["spans"]);
 // The runner owns telemetry: "observability" turns it on for both runtimes.
 const RUNNER_ENV = /^(CELLD_OTEL|OTEL_)/;
 // Ports the runner picks for a run, which `env` values and step paths name as
-// `${NAME}`. The upstream ports need "upstream": true. The public port is
-// celld's own listener, so it needs a celld-only case.
+// `${NAME}`. The upstream ports need "upstream": true. The public and
+// internal ports are celld's own listeners, so they need a celld-only case.
 const PLACEHOLDER = /\$\{([^}]*)\}/g;
-const PLACEHOLDERS = new Set(["UPSTREAM_PORT", "UPSTREAM_PORT_2", "PUBLIC_PORT"]);
+const PLACEHOLDERS = new Set(["UPSTREAM_PORT", "UPSTREAM_PORT_2", "PUBLIC_PORT", "INTERNAL_PORT"]);
 const NORMALIZE_KEYS = new Set(["pattern", "replace", "why"]);
 
 export class CaseError extends Error {}
@@ -181,6 +181,7 @@ export function loadCase(root, id) {
     env,
     upstream,
     publicPort: placeholders.has("PUBLIC_PORT"),
+    internalPort: placeholders.has("INTERNAL_PORT"),
     observability,
     xfail: raw.xfail,
     steps,

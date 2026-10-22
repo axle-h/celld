@@ -1,0 +1,10 @@
+{
+  "kind": "celld-only",
+  "reason": "the egress policy (plan 1.9) always refuses celld's own operator listener, which workerd doesn't have",
+  "workers": ["app"],
+  "upstream": true,
+  "env": {"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${INTERNAL_PORT},127.0.0.1:${UPSTREAM_PORT}"},
+  "steps": [
+    {"path": "/run?internal=${INTERNAL_PORT}&upstream=${UPSTREAM_PORT}"}
+  ]
+}

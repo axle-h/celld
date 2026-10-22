@@ -3690,6 +3690,12 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
             unsafe_public_advertise: settings.unsafe_public_advertise,
         })
         .await?;
+    // Before any Worker runs: no Worker reaches the operator routes, whatever
+    // CELLD_FETCH_PRIVATE_ALLOW names.
+    celld::public_egress::install_node_addresses(
+        internal.listener.local_addr()?,
+        internal.advertise.clone(),
+    )?;
     let advertise = internal.advertise.to_string();
     let listen = ingress.listen.to_string();
     let listener = ingress.listener;

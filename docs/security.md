@@ -35,7 +35,9 @@ you must route the advertised address to the internal listener.
 The public listener reserves only `/.well-known/celld/health`: 200 with
 `{"ok":true}` when healthy, 503 otherwise. The Worker owns every other public
 path, including `/health`. The internal listener returns 404 for an unknown
-path, so an operator request cannot become an application request.
+path, so an operator request cannot become an application request. A Worker
+cannot reach the internal listener either: the
+[egress policy](#the-nodes-internal-listener-is-always-refused) refuses it.
 
 The internal listener has three request groups, and all three require the
 trusted private network:
@@ -123,6 +125,36 @@ CELLD_FETCH_PRIVATE_ALLOW=127.0.0.1:11434,[fd00::5]:8080,models.internal:443
 The list is node-wide: every Worker on the node, Dynamic Workers included, can
 reach every entry.
 
+### The node's internal listener is always refused
+
+No Worker reaches the node's internal listener or its advertise address, even
+when `CELLD_FETCH_PRIVATE_ALLOW` names them, because the operator routes behind
+them have no authentication. This holds for `fetch()`, `new WebSocket()` and
+`connect()` alike. The refusal reads:
+
+```text
+celld egress policy: 127.0.0.1:7000 is this node's internal listener, which no Worker can reach, even when CELLD_FETCH_PRIVATE_ALLOW names it.
+```
+
+- celld refuses the bound `--internal-listen` address on its port. For an
+  unspecified address, such as `0.0.0.0:7000`, it refuses that port on every
+  address of the host's interfaces, loopback included. It reads the
+  interfaces at each connection, and refuses the connection if it cannot
+  read them.
+- celld refuses an `--advertise` address on its port. An advertised name is
+  refused as the URL spells it, because celld does not resolve it.
+- celld logs a warning at startup for an allowlist entry that names one of
+  these addresses.
+- A NAT or a proxy that forwards another address to the internal listener is
+  outside what celld can see. Keep the internal listener off any address that
+  a Worker can reach through the allowlist.
+
+The public listener is not refused. It serves only the Workers and a health
+check, which a Worker can already reach through `ctx.exports` or a service
+binding, and a Worker on Cloudflare can fetch its own public hostname. On
+loopback or a private address, it is refused like any other address unless
+the allowlist names it.
+
 ### What the policy does not cover
 
 - Service bindings, `ctx.exports`, Durable Object stubs and a Worker Loader's
@@ -131,9 +163,10 @@ reach every entry.
 - A container's `getTcpPort()` reaches the address of that container's port,
   which the host looks up, as that IP address only. A redirect from the
   container is checked, and a name never reaches the container's address.
-- `connect()` from `cloudflare:sockets` is not restricted. It is the API for
-  databases and other services on your network, and it reaches any address the
-  node can. A Dynamic Worker inherits it from its loader unless the loader sets
+- `connect()` from `cloudflare:sockets` is restricted only by the
+  [internal-listener rule](#the-nodes-internal-listener-is-always-refused). It
+  is the API for databases and other services on your network, and it reaches
+  every other address the node can. A Dynamic Worker inherits it from its loader unless the loader sets
   `globalOutbound` to `null` or a Fetcher, so give code that you do not trust a
   `globalOutbound` of `null` or a Fetcher.
 

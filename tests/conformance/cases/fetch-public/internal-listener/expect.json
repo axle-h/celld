@@ -1,0 +1,48 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": [
+        {
+          "url": "http://127.0.0.1:${UPSTREAM_PORT}/",
+          "status": 200,
+          "body": "upstream"
+        },
+        {
+          "url": "http://127.0.0.1:${INTERNAL_PORT}/state",
+          "error": "TypeError",
+          "message": "celld egress policy: 127.0.0.1:${INTERNAL_PORT} is this node's internal listener, which no Worker can reach, even when CELLD_FETCH_PRIVATE_ALLOW names it."
+        },
+        {
+          "url": "http://localhost:${INTERNAL_PORT}/state",
+          "error": "TypeError",
+          "message": "celld egress policy: localhost:${INTERNAL_PORT} is this node's internal listener, which no Worker can reach, even when CELLD_FETCH_PRIVATE_ALLOW names it."
+        },
+        {
+          "url": "http://[::ffff:127.0.0.1]:${INTERNAL_PORT}/state",
+          "error": "TypeError",
+          "message": "celld egress policy: [::ffff:7f00:1]:${INTERNAL_PORT} is this node's internal listener, which no Worker can reach, even when CELLD_FETCH_PRIVATE_ALLOW names it."
+        },
+        {
+          "url": "http://0.0.0.0:${INTERNAL_PORT}/state",
+          "error": "TypeError",
+          "message": "celld egress policy: 0.0.0.0:${INTERNAL_PORT} is this node's internal listener, which no Worker can reach, even when CELLD_FETCH_PRIVATE_ALLOW names it."
+        },
+        {
+          "url": "ws://127.0.0.1:${INTERNAL_PORT}/",
+          "events": [
+            {
+              "type": "error",
+              "message": "celld egress policy: 127.0.0.1:${INTERNAL_PORT} is this node's internal listener, which no Worker can reach, even when CELLD_FETCH_PRIVATE_ALLOW names it.",
+              "error": "TypeError"
+            },
+            {
+              "type": "close",
+              "code": 1006
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

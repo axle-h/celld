@@ -304,6 +304,7 @@ local state, so use `--clean` after removing a config.
 | `-c`, `--config PATH` | A config or project directory. Repeatable |
 | `--port PORT` | The Worker listener port. `0` picks a free port, which the node keeps across rebuilds |
 | `--host ADDR` | The Worker listener interface. The operator listener stays on loopback |
+| `--internal-port PORT` | The operator listener port on `127.0.0.1`. The default, `0`, picks a free port at each start |
 | `--logs` | Show the node warning and information logs |
 | `--clean` | Delete the primary's `.celld/dev` before the start |
 | `--watch-ignore GLOB` | Ignore one more project-relative glob. Repeatable. Not valid with `--no-watch` |

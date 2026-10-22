@@ -16,10 +16,15 @@
 //! passed. A name that resolves differently a second time (DNS rebinding)
 //! therefore cannot pass the check with one address and connect to another.
 //!
+//! The node's own internal listener and advertise address are refused to
+//! every Worker, even when the allowlist names them: they carry the operator
+//! routes, which have no authentication of their own.
+//!
 //! Service bindings, `ctx.exports`, Durable Object stubs and a container's
-//! `getTcpPort()` are bindings, not network requests, and `connect()` from
-//! `cloudflare:sockets` is the operator-network tool: none of them is checked
-//! here.
+//! `getTcpPort()` are bindings, not network requests, so nothing here checks
+//! them. `connect()` from `cloudflare:sockets` is the operator-network tool:
+//! it reaches any address, public or private, except the node's own
+//! internal listener and advertise address ([`connect_socket`]).
 
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
@@ -57,6 +62,8 @@ pub struct Refused {
 enum Reason {
     /// Not a public address, and not allowed by `CELLD_FETCH_PRIVATE_ALLOW`.
     NotPublic,
+    /// The node's internal listener or advertise address.
+    Node,
     /// A connection outside a request this module checked. No Worker request
     /// reaches this: it keeps an unchecked connection from passing silently.
     Unchecked,
@@ -71,6 +78,11 @@ impl std::fmt::Display for Refused {
                 "celld egress policy: {authority} is not a public address, so this node \
                  refuses to connect to it. A node operator can allow it by adding \
                  {authority} to CELLD_FETCH_PRIVATE_ALLOW."
+            ),
+            Reason::Node => write!(
+                formatter,
+                "celld egress policy: {authority} is this node's internal listener, which \
+                 no Worker can reach, even when CELLD_FETCH_PRIVATE_ALLOW names it."
             ),
             Reason::Unchecked => write!(
                 formatter,
@@ -267,6 +279,187 @@ fn normalized_name(host: &str) -> &str {
     host.strip_suffix('.').unwrap_or(host)
 }
 
+/// The node's internal listener and the address it advertises to peers. The
+/// operator routes behind them are unauthenticated, so no Worker may reach
+/// them, whatever the allowlist says.
+#[derive(Debug)]
+struct NodeAddresses {
+    internal: SocketAddr,
+    advertise: crate::startup::Advertise,
+}
+
+impl NodeAddresses {
+    /// Whether a connection to `ip:port`, reached through the URL host
+    /// `host`, would land on one of these addresses.
+    fn reached(&self, host: &str, ip: IpAddr, port: u16) -> bool {
+        if port == self.internal.port() && lands_on(self.internal.ip(), ip) {
+            return true;
+        }
+        match &self.advertise {
+            crate::startup::Advertise::Addr(advertise) => {
+                port == advertise.port() && lands_on(advertise.ip(), ip)
+            }
+            crate::startup::Advertise::Name { .. } => self.advertises(host, port),
+        }
+    }
+
+    /// Whether `host:port` is the advertised name. celld does not resolve
+    /// that name (each peer does), so it matches the name as the URL spells
+    /// it; an address the name leads to on this host is refused as the
+    /// internal listener's.
+    fn advertises(&self, host: &str, port: u16) -> bool {
+        match &self.advertise {
+            crate::startup::Advertise::Name {
+                host: advertised,
+                port: advertised_port,
+            } => {
+                port == *advertised_port
+                    && normalized_name(&advertised.to_ascii_lowercase()) == normalized_name(host)
+            }
+            crate::startup::Advertise::Addr(_) => false,
+        }
+    }
+}
+
+/// Whether a connection to `destination` reaches a socket bound to `bound`.
+/// A socket bound to the unspecified address takes every address of this
+/// host, and a connection to the unspecified address goes to this host.
+fn lands_on(bound: IpAddr, destination: IpAddr) -> bool {
+    let (bound, destination) = (canonical(bound), canonical(destination));
+    if bound == destination || destination.is_unspecified() {
+        return true;
+    }
+    bound.is_unspecified() && (destination.is_loopback() || is_local_address(destination))
+}
+
+/// Whether `ip` is an address of one of this host's interfaces. Read at
+/// connect time, so an address added after startup counts too. A failure to
+/// read the interfaces counts as local: the check refuses rather than guess.
+fn is_local_address(ip: IpAddr) -> bool {
+    let ip = canonical(ip);
+    match interface_addresses() {
+        Ok(addresses) => addresses
+            .into_iter()
+            .any(|address| canonical(address) == ip),
+        Err(error) => {
+            tracing::warn!(%error, "could not list the host's interface addresses");
+            true
+        }
+    }
+}
+
+/// Every IPv4 and IPv6 address of this host's interfaces, from
+/// `getifaddrs(3)`.
+#[cfg(unix)]
+fn interface_addresses() -> std::io::Result<Vec<IpAddr>> {
+    let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: on success getifaddrs points `head` at a list it allocated,
+    // which `freeifaddrs` below releases exactly once.
+    if unsafe { libc::getifaddrs(&mut head) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut addresses = Vec::new();
+    let mut cursor = head;
+    while !cursor.is_null() {
+        // SAFETY: `cursor` is a node of the list, which stays allocated until
+        // `freeifaddrs`; `ifa_addr` is null or points at a sockaddr whose
+        // family field says which sockaddr type it is.
+        unsafe {
+            let entry = &*cursor;
+            if !entry.ifa_addr.is_null() {
+                match i32::from((*entry.ifa_addr).sa_family) {
+                    libc::AF_INET => {
+                        let address = &*(entry.ifa_addr as *const libc::sockaddr_in);
+                        addresses.push(IpAddr::V4(Ipv4Addr::from(u32::from_be(
+                            address.sin_addr.s_addr,
+                        ))));
+                    }
+                    libc::AF_INET6 => {
+                        let address = &*(entry.ifa_addr as *const libc::sockaddr_in6);
+                        addresses.push(IpAddr::V6(Ipv6Addr::from(address.sin6_addr.s6_addr)));
+                    }
+                    _ => {}
+                }
+            }
+            cursor = entry.ifa_next;
+        }
+    }
+    // SAFETY: `head` came from the successful getifaddrs above.
+    unsafe { libc::freeifaddrs(head) };
+    Ok(addresses)
+}
+
+#[cfg(not(unix))]
+fn interface_addresses() -> std::io::Result<Vec<IpAddr>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "listing interface addresses needs getifaddrs",
+    ))
+}
+
+static NODE: OnceLock<NodeAddresses> = OnceLock::new();
+
+/// Refuse the node's own internal listener and advertise address to every
+/// Worker. The node calls this once, with the bound listener, before it
+/// starts the runtime; a process that never serves (a CLI command, a unit
+/// test) has no such address.
+pub fn install_node_addresses(
+    internal: SocketAddr,
+    advertise: crate::startup::Advertise,
+) -> anyhow::Result<()> {
+    let node = NodeAddresses {
+        internal,
+        advertise,
+    };
+    // Validation is startup's (`env_vars::validate`); this only warns.
+    for entry in crate::env_vars::fetch_private_allow().unwrap_or_default() {
+        let named = match &entry.host {
+            AllowHost::Ip(ip) => node.reached(&ip.to_string(), *ip, entry.port),
+            AllowHost::Name(name) => node.advertises(name, entry.port),
+        };
+        if named {
+            tracing::warn!(
+                entry = %format_entry(entry),
+                "CELLD_FETCH_PRIVATE_ALLOW names this node's internal listener; no Worker can \
+                 reach it"
+            );
+        }
+    }
+    NODE.set(node)
+        .map_err(|_| anyhow::anyhow!("the node's egress addresses are already installed"))
+}
+
+fn format_entry(entry: &AllowEntry) -> String {
+    match &entry.host {
+        AllowHost::Ip(IpAddr::V6(ip)) => format!("[{ip}]:{}", entry.port),
+        AllowHost::Ip(ip) => format!("{ip}:{}", entry.port),
+        AllowHost::Name(name) => format!("{name}:{}", entry.port),
+    }
+}
+
+/// The verdict on one address: the node's own addresses first, which nothing
+/// lets past, then a binding's exempt address, then the allowlist.
+fn verdict(
+    policy: &Policy,
+    node: Option<&NodeAddresses>,
+    host: &str,
+    ip: IpAddr,
+    port: u16,
+    exempt: Option<SocketAddr>,
+) -> Result<(), Reason> {
+    if node.is_some_and(|node| node.reached(host, ip, port)) {
+        return Err(Reason::Node);
+    }
+    if exempt.is_some_and(|exempt| canonical(exempt.ip()) == canonical(ip) && exempt.port() == port)
+    {
+        return Ok(());
+    }
+    if policy.permits(host, ip, port) {
+        return Ok(());
+    }
+    Err(Reason::NotPublic)
+}
+
 /// The node's policy, from `CELLD_FETCH_PRIVATE_ALLOW`. Every celld command
 /// validates the variable at startup (`env_vars::validate`), so an invalid
 /// value never reaches a serving node; a library caller that skipped that
@@ -336,15 +529,15 @@ fn check_address(
     ip: IpAddr,
     exempt: Option<SocketAddr>,
 ) -> Result<(), Refused> {
-    if exempt.is_some_and(|exempt| {
-        canonical(exempt.ip()) == canonical(ip) && exempt.port() == destination.port
-    }) {
-        return Ok(());
-    }
-    if policy().permits(&destination.host, ip, destination.port) {
-        return Ok(());
-    }
-    Err(destination.refused(Reason::NotPublic))
+    verdict(
+        policy(),
+        NODE.get(),
+        &destination.host,
+        ip,
+        destination.port,
+        exempt,
+    )
+    .map_err(|reason| destination.refused(reason))
 }
 
 /// The addresses of `destination` the policy lets a Worker connect to, in
@@ -364,7 +557,14 @@ async fn resolve(
             |address| match check_address(destination, address.ip(), None) {
                 Ok(()) => true,
                 Err(refusal) => {
-                    refused.get_or_insert(refusal);
+                    // The node's own address is the one worth naming: no
+                    // allowlist entry would let it through.
+                    if refused
+                        .as_ref()
+                        .is_none_or(|refused: &Refused| refused.reason != Reason::Node)
+                    {
+                        refused = Some(refusal);
+                    }
                     false
                 }
             },
@@ -515,6 +715,54 @@ pub(crate) async fn connect(
                 Err(error) => ConnectError::Io(std::io::Error::other(error)),
             })?,
     };
+    connect_first(addresses, &destination.authority).await
+}
+
+/// Open a `connect()` socket from `cloudflare:sockets` to `hostname:port`.
+/// The API is the operator-network tool, so it reaches any address, public
+/// or private, except the node's internal listener and advertise address.
+/// A name is resolved here, and only its addresses that pass are dialed.
+pub(crate) async fn connect_socket(
+    hostname: &str,
+    port: u16,
+) -> Result<tokio::net::TcpStream, ConnectError> {
+    let host = hostname
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(hostname)
+        .to_ascii_lowercase();
+    let literal = host.parse::<IpAddr>().ok();
+    let authority = match literal {
+        Some(ip) => SocketAddr::new(ip, port).to_string(),
+        None => format!("{host}:{port}"),
+    };
+    let addresses: Vec<SocketAddr> = match literal {
+        Some(ip) => vec![SocketAddr::new(ip, port)],
+        None => tokio::net::lookup_host((host.as_str(), port))
+            .await
+            .map_err(ConnectError::Io)?
+            .collect(),
+    };
+    let node = NODE.get();
+    let allowed: Vec<SocketAddr> = addresses
+        .iter()
+        .copied()
+        .filter(|address| !node.is_some_and(|node| node.reached(&host, address.ip(), port)))
+        .collect();
+    if allowed.is_empty() && !addresses.is_empty() {
+        return Err(ConnectError::Refused(Refused {
+            authority,
+            reason: Reason::Node,
+        }));
+    }
+    connect_first(allowed, &authority).await
+}
+
+/// Connect to the first of `addresses` that answers, in order.
+async fn connect_first(
+    addresses: Vec<SocketAddr>,
+    authority: &str,
+) -> Result<tokio::net::TcpStream, ConnectError> {
     let mut last = None;
     for address in addresses {
         match tokio::net::TcpStream::connect(address).await {
@@ -525,7 +773,7 @@ pub(crate) async fn connect(
     Err(ConnectError::Io(last.unwrap_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!("{} resolved to no address", destination.authority),
+            format!("{authority} resolved to no address"),
         )
     })))
 }
@@ -741,6 +989,102 @@ mod tests {
             assert_eq!(refused.reason, Reason::NotPublic);
             assert_eq!(refused.authority, "localhost:9");
         });
+    }
+
+    fn node(internal: &str, advertise: crate::startup::Advertise) -> NodeAddresses {
+        NodeAddresses {
+            internal: internal.parse().unwrap(),
+            advertise,
+        }
+    }
+
+    #[test]
+    fn the_nodes_own_addresses_are_refused_even_when_allowed() {
+        use crate::startup::Advertise;
+        let policy = Policy::new(vec![
+            entry(AllowHost::Ip(ip("127.0.0.1")), 7000),
+            entry(AllowHost::Ip(ip("10.0.0.5")), 7443),
+            entry(AllowHost::Name("node-1.fleet".into()), 7443),
+            entry(AllowHost::Name("localhost".into()), 7000),
+            entry(AllowHost::Ip(ip("127.0.0.1")), 11434),
+        ]);
+        let node = node(
+            "127.0.0.1:7000",
+            Advertise::Addr("10.0.0.5:7443".parse().unwrap()),
+        );
+        let check = |host: &str, address: &str, port| {
+            verdict(&policy, Some(&node), host, ip(address), port, None)
+        };
+        // The internal listener, in every spelling that lands on it.
+        assert_eq!(check("127.0.0.1", "127.0.0.1", 7000), Err(Reason::Node));
+        assert_eq!(check("localhost", "127.0.0.1", 7000), Err(Reason::Node));
+        assert_eq!(
+            check("::ffff:7f00:1", "::ffff:127.0.0.1", 7000),
+            Err(Reason::Node)
+        );
+        assert_eq!(check("0.0.0.0", "0.0.0.0", 7000), Err(Reason::Node));
+        // The advertise address.
+        assert_eq!(check("10.0.0.5", "10.0.0.5", 7443), Err(Reason::Node));
+        // A container's exempt address cannot be one of them either.
+        let exempt = Some("127.0.0.1:7000".parse().unwrap());
+        assert_eq!(
+            verdict(
+                &policy,
+                Some(&node),
+                "127.0.0.1",
+                ip("127.0.0.1"),
+                7000,
+                exempt
+            ),
+            Err(Reason::Node)
+        );
+        // Another allowed port on the same address still passes.
+        assert_eq!(check("127.0.0.1", "127.0.0.1", 11434), Ok(()));
+        // Without the node's addresses, the allowlist alone decides.
+        assert_eq!(
+            verdict(&policy, None, "127.0.0.1", ip("127.0.0.1"), 7000, None),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn every_interface_address_is_local() {
+        let addresses = interface_addresses().unwrap();
+        assert!(addresses.contains(&ip("127.0.0.1")), "{addresses:?}");
+        for address in addresses {
+            assert!(is_local_address(address), "{address}");
+            assert!(lands_on(ip("0.0.0.0"), address), "{address}");
+        }
+        // TEST-NET-3 is never assigned to an interface.
+        assert!(!is_local_address(ip("203.0.113.7")));
+        assert!(!lands_on(ip("0.0.0.0"), ip("203.0.113.7")));
+    }
+
+    #[test]
+    fn a_wildcard_listener_is_refused_on_every_local_address() {
+        use crate::startup::Advertise;
+        let policy = Policy::new(vec![
+            entry(AllowHost::Ip(ip("127.0.0.2")), 7000),
+            entry(AllowHost::Ip(ip("::1")), 7000),
+            entry(AllowHost::Name("node-1.fleet".into()), 7000),
+        ]);
+        let node = node(
+            "0.0.0.0:7000",
+            Advertise::Name {
+                host: "Node-1.Fleet".into(),
+                port: 7000,
+            },
+        );
+        let check = |host: &str, address: &str, port| {
+            verdict(&policy, Some(&node), host, ip(address), port, None)
+        };
+        assert_eq!(check("127.0.0.2", "127.0.0.2", 7000), Err(Reason::Node));
+        assert_eq!(check("::1", "::1", 7000), Err(Reason::Node));
+        // The advertised name, however it resolves.
+        assert_eq!(check("node-1.fleet", "10.9.9.9", 7000), Err(Reason::Node));
+        assert_eq!(check("node-1.fleet.", "10.9.9.9", 7000), Err(Reason::Node));
+        // A public address that is not this host's is someone else's port.
+        assert_eq!(check("1.1.1.1", "1.1.1.1", 7000), Ok(()));
     }
 
     #[test]

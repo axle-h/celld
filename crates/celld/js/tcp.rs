@@ -163,13 +163,15 @@ pub(super) fn op_tcp_connect(
     let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Tcp);
     let async_id = asyncrt::enqueue(async move {
         await_egress_gate(gate).await?;
-        let stream = tokio::net::TcpStream::connect((request.hostname.as_str(), request.port))
+        // Any address the node can reach, except its own internal listener.
+        let stream = crate::public_egress::connect_socket(&request.hostname, request.port)
             .await
-            .map_err(|error| {
-                format!(
+            .map_err(|error| match error {
+                crate::public_egress::ConnectError::Refused(refused) => refused.to_string(),
+                crate::public_egress::ConnectError::Io(error) => format!(
                     "connection to {}:{} failed: {error}",
                     request.hostname, request.port
-                )
+                ),
             })?;
         let remote = stream.peer_addr().map(|a| a.to_string()).ok();
         let local = stream.local_addr().map(|a| a.to_string()).ok();

@@ -184,8 +184,9 @@ async function execute(runtime, testCase, tools) {
     const ports = {
       UPSTREAM_PORT: upstream?.ports[0],
       UPSTREAM_PORT_2: upstream?.ports[1],
-      // celld's own listener, for celld-only cases.
+      // celld's own listeners, for celld-only cases.
       PUBLIC_PORT: testCase.publicPort && runtime === "celld" ? await freePort() : undefined,
+      INTERNAL_PORT: testCase.internalPort && runtime === "celld" ? await freePort() : undefined,
     };
     const { env, steps, normalize } = bindPlaceholders(testCase, ports);
     session =
@@ -199,6 +200,7 @@ async function execute(runtime, testCase, tools) {
             workers: testCase.workers,
             env,
             publicPort: ports.PUBLIC_PORT,
+            internalPort: ports.INTERNAL_PORT,
             observability: testCase.observability,
           })
         : await startWorkerd({ dir, workers: testCase.workers, observability: testCase.observability });

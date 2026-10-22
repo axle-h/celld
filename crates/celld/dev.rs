@@ -98,6 +98,9 @@ impl DevState {
 #[derive(Debug)]
 struct StackOptions {
     listener: SocketAddr,
+    /// `--internal-port`: the operator listener's port on loopback, 0 for a
+    /// free one at each start.
+    internal_port: u16,
     logs: bool,
     watch: bool,
     watch_ignores: Vec<Pattern>,
@@ -513,7 +516,7 @@ impl ShutdownSignals {
 pub fn print_help() -> anyhow::Result<()> {
     crate::cli_output::Output::new(crate::cli_output::Format::Text).help(
         &format!("celld dev — run an application with persistent local storage\n\n\
-USAGE:\n  celld dev [PROJECT] [-c CONFIG]... [--host IP] [--port PORT] [--logs] [--no-watch] [--no-build] [--clean]\n\n\
+USAGE:\n  celld dev [PROJECT] [-c CONFIG]... [--host IP] [--port PORT] [--internal-port PORT] [--logs] [--no-watch] [--no-build] [--clean]\n\n\
 PROJECT and each -c CONFIG are a directory or a Wrangler config. Without\n\
 either, celld uses the current directory. Several run together, as with\n\
 wrangler dev -c. The first one named is the primary: it serves the Worker\n\
@@ -533,7 +536,7 @@ A config's build.command runs before each build, as for wrangler dev, with\n\
 its output on stderr. celld watches each config's directory, and also its\n\
 build.watch_dir (default: src) when that is outside the directory. A\n\
 rebuild that deploys what already runs keeps the node running.\n\n\
-OPTIONS:\n  -c, --config PATH      A config or project directory; repeat as needed\n  --host IP              Worker listener host (default: 127.0.0.1)\n  --port PORT            Worker listener port (default: {DEFAULT_PORT}; 0 picks a free one)\n  --clean                Delete the primary's .celld/dev before the server starts\n  --logs                 Show the node warning and information logs\n  --no-watch             Do not rebuild when a project file changes\n  --no-build             Do not run the configs' build.command\n  --watch-ignore PATTERN Ignore a project-relative glob; repeat as needed\n  -h, --help             Show this help"
+OPTIONS:\n  -c, --config PATH      A config or project directory; repeat as needed\n  --host IP              Worker listener host (default: 127.0.0.1)\n  --port PORT            Worker listener port (default: {DEFAULT_PORT}; 0 picks a free one)\n  --internal-port PORT   Operator listener port on 127.0.0.1 (default: 0, a free one)\n  --clean                Delete the primary's .celld/dev before the server starts\n  --logs                 Show the node warning and information logs\n  --no-watch             Do not rebuild when a project file changes\n  --no-build             Do not run the configs' build.command\n  --watch-ignore PATTERN Ignore a project-relative glob; repeat as needed\n  -h, --help             Show this help"
         ),
     )
 }
@@ -543,6 +546,7 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
     let mut positional = false;
     let mut host = IpAddr::V4(Ipv4Addr::LOCALHOST);
     let mut port = DEFAULT_PORT;
+    let mut internal_port = 0;
     let mut clean = false;
     let mut logs = false;
     let mut watch = true;
@@ -581,6 +585,14 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
                     .parse::<u16>()
                     .with_context(|| format!("invalid --port value {value:?}"))?;
             }
+            "--internal-port" => {
+                let value = arguments
+                    .next()
+                    .context("--internal-port requires a value")?;
+                internal_port = value
+                    .parse::<u16>()
+                    .with_context(|| format!("invalid --internal-port value {value:?}"))?;
+            }
             other if other.starts_with('-') => bail!("unknown argument for `celld dev`: {other}"),
             value if !positional => {
                 positional = true;
@@ -597,6 +609,7 @@ fn options_from_arguments(arguments: Vec<String>) -> anyhow::Result<Option<Optio
         clean,
         stack: StackOptions {
             listener: SocketAddr::new(host, port),
+            internal_port,
             logs,
             watch,
             watch_ignores,
@@ -994,6 +1007,7 @@ async fn run_stack(
     let mut running = start_node(
         state,
         options.listener,
+        options.internal_port,
         options.logs,
         project_hash,
         store,
@@ -1073,6 +1087,7 @@ async fn run_stack(
                 running = start_node(
                     state,
                     options.listener,
+                    options.internal_port,
                     options.logs,
                     project_hash,
                     store,
@@ -1101,6 +1116,7 @@ enum NodeEvent {
 async fn start_node(
     state: &Path,
     listener: SocketAddr,
+    internal_port: u16,
     logs: bool,
     project_hash: &str,
     store: &Store,
@@ -1108,6 +1124,7 @@ async fn start_node(
 ) -> anyhow::Result<RunningNode> {
     let executable = std::env::current_exe().context("locate the celld executable")?;
     let listen = listener.to_string();
+    let internal_listen = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), internal_port).to_string();
     let mut command = Command::new(executable);
     // The supervisor owns the child's complete storage and listener topology.
     // Inherited fleet settings can otherwise override that private topology or
@@ -1135,7 +1152,7 @@ async fn start_node(
             "--listen",
             &listen,
             "--internal-listen",
-            "127.0.0.1:0",
+            &internal_listen,
         ])
         .env("CELLD_INTERNAL_DEV_STORE", &store.database)
         .env("CELLD_WATCH", state.join("runtime"))
@@ -1457,6 +1474,17 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(options.stack.listener.port(), 0);
+    }
+
+    #[test]
+    fn the_internal_port_defaults_to_a_free_one() {
+        let options = options_from_arguments(arguments(&[])).unwrap().unwrap();
+        assert_eq!(options.stack.internal_port, 0);
+        let options = options_from_arguments(arguments(&["--internal-port", "7001"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(options.stack.internal_port, 7001);
+        assert!(options_from_arguments(arguments(&["--internal-port", "x"])).is_err());
     }
 
     #[test]

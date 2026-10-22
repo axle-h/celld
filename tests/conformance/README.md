@@ -94,6 +94,8 @@ nondeterministic case shows up when it is recorded. A case runs as it would unde
     own origin and has to allow it. The runner picks a free port and passes it
     as `--port`, so another process can take it first. It needs a
     `celld-only` case.
+  - `${INTERNAL_PORT}`: celld's operator listener, passed as
+    `--internal-port` in the same way. It needs a `celld-only` case.
 
   The runner writes each port back as its placeholder wherever the transcript
   has it after a `:` or a `=`, as it writes the origin as `http://origin.test`.
