@@ -1,0 +1,13 @@
+{
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/proxy-rpc-target"},
+    {"path": "/proxy-entrypoint"},
+    {"path": "/rpc-target"},
+    {"path": "/function"},
+    {"path": "/plain"},
+    {"path": "/returned"},
+    {"path": "/forward"},
+    {"path": "/entrypoint"}
+  ]
+}

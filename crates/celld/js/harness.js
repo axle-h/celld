@@ -4319,19 +4319,34 @@ const __rpcNoClone = () => {};
 // Proxy handlers participate, as in Workerd.
 const __rpcNoSuchMethod = (prop) => new TypeError(
   'The RPC receiver does not implement the method "' + prop + '".');
+// An RpcTarget's or an entrypoint instance's member, as workerd's
+// tryGetProperty() finds it: one [[Get]], never `in`, so a Proxy's `get`
+// trap answers for it and its `has` trap is not asked. An own property
+// (by [[GetOwnProperty]], which a Proxy's trap answers too) stays hidden,
+// and a read of undefined is a missing method. Object.prototype's names
+// are refused before any user code runs: workerd's stubs answer them
+// locally, but celld's stubs forward every string key.
+const __rpcClassMember = (target, prop) => {
+  if (prop in Object.prototype || Object.hasOwn(target, prop))
+    throw __rpcNoSuchMethod(prop);
+  const value = target[prop];
+  if (value === undefined) throw __rpcNoSuchMethod(prop);
+  return value;
+};
 // Bind through the intrinsic because a callable proxy can implement `.bind`
 // as a remote property. Reading that property can turn a valid named RPC
 // method into a non-function. Keep this rule shared by every RPC binding site.
 const __rpcBindMethod = (value, receiver) =>
   Reflect.apply(Function.prototype.bind, value, [receiver]);
 const __stubResolve = (target, prop) => {
+  let value;
   if (target instanceof __cf.RpcTarget) {
-    if (Object.hasOwn(target, prop) || !(prop in target) ||
-        prop in Object.prototype) throw __rpcNoSuchMethod(prop);
-  } else if (!Object.hasOwn(target, prop)) {
+    value = __rpcClassMember(target, prop);
+  } else if (Object.hasOwn(target, prop)) {
+    value = target[prop];
+  } else {
     throw __rpcNoSuchMethod(prop);
   }
-  const value = target[prop];
   // Keep celld's own stubs and pipeline nodes unwrapped because the wrapper
   // would lose their metadata.
   return typeof value === "function" && !__stubMeta.has(value) &&
@@ -4838,22 +4853,21 @@ const __foreignStub = () => new Proxy(function () {}, {
   apply: () => Promise.reject(new Error(
     "RPC stubs cannot cross isolate boundaries yet.")),
 });
-// Workerd's entrypoint method-visibility rules (worker-rpc.c++):
-// reserved lifecycle names are refused outright; only prototype
-// methods and accessors are visible -- never own instance state
-// (env/ctx live there) and never Object.prototype.
+// Workerd's entrypoint method-visibility rules (worker-rpc.c++
+// EntrypointJsRpcTarget::isReservedName): reserved names are refused
+// before the instance is read; otherwise a member is found as an
+// RpcTarget's is -- never own instance state (env/ctx live there) and
+// never Object.prototype. `scheduled` is not reserved: it is an ordinary
+// method over RPC.
 const __entrypointReserved = new Set([
-  "constructor", "fetch", "connect", "alarm", "scheduled",
+  "constructor", "fetch", "connect", "alarm",
   "webSocketMessage", "webSocketClose", "webSocketError", "dup",
 ]);
 const __entrypointResolve = (inst, prop) => {
   if (__entrypointReserved.has(prop))
     throw new TypeError("'" + prop +
       "' is a reserved method and cannot be called over RPC.");
-  if (Object.hasOwn(inst, prop) || !(prop in inst) ||
-      prop in Object.prototype)
-    throw __rpcNoSuchMethod(prop);
-  const value = inst[prop];
+  const value = __rpcClassMember(inst, prop);
   return typeof value === "function" && !__stubMeta.has(value) &&
       !(value instanceof __cf.RpcPromise) &&
       !(value instanceof __cf.RpcProperty)

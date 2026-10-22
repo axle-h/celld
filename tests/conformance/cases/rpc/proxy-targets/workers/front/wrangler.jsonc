@@ -1,0 +1,16 @@
+// Get-only Proxies as RPC receivers in this isolate, and service bindings to
+// `back`'s entrypoints whose constructors return a Proxy.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": {
+    "bindings": [{ "name": "STORE", "class_name": "Store" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Store"] }],
+  "services": [
+    { "binding": "PROXY_EP", "service": "back", "entrypoint": "ProxyEntrypoint" },
+    { "binding": "PROBE", "service": "back", "entrypoint": "Probe" },
+    { "binding": "LOOPBACK", "service": "back", "entrypoint": "Loopback" }
+  ]
+}

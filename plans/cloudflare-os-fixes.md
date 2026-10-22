@@ -356,8 +356,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 16 | 1.8 BYOB readers on platform streams | done | `e8e6459` |
 | 17 | 1.9 egress policy (part A), node-address always-block (part B) | done | `36b5b0f`, `5e33fe2` |
 | 18 | 1.27 container ownership (security) | done | `f55c069` |
-| 19 | 1.10 small built-in fixes | done | see log |
-| 20+ | Phase 1 in plan order (1.11-1.26), and the 1.4 props key-order follow-up | queued | |
+| 19 | 1.10 small built-in fixes | done | `c7295a0` |
+| 20 | 1.11 method lookup on get-only Proxies | done | see log |
+| 21+ | Phase 1 in plan order (1.12-1.28), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -1500,6 +1501,20 @@ This is a same-isolate bug, independent of Phase 3.
 **Design.** Fall back to `target[prop] !== undefined`, keeping workerd's
 visibility rules for reserved names and own properties.
 
+**As built (done).** workerd's `tryGetProperty` rule, applied by hand in
+`__rpcClassMember`, used by `__stubResolve` and `__entrypointResolve`:
+- reserved names are refused first; `scheduled` is no longer reserved,
+  matching workerd;
+- own properties are refused, which a Proxy's `getOwnPropertyDescriptor`
+  answers;
+- exactly one `[[Get]]`, never `in`, and `undefined` means "does not
+  implement";
+- `Object.prototype` names are refused before user code, because celld's
+  stubs forward them where workerd's answer locally.
+
+Neither fork variant matched workerd: patcon's ran `has` and `get`, and
+royalcala's exposed own properties. Case `rpc/proxy-targets`.
+
 **Prior art.** Adopt royalcala `ffd1011` (RpcTarget) and `da57cca` (entrypoint
 instance), from patcon. royalcala `2bd84cd` has a different variant. Choose
 the one the differential case supports.
@@ -1636,7 +1651,8 @@ showed.
 - Already classified: `global_fetch_strictly_public` is no-op by design
   (1.9). `nodejs_als` is honoured and reported in
   `Cloudflare.compatibilityFlags` (`flags/nodejs-als`).
-- Known gap (found by 1.4): celld always exposes Fetcher `scheduled()`.
+- Known gap (found by 1.4, now reachable since 1.11 un-reserved `scheduled`):
+  celld always exposes Fetcher `scheduled()`.
   Without `service_binding_extra_handlers`, workerd treats
   `env.X.scheduled(...)` as an RPC call to a method named `scheduled`.
 - Replace the blanket sentence in the docs with the three lists.
@@ -1880,6 +1896,30 @@ tests for each op.
 - Follow-up: check the I/O type names against workerd, and the difference in
   `running` (workerd returns false without throwing when the owner never
   started its container).
+
+### 1.28 RPC method lookup everywhere else (found by 1.11)
+
+1.11 applied workerd's rule to RpcTargets and class entrypoints. These paths
+still differ from workerd:
+- **DO stubs.** `__rpcTargetMethod` uses a bare `inst[method]`:
+  - own-property methods are callable;
+  - `stub.alarm()` runs the DO's alarm, where workerd says it is reserved;
+  - a missing method says "is not a function" instead of "does not
+    implement";
+  - `await stub.version` returns a function.
+
+  Reuse the reserved set and `__rpcClassMember`, after checking which
+  internal names reach `__dispatchRpc`.
+- **Plain-object entrypoints.** `__callObjectEntrypoint` reads `handler[method]`
+  with no reserved, own-only or `Object.prototype` rule. For example,
+  `constructor(x)` calls `Object(x)`.
+- **Client side.** celld stubs send `Object.prototype` names (`toString`,
+  `constructor`) to the receiver; workerd answers them locally. Either answer
+  them locally or document the difference.
+- workerd refuses pipelining on a returned Proxy RpcTarget (it fails
+  `isInstanceOf<JsRpcTarget>`); celld probably allows it.
+- Tests to add: a prototype accessor on a plain class returning `undefined`,
+  and `constructor`/`dup` refused on a transient RpcTarget.
 
 ### Phase 1 gate
 

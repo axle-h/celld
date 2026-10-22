@@ -1,0 +1,11 @@
+// Entrypoints whose constructors return a Proxy, and the Durable Object the
+// GatekeeperLoopback-shaped one forwards to.
+{
+  "name": "back",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": {
+    "bindings": [{ "name": "SESSION", "class_name": "Session" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Session"] }]
+}

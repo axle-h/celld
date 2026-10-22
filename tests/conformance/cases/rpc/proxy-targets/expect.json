@@ -1,0 +1,184 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "result": "proxy:hello"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "result": "proxy-entrypoint:hello"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "greet": {
+          "type": "string",
+          "value": "proxy:hello"
+        },
+        "greetTraps": {
+          "own greet": 1,
+          "get greet": 1
+        },
+        "value": {
+          "type": "number",
+          "value": 7
+        },
+        "callValue": {
+          "error": "TypeError: \"version\" is not a function."
+        },
+        "missing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "missingGet": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "ghost": {
+          "error": "TypeError: The RPC receiver does not implement the method \"ghost\"."
+        },
+        "ghostGet": {
+          "error": "TypeError: The RPC receiver does not implement the method \"ghost\"."
+        },
+        "own": {
+          "error": "TypeError: The RPC receiver does not implement the method \"own\"."
+        },
+        "claimed": {
+          "error": "TypeError: The RPC receiver does not implement the method \"claimed\"."
+        },
+        "nested": {
+          "type": "string",
+          "value": "proxy:nested"
+        },
+        "plain": {
+          "error": "TypeError: The RPC receiver does not implement the method \"greet\"."
+        },
+        "then": "undefined",
+        "symbol": "undefined"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "call": {
+          "type": "string",
+          "value": "called:x"
+        },
+        "own": {
+          "type": "string",
+          "value": "extra"
+        },
+        "inherited": {
+          "error": "TypeError: The RPC receiver does not implement the method \"greet\"."
+        },
+        "name": {
+          "type": "string",
+          "value": "base"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "greet": {
+          "error": "TypeError: The RPC receiver does not implement the method \"greet\"."
+        },
+        "own": {
+          "type": "string",
+          "value": "own"
+        },
+        "claimed": {
+          "type": "string",
+          "value": "claimed"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "awaited": {
+          "type": "string",
+          "value": "proxy:awaited"
+        },
+        "missing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "target": {
+          "type": "string",
+          "value": "store:target"
+        },
+        "loopback": {
+          "type": "string",
+          "value": "store:loopback"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "greet": {
+          "type": "object",
+          "value": {
+            "greeting": "entrypoint:hello",
+            "traps": {
+              "own greet": 1,
+              "get greet": 1
+            }
+          }
+        },
+        "value": {
+          "type": "number",
+          "value": 7
+        },
+        "callValue": {
+          "error": "TypeError: \"version\" is not a function."
+        },
+        "missing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "ghost": {
+          "error": "TypeError: The RPC receiver does not implement the method \"ghost\"."
+        },
+        "own": {
+          "error": "TypeError: The RPC receiver does not implement the method \"own\"."
+        },
+        "claimed": {
+          "error": "TypeError: The RPC receiver does not implement the method \"claimed\"."
+        },
+        "prototype": {
+          "error": "TypeError: The RPC receiver does not implement the method \"prototypeMethod\"."
+        },
+        "alarm": {
+          "error": "TypeError: 'alarm' is a reserved method and cannot be called over RPC."
+        },
+        "webSocketMessage": {
+          "error": "TypeError: 'webSocketMessage' is a reserved method and cannot be called over RPC."
+        },
+        "dup": {
+          "error": "TypeError: 'dup' is a reserved method and cannot be called over RPC."
+        },
+        "scheduled": {
+          "type": "string",
+          "value": "scheduled:rpc"
+        },
+        "nested": {
+          "type": "string",
+          "value": "nested:nested"
+        },
+        "loopback": {
+          "type": "string",
+          "value": "session:service"
+        }
+      }
+    }
+  ]
+}
