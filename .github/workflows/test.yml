@@ -83,13 +83,19 @@ jobs:
       - name: Install the conformance runner
         run: pnpm --dir tests/conformance install --frozen-lockfile
 
+      # The runner has Docker, so a case that requires it must run here:
+      # CONFORMANCE_REQUIRE fails such a case instead of skipping it.
       - name: Conformance (celld against expect.json)
         if: github.event_name == 'push'
         run: node tests/conformance/run.mjs --runtime=celld
+        env:
+          CONFORMANCE_REQUIRE: docker
 
       - name: Conformance (celld and workerd)
         if: github.event_name != 'push'
         run: node tests/conformance/run.mjs --runtime=both
+        env:
+          CONFORMANCE_REQUIRE: docker
 
       # Multi-node cases (nodes > 1, with Azurite as a service container)
       # and the tests/fleet scripts join the nightly run when they land.

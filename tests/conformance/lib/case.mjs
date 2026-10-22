@@ -4,8 +4,9 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { REQUIREMENTS } from "./requirements.mjs";
 
-const CASE_KEYS = new Set(["kind", "reason", "workers", "env", "upstream", "observability", "nodes", "xfail", "steps", "normalize"]);
+const CASE_KEYS = new Set(["kind", "reason", "workers", "env", "upstream", "observability", "nodes", "xfail", "requires", "steps", "normalize"]);
 const STEP_KEYS = {
   path: new Set(["path", "method", "headers", "body", "chunked", "responseHeaders"]),
   ws: new Set(["ws", "send", "receive", "close", "protocols"]),
@@ -109,6 +110,12 @@ export function loadCase(root, id) {
     }
   }
 
+  const requires = raw.requires ?? [];
+  if (!Array.isArray(requires) || requires.some((name) => !Object.hasOwn(REQUIREMENTS, name))) {
+    fail(`"requires" must be an array of ${Object.keys(REQUIREMENTS).map((name) => `"${name}"`).join(", ")}`);
+  }
+  if (new Set(requires).size !== requires.length) fail(`"requires" names a requirement twice`);
+
   if ("xfail" in raw && !nonEmptyString(raw.xfail)) {
     fail(`"xfail" must name the plan item that fixes the case, such as "1.7"`);
   }
@@ -184,6 +191,7 @@ export function loadCase(root, id) {
     internalPort: placeholders.has("INTERNAL_PORT"),
     observability,
     xfail: raw.xfail,
+    requires,
     steps,
     deployOnly: deploys > 0,
     normalize: rules,

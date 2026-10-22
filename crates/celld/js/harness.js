@@ -845,8 +845,8 @@ const __dataUrlResponse = (url) => {
 };
 globalThis.fetch = (input, init) => __fetchNetwork(input, init);
 // Global fetch(), and the fetch() of a container's getTcpPort(), which names
-// its `[scope, port]` as `container`: the host then lets that one container
-// address past the egress policy. Nothing else can pass it.
+// its port as `container`: the host then lets that port of the running
+// object's own container past the egress policy. Nothing else can pass it.
 const __fetchNetwork = async (input, init, container) => {
   const rawUrl = typeof input === "string" ? input : input?.url;
   if (typeof rawUrl === "string" && rawUrl.startsWith("data:")) {
@@ -878,7 +878,7 @@ const __fetchNetwork = async (input, init, container) => {
       req.method, req.url, body,
       JSON.stringify(req.headers.__celldHeaderList), req.redirect,
       streamId, signal != null,
-      container === undefined ? undefined : JSON.stringify(container),
+      container,
     );
     if (signal) {
       // An abort and the response can cross, leaving a body stream nobody
@@ -959,7 +959,7 @@ const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
       // what the peer must see. Moving this to the header list needs the
       // host to append instead, so it is a separate change.
       JSON.stringify(Array.from(req.headers)),
-      container === undefined ? undefined : JSON.stringify(container),
+      container,
     );
     id = upgrade.id;
     state.id = id;
@@ -2524,36 +2524,58 @@ function __describeFailure(error) {
 // ---- Containers -----------------------------------------------------------
 // `ctx.container` for a class named in the deployment's `containers`. The
 // surface and every message follow workerd's api/container.c++; the host
-// ops perform the effects against the node's container engine, and the
-// scope names the cell the way the storage ops do.
-const __containerEnvList = (env, what) => {
+// ops perform the effects against the node's container engine. The host
+// acts on the container of the Durable Object whose event is running, never
+// on one that JavaScript names. As in workerd, a `Container`, its ports and
+// its processes are I/O objects of the object that made them: each keeps
+// that object's scope as its private owner, which the host only compares
+// with the running event's, and use during another object's event throws
+// workerd's cross-object I/O error. Their state is private, and the
+// intrinsics below are captured before any application code runs.
+const __ObjectEntries = Object.entries;
+const __ArrayIsArray = Array.isArray;
+const __NumberIsInteger = Number.isInteger;
+const __String = String;
+const __Number = Number;
+const __Uint8Array = Uint8Array;
+const __ArrayBuffer = ArrayBuffer;
+const __ArrayBufferIsView = ArrayBuffer.isView;
+const __PromiseThen = Promise.prototype.then;
+const __PromiseAll = Promise.all.bind(Promise);
+const __RegExpTest = RegExp.prototype.test;
+// Settle a host promise nobody waits on, without its `catch` a Worker could
+// have replaced.
+const __ignoreRejection = (promise) => {
+  __ReflectApply(__PromiseThen, promise, [undefined, () => {}]);
+};
+const __containerEnvList = (env) => {
   const list = [];
   if (env === undefined || env === null) return list;
-  for (const [name, value] of Object.entries(env)) {
-    const text = String(value);
+  for (const [name, value] of __ObjectEntries(env)) {
+    const text = __String(value);
     if (name.includes("="))
       throw new Error(`Environment variable names cannot contain '=': ${name}`);
     if (name.includes("\0"))
       throw new Error(`Environment variable names cannot contain '\\0': ${name}`);
     if (text.includes("\0"))
       throw new Error(`Environment variable values cannot contain '\\0': ${name}`);
-    list.push([name, text]);
+    list[list.length] = [name, text];
   }
   return list;
 };
 const __execOutputMode = (mode, kind) => {
-  const value = mode === undefined ? "pipe" : String(mode);
+  const value = mode === undefined ? "pipe" : __String(mode);
   if (value === "pipe" || value === "ignore" ||
       (kind === "stderr" && value === "combined")) return value;
   throw new TypeError(`Invalid ${kind} option: ${value}`);
 };
-const __validSignal = (signo) => Number.isInteger(signo) && signo > 0 && signo <= 64;
-const __execStream = (id, which) => new ReadableStream({
+const __validSignal = (signo) => __NumberIsInteger(signo) && signo > 0 && signo <= 64;
+const __execStream = (owner, id, which) => new ReadableStream({
   type: "bytes",
   async pull(controller) {
-    const chunk = await __container_exec_read(id, which);
+    const chunk = await __container_exec_read(owner, id, which);
     if (chunk.byteLength === 0) controller.close();
-    else controller.enqueue(new Uint8Array(chunk));
+    else controller.enqueue(new __Uint8Array(chunk));
   },
 });
 class ContainerExecOutput {
@@ -2564,63 +2586,70 @@ class ContainerExecOutput {
   }
 }
 class ContainerExecProcess {
-  constructor(id, pid, stdinMode, stdoutMode, stderrMode) {
-    this._id = id;
+  #owner;
+  #id;
+  #outputCalled = false;
+  #exitCode = null;
+  constructor(owner, id, pid, stdinMode, stdoutMode, stderrMode) {
+    this.#owner = owner;
+    this.#id = id;
     this.pid = pid;
-    this._outputCalled = false;
-    this._exitCode = null;
-    this.stdout = stdoutMode === "pipe" ? __execStream(id, 1) : null;
-    this.stderr = stderrMode === "pipe" ? __execStream(id, 2) : null;
+    this.stdout = stdoutMode === "pipe" ? __execStream(owner, id, 1) : null;
+    this.stderr = stderrMode === "pipe" ? __execStream(owner, id, 2) : null;
     this.stdin = stdinMode === "pipe"
       ? new WritableStream({
-        write: (chunk) => __container_exec_write(id, __bytesOf(chunk)),
-        close: () => __container_exec_close(id),
-        abort: () => __container_exec_close(id),
+        write: (chunk) => __container_exec_write(owner, id, __bytesOf(chunk)),
+        close: () => __container_exec_close(owner, id),
+        abort: () => __container_exec_close(owner, id),
       })
       : null;
   }
   get exitCode() {
-    if (this._exitCode === null) {
-      this._exitCode = __container_exec_wait(this._id).then(Number);
+    if (this.#exitCode === null) {
+      this.#exitCode = __ReflectApply(
+        __PromiseThen, __container_exec_wait(this.#owner, this.#id), [__Number]);
     }
-    return this._exitCode;
+    return this.#exitCode;
   }
   async output() {
-    if (this._outputCalled) throw new TypeError("output() can only be called once.");
-    this._outputCalled = true;
+    if (this.#outputCalled) throw new TypeError("output() can only be called once.");
+    this.#outputCalled = true;
     for (const [stream, name] of [[this.stdout, "stdout"], [this.stderr, "stderr"]]) {
       if (stream && stream.locked)
         throw new TypeError(`Cannot call output() after ${name} has started being consumed.`);
     }
     const all = (stream) => stream
       ? new Response(stream).arrayBuffer()
-      : Promise.resolve(new ArrayBuffer(0));
-    const [stdout, stderr] = await Promise.all([all(this.stdout), all(this.stderr)]);
+      : new __ArrayBuffer(0);
+    const [stdout, stderr] = await __PromiseAll([all(this.stdout), all(this.stderr)]);
     const exitCode = await this.exitCode;
     // Nothing else can read the process now, so the host can forget it.
-    __container_exec_drop(this._id);
+    __container_exec_drop(this.#owner, this.#id);
     return new ContainerExecOutput(stdout, stderr, exitCode);
   }
   kill(signal = 15) {
     if (!__validSignal(signal)) throw new RangeError("Invalid signal number.");
-    __container_exec_kill(this._id, signal).catch(() => {});
+    __ignoreRejection(__container_exec_kill(this.#owner, this.#id, signal));
   }
 }
 const __bytesOf = (chunk) => {
-  if (chunk instanceof Uint8Array) return chunk;
-  if (chunk instanceof ArrayBuffer) return new Uint8Array(chunk);
-  if (ArrayBuffer.isView(chunk))
-    return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+  if (chunk instanceof __Uint8Array) return chunk;
+  if (chunk instanceof __ArrayBuffer) return new __Uint8Array(chunk);
+  if (__ArrayBufferIsView(chunk))
+    return new __Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
   throw new TypeError("stdin accepts bytes");
 };
 // The Fetcher `getTcpPort()` returns: `fetch()` speaks HTTP to the port over
 // the node's route to the container, and `connect()` is the raw socket.
 class ContainerPort {
-  constructor(scope, port) {
-    this._scope = scope;
-    this._port = port;
+  #owner;
+  #port;
+  constructor(owner, port) {
+    this.#owner = owner;
+    this.#port = port;
   }
   async fetch(input, init) {
+    const port = this.#port;
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.protocol === "https:")
@@ -2630,19 +2659,19 @@ class ContainerPort {
       );
     if (url.protocol !== "http:") throw new TypeError(`Fetch API cannot load: ${url}`);
     const authority = url.host;
-    url.host = __container_address(this._scope, this._port);
+    url.host = __container_address(this.#owner, port);
     const forwarded = new Request(url.toString(), request);
     forwarded.headers.set("host", authority);
     try {
-      return await __fetchNetwork(forwarded, undefined, [this._scope, this._port]);
+      return await __fetchNetwork(forwarded, undefined, port);
     } catch (error) {
       // A refused or reset connection is the port not listening yet, which
       // the `@cloudflare/containers` start loop recognizes by this phrase
       // and retries; any other failure keeps its own message.
-      const message = error?.message ?? String(error);
-      if (/error sending request|connection|connect/i.test(message)) {
+      const message = error?.message ?? __String(error);
+      if (__ReflectApply(__RegExpTest, /error sending request|connection|connect/i, [message])) {
         throw new Error(
-          `The container is not listening on port ${this._port}: ${message}`,
+          `The container is not listening on port ${port}: ${message}`,
         );
       }
       throw error;
@@ -2655,57 +2684,59 @@ class ContainerPort {
         "unnecessary anyway, as the connection is already secure by default.",
       );
     return __celld.__cfSockets.connect(
-      __container_address(this._scope, this._port), options);
+      __container_address(this.#owner, this.#port), options);
   }
 }
 class Container {
-  constructor(scope) {
-    this._scope = scope;
-    this._destroyReason = undefined;
+  #owner;
+  // Why `destroy()` stopped the container, for the `monitor()` it ends.
+  #destroyReason = undefined;
+  constructor(owner) {
+    this.#owner = owner;
   }
   // The host's answer, not a JavaScript flag: a monitor() promise can be
   // dropped with its event, so the flag it would maintain could go stale.
-  get running() { return __container_running(this._scope); }
+  get running() { return __container_running(this.#owner); }
   start(options) {
     if (this.running)
       throw new Error("start() cannot be called on a container that is already running.");
     const o = options ?? {};
     const params = { enableInternet: !!o.enableInternet, labels: [] };
-    if (o.entrypoint !== undefined) params.entrypoint = Array.from(o.entrypoint, String);
+    if (o.entrypoint !== undefined) params.entrypoint = __ArrayFrom(o.entrypoint, __String);
     params.env = __containerEnvList(o.env);
     if (o.labels !== undefined) {
-      for (const [name, value] of Object.entries(o.labels)) {
+      for (const [name, value] of __ObjectEntries(o.labels)) {
         if (name.length === 0) throw new Error("Label names cannot be empty");
-        for (const text of [name, String(value)]) {
+        for (const text of [name, __String(value)]) {
           for (let i = 0; i < text.length; i++) {
             if (text.charCodeAt(i) < 0x20)
               throw new Error(`Label names cannot contain control characters (index ${i})`);
           }
         }
-        params.labels.push([name, String(value)]);
+        params.labels[params.labels.length] = [name, __String(value)];
       }
     }
     if (o.hardTimeout !== undefined && !(o.hardTimeout > 0))
       throw new RangeError("Hard timeout must be greater than 0");
     // Fire and forget, as on Cloudflare: a start that fails reports
     // through monitor(). The host marks the run as running at once.
-    this._destroyReason = undefined;
-    __container_start(this._scope, JSON.stringify(params)).catch(() => {});
+    this.#destroyReason = undefined;
+    __ignoreRejection(__container_start(this.#owner, __jsonStringify(params)));
   }
   async monitor() {
     if (!this.running)
       throw new Error("monitor() cannot be called on a container that is not running.");
     let raw;
     try {
-      raw = await __container_monitor(this._scope);
+      raw = await __container_monitor(this.#owner);
     } catch (error) {
-      this._destroyReason = undefined;
+      this.#destroyReason = undefined;
       throw error;
     }
-    const exitCode = Number(raw);
-    if (this._destroyReason !== undefined) {
-      const reason = this._destroyReason;
-      this._destroyReason = undefined;
+    const exitCode = __Number(raw);
+    if (this.#destroyReason !== undefined) {
+      const reason = this.#destroyReason;
+      this.#destroyReason = undefined;
       throw reason;
     }
     if (exitCode !== 0) {
@@ -2716,29 +2747,30 @@ class Container {
   }
   async destroy(error) {
     if (!this.running) return;
-    if (this._destroyReason === undefined) this._destroyReason = error;
-    await __container_destroy(this._scope);
+    if (this.#destroyReason === undefined) this.#destroyReason = error;
+    await __container_destroy(this.#owner);
   }
   signal(signo) {
     if (!__validSignal(signo)) throw new RangeError("Invalid signal number.");
     if (!this.running)
       throw new Error("signal() cannot be called on a container that is not running.");
-    __container_signal(this._scope, signo).catch(() => {});
+    __ignoreRejection(__container_signal(this.#owner, signo));
   }
   getTcpPort(port) {
-    if (!(Number.isInteger(port) && port > 0 && port < 65536))
+    if (!(__NumberIsInteger(port) && port > 0 && port < 65536))
       throw new TypeError(`Invalid port number: ${port}`);
-    return new ContainerPort(this._scope, port);
+    __container_port(this.#owner);
+    return new ContainerPort(this.#owner, port);
   }
   setInactivityTimeout(durationMs) {
     if (!(durationMs > 0))
       throw new Error(`setInactivityTimeout() requires durationMs > 0, got ${durationMs}`);
-    return __container_inactivity(this._scope, durationMs);
+    return __container_inactivity(this.#owner, durationMs);
   }
   async exec(cmd, options) {
     if (!this.running)
       throw new Error("exec() cannot be called on a container that is not running.");
-    if (!Array.isArray(cmd) || cmd.length === 0)
+    if (!__ArrayIsArray(cmd) || cmd.length === 0)
       throw new TypeError("exec() requires a non-empty command array.");
     const o = options ?? {};
     const stdoutMode = __execOutputMode(o.stdout, "stdout");
@@ -2746,9 +2778,9 @@ class Container {
     const combined = stderrMode === "combined";
     if (combined && stdoutMode !== "pipe")
       throw new TypeError('stderr: "combined" requires stdout to be "pipe".');
-    if (o.cwd !== undefined && String(o.cwd).includes("\0"))
+    if (o.cwd !== undefined && __String(o.cwd).includes("\0"))
       throw new TypeError("cwd cannot contain '\\0' characters.");
-    if (o.user !== undefined && String(o.user).includes("\0"))
+    if (o.user !== undefined && __String(o.user).includes("\0"))
       throw new TypeError("user cannot contain '\\0' characters.");
     let stdinMode = "none";
     if (o.stdin !== undefined) {
@@ -2757,34 +2789,35 @@ class Container {
       else throw new TypeError('stdin must be a ReadableStream or the string "pipe".');
     }
     const params = {
-      cmd: Array.from(cmd, String),
+      cmd: __ArrayFrom(cmd, __String),
       env: __containerEnvList(o.env),
       combined,
     };
-    if (o.cwd !== undefined) params.cwd = String(o.cwd);
-    if (o.user !== undefined) params.user = String(o.user);
-    const { id, pid } = JSON.parse(
-      await __container_exec(this._scope, JSON.stringify(params)),
-    );
+    if (o.cwd !== undefined) params.cwd = __String(o.cwd);
+    if (o.user !== undefined) params.user = __String(o.user);
+    const owner = this.#owner;
+    const started = __jsonParse(await __container_exec(owner, __jsonStringify(params)));
+    const id = __own(started, "id");
+    const pid = __own(started, "pid");
     if (stdinMode === "stream") {
       // Pump the caller's stream to the process; the pump is pending work
       // of the event, like a subrequest body.
-      (async () => {
+      __ignoreRejection((async () => {
         const reader = o.stdin.getReader();
         try {
           for (;;) {
             const { value, done } = await reader.read();
             if (done) break;
-            await __container_exec_write(id, __bytesOf(value));
+            await __container_exec_write(owner, id, __bytesOf(value));
           }
         } finally {
-          await __container_exec_close(id);
+          await __container_exec_close(owner, id);
         }
-      })().catch(() => {});
+      })());
     } else if (stdinMode === "none") {
-      __container_exec_close(id).catch(() => {});
+      __ignoreRejection(__container_exec_close(owner, id));
     }
-    return new ContainerExecProcess(id, pid, stdinMode, stdoutMode, stderrMode);
+    return new ContainerExecProcess(owner, id, pid, stdinMode, stdoutMode, stderrMode);
   }
   inspect() {
     return Promise.reject(new Error("inspect() is not implemented in celld"));

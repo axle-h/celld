@@ -20,7 +20,11 @@ and reaches it through a container port.
 
 A `containers` entry names a SQLite-backed Durable Object class of the same
 script. Each object of that class gets a `ctx.container` handle and controls at
-most one container.
+most one container. Every operation acts on the container of the object whose
+event is running, so an object reaches only its own container. As on
+Cloudflare, `ctx.container`, its ports and its processes throw the
+cross-object I/O error when another object uses them. See
+[container ownership](../security.md#container-ownership).
 
 celld implements this part of `ctx.container`:
 

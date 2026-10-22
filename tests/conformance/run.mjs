@@ -9,6 +9,7 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import { CaseError, findCases, loadCase } from "./lib/case.mjs";
 import { startCelld, startDeploySession } from "./lib/celld.mjs";
 import { bindPlaceholders, describeStep, freePort, runSteps } from "./lib/steps.mjs";
+import { mandatoryRequirements, missingRequirement } from "./lib/requirements.mjs";
 import { startUpstream } from "./lib/upstream.mjs";
 import { startWorkerd } from "./lib/workerd.mjs";
 
@@ -23,7 +24,11 @@ const USAGE = `usage: node run.mjs [--runtime=celld|workerd|both] [--update] [--
   --runtime   which runtime to run the cases on (default: both)
   --update    record expect.json from workerd for the differential cases
   --filter    run only the cases whose id (area/case) matches GLOB; repeatable
-  --profile   the cargo profile whose celld binary to run (default: lab)`;
+  --profile   the cargo profile whose celld binary to run (default: lab)
+
+  CONFORMANCE_REQUIRE=docker[,...]  fail, instead of skip, a case whose
+                                    "requires" names a requirement this
+                                    machine does not meet`;
 
 // An error in how the runner was invoked or set up: its message is the whole
 // report.
@@ -56,7 +61,13 @@ function parseOptions() {
   const runtime = values.update ? "workerd" : (values.runtime ?? "both");
   if (!["celld", "workerd", "both"].includes(runtime)) usage(`--runtime must be celld, workerd or both, not "${runtime}"`);
   if (!/^[\w-]+$/.test(values.profile)) usage(`--profile "${values.profile}" is not a cargo profile name`);
-  return { runtime, update: values.update, filters: values.filter, profile: values.profile };
+  let required;
+  try {
+    required = mandatoryRequirements();
+  } catch (error) {
+    usage(error.message);
+  }
+  return { runtime, update: values.update, filters: values.filter, profile: values.profile, required };
 }
 
 function usage(message) {
@@ -136,6 +147,14 @@ async function runCase(testCase, options, tools) {
 
   if (testCase.kind === "celld-only" && options.runtime === "workerd") {
     return { status: "SKIP", detail: `celld-only: ${testCase.reason}` };
+  }
+  for (const name of testCase.requires) {
+    const missing = missingRequirement(name);
+    if (!missing) continue;
+    if (options.required.has(name)) {
+      return { status: "FAIL", detail: `requires ${name}, which CONFORMANCE_REQUIRE makes mandatory: ${missing}` };
+    }
+    return { status: "SKIP", detail: `requires ${name}: ${missing}` };
   }
   if (testCase.kind === "differential" && options.runtime !== "celld") {
     const run = await execute("workerd", testCase, tools);

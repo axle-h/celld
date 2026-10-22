@@ -16,6 +16,7 @@ node run.mjs --runtime=workerd               # workerd against expect.json
 node run.mjs --filter 'storage/*'            # only matching case ids; repeatable
 node run.mjs --profile release               # run target/release/celld
 node run.mjs --update                        # re-record expect.json from workerd
+CONFORMANCE_REQUIRE=docker node run.mjs      # fail, not skip, a case that needs Docker when none answers
 ```
 
 `--runtime=both` runs each differential case on workerd, checks workerd
@@ -106,6 +107,15 @@ nondeterministic case shows up when it is recorded. A case runs as it would unde
   `X_LOCAL_OBSERVABILITY`, which attaches Miniflare's trace collector. So
   `tracing` spans report `isTraced: true` on both runtimes with it, and
   `false` on both without it.
+- `requires` lists what the case needs of the machine beyond the runner's
+  own dependencies. The only requirement is `"docker"`: a container engine
+  that `docker info` reaches (or the CLI that `CELLD_DOCKER` names, such as
+  `podman`), as `celld dev` uses to build a container image. The runner
+  checks each requirement once per run. A case whose requirement is missing
+  reports `SKIP` with the reason, unless the comma-separated
+  `CONFORMANCE_REQUIRE` environment variable names that requirement: then it
+  reports `FAIL`. CI sets `CONFORMANCE_REQUIRE=docker`, so a container case
+  never skips there. A case's image pins its base image by digest.
 - `normalize` rewrites matches of a regular expression in every string value
   of the transcript. It doesn't touch numbers, booleans or object keys. Use it only for values that differ from run to run, such as
   random ids or timestamps, and say why in `why`. The runner itself rewrites

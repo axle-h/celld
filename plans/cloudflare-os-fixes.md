@@ -354,8 +354,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 14b | 1.21 part 2: harness private state, target grants | done | `324563e` |
 | 15 | 0.5 integration adapter | done | starter `fb97f16` |
 | 16 | 1.8 BYOB readers on platform streams | done | `e8e6459` |
-| 17 | 1.9 egress policy (part A), node-address always-block (part B) | done | see log |
-| 18 | 1.27 container scope (security) | queued | |
+| 17 | 1.9 egress policy (part A), node-address always-block (part B) | done | `36b5b0f`, `5e33fe2` |
+| 18 | 1.27 container ownership (security) | done | see log |
 | 19+ | Phase 1 in plan order (1.10-1.26), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
@@ -1396,8 +1396,8 @@ not only ones that set the flag.
   (`64:ff9b::/96`, `64:ff9b:1::/48`) and 6to4 addresses are judged by their
   embedded IPv4. Teredo is refused.
 - `new WebSocket()` and fetch upgrades use the same checks.
-- Containers: `getTcpPort().fetch()` may reach exactly its container's
-  address, and only as a literal.
+- Containers: `getTcpPort().fetch()` may reach exactly the running object's
+  own container port, and only as a literal (1.27).
 - `CELLD_FETCH_PRIVATE_ALLOW` is validated at startup. Public IPs and
   numeric-tail names are refused as entries.
 - The node's **public** listener is not always blocked: a Worker on Cloudflare
@@ -1828,6 +1828,25 @@ never comes from JS. Keep harness state private.
 
 **Tests.** A celld-only isolation case that expects the refusal, and unit
 tests for each op.
+
+**As built (done).**
+- Every container op takes its container from the running DO event. No op
+  accepts a scope from JS.
+- Container, port and exec-process objects carry a private owner, which is
+  only ever compared. Use during another object's event throws workerd's
+  "Cannot perform I/O on behalf of a different Durable Object" error, with
+  workerd's I/O type (`Monitor`, `Client`, `OutgoingFactory`). Use outside
+  any DO event throws the cross-request variant.
+- **Also fixed:** exec process ids were a global counter, so any Worker could
+  read or kill another object's process. Ids now resolve only through the
+  running container's own process set.
+- The 1.9 `getTcpPort` exemption takes only an integer port.
+- `containers/ownership` (celld-only) needs Docker. The runner's new
+  `requires: ["docker"]` skips it locally when there's no engine, and CI sets
+  `CONFORMANCE_REQUIRE=docker` so it can never be skipped there.
+- Follow-up: check the I/O type names against workerd, and the difference in
+  `running` (workerd returns false without throwing when the owner never
+  started its container).
 
 ### Phase 1 gate
 

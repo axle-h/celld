@@ -1,0 +1,64 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": "a"
+    },
+    {
+      "status": 200,
+      "body": "b"
+    },
+    {
+      "status": 200,
+      "body": "leaked"
+    },
+    {
+      "status": 200,
+      "body": {
+        "running": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: Monitor)",
+        "port": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: OutgoingFactory)",
+        "exec": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: Monitor)"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "running": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: Monitor)",
+        "port": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: OutgoingFactory)",
+        "exec": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: Monitor)"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "running": true,
+        "port": "a",
+        "exec": 0
+      }
+    },
+    {
+      "status": 200,
+      "body": "a"
+    },
+    {
+      "status": 200,
+      "body": "a"
+    },
+    {
+      "status": 200,
+      "body": "a"
+    },
+    {
+      "status": 200,
+      "body": {
+        "running": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "running": false
+      }
+    }
+  ]
+}

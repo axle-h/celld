@@ -160,8 +160,9 @@ the allowlist names it.
 - Service bindings, `ctx.exports`, Durable Object stubs and a Worker Loader's
   `globalOutbound` Fetcher are bindings, not network requests. A Fetcher's own
   `fetch()` is checked.
-- A container's `getTcpPort()` reaches the address of that container's port,
-  which the host looks up, as that IP address only. A redirect from the
+- A container's `getTcpPort()` reaches the address of that port on the running
+  Durable Object's own container, which the host looks up, as that IP address
+  only. See [container ownership](#container-ownership). A redirect from the
   container is checked, and a name never reaches the container's address.
 - `connect()` from `cloudflare:sockets` is restricted only by the
   [internal-listener rule](#the-nodes-internal-listener-is-always-refused). It
@@ -325,3 +326,33 @@ owner, so a hibernatable socket still works after the object wakes.
   auto-response pair act on the running Durable Object, whichever object's
   `ctx` they are called on, as in workerd, and throw a `TypeError` outside a
   Durable Object event.
+
+## Container ownership
+
+A Durable Object reaches only its own container. The host takes the
+container from the Durable Object whose event is running, never from a value
+the script passes. Every event of a Durable Object is the same owner, so a
+`waitUntil()` continuation, an alarm, or a response body that is read after
+the handler answers still reaches the object's container.
+
+- **I/O objects.** As in workerd, a `Container`, the port that `getTcpPort()`
+  returns, and an `exec()` process belong to the object that made them. Used
+  during another object's event, `running` and every method throw workerd's
+  cross-object I/O error, and nothing reaches a container:
+
+  ```text
+  Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: Monitor)
+  ```
+
+  Outside any Durable Object event, they throw workerd's cross-request I/O
+  error instead. The I/O type names the workerd object the operation reaches
+  first: `Monitor` for `running`, `start()`, `monitor()`, `destroy()`,
+  `signal()` and `exec()`, `Client` for `setInactivityTimeout()`,
+  `getTcpPort()` and a process, and `OutgoingFactory` for a port's `fetch()`
+  and `connect()`. Each object keeps its owner privately, and the host only
+  compares it with the running event; it never selects a container.
+- **Process ids.** An exec process id answers only in the container that
+  started it, and is closed anywhere else.
+- **Egress.** The [egress policy](#what-the-policy-does-not-cover) lets a
+  port's `fetch()` reach only the address of that port on the running object's
+  own container.

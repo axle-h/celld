@@ -749,8 +749,9 @@ fn egress_refusal(scope: &mut v8::PinScope) -> Option<&'static str> {
 /// "websocket" } })`. Returns `{ id, ready }`, where `ready` resolves with a
 /// JSON envelope: an upgraded socket, the ordinary response a server sent
 /// instead, which the caller returns unchanged, or the egress policy's
-/// refusal. `container` is the `[scope, port]` of a container's `getTcpPort()`
-/// upgrade, whose address the host lets past the policy.
+/// refusal. `container` is the port of a container's `getTcpPort()` upgrade:
+/// the host lets that port of the running object's own container past the
+/// policy.
 pub(super) fn op_ws_upgrade(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -784,7 +785,7 @@ pub(super) fn op_ws_upgrade(
         .unwrap_or_default();
     let exempt = match super::container::port_address_arg(scope, args.get(2)) {
         Ok(exempt) => exempt,
-        Err(error) => return loader_throw(scope, &error),
+        Err(refusal) => return refusal.throw(scope),
     };
     let (id, rx) = start_dial(
         &context,
@@ -1335,17 +1336,7 @@ mod tests {
         });
     }
 
-    /// A context running an event of the Durable Object `cell`, as
-    /// `start_cell_event` leaves one.
-    fn cell_context(cell: &str) -> Arc<IoContext> {
-        let context = IoContext::new();
-        context.egress.lock().unwrap().push(EgressFrame {
-            storage: cell.to_string(),
-            before: 0,
-            root: None,
-        });
-        context
-    }
+    use super::super::cell_event_context_for_test as cell_context;
 
     /// A registered socket that `owner` owns, with the channel its frames
     /// leave by.

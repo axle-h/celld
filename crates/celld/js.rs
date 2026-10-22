@@ -859,6 +859,19 @@ fn current_cell_event(context: &IoContext) -> Option<EgressFrame> {
     context.egress.lock().unwrap().last().cloned()
 }
 
+/// A context running an event of the Durable Object `cell`, as
+/// `start_cell_event` leaves one.
+#[cfg(test)]
+fn cell_event_context_for_test(cell: &str) -> Arc<IoContext> {
+    let context = IoContext::new();
+    context.egress.lock().unwrap().push(EgressFrame {
+        storage: cell.to_string(),
+        before: 0,
+        root: None,
+    });
+    context
+}
+
 /// Return and clear the number of output-gate samples for one test cell.
 #[cfg(all(test, celld_internal_tests))]
 pub(crate) fn take_egress_gate_samples_for_test(scope: &str, channel: celld_logic::Channel) -> u64 {
@@ -6787,6 +6800,7 @@ ops! { OP_NAMES, install_op_functions,
         "__tcp_starttls" => tcp::op_tcp_starttls,
         "__container_running" => container::op_container_running,
         "__container_address" => container::op_container_address,
+        "__container_port" => container::op_container_port,
         "__container_start" => container::op_container_start,
         "__container_monitor" => container::op_container_monitor,
         "__container_destroy" => container::op_container_destroy,
@@ -9144,7 +9158,7 @@ fn op_fetch(
     // up the address the egress policy then lets this one request reach.
     let exempt = match container::port_address_arg(scope, args.get(7)) {
         Ok(exempt) => exempt,
-        Err(error) => return loader_throw(scope, &error),
+        Err(refusal) => return refusal.throw(scope),
     };
     let mut body_guard = match body.as_ref().and_then(RequestBody::stream_id) {
         Some(stream_id) => match current_context().transfer_body_stream(stream_id) {

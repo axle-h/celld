@@ -225,7 +225,7 @@ pub struct CellContainer {
     state: Mutex<CellState>,
     /// Processes `exec()` started in this container. An object drops one
     /// after `output()`; the rest go with the container.
-    processes: Mutex<Vec<u64>>,
+    processes: Mutex<std::collections::HashSet<u64>>,
     /// The exit of the current run, `None` while it runs. `Some(Err)` is
     /// an engine failure the wait could not attribute to the process.
     /// Written with `send_replace`: a plain `send` discards the value
@@ -282,6 +282,23 @@ impl CellContainer {
     /// The run `monitor()` waits on: the newest one.
     pub fn current_run(&self) -> u64 {
         self.state.lock().unwrap().run
+    }
+
+    /// Process `id`, if `exec()` started it in this container and nothing
+    /// dropped it. An id is a counter that JavaScript holds, so another
+    /// container's process answers `None`, as a closed one does.
+    pub fn process(&self, id: u64) -> Option<Arc<ExecProcess>> {
+        if !self.processes.lock().unwrap().contains(&id) {
+            return None;
+        }
+        processes().lock().unwrap().get(&id).cloned()
+    }
+
+    /// Forget process `id`, if it is one of this container's.
+    pub fn drop_process(&self, id: u64) {
+        if self.processes.lock().unwrap().remove(&id) {
+            drop_process(id);
+        }
     }
 }
 
@@ -402,6 +419,10 @@ pub async fn engine() -> anyhow::Result<Arc<ContainerEngine>> {
 
 /// The engine only if a previous call connected it.
 pub fn engine_if_ready() -> Option<Arc<ContainerEngine>> {
+    #[cfg(test)]
+    if let Some(engine) = test_support::TEST_ENGINE.with_borrow(Clone::clone) {
+        return Some(engine);
+    }
     ENGINE.get().cloned()
 }
 
@@ -795,7 +816,7 @@ impl ContainerEngine {
                     name: container_name(&self.node, scope),
                     spec,
                     state: Mutex::new(CellState::default()),
-                    processes: Mutex::new(Vec::new()),
+                    processes: Mutex::default(),
                     exit: watch::channel(None).0,
                 })
             });
@@ -1244,7 +1265,7 @@ impl ContainerEngine {
 
     async fn forget(&self, cell: &Arc<CellContainer>) {
         let _ = self.destroy(cell).await;
-        for id in cell.processes.lock().unwrap().drain(..) {
+        for id in cell.processes.lock().unwrap().drain() {
             drop_process(id);
         }
         let mut cells = self.cells.lock().unwrap();
@@ -1356,7 +1377,7 @@ impl ContainerEngine {
             .lock()
             .unwrap()
             .insert(process.id, process.clone());
-        cell.processes.lock().unwrap().push(process.id);
+        cell.processes.lock().unwrap().insert(process.id);
         Ok(process)
     }
 }
@@ -1397,11 +1418,7 @@ fn next_exec_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-pub fn process(id: u64) -> Option<Arc<ExecProcess>> {
-    processes().lock().unwrap().get(&id).cloned()
-}
-
-pub fn drop_process(id: u64) {
+fn drop_process(id: u64) {
     processes().lock().unwrap().remove(&id);
 }
 
@@ -1596,6 +1613,102 @@ fn container_name(node: &str, scope: &str) -> String {
     format!("celld-{:x}", digest)[..30].to_string()
 }
 
+/// An engine without a daemon, with cells and processes made up in place,
+/// for tests of the ops that act on a cell's container.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    thread_local! {
+        /// The engine `engine_if_ready` answers on this thread only, so a
+        /// test's made-up cells never count in another test's samples.
+        pub(super) static TEST_ENGINE: std::cell::RefCell<Option<Arc<ContainerEngine>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Install an empty engine for this thread. Nothing dials its socket.
+    pub(crate) fn install_engine() -> Arc<ContainerEngine> {
+        let engine = Arc::new(ContainerEngine {
+            runtime: None,
+            dns: Vec::new(),
+            resolv_conf: None,
+            docker: Docker::new("/nonexistent/celld-test.sock"),
+            node: "test".to_string(),
+            bucket: None,
+            images: Mutex::new(HashMap::new()),
+            cells: Mutex::new(HashMap::new()),
+            networks: tokio::sync::Mutex::new(None),
+            fenced: tokio::sync::Mutex::new(false),
+        });
+        TEST_ENGINE.with_borrow_mut(|slot| *slot = Some(engine.clone()));
+        engine
+    }
+
+    /// A cell's container, running at `ip` when one is given.
+    pub(crate) fn add_cell(
+        engine: &ContainerEngine,
+        scope: &str,
+        ip: Option<&str>,
+    ) -> Arc<CellContainer> {
+        let cell = Arc::new(CellContainer {
+            scope: scope.to_string(),
+            name: container_name(&engine.node, scope),
+            spec: Arc::new(ContainerSpec {
+                class_name: "Test".to_string(),
+                image: "celld-image:test".to_string(),
+                instance_type: None,
+                max_instances: None,
+                runtime: None,
+            }),
+            state: Mutex::new(CellState {
+                running: ip.is_some(),
+                address: ip.map_or(Address::None, |ip| Address::Ip(ip.to_string())),
+                ..CellState::default()
+            }),
+            processes: Mutex::default(),
+            exit: watch::channel(None).0,
+        });
+        engine
+            .cells
+            .lock()
+            .unwrap()
+            .insert(scope.to_string(), cell.clone());
+        cell
+    }
+
+    /// A process of `cell` whose output has ended. Answers its id.
+    pub(crate) fn add_process(cell: &CellContainer) -> u64 {
+        let process = Arc::new(ExecProcess {
+            id: next_exec_id(),
+            exec_id: "test".to_string(),
+            container: cell.name.clone(),
+            pid: 1,
+            docker: Docker::new("/nonexistent/celld-test.sock"),
+            stdin: tokio::sync::Mutex::new(None),
+            stdout: tokio::sync::Mutex::new(mpsc::channel(1).1),
+            stderr: tokio::sync::Mutex::new(mpsc::channel(1).1),
+            ended: watch::channel(true).0,
+            exit_code: tokio::sync::Mutex::new(Some(0)),
+        });
+        processes()
+            .lock()
+            .unwrap()
+            .insert(process.id, process.clone());
+        cell.processes.lock().unwrap().insert(process.id);
+        process.id
+    }
+
+    /// The idle window `setInactivityTimeout()` set on `cell`.
+    pub(crate) fn inactivity(cell: &CellContainer) -> Option<Duration> {
+        cell.state.lock().unwrap().inactivity
+    }
+
+    /// Whether process `id` is still in the node's table.
+    pub(crate) fn process_known(id: u64) -> bool {
+        processes().lock().unwrap().contains_key(&id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1603,5 +1716,21 @@ mod tests {
         assert_eq!(super::ip_port("172.17.0.2", 8080), "172.17.0.2:8080");
         assert_eq!(super::ip_port("fd00::2", 8080), "[fd00::2]:8080");
         assert!("[fd00::2]:8080".parse::<std::net::SocketAddr>().is_ok());
+    }
+
+    #[test]
+    fn a_container_answers_only_for_its_own_processes() {
+        let engine = super::test_support::install_engine();
+        let own = super::test_support::add_cell(&engine, "processes-a", Some("10.0.0.1"));
+        let other = super::test_support::add_cell(&engine, "processes-b", Some("10.0.0.2"));
+        let id = super::test_support::add_process(&own);
+        assert!(own.process(id).is_some());
+        assert!(other.process(id).is_none());
+        // Another container cannot drop it either.
+        other.drop_process(id);
+        assert!(super::test_support::process_known(id));
+        own.drop_process(id);
+        assert!(own.process(id).is_none());
+        assert!(!super::test_support::process_known(id));
     }
 }
