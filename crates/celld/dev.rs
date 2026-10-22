@@ -1534,6 +1534,8 @@ mod tests {
 
     #[test]
     fn only_the_primary_selects_the_application() {
+        // deploy_projects runs the dev builds, which a stopping test refuses.
+        let _turn = DEV_BUILD.lock().unwrap_or_else(|e| e.into_inner());
         host_runtime().block_on(only_the_primary_selects_the_application_on_the_host());
     }
 
