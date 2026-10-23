@@ -1,0 +1,442 @@
+{
+  "workerd": "1.20261001.1",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "network": {
+          "clone": {
+            "original": {
+              "status": 200,
+              "ok": true,
+              "redirected": false,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 200,
+              "ok": true,
+              "redirected": false,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "upstream",
+              "upstream"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "upstream",
+            "upstream"
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 200,
+              "ok": true,
+              "redirected": false,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "upstream",
+              "upstream",
+              "upstream"
+            ]
+          },
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "status": 200,
+              "ok": true,
+              "redirected": false,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "whole": true,
+            "cloneIsRest": true
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterCancel": {
+            "clone": {
+              "status": 200,
+              "ok": true,
+              "redirected": false,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "cancelClone": {
+            "text": "upstream",
+            "cloneUsed": true
+          },
+          "cancelOriginal": {
+            "text": "upstream",
+            "originalUsed": true
+          },
+          "headers": {
+            "set": "TypeError: Can't modify immutable headers.",
+            "original": null,
+            "clone": null
+          },
+          "arrayBuffer": [
+            8,
+            8
+          ]
+        },
+        "redirected": {
+          "clone": {
+            "original": {
+              "status": 200,
+              "ok": true,
+              "redirected": true,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/landed?from=bounce",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "application/json"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 200,
+              "ok": true,
+              "redirected": true,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/landed?from=bounce",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "application/json"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "{\"landed\":\"?from=bounce\"}",
+              "{\"landed\":\"?from=bounce\"}"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "{\"landed\":\"?from=bounce\"}",
+            "{\"landed\":\"?from=bounce\"}"
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 200,
+              "ok": true,
+              "redirected": true,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/landed?from=bounce",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "application/json"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "{\"landed\":\"?from=bounce\"}",
+              "{\"landed\":\"?from=bounce\"}",
+              "{\"landed\":\"?from=bounce\"}"
+            ]
+          },
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "status": 200,
+              "ok": true,
+              "redirected": true,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/landed?from=bounce",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "application/json"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "whole": true,
+            "cloneIsRest": true
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterCancel": {
+            "clone": {
+              "status": 200,
+              "ok": true,
+              "redirected": true,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/landed?from=bounce",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "application/json"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "cancelClone": {
+            "text": "{\"landed\":\"?from=bounce\"}",
+            "cloneUsed": true
+          },
+          "cancelOriginal": {
+            "text": "{\"landed\":\"?from=bounce\"}",
+            "originalUsed": true
+          },
+          "headers": {
+            "set": "TypeError: Can't modify immutable headers.",
+            "original": null,
+            "clone": null
+          },
+          "arrayBuffer": [
+            25,
+            25
+          ]
+        },
+        "manual": {
+          "clone": {
+            "original": {
+              "status": 302,
+              "ok": false,
+              "redirected": false,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/bounce",
+              "type": "default",
+              "headers": [
+                [
+                  "location",
+                  "/landed?from=bounce"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 302,
+              "ok": false,
+              "redirected": false,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/bounce",
+              "type": "default",
+              "headers": [
+                [
+                  "location",
+                  "/landed?from=bounce"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "bounce",
+              "bounce"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "bounce",
+            "bounce"
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 302,
+              "ok": false,
+              "redirected": false,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/bounce",
+              "type": "default",
+              "headers": [
+                [
+                  "location",
+                  "/landed?from=bounce"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "bounce",
+              "bounce",
+              "bounce"
+            ]
+          },
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "status": 302,
+              "ok": false,
+              "redirected": false,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/bounce",
+              "type": "default",
+              "headers": [
+                [
+                  "location",
+                  "/landed?from=bounce"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "whole": true,
+            "cloneIsRest": true
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterCancel": {
+            "clone": {
+              "status": 302,
+              "ok": false,
+              "redirected": false,
+              "url": "http://127.0.0.1:${UPSTREAM_PORT}/bounce",
+              "type": "default",
+              "headers": [
+                [
+                  "location",
+                  "/landed?from=bounce"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "cancelClone": {
+            "text": "bounce",
+            "cloneUsed": true
+          },
+          "cancelOriginal": {
+            "text": "bounce",
+            "originalUsed": true
+          },
+          "headers": {
+            "set": "TypeError: Can't modify immutable headers.",
+            "original": null,
+            "clone": null
+          },
+          "arrayBuffer": [
+            6,
+            6
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "network": {
+          "originalFirst": [
+            4194304,
+            4194304
+          ],
+          "cloneFirst": [
+            4194304,
+            4194304
+          ],
+          "cloneNeverRead": 4194304,
+          "together": [
+            4194304,
+            4194304
+          ],
+          "readerOnOriginal": [
+            4194304,
+            4194304
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -55,9 +55,11 @@ nondeterministic case shows up when it is recorded. A case runs as it would unde
 the stub-ownership checks the `rpc/params-dup*` cases run under different
 compatibility dates and flags, `#process-env` is
 `lib/worker/process-env.js`, the `process.env` report each
-`node/process-env` Worker gives under its own date and flags, and
+`node/process-env` Worker gives under its own date and flags,
 `#ws-close-reply` is `lib/worker/ws-close-reply.js`, the WebSocket close
-replies the `flags/websocket-*-reply` cases check under different flags.
+replies the `flags/websocket-*-reply` cases check under different flags, and
+`#clone` is `lib/worker/clone.js`, the `Response.clone()` and
+`Request.clone()` checks the `fetch/*-clone*` cases run on each source.
 
 ```json
 {
@@ -91,8 +93,8 @@ replies the `flags/websocket-*-reply` cases check under different flags.
   `/landed?from=bounce`, `/landed` answers `{"landed": <query>}`,
   `/redirect?to=<url>&status=<code>` answers that status (302 by default) to
   that URL, `/chain?n=<n>` redirects `n` times and lands, `/loop` redirects
-  to itself, `/echo` answers JSON describing the request it received, and
-  every other path answers `upstream`. A WebSocket upgrade to
+  to itself, `/echo` answers JSON describing the request it received,
+  `/big?kib=<n>` answers `n` KiB, and every other path answers `upstream`. A WebSocket upgrade to
   `/redirect?to=<url>` answers 302 to that URL, and one to `/chain?n=<n>`
   redirects `n` times and lands on `/ws/close-first`. A WebSocket upgrade to
   `/ws/close-first?id=<id>` (with optional `code` and `reason`) sends the
@@ -209,6 +211,13 @@ whose support hasn't landed yet: `nodes` greater than 1 or a step's `node`
   `{"rss": 96}` checks that the peak has grown by at most 96 MiB since. The
   transcript records the verdict, `"baseline"` or `"grew at most 96 MiB"`,
   and the growth only when it is over. The step needs `"kind": "celld-only"`.
+
+- **`cpu`**: `{"cpu": 300}` measures the CPU time all the celld node's
+  threads use in one second while the case sends nothing, and checks it is
+  at most 300 ms. `"wait": <ms>` (up to 90000) leaves the node alone that long
+  first. The transcript records the verdict, `"at most 300 ms in 1 s"`, and
+  the time only when it is over. A task that spins shows as most of a core.
+  The step needs `"kind": "celld-only"`.
 
 - **`sockets`**: counts the celld node's TCP connections to the ports the
   case opened: the upstream's, and the client ports of its raw `ws` steps.

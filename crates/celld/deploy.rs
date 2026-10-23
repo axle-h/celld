@@ -64,6 +64,7 @@ const SUPPORTED_KEYS: &[&str] = &[
     "containers",
     "no_bundle",
     "define",
+    "alias",
     "rules",
     "build",
     "secrets",
@@ -375,16 +376,18 @@ struct Project {
     python: Option<python::PythonCompat>,
 }
 
-/// The two Wrangler bundling knobs that celld forwards to esbuild.
+/// The Wrangler bundling knobs that celld forwards to esbuild.
 ///
-/// Both are pass-throughs, so celld validates their shape and leaves their
-/// meaning to esbuild. They travel together because both are build inputs and
-/// neither reaches the deployment metadata: a change to either changes the
-/// bundle bytes, and the deployment version hashes those.
+/// They travel together because all are build inputs and none reaches the
+/// deployment metadata: a change to any changes the bundle bytes, and the
+/// deployment version hashes those.
 struct BundleConfig {
     /// `define` as `--define:KEY=VALUE`. Each value is a JavaScript
     /// expression, which is what Wrangler and esbuild both take.
     define: BTreeMap<String, String>,
+    /// `alias` as `--alias:KEY=FILE`, each target resolved as Wrangler
+    /// resolves it (`read_alias`).
+    alias: BTreeMap<String, PathBuf>,
     /// `rules` as `--loader:.EXT=LOADER`, plus celld's own default rule.
     loaders: BTreeMap<String, Loader>,
 }
@@ -626,7 +629,7 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
     } else {
         BuildCommand::Deploy
     };
-    let mut project = read_project(&config_path, &root, &options.vars, build)?;
+    let mut project = read_project(&config_path, &root, &options.vars, build, options.dev)?;
     // Resolve every image before the version is computed: the id is part of
     // the deployment's identity, so a rebuilt image is a new deployment.
     // A fleet deploy builds for the platform the nodes run, which Wrangler
@@ -1437,11 +1440,14 @@ fn check_compatibility(object: &Map<String, Value>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `dev` reads the config as `wrangler dev` does where it differs from a
+/// deploy: a KV binding's `preview_id`.
 fn read_project(
     path: &Path,
     root: &Path,
     overrides: &VarOverrides,
     build_command: BuildCommand,
+    dev: bool,
 ) -> anyhow::Result<Project> {
     let (config, source) = read_config(path)?;
     let object = &config;
@@ -1534,13 +1540,13 @@ fn read_project(
             python::python_compat(object)
         })
         .transpose()?;
-    let bundle = read_bundle_config(object)?;
-    // `define` and `rules` describe the esbuild run, and `no_bundle` is the
-    // absence of one. Accepting both would produce a deployment that silently
-    // omits every substitution the config asks for, which is the failure the
-    // caller wrote those keys to prevent.
+    let bundle = read_bundle_config(object, root)?;
+    // `define`, `alias` and `rules` describe the esbuild run, and `no_bundle`
+    // is the absence of one. Accepting both would produce a deployment that
+    // silently omits every substitution the config asks for, which is the
+    // failure the caller wrote those keys to prevent.
     if no_bundle {
-        let ignored: Vec<&str> = ["define", "rules"]
+        let ignored: Vec<&str> = ["define", "alias", "rules"]
             .into_iter()
             .filter(|key| object.contains_key(*key))
             .collect();
@@ -1703,9 +1709,8 @@ fn read_project(
     let mut kv_ids = BTreeSet::new();
     for namespace in kv_namespaces {
         // Every key celld does not model stops the deploy, per the loud-gap
-        // rule. `preview_id` is the exception and is accepted below: it selects
-        // a different namespace under `wrangler dev`, which celld does not run,
-        // so ignoring it costs a developer nothing at deploy time.
+        // rule. `preview_id` names the namespace `celld dev` binds, as
+        // `wrangler dev` does, and a deploy does not read it.
         let unsupported = namespace
             .as_object()
             .map(|object| {
@@ -1737,21 +1742,36 @@ fn read_project(
         // unportable, which is the one property the deploy story rests on. A
         // project ported from Cloudflare therefore keeps its hex id and works;
         // a project that was never there writes a readable string.
-        let id = namespace.get("id").and_then(Value::as_str).ok_or_else(|| {
-            anyhow!(
-                "kv binding {binding} has no `id`; celld uses the id as the \
-                     namespace identity, so any stable string serves"
-            )
-        })?;
-        if id.is_empty() {
+        let field = |key: &str| match namespace.get(key) {
+            None => Ok(None),
+            Some(Value::String(value)) => Ok(Some(value.as_str())),
+            Some(_) => bail!("kv binding {binding} has a `{key}` that is not a string"),
+        };
+        let (id, preview_id) = (field("id")?, field("preview_id")?);
+        // Wrangler refuses an empty `id`, and takes an empty `preview_id`,
+        // which `celld dev` then refuses as a cell name.
+        if id == Some("") {
             bail!("kv binding {binding} has an empty `id`");
         }
+        // `wrangler dev` binds the namespace `preview_id` names, else `id`'s
+        // (`convertConfigToBindings` with `usePreviewIds`), and with neither,
+        // a local namespace named after the binding (`kvNamespaceEntry`).
+        // `celld dev` does the same. A deploy binds `id`'s.
+        let (id, key) = match (dev, preview_id, id) {
+            (true, Some(preview_id), _) => (preview_id, "preview_id"),
+            (_, _, Some(id)) => (id, "id"),
+            (true, None, None) => (binding, "binding"),
+            (false, _, None) => bail!(
+                "kv binding {binding} has no `id`; celld uses the id as the \
+                 namespace identity, so any stable string serves"
+            ),
+        };
         // The id becomes a cell name and therefore a path component and an
         // object-store key, so it answers to the same charset fence every cell
         // scope does rather than to a looser one invented here.
         if !celld_logic::cell::valid_cell_scope(id) {
             bail!(
-                "kv binding {binding} has an `id` that cannot name a cell: {id:?}; \
+                "kv binding {binding}'s `{key}` cannot name a cell: {id:?}; \
                  use ASCII letters, digits, and `_ - . : $`"
             );
         }
@@ -2775,9 +2795,10 @@ pub(crate) fn build_watch_dirs(config: &Path) -> anyhow::Result<Vec<PathBuf>> {
 /// Wrangler owns the spelling of both keys, so celld reads them as written
 /// rather than inventing a celld-only escape hatch: a project keeps one
 /// config, and a later move back to Wrangler bundles the same way.
-fn read_bundle_config(object: &Map<String, Value>) -> anyhow::Result<BundleConfig> {
+fn read_bundle_config(object: &Map<String, Value>, root: &Path) -> anyhow::Result<BundleConfig> {
     let mut bundle = BundleConfig {
         define: BTreeMap::new(),
+        alias: read_alias(object, root)?,
         loaders: BTreeMap::new(),
     };
     match object.get("define") {
@@ -2903,6 +2924,168 @@ fn read_bundle_config(object: &Map<String, Value>) -> anyhow::Result<BundleConfi
         bundle.loaders.insert(".wasm".to_string(), Loader::Copy);
     }
     Ok(bundle)
+}
+
+/// The config's `alias`, as Wrangler 4.147.0 reads and applies it: an
+/// object of strings, each key an import path that is replaced, wherever it
+/// is imported, by the module its value names. Wrangler's esbuild plugin
+/// matches the import path exactly and resolves the value with Node's
+/// `require.resolve` from the config's directory, ahead of its
+/// `nodejs_compat` aliases, so an alias of a Node.js builtin wins. An empty
+/// value aliases nothing.
+///
+/// celld passes each to esbuild's `alias`, which wins over the builtins'
+/// `--external` in the same way. Where esbuild's alias would do something
+/// else, it fails loudly instead. esbuild takes only a package path as a key
+/// (Wrangler matches `./x` as written too), so another key is refused. A
+/// target is resolved here to its file, as Node resolves a path; a package
+/// name as the target is refused, since Node would resolve it by its
+/// `require` conditions, which esbuild does not apply. And esbuild also
+/// replaces each subpath import of a key, `pkg/sub` with a path under the
+/// target file, which does not exist, so the build fails on an import that
+/// Wrangler resolves as usual.
+fn read_alias(
+    object: &Map<String, Value>,
+    root: &Path,
+) -> anyhow::Result<BTreeMap<String, PathBuf>> {
+    let entries = match object.get("alias") {
+        None => return Ok(BTreeMap::new()),
+        Some(Value::Object(entries)) => entries,
+        // `typeof` calls both an object, which Wrangler then reads: `null`
+        // crashes it and an array's indexes become keys. celld refuses them.
+        Some(Value::Null) => bail!("`alias` must be an object, not null"),
+        Some(Value::Array(_)) => bail!("`alias` must be an object, not an array"),
+        Some(other) => bail!(
+            "Expected alias to be an object, but got {}",
+            json_type(other)
+        ),
+    };
+    // Wrangler reports every entry that is not a string before giving up.
+    let wrong: Vec<String> = entries
+        .iter()
+        .filter(|(_, value)| !value.is_string())
+        .map(|(key, value)| {
+            format!(
+                "Expected alias[\"{key}\"] to be a string, but got {}",
+                json_type(value)
+            )
+        })
+        .collect();
+    if !wrong.is_empty() {
+        bail!("{}", wrong.join("\n"));
+    }
+    let mut alias = BTreeMap::new();
+    for (key, value) in entries {
+        let value = value.as_str().expect("checked above");
+        if value.is_empty() {
+            note!("note: `alias` {key:?} has an empty target, so it aliases nothing");
+            continue;
+        }
+        // esbuild's own rule for an alias name (`validateAlias`): not
+        // relative or absolute, and already clean. Its `--alias:KEY=VALUE`
+        // argument splits at the first `=`.
+        if key.starts_with('.')
+            || key.starts_with('/')
+            || Path::new(key).is_absolute()
+            || key.contains(['=', '\\'])
+            || key.split('/').any(|part| matches!(part, "" | "." | ".."))
+        {
+            bail!(
+                "`alias` {key:?} is not a package path; celld applies `alias` with esbuild's, \
+                 which replaces only an import of a package name such as \"pkg\" or \
+                 \"@scope/pkg\". Import the module by such a name, or deploy with Wrangler"
+            );
+        }
+        alias.insert(key.clone(), resolve_alias_target(root, key, value)?);
+    }
+    Ok(alias)
+}
+
+/// What JavaScript's `typeof` says of a JSON value, as Wrangler's messages
+/// use it: `null` and an array are both `object`.
+fn json_type(value: &Value) -> &'static str {
+    match value {
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Null | Value::Array(_) | Value::Object(_) => "object",
+    }
+}
+
+/// The file an alias target names, as Node's `require.resolve` finds it
+/// from the config's directory: the path itself, then with `.js`, `.json` or
+/// `.node`, then as a directory, by its `package.json` `main` or its
+/// `index` file. The result is absolute, since esbuild resolves an alias
+/// target from its working directory.
+fn resolve_alias_target(root: &Path, key: &str, value: &str) -> anyhow::Result<PathBuf> {
+    let relative =
+        value == "." || value == ".." || value.starts_with("./") || value.starts_with("../");
+    if !relative && !Path::new(value).is_absolute() {
+        bail!(
+            "`alias` {key:?} names the package {value:?}; celld resolves an alias target only \
+             as a file path, relative to the config's directory (Wrangler resolves a package \
+             with Node's `require.resolve`). Give the file, such as \"./node_modules/{value}/<file>\""
+        );
+    }
+    let base = root.join(value);
+    let as_file = |path: &Path| -> Option<PathBuf> {
+        std::iter::once(path.to_path_buf())
+            .chain([".js", ".json", ".node"].into_iter().map(|extension| {
+                let mut with = path.as_os_str().to_owned();
+                with.push(extension);
+                PathBuf::from(with)
+            }))
+            .find(|candidate| candidate.is_file())
+    };
+    let as_index = |dir: &Path| -> Option<PathBuf> {
+        ["index.js", "index.json", "index.node"]
+            .into_iter()
+            .map(|name| dir.join(name))
+            .find(|candidate| candidate.is_file())
+    };
+    // A `package.json` that does not parse fails the resolution, as Node's
+    // ERR_INVALID_PACKAGE_CONFIG does; it does not fall back to `index`.
+    let as_directory = |dir: &Path| -> anyhow::Result<Option<PathBuf>> {
+        let package = dir.join("package.json");
+        let main = match std::fs::read(&package) {
+            Err(_) => None,
+            Ok(bytes) => {
+                let parsed: Value = serde_json::from_slice(&bytes).map_err(|error| {
+                    anyhow!(
+                        "`alias` {key:?}: invalid package config {}: {error}",
+                        package.display()
+                    )
+                })?;
+                parsed
+                    .get("main")
+                    .and_then(Value::as_str)
+                    .filter(|main| !main.is_empty())
+                    .map(str::to_string)
+            }
+        };
+        if let Some(main) = main {
+            let main = dir.join(main);
+            if let Some(found) = as_file(&main).or_else(|| as_index(&main)) {
+                return Ok(Some(found));
+            }
+        }
+        Ok(as_index(dir))
+    };
+    // A target that ends in `/` names a directory only.
+    let file = (!value.ends_with('/')).then(|| as_file(&base)).flatten();
+    let found = match file {
+        Some(file) => Some(file),
+        None => as_directory(&base)?,
+    }
+    .ok_or_else(|| {
+        anyhow!(
+            "`alias` {key:?}: cannot find module {value:?} from {}",
+            root.display()
+        )
+    })?;
+    found
+        .canonicalize()
+        .with_context(|| format!("resolve `alias` {key:?} target {}", found.display()))
 }
 
 /// The file extension a Wrangler module glob selects.
@@ -3910,6 +4093,12 @@ fn run_esbuild(root: &Path, entry: &str, config: &BundleConfig) -> anyhow::Resul
                     .iter()
                     .map(|(key, value)| format!("--define:{key}={value}")),
             )
+            .args(
+                config
+                    .alias
+                    .iter()
+                    .map(|(key, path)| format!("--alias:{key}={}", path.display())),
+            )
             .arg(format!("--outdir={}", outdir.path().display()))
             .arg("--entry-names=index")
             .output()
@@ -4046,7 +4235,7 @@ mod tests {
     }
 
     fn bundle(value: Value) -> anyhow::Result<BundleConfig> {
-        read_bundle_config(&object(value))
+        read_bundle_config(&object(value), Path::new("."))
     }
 
     fn refusal<T>(result: anyhow::Result<T>) -> String {
@@ -4193,6 +4382,82 @@ mod tests {
     }
 
     #[test]
+    fn alias_keys_follow_esbuilds_rule_for_a_package_path() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.js"), "").unwrap();
+        let read =
+            |key: &str| read_alias(&object(json!({ "alias": { key: "./a.js" } })), root.path());
+        for key in ["pkg", "pkg/sub", "@scope/pkg", "node:fs"] {
+            assert!(read(key).is_ok(), "{key}");
+        }
+        for key in [
+            "./x.js", "../x", "/x", ".x", "pkg/", "a//b", "a/./b", "a/../b", "a\\b", "a=b", "",
+        ] {
+            assert!(
+                refusal(read(key)).contains("is not a package path"),
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn alias_must_be_an_object_of_strings() {
+        let read = |alias: Value| read_alias(&object(json!({ "alias": alias })), Path::new("."));
+        assert_eq!(
+            refusal(read(json!("x"))),
+            "Expected alias to be an object, but got string"
+        );
+        assert_eq!(
+            refusal(read(json!(null))),
+            "`alias` must be an object, not null"
+        );
+        assert_eq!(
+            refusal(read(json!([]))),
+            "`alias` must be an object, not an array"
+        );
+        assert_eq!(
+            refusal(read(json!({ "a": 1, "b": "./c", "d": null }))),
+            "Expected alias[\"a\"] to be a string, but got number\n\
+             Expected alias[\"d\"] to be a string, but got object"
+        );
+        // An empty target aliases nothing, as in Wrangler.
+        assert!(read(json!({ "a": "" })).unwrap().is_empty());
+    }
+
+    #[test]
+    fn alias_targets_resolve_as_node_resolves_a_path() {
+        let root = tempfile::tempdir().unwrap();
+        let at = |path: &str| root.path().join(path);
+        std::fs::create_dir_all(at("lib/main")).unwrap();
+        std::fs::create_dir_all(at("lib/index")).unwrap();
+        for file in [
+            "lib/file.ts",
+            "lib/noext.js",
+            "lib/main/entry.js",
+            "lib/index/index.js",
+        ] {
+            std::fs::write(at(file), "").unwrap();
+        }
+        std::fs::write(at("lib/main/package.json"), r#"{ "main": "entry" }"#).unwrap();
+        let resolve = |value: &str| resolve_alias_target(root.path(), "k", value);
+        let real = |path: &str| at(path).canonicalize().unwrap();
+        assert_eq!(resolve("./lib/file.ts").unwrap(), real("lib/file.ts"));
+        assert_eq!(resolve("./lib/noext").unwrap(), real("lib/noext.js"));
+        assert_eq!(resolve("./lib/main").unwrap(), real("lib/main/entry.js"));
+        assert_eq!(resolve("./lib/index/").unwrap(), real("lib/index/index.js"));
+        assert_eq!(
+            resolve(at("lib/noext").to_str().unwrap()).unwrap(),
+            real("lib/noext.js")
+        );
+        // A package.json that does not parse fails, rather than `index.js`.
+        std::fs::write(at("lib/index/package.json"), "{ not json").unwrap();
+        assert!(refusal(resolve("./lib/index")).contains("invalid package config"));
+        // Node does not try `.ts`.
+        assert!(refusal(resolve("./lib/file")).contains("cannot find module \"./lib/file\""));
+        assert!(refusal(resolve("lib/file.ts")).contains("names the package \"lib/file.ts\""));
+    }
+
+    #[test]
     fn crons_are_parsed_at_deploy() {
         assert_eq!(
             read_crons(&object(json!({}))).unwrap(),
@@ -4268,6 +4533,7 @@ mod tests {
             root.path(),
             &VarOverrides::None,
             BuildCommand::Deploy,
+            false,
         )
     }
 
@@ -4280,7 +4546,7 @@ mod tests {
     ) -> anyhow::Result<Project> {
         let path = root.join("wrangler.jsonc");
         std::fs::write(&path, source).unwrap();
-        read_project(&path, root, overrides, build)
+        read_project(&path, root, overrides, build, false)
     }
 
     fn var_metadata(project: &Project) -> Vec<&Value> {

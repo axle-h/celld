@@ -1997,70 +1997,109 @@ fn http_chunk_stream(source: HttpStreamSource) -> HttpChunkStream {
 /// scans the other for observability or usage accounting.
 pub(crate) type HttpTeePump = Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum HttpTeeSendOutcome {
-    Sent,
-    BranchClosed,
-    SourceTerminated,
+/// Charges the bytes a tee holds for its slower branch to the isolate whose
+/// body it is, or refuses them. The guard gives them back when dropped.
+pub(crate) type HttpTeeCharge = Box<dyn Fn(usize) -> Option<Box<dyn Send + Sync>> + Send + Sync>;
+
+/// workerd's error once a tee's slower branch would hold more than the
+/// buffering limit: kj's "tee buffer size limit exceeded" as `api/util.c++`
+/// translates it. Both branches get it after what they already hold.
+pub(crate) const HTTP_TEE_BUFFER_LIMIT: &str = "ReadableStream.tee() buffer limit exceeded. \
+This error usually occurs when a Request or Response with a large body is cloned, then only \
+one of the clones is read, forcing the Workers runtime to buffer the entire body in memory. \
+To fix this issue, remove unnecessary calls to Request/Response.clone() and \
+ReadableStream.tee(), and always read clones/tees in parallel.";
+
+type HttpTeeItem = Result<Vec<u8>, String>;
+
+/// One branch of a tee: its channel, and what the channel had no room for.
+/// `sender` is `None` once the branch is done: its consumer went away, or it
+/// has everything the source gave.
+struct HttpTeeBranch {
+    sender: Option<tokio::sync::mpsc::Sender<HttpTeeItem>>,
+    held: std::collections::VecDeque<(HttpTeeItem, Option<Box<dyn Send + Sync>>)>,
 }
 
-async fn reserve_http_tee_send(
-    sender: &tokio::sync::mpsc::Sender<Result<Vec<u8>, String>>,
-    item: Result<Vec<u8>, String>,
-    termination: &HttpStreamTermination,
-) -> HttpTeeSendOutcome {
-    // Sender::send enqueues before it resolves, so a select cannot retract a
-    // value after cancellation wins. Reserve capacity first, then recheck the
-    // committed source reason before the permit makes the value visible.
-    let reservation = asyncrt::select_biased! {
-        "a capacity reservation wins a tie because termination is rechecked before the send";
-        reservation = sender.reserve() => Some(reservation),
-        _ = futures_util::future::poll_fn(|context| termination.poll_reason(context)) => None,
-    };
-    if termination.reason() != HttpStreamTerminationReason::Live {
-        return HttpTeeSendOutcome::SourceTerminated;
-    }
-    match reservation {
-        Some(Ok(permit)) => {
-            permit.send(item);
-            HttpTeeSendOutcome::Sent
+impl HttpTeeBranch {
+    /// Move held items into the channel while it has room.
+    fn flush(&mut self) {
+        // A consumer that went away is seen here even when the branch holds
+        // nothing: its channel then still reports room, as a dropped
+        // receiver gives its permits back.
+        if self
+            .sender
+            .as_ref()
+            .is_some_and(|sender| sender.is_closed())
+        {
+            self.close();
         }
-        Some(Err(_)) => HttpTeeSendOutcome::BranchClosed,
-        None => HttpTeeSendOutcome::SourceTerminated,
+        while let Some(sender) = &self.sender {
+            // The charge is given back as the item reaches the channel.
+            let Some((item, charge)) = self.held.pop_front() else {
+                return;
+            };
+            match sender.try_send(item) {
+                Ok(()) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Full(item)) => {
+                    self.held.push_front((item, charge));
+                    return;
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => self.close(),
+            }
+        }
+    }
+
+    fn close(&mut self) {
+        self.sender = None;
+        self.held.clear();
+    }
+
+    /// Whether the branch has room for the source's next item now.
+    fn wants(&self) -> bool {
+        self.held.is_empty() && self.sender.as_ref().is_some_and(|s| s.capacity() > 0)
+    }
+
+    async fn room(&self) {
+        match &self.sender {
+            Some(sender) => match sender.reserve().await {
+                // The permit only shows there is room; the item goes in
+                // through `flush`.
+                Ok(permit) => drop(permit),
+                Err(_) => std::future::pending().await,
+            },
+            None => std::future::pending().await,
+        }
+    }
+
+    /// A live branch's consumer going away; never, for a done branch, which
+    /// the loop has already dealt with.
+    async fn closed(&self) {
+        match &self.sender {
+            Some(sender) => sender.closed().await,
+            None => std::future::pending().await,
+        }
+    }
+
+    /// The branch has no consumer: it went away, or the branch is done.
+    async fn gone(&self) {
+        if let Some(sender) = &self.sender {
+            sender.closed().await;
+        }
     }
 }
 
-async fn fan_out_http_tee_item(
-    tx1: &tokio::sync::mpsc::Sender<Result<Vec<u8>, String>>,
-    tx2: &tokio::sync::mpsc::Sender<Result<Vec<u8>, String>>,
-    item: Result<Vec<u8>, String>,
-    termination: &HttpStreamTermination,
-) -> Option<(bool, bool)> {
-    let first = reserve_http_tee_send(tx1, item.clone(), termination).await;
-    if first == HttpTeeSendOutcome::SourceTerminated {
-        return None;
-    }
-    let second = reserve_http_tee_send(tx2, item, termination).await;
-    if second == HttpTeeSendOutcome::SourceTerminated {
-        return None;
-    }
-    Some((
-        first == HttpTeeSendOutcome::Sent,
-        second == HttpTeeSendOutcome::Sent,
-    ))
-}
-
-async fn both_http_tee_receivers_closed(
-    tx1: &tokio::sync::mpsc::Sender<Result<Vec<u8>, String>>,
-    tx2: &tokio::sync::mpsc::Sender<Result<Vec<u8>, String>>,
-) {
-    tx1.closed().await;
-    tx2.closed().await;
-}
-
+/// Tee a host stream as workerd does (`kj::newTee`): the source is read as
+/// fast as the faster branch reads, and the slower branch holds what it has
+/// not read yet, so one branch can be read to its end before the other.
+/// Each branch's channel holds `HTTP_TEE_BRANCH_CAPACITY` chunks; beyond that
+/// the slower branch's chunks are charged with `charge`. A chunk the charge
+/// refuses stops the tee as workerd's buffering limit does: both branches end
+/// with `HTTP_TEE_BUFFER_LIMIT` after what they hold, and the source is
+/// cancelled.
 pub(crate) fn prepare_http_stream_tee(
     service: &Arc<HttpStreamService>,
-    mut source: HttpTransferredStream,
+    source: HttpTransferredStream,
+    charge: HttpTeeCharge,
 ) -> Result<((u64, u64), HttpTeePump), &'static str> {
     let (tx1, rx1) = tokio::sync::mpsc::channel(HTTP_TEE_BRANCH_CAPACITY);
     let (tx2, rx2) = tokio::sync::mpsc::channel(HTTP_TEE_BRANCH_CAPACITY);
@@ -2073,43 +2112,111 @@ pub(crate) fn prepare_http_stream_tee(
     };
     let termination = source.termination_handle();
     let pump = Box::pin(async move {
+        let branch = |sender| HttpTeeBranch {
+            sender: Some(sender),
+            held: Default::default(),
+        };
+        let mut branches = [branch(tx1), branch(tx2)];
+        // Dropped once it has given its last item: its end, an error, or the
+        // buffering limit's. The branches then only take what they hold.
+        let mut source = Some(source);
         loop {
+            let ended = source.is_none();
+            for branch in &mut branches {
+                branch.flush();
+                if ended && branch.held.is_empty() {
+                    branch.close();
+                }
+            }
+            if branches.iter().all(|branch| branch.sender.is_none()) {
+                break;
+            }
+            // A cancelled source ends the tee at once, as it did before
+            // anything was held.
+            if !ended && termination.reason() != HttpStreamTerminationReason::Live {
+                break;
+            }
+            let [first, second] = &branches;
+            if ended || !(first.wants() || second.wants()) {
+                // Nothing can move until a branch reads or goes away, or the
+                // source is cancelled.
+                asyncrt::select_biased! {
+                    "a cancelled source wins a tie so no item is handed on after it";
+                    _ = futures_util::future::poll_fn(|context| termination.poll_reason(context)), if !ended => {},
+                    _ = first.room() => {},
+                    _ = second.room() => {},
+                    _ = first.closed() => {},
+                    _ = second.closed() => {},
+                }
+                continue;
+            }
+            let Some(stream) = source.as_mut() else {
+                unreachable!("a tee with a source to read has not ended");
+            };
             // A permanently pending source does not wake when its consumers
             // disappear. Observe both receivers in the same poll, and prefer
             // their committed closure when the source is also ready.
+            let all_closed = async {
+                first.gone().await;
+                second.gone().await;
+            };
             let event = asyncrt::select_biased! {
                 "closed tee consumers win a tie so the pump cannot read another source item";
-                _ = both_http_tee_receivers_closed(&tx1, &tx2) => None,
-                event = futures_util::future::poll_fn(|context| source.poll_event(context)) => Some(event),
+                _ = all_closed => None,
+                event = futures_util::future::poll_fn(|context| stream.poll_event(context)) => Some(event),
             };
             let Some(event) = event else {
-                break;
+                continue;
             };
-            match event {
-                HttpTransferredEvent::Chunk(bytes) => {
-                    let Some((first, second)) =
-                        fan_out_http_tee_item(&tx1, &tx2, Ok(bytes), &termination).await
-                    else {
-                        break;
-                    };
-                    if !first && !second {
-                        break;
-                    }
-                }
-                HttpTransferredEvent::Error(error) => {
-                    if fan_out_http_tee_item(&tx1, &tx2, Err(error), &termination)
-                        .await
-                        .is_some()
-                    {
-                        source.finish(HttpStreamTerminationReason::Finished);
-                    }
-                    break;
-                }
+            let item = match event {
+                HttpTransferredEvent::Chunk(bytes) => Ok(bytes),
+                HttpTransferredEvent::Error(error) => Err(error),
                 HttpTransferredEvent::End => {
-                    source.finish(HttpStreamTerminationReason::Finished);
-                    break;
+                    stream.finish(HttpStreamTerminationReason::Finished);
+                    source = None;
+                    continue;
                 }
                 HttpTransferredEvent::Terminated(_) => break,
+            };
+            if item.is_err() {
+                stream.finish(HttpStreamTerminationReason::Finished);
+                source = None;
+            }
+            // The chunk goes straight into the channel of a branch that has
+            // room, and is held, and charged, for one that has not.
+            let mut held = [None, None];
+            let mut refused = false;
+            for (index, branch) in branches.iter().enumerate() {
+                if branch.sender.is_none() || branch.wants() {
+                    continue;
+                }
+                if let Ok(bytes) = &item {
+                    match charge(bytes.len()) {
+                        Some(guard) => held[index] = Some(guard),
+                        None => refused = true,
+                    }
+                }
+            }
+            if refused {
+                // The slower branch would pass the limit: the tee stops for
+                // both, as kj's does.
+                drop(held);
+                if let Some(mut stream) = source.take() {
+                    stream.finish(HttpStreamTerminationReason::Cancelled);
+                }
+                for branch in &mut branches {
+                    if branch.sender.is_some() {
+                        branch
+                            .held
+                            .push_back((Err(HTTP_TEE_BUFFER_LIMIT.to_string()), None));
+                    }
+                }
+                continue;
+            }
+            for (branch, guard) in branches.iter_mut().zip(held) {
+                if branch.sender.is_some() {
+                    branch.held.push_back((item.clone(), guard));
+                }
             }
         }
     });
@@ -2140,6 +2247,194 @@ mod tests {
             write_position: None,
             observed_position: None,
         }
+    }
+
+    /// A tee of `chunks` chunks of `len` bytes, with a charge that admits at
+    /// most `limit` bytes held at once, and the bytes it holds now.
+    fn tee(
+        chunks: usize,
+        len: usize,
+        limit: usize,
+    ) -> ((u64, u64), Arc<std::sync::atomic::AtomicUsize>) {
+        struct Held(Arc<std::sync::atomic::AtomicUsize>, usize);
+        impl Drop for Held {
+            fn drop(&mut self) {
+                self.0.fetch_sub(self.1, Ordering::SeqCst);
+            }
+        }
+        let service = http_stream_service();
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        crate::asyncrt::spawn(async move {
+            for _ in 0..chunks {
+                if tx.send(Ok(vec![7; len])).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let id = service
+            .register_source(HttpStreamSource::Receiver(rx))
+            .unwrap();
+        let source = service.checkout_transfer(id, None).unwrap();
+        let held = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = held.clone();
+        let charge: HttpTeeCharge = Box::new(move |len| {
+            let now = counter.fetch_add(len, Ordering::SeqCst) + len;
+            if now > limit {
+                counter.fetch_sub(len, Ordering::SeqCst);
+                return None;
+            }
+            Some(Box::new(Held(counter.clone(), len)) as Box<dyn Send + Sync>)
+        });
+        let (ids, pump) = prepare_http_stream_tee(&service, source, charge).unwrap();
+        crate::asyncrt::spawn(pump);
+        (ids, held)
+    }
+
+    /// A pump that counts its polls and says when it has ended.
+    struct Counted {
+        pump: HttpTeePump,
+        polls: Arc<std::sync::atomic::AtomicUsize>,
+        ended: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl std::future::Future for Counted {
+        type Output = ();
+        fn poll(
+            mut self: Pin<&mut Self>,
+            context: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<()> {
+            self.polls.fetch_add(1, Ordering::SeqCst);
+            let poll = self.pump.as_mut().poll(context);
+            if poll.is_ready() {
+                self.ended.store(true, Ordering::SeqCst);
+            }
+            poll
+        }
+    }
+
+    /// A tee of a source that sends `chunks` chunks and then idles, open:
+    /// its ids, its pump's poll count, and whether the pump has ended.
+    fn idle_tee(
+        chunks: usize,
+    ) -> (
+        (u64, u64),
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        let service = http_stream_service();
+        let (tx, rx) = tokio::sync::mpsc::channel(chunks.max(1));
+        for _ in 0..chunks {
+            tx.try_send(Ok(vec![7; 16])).unwrap();
+        }
+        // The sender stays alive, so the source never ends.
+        crate::asyncrt::spawn(async move {
+            tx.closed().await;
+        });
+        let id = service
+            .register_source(HttpStreamSource::Receiver(rx))
+            .unwrap();
+        let source = service.checkout_transfer(id, None).unwrap();
+        let charge: HttpTeeCharge = Box::new(|_| Some(Box::new(()) as Box<dyn Send + Sync>));
+        let (ids, pump) = prepare_http_stream_tee(&service, source, charge).unwrap();
+        let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        crate::asyncrt::spawn(Counted {
+            pump,
+            polls: polls.clone(),
+            ended: ended.clone(),
+        });
+        (ids, polls, ended)
+    }
+
+    /// Wait up to a second for the pump to end; its poll count then.
+    async fn ends(
+        polls: &std::sync::atomic::AtomicUsize,
+        ended: &std::sync::atomic::AtomicBool,
+    ) -> usize {
+        for _ in 0..100 {
+            if ended.load(Ordering::SeqCst) {
+                return polls.load(Ordering::SeqCst);
+            }
+            crate::asyncrt::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!(
+            "the tee pump did not end ({} polls)",
+            polls.load(Ordering::SeqCst)
+        );
+    }
+
+    #[test]
+    fn a_tee_whose_branches_are_both_cancelled_while_its_source_idles_ends() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let ((first, second), polls, ended) = idle_tee(2);
+            crate::asyncrt::sleep(std::time::Duration::from_millis(20)).await;
+            http_stream_service().cancel_source(first);
+            http_stream_service().cancel_source(second);
+            // A pump that spun would be polled without end.
+            assert!(ends(&polls, &ended).await < 50);
+        });
+    }
+
+    #[test]
+    fn a_tee_whose_branches_are_cancelled_one_after_the_other_ends() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let ((first, second), polls, ended) = idle_tee(0);
+            http_stream_service().cancel_source(first);
+            crate::asyncrt::sleep(std::time::Duration::from_millis(20)).await;
+            let before = polls.load(Ordering::SeqCst);
+            crate::asyncrt::sleep(std::time::Duration::from_millis(50)).await;
+            // With one branch left the pump waits on the source, not spinning.
+            assert!(polls.load(Ordering::SeqCst) - before < 5);
+            assert!(!ended.load(Ordering::SeqCst));
+            http_stream_service().cancel_source(second);
+            assert!(ends(&polls, &ended).await < 50);
+        });
+    }
+
+    /// Read a stream to its end: the bytes read, and the error that ended it.
+    async fn drain(id: u64) -> (usize, Option<String>) {
+        let mut total = 0;
+        loop {
+            match http_stream_read(http_stream_service(), id).await {
+                Ok(Some(bytes)) => total += bytes.len(),
+                Ok(None) => return (total, None),
+                Err(error) => return (total, Some(error)),
+            }
+        }
+    }
+
+    #[test]
+    fn a_tee_branch_reads_to_its_end_before_the_other_is_read() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let chunks = HTTP_TEE_BRANCH_CAPACITY * 4;
+            let ((first, second), held) = tee(chunks, 1024, usize::MAX);
+            assert_eq!(drain(first).await, (chunks * 1024, None));
+            // The second branch holds all but what its channel has room for.
+            assert_eq!(
+                held.load(Ordering::SeqCst),
+                (chunks - HTTP_TEE_BRANCH_CAPACITY) * 1024
+            );
+            assert_eq!(drain(second).await, (chunks * 1024, None));
+            assert_eq!(held.load(Ordering::SeqCst), 0);
+        });
+    }
+
+    #[test]
+    fn a_tee_past_its_limit_ends_both_branches_with_workerds_error() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            let limit = 8 * 1024;
+            let ((first, second), held) = tee(HTTP_TEE_BRANCH_CAPACITY * 4, 1024, limit);
+            let (read, error) = drain(first).await;
+            assert_eq!(error.as_deref(), Some(HTTP_TEE_BUFFER_LIMIT));
+            // What the first branch read, the second still has, then the
+            // same error.
+            assert_eq!(read, (HTTP_TEE_BRANCH_CAPACITY + 8) * 1024);
+            assert_eq!(
+                drain(second).await,
+                (read, Some(HTTP_TEE_BUFFER_LIMIT.to_string()))
+            );
+            assert_eq!(held.load(Ordering::SeqCst), 0);
+        });
     }
 
     #[test]

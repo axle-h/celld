@@ -1,0 +1,15 @@
+// Under `wrangler dev`, an R2 binding is the bucket its `preview_bucket_name`
+// names, and a D1 binding the database its `preview_database_id` names. celld
+// accepts both keys and ignores them (plan 1.44, found by 1.25). peer binds
+// each bucket and database by its production name, to show which one app
+// wrote to.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "bucket-prod", "preview_bucket_name": "bucket-preview" }],
+  "d1_databases": [
+    { "binding": "DB", "database_name": "db", "database_id": "db-prod", "preview_database_id": "db-preview" }
+  ],
+  "services": [{ "binding": "PEER", "service": "peer" }]
+}

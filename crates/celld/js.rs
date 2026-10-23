@@ -1427,7 +1427,10 @@ fn resolve_res(tc: &mut v8::PinScope, id: u64, res: Result<asyncrt::OpOut, Strin
             let ex = if let Some(message) = without_upgrade {
                 let s = v8::String::new(tc, message).unwrap();
                 v8::Exception::type_error(tc, s)
-            } else if e == BODY_PAST_BUDGET || e == BODY_PASSED_BUDGET {
+            } else if e == BODY_PAST_BUDGET
+                || e == BODY_PASSED_BUDGET
+                || e == crate::http_streams::HTTP_TEE_BUFFER_LIMIT
+            {
                 let s = v8::String::new(tc, &e).unwrap();
                 v8::Exception::type_error(tc, s)
             } else {
@@ -2482,6 +2485,9 @@ struct BackingStoreBudget {
     /// refusal there, so V8's RangeError follows with nothing standing. An
     /// allocation that fits and the end of each turn end it too.
     refusing: AtomicU8,
+    /// What every tee of a host stream in this isolate holds for its slower
+    /// branch (`TeeHold`).
+    tee_held: AtomicUsize,
 }
 
 /// No refusal stands (`BackingStoreBudget::refusing`).
@@ -2503,6 +2509,7 @@ impl BackingStoreBudget {
             watch_paused: AtomicBool::new(false),
             watch_deferred: AtomicBool::new(false),
             refusing: AtomicU8::new(REFUSAL_NONE),
+            tee_held: AtomicUsize::new(0),
         }
     }
 
@@ -2683,6 +2690,31 @@ mod backing_store_budget_tests {
         free(&budget, new, 70);
     }
 
+    /// The isolate's tees together hold at most half the budget, each hold
+    /// gives its charge back when dropped, and a refusal takes nothing.
+    #[test]
+    fn tee_holds_share_half_the_budget_and_give_it_back() {
+        let budget = Arc::new(BackingStoreBudget::new(100));
+        let first = TeeHold::charge(&budget, 30).expect("within half");
+        // Another tee of the same isolate counts against the same half.
+        let second = TeeHold::charge(&budget, 20).expect("within half");
+        assert!(TeeHold::charge(&budget, 1).is_none());
+        assert_eq!(budget.used.load(Ordering::Relaxed), 50);
+        assert_eq!(budget.tee_held.load(Ordering::Relaxed), 50);
+        drop(first);
+        assert_eq!(budget.used.load(Ordering::Relaxed), 20);
+        assert_eq!(budget.tee_held.load(Ordering::Relaxed), 20);
+        // Within the half but past what the rest of the isolate left.
+        assert!(budget.charge_within(70, 100));
+        assert!(TeeHold::charge(&budget, 20).is_none());
+        assert_eq!(budget.used.load(Ordering::Relaxed), 90);
+        assert_eq!(budget.tee_held.load(Ordering::Relaxed), 20);
+        budget.release(70);
+        drop(second);
+        assert_eq!(budget.used.load(Ordering::Relaxed), 0);
+        assert_eq!(budget.tee_held.load(Ordering::Relaxed), 0);
+    }
+
     /// A zero-length buffer still gets a pointer V8 can free.
     #[test]
     fn a_zero_length_allocation_is_a_real_pointer() {
@@ -2799,6 +2831,45 @@ impl BudgetReservation {
 
 impl Drop for BudgetReservation {
     fn drop(&mut self) {
+        self.budget.release(self.len);
+    }
+}
+
+/// What a tee's slower branch holds on the host, charged to the isolate's
+/// budget as the buffers it is read into later will be. All the isolate's
+/// tees together hold at most half the budget (`tee_held`), so the branches
+/// being read, and whatever the Worker keeps of them, have the other half: a
+/// charge that let tees fill the budget would condemn the isolate at the next
+/// buffer it read. A refusal takes nothing.
+struct TeeHold {
+    budget: Arc<BackingStoreBudget>,
+    len: usize,
+}
+
+impl TeeHold {
+    #[allow(deprecated)]
+    fn charge(budget: &Arc<BackingStoreBudget>, len: usize) -> Option<Box<dyn Send + Sync>> {
+        budget
+            .tee_held
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |now| {
+                now.checked_add(len)
+                    .filter(|total| *total <= budget.limit / 2)
+            })
+            .ok()?;
+        if !budget.charge_within(len, budget.limit) {
+            budget.tee_held.fetch_sub(len, Ordering::AcqRel);
+            return None;
+        }
+        Some(Box::new(TeeHold {
+            budget: budget.clone(),
+            len,
+        }))
+    }
+}
+
+impl Drop for TeeHold {
+    fn drop(&mut self) {
+        self.budget.tee_held.fetch_sub(self.len, Ordering::AcqRel);
         self.budget.release(self.len);
     }
 }
@@ -11110,8 +11181,10 @@ fn op_asset_fetch(
 fn tee_http_stream(
     service: &Arc<HttpStreamService>,
     source: HttpTransferredStream,
+    budget: Arc<BackingStoreBudget>,
 ) -> Result<(u64, u64), &'static str> {
-    let (ids, pump) = prepare_http_stream_tee(service, source)?;
+    let charge = Box::new(move |len| TeeHold::charge(&budget, len));
+    let (ids, pump) = prepare_http_stream_tee(service, source, charge)?;
     asyncrt::op_handle().spawn(pump);
     Ok(ids)
 }
@@ -11200,6 +11273,12 @@ fn op_http_stream_tee(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let stream_id = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
+    let Some(budget) = scope.get_slot::<Arc<BackingStoreBudget>>().cloned() else {
+        let message = v8::String::new(scope, "the isolate has no backing-store budget").unwrap();
+        let exception = v8::Exception::type_error(scope, message);
+        scope.throw_exception(exception);
+        return;
+    };
     let service = http_stream_service();
     let source = service.checkout_transfer(stream_id, None).ok();
     let Some(source) = source else {
@@ -11208,7 +11287,7 @@ fn op_http_stream_tee(
         scope.throw_exception(exception);
         return;
     };
-    let ids = match tee_http_stream(&service, source) {
+    let ids = match tee_http_stream(&service, source, budget) {
         Ok(ids) => ids,
         Err(error) => {
             let message = v8::String::new(scope, error).unwrap();

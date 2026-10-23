@@ -1,0 +1,14 @@
+// Each bucket and database app's bindings could name.
+{
+  "name": "peer",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "r2_buckets": [
+    { "binding": "PROD", "bucket_name": "bucket-prod" },
+    { "binding": "PREVIEW", "bucket_name": "bucket-preview" }
+  ],
+  "d1_databases": [
+    { "binding": "DB_PROD", "database_name": "db-prod", "database_id": "db-prod" },
+    { "binding": "DB_PREVIEW", "database_name": "db-preview", "database_id": "db-preview" }
+  ]
+}

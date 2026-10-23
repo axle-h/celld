@@ -400,7 +400,7 @@
         "body": {
           "echoed": "forwarded body",
           "read": "TypeError: This ReadableStream is currently locked to a reader.",
-          "cloned": "TypeError: Body has already been consumed"
+          "cloned": "TypeError: This ReadableStream is currently locked to a reader,"
         }
       }
     },

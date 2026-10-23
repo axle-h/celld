@@ -373,7 +373,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 32 | 1.19 trace context across RPC and the peer tunnel | done | `0477165` |
 | 33 | 1.20 redirect handling through the same Fetcher | done | `1e23fdb`, starter `86b89b1` |
 | 34 | 1.22 WebSocket follow-ups; bounded send queues and socket lifetimes (security) | done | `5a59ae1` |
-| 35+ | Phase 1 in plan order (1.23-1.30, 1.34, 1.36-1.42), and the 1.4 props key-order follow-up | queued | |
+| 35 | 1.23 `clone()` tees, 1.24 `alias` (package keys), 1.25 KV `preview_id` | done | see log |
+| 36+ | Phase 1 in plan order (1.26, 1.45, 1.28-1.30, 1.34, 1.36-1.44), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -2733,16 +2734,229 @@ legitimate cross-event uses.
 before consumption", and clones lose `url` and `redirected`. workerd tees the
 body and keeps both. The adapter self-test's `it.fails` pins it.
 
+**As built.**
+- **What workerd does** (probed, and read in `api/http.c++`:
+  `Response::clone`, `Request::clone`, `Body::clone`). `clone()` tees the
+  body: the original keeps one branch and the clone gets the other. The
+  clone has a copy of the headers with their guard, so a fetched
+  Response's clone has immutable headers too, a deep copy of `cf`, and the
+  status, statusText, type and URL list, so `url` and `redirected`.
+  - A Response with a WebSocket: `TypeError: Cannot clone a response to a
+    WebSocket handshake.`
+  - A body a body method has read, or one locked to a reader: `TypeError:
+    This ReadableStream is currently locked to a reader,` (the comma is
+    workerd's). There is no `bodyUsed` check of its own.
+  - After a partial read the clone has the rest, and both bodies are
+    unused again (fresh branches). After a `cancel()` the clone succeeds
+    with an empty, unused body.
+  - `bodyUsed` is the stream's disturbed flag, and false for a null body.
+    A body that is closed and was never read reads as empty and stays
+    unused, as a tee branch of a finished stream does.
+  - A Request clone shares the signal the request was made with; without
+    one, as for a request the Worker received, it has its own.
+  - A tee's slower branch holds what it has not read. workerd run locally
+    has no limit; Cloudflare's buffering limit ends both branches with
+    `TypeError: ReadableStream.tee() buffer limit exceeded. This error
+    usually occurs when …` (kj's "tee buffer size limit exceeded", as
+    `api/util.c++` translates it).
+- **JS** (`harness.js`). `Response.clone()` and `Request.clone()` share
+  `__cloneBody`: an untouched buffered body is copied, anything else is
+  teed. The Response clone is built through the network-response path, so
+  the constructor's status checks don't apply (`Response.error()`), and
+  then gets the original's `type`, `url` and `redirected`. Headers
+  are copied from the header list, not the iterator, and keep
+  `_immutable`. `bodyUsed` became a getter over an internal flag (set by
+  body methods and by a subrequest that takes the body over) and the
+  stream's disturbed flag. The old "Body has already been consumed" and
+  "Cannot clone a streaming response before consumption" texts are gone.
+- **Responses that had the wrong properties to begin with**, which the
+  clone then copied. A Durable Object stub's Response had mutable headers
+  and no statusText, and a global `fetch()`'s had mutable headers. Both now
+  have immutable headers, and the stub's gets the reason phrase, as a
+  service binding's does.
+- **A host stream's tee no longer stalls** (`http_streams.rs`). Each branch
+  had a 16-chunk channel and the pump waited for the slower one, so reading
+  one branch of a clone to its end before the other hung once the body
+  passed 16 chunks. The pump now reads as fast as the faster branch reads,
+  and holds the slower branch's chunks beyond its channel. They are
+  charged to the isolate's backing-store budget (`TeeHold`), and all the
+  isolate's tees together hold at most half of it (`tee_held` on
+  `BackingStoreBudget`), so the branches being read have the other half.
+  Past that both branches end with Cloudflare's text after what they hold,
+  and the isolate lives on. **Decision:** half the budget, because a tee
+  allowed to fill it condemned the isolate at the next buffer the reader
+  took (`limits/tee-buffer` did, before the cap). A finished or cancelled
+  host stream is teed in JS, since the host has nothing left under its id.
+  - **Review fix: the pump ends once no branch has a consumer.** A dropped
+    receiver gives its channel's permits back, so a branch that held
+    nothing still looked as if it wanted the next chunk, and a branch done
+    already made the "both closed" wait pending for good: the pump could
+    loop on a quiet source, or never notice the second consumer leave.
+    Each branch is now closed as soon as its sender reports the receiver
+    gone (`flush`), and the read waits on `gone()`, which is ready for a
+    done branch. In a node the unfixed pump stayed parked rather than
+    spinning on the paths tried, so the unit tests below pin it, with a
+    bounded poll count.
+- **Known differences.** A clone or `tee()` of a stream the Worker made is
+  teed in JS and buffers in the isolate, so past the memory limit it
+  condemns the isolate where Cloudflare gives the tee error; workerd run
+  locally has no limit either way (`docs/limitations.md`). Gaps the cases
+  found outside `clone()` are 1.43.
+- **Tests.**
+  - `fetch/response-clone` (differential): 12 checks (clone and read in
+    either order, a clone of a clone, after a partial read, a lock, `text()`
+    and a cancel, cancelling either branch, the headers guard, both read
+    together, `cache.put(response.clone())`) on Responses that are
+    constructed (string, stream, null, `Response.json()`,
+    `Response.error()`), wrap an R2 object's body, or come from a service
+    binding (streamed, buffered, a followed redirect, a manual one) and a
+    Durable Object stub (streamed and redirected); a 4 MiB body cloned and
+    read one branch at a time, both orders, together, and with the clone
+    never read, from a constructed stream, a service binding and a stub;
+    the WebSocket refusal; and `Response.redirect()`'s clone's guard.
+  - `fetch/response-clone-network` (celld-only, recorded by
+    `lib/workerd-direct.mjs`, as wrangler's harness follows global
+    `fetch()` redirects in Node): the same checks on global `fetch()`
+    Responses, plain, redirected and manual, and the 4 MiB backpressure
+    rows. The checks live in `lib/worker/clone.js` (`#clone`); the runner's
+    upstream gained `/big?kib=<n>`.
+  - `fetch/request-clone` (differential): the Request checks (signal, `cf`
+    copy, guard) on constructed Requests (string, stream, GET, copied, a
+    fetched body) and on the received request, with a length and chunked.
+  - `limits/tee-buffer` (celld-only): a 400 MiB fetched body cloned, and
+    teed, and read one branch first ends both with the tee error, and the
+    isolate serves the next request. A `/shared` step pins the
+    per-isolate cap: alone, a tee's read branch gets past 48 MiB before the
+    limit; with 40 MiB held by another tee's unread clone, a second stops
+    under 32 MiB.
+  - `limits/tee-idle` (celld-only): after a clone of a quiet streamed body
+    whose bodies are cancelled, and one left unread past the 60 s idle
+    sweep, the node uses at most 300 ms of CPU in a second. It needed a new
+    runner step, `cpu` (`lib/celld.mjs`, README).
+  - Unit: `http_streams::tests`, a tee branch read to its end before the
+    other, a tee past its limit, both branches cancelled while the source
+    idles, and one cancelled after the other (the last two failed on the
+    unfixed pump); `js::backing_store_budget_tests`, the shared half cap, the
+    refund on drop, and a refusal that takes nothing.
+  - `limits/backing-stores` (hand-written) pinned celld's old text for a
+    clone of a request whose body was forwarded; it now has workerd's lock
+    error, probed on workerd.
+  - Starter: the adapter's "a clone of a fetched response keeps its URL"
+    is an `it`.
+- **Found.** 1.43.
+
+### 1.43 Body and Response defaults (found by 1.23)
+
+Each one differs from workerd 1.20261001.1; `builtins/body-defaults` pins
+them (xfail):
+- A string body gets no `Content-Type`. workerd gives a Request's or a
+  Response's `text/plain;charset=UTF-8`.
+- A Response made without a `statusText` has `""`. workerd's is its
+  status's reason phrase (`defaultStatusText`), including
+  `Response.json()` and `Response.redirect()`.
+- A service binding's and a global `fetch()`'s Response have the reason
+  phrase of their status, not the one the target sent (`Made` for a 201;
+  the network's wire reason).
+- `text()` after a partial read of a buffered body returns the whole body.
+  workerd refuses it: `TypeError: Body has already been used. It can only
+  be used once. Use tee() first if you need to read it twice.`
+- A received request's headers are mutable, and so are its clone's.
+  workerd's are immutable (`Can't modify immutable headers.`).
+
 ### 1.24 Wrangler `alias` (found by 0.5)
 
 `celld deploy` refuses `alias`, which upstream's `bundleBlueprints` uses.
 Map it to esbuild's `alias`, as wrangler does.
+
+**As built.**
+- **What Wrangler does** (4.147.0, `wrangler-dist/cli.js`).
+  - `normalizeAndValidateAliases`: `alias` must be an object (`Expected
+    alias to be an object, but got string`), and every value a string,
+    each failure named (`Expected alias["k"] to be a string, but got
+    number`).
+  - It applies `alias` with its own esbuild plugin, not esbuild's `alias`.
+    The plugin matches an import path exactly, any string, relative ones
+    included, and leaves `key/sub` alone. It resolves the value with
+    Node's `require.resolve(value, { paths: [projectRoot] })`, the config's
+    directory: a path relative to it, with Node's file probing (`.js`,
+    `.json`, `.node`, a directory's `main` or `index`), or a package by its
+    `require` conditions. An empty value aliases nothing.
+  - The plugin comes before the `nodejs_compat` ones, so an alias of
+    `node:path` or `fs` wins over unenv.
+- **celld** maps each to esbuild's `--alias:KEY=FILE` (`read_alias`). The
+  value is resolved to its absolute file in Rust, as Node resolves a path
+  (`resolve_alias_target`). esbuild's alias also wins over celld's
+  `--external` for builtins. `no_bundle` with `alias` stops the deploy, as
+  with `define` and `rules`. An empty value prints a note.
+- **Decision: refuse what esbuild's alias can't do, loudly**, since the
+  esbuild CLI has no plugins:
+  - a key that is not a package path by esbuild's rule (`./x.js`, `/x`,
+    `pkg/`, `a/../b`);
+  - a value that names a package, which Node would resolve by its
+    `require` conditions, not esbuild's;
+  - a subpath import of a key. esbuild rewrites `pkg/sub` to a path under
+    the target file, so the build fails with esbuild's "remapped … using the
+    alias feature" error where Wrangler resolves `pkg/sub` as usual.
+  - celld refuses a `null` or array `alias`, which `typeof` calls an
+    object: Wrangler crashes on `null` and reads an array's indexes as
+    keys. The type messages use `typeof` names as Wrangler's do, so a
+    `null` value is "got object".
+  - A directory target whose `package.json` does not parse fails, as Node's
+    `ERR_INVALID_PACKAGE_CONFIG` does, rather than falling back to `index`.
+- **bundleBlueprints still does not deploy.** Its alias key is the relative
+  import `./generated/bundled-blueprints.js`, which esbuild's alias can't
+  take, and no esbuild CLI feature can express it (confirmed by review).
+  **Decision (Alex, 2026-10-23):** celld will support Wrangler's relative
+  keys exactly, through esbuild's service protocol: 1.45. The starter's
+  `status.json` says so for `workshop-blueprints`.
+- **Tests.**
+  - `modules/alias` (differential): a file, a path without its extension,
+    a directory by its `package.json` `main`, a path outside the Worker's
+    directory, `node:path` under `nodejs_compat`, and an empty value.
+  - `deploy/alias` (celld-only): each refusal above, the type errors, a
+    missing file, `no_bundle`, and an accepted config with an empty value.
+  - Unit: `deploy::tests`, the key rule, the type checks, and the target
+    resolution.
+- Docs: `docs/cloudflare-compat.md`.
 
 ### 1.25 KV `preview_id` under `celld dev` (found by 0.5)
 
 `celld dev` requires a KV `id` and ignores `preview_id`, where `wrangler dev`
 uses `preview_id`. The comment at `deploy.rs:1678` ("`wrangler dev`, which
 celld does not run") is out of date.
+
+**As built.**
+- **What Wrangler does** (4.147.0). Its config validation allows `id` (a
+  non-empty string), `preview_id` (a string) or neither. `wrangler dev`
+  binds `preview_id ?? id` (`convertConfigToBindings` with
+  `usePreviewIds`), and with neither a local namespace named after the
+  binding (`kvNamespaceEntry`), so a missing id is no error there.
+  `wrangler deploy` uses `id`.
+- **celld.** `read_project` takes whether it builds for `celld dev`, and
+  binds the same namespace as `wrangler dev` there. `celld deploy` still
+  requires `id` and ignores `preview_id`, with its message for a missing
+  one. An empty `id`, or an `id` or `preview_id` that is not a string,
+  stops both, as in Wrangler. An empty `preview_id`, which Wrangler takes,
+  stops only `celld dev`, since a cell can't have that name. The comment is
+  replaced.
+- **Tests.** `dev/kv-preview-id` (differential): bindings with both, only
+  `preview_id`, only `id` and neither, each read back by `id` from another
+  Worker. `deploy/refused-keys` gained a deploy of a `preview_id`-only
+  binding.
+- **Starter.** The adapter's `previewIdsAsIds` workaround and its README
+  note are gone.
+- Docs: `docs/services/kv.md`.
+- **Found.** R2's and D1's preview keys are accepted and ignored: 1.44.
+
+### 1.44 R2 and D1 preview keys (found by 1.25)
+
+`celld deploy` checks no key of an `r2_buckets` or `d1_databases` entry
+beyond those it reads, so `preview_bucket_name` and `preview_database_id`,
+and any unknown key, are accepted and ignored. `wrangler dev` binds
+`preview_bucket_name ?? bucket_name` and `preview_database_id ??
+database_id` (`convertConfigToBindings` with `usePreviewIds`). `celld dev`
+should do the same, as it does for KV since 1.25, and both commands should
+refuse the keys they don't model. Pinned by `dev/r2-d1-preview` (xfail).
 
 ### 1.26 Stream follow-ups (found by 1.8)
 
@@ -2758,6 +2972,27 @@ celld does not run") is out of date.
 - `IdentityTransformStream`: BYOB returns the view's type, `tee()` branches
   can't take a BYOB reader, and `releaseLock` with a read pending rejects
   the read instead of throwing.
+
+### 1.45 Wrangler `alias` via esbuild's service protocol (found by 1.24)
+
+1.24 maps `alias` to esbuild's CLI `--alias`, which takes only package-name
+keys, rewrites every subpath of a key, and resolves a target its own way.
+Wrangler's exact semantics need an on-resolve plugin, which the esbuild CLI
+can't run. Drive esbuild through its service protocol instead, as its JS API
+does (`esbuild --service=<version>`), with an on-resolve plugin that does
+what Wrangler's does.
+- **Wrangler's plugin** (`wrangler-dist/cli.js` ~184913): an unanchored
+  regex filter of the keys, then `alias[args.path]` as a literal match of the
+  import path, from any importer. The value is resolved with
+  `require.resolve(value, { paths: [dirname(config)] })`.
+- **The protocol** is a length-prefixed packet codec, tied to the esbuild
+  version, so CI must cover each esbuild version celld supports.
+- Diagnostics come back structured, so celld can report them as esbuild's
+  CLI does.
+- Package targets need Node's CommonJS resolution, `exports` included.
+- Estimated at 400–700 lines.
+- It unblocks `workshop-blueprints`' redeploy case, and removes 1.24's
+  refusals of relative keys, package targets and subpath imports.
 
 ### 1.27 Container scope comes from JS (found by 1.9) — security
 

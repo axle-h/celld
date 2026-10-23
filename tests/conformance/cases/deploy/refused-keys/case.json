@@ -1,7 +1,7 @@
 {
   "kind": "celld-only",
   "reason": "celld deploy --dry-run refusals; workerd has no deploy step",
-  "workers": ["build-fails", "no-build-unbuilt", "rules-conflict", "routes", "secret-missing", "json-var-too-big", "platform-shape"],
+  "workers": ["build-fails", "no-build-unbuilt", "rules-conflict", "routes", "secret-missing", "json-var-too-big", "platform-shape", "kv-preview-only"],
   "steps": [
     {"deploy": "build-fails"},
     {"deploy": "no-build-unbuilt", "args": ["--no-build"]},
@@ -9,6 +9,7 @@
     {"deploy": "routes"},
     {"deploy": "secret-missing"},
     {"deploy": "json-var-too-big"},
-    {"deploy": "platform-shape"}
+    {"deploy": "platform-shape"},
+    {"deploy": "kv-preview-only"}
   ]
 }

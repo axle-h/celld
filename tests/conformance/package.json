@@ -8,6 +8,7 @@
   },
   "imports": {
     "#byob": "./lib/worker/byob.js",
+    "#clone": "./lib/worker/clone.js",
     "#params-dup": "./lib/worker/params-dup.js",
     "#process-env": "./lib/worker/process-env.js",
     "#ws-close-reply": "./lib/worker/ws-close-reply.js"

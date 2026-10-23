@@ -422,7 +422,7 @@ class CelldHttpBodyStream extends CelldChunkStream {
       if (typeof body !== "object" || body === null || !(#id in body))
         return undefined;
       const st = body._chunks;
-      return st.rest === null && st.pulling === null &&
+      return st.rest === null && st.pulling === null && !st.done &&
           body._queue.length === 0
         ? body.#id
         : undefined;
@@ -460,6 +460,38 @@ for (const bodyStream of [CelldChunkStream, CelldBodyStream, CelldHttpBodyStream
 }
 __celld.__makeInternalByteStream = (pull, cancel) =>
   new CelldChunkStream(pull, cancel);
+// What a body method left: workerd reads the stream to its end, which
+// leaves it locked to the reader, so a clone fails on the lock. celld reads a
+// buffered body without its stream, so a flag stands in for the lock. A
+// stream's own reads and cancels make it disturbed instead. `bodyUsed` is
+// either, and only a body has one (`Body::getBodyUsed` in api/http.c++).
+const __bodyUsed = (target) => target.body !== null &&
+  (target._bodyUsed || target.body._disturbed === true);
+// workerd reads a body stream that is closed, and was never read from,
+// without a reader: it gives nothing, and the body stays unused (a tee of a
+// finished stream has two of them).
+const __closedUnread = (body) =>
+  body != null && body._closed === true && body._disturbed !== true;
+const __markBodyRead = (target) => {
+  if (!__closedUnread(target.body)) target._bodyUsed = true;
+};
+// workerd's clone of a body (`Body::clone` in api/http.c++): the stream is
+// teed, the original keeps one branch and the clone gets the other, so both
+// are unused again after a partial read. A buffered body nothing has read
+// stays buffered in both, as a copy.
+const __cloneBody = (target) => {
+  const body = target.body;
+  if (body === null) return null;
+  if (target._bodyUsed || body.locked)
+    throw new TypeError("This ReadableStream is currently locked to a reader,");
+  if (target._bodyBytes !== null && body instanceof CelldBodyStream &&
+      !body._disturbed)
+    return target._bodyBytes;
+  const [left, right] = body.tee();
+  target.body = left;
+  target._bodyBytes = null;
+  return right;
+};
 // workerd converts a Response's status as a WebIDL `long`: a value that is
 // not a finite number is 0, a fraction truncates (-0.5 to 0, not -0), and a
 // value outside the 32-bit range throws.
@@ -548,7 +580,7 @@ globalThis.Response = class Response {
     this.redirected = false;
     this.type = "default";
     this.url = "";
-    this.bodyUsed = false;
+    this._bodyUsed = false;
     if (init.cf !== undefined) this.cf = init.cf;
   }
   static json(data, init = {}) {
@@ -584,6 +616,7 @@ globalThis.Response = class Response {
   }
   async _consume() {
     if (__handedOverBodies.has(this)) throw new TypeError(__BODY_USED);
+    if (__closedUnread(this.body)) return new Uint8Array();
     if (this._bodyBytes !== null) {
       if (this.body !== null && this.body._cancelled)
         throw new TypeError(
@@ -594,7 +627,7 @@ globalThis.Response = class Response {
     return __drainBody(this);
   }
   async text() {
-    this.bodyUsed = true;
+    __markBodyRead(this);
     return new TextDecoder().decode(await this._consume());
   }
   async json() { return JSON.parse(await this.text()); }
@@ -602,30 +635,39 @@ globalThis.Response = class Response {
     // The undecoded bytes, not `text()`: a UTF-8 decode replaces each invalid
     // sequence in a binary file part with one U+FFFD, so both the bytes and
     // the length change.
-    this.bodyUsed = true;
+    __markBodyRead(this);
     return __celld.__parseFormData(
       await this._consume(), this.headers.get('content-type'));
   }
   async arrayBuffer() {
-    this.bodyUsed = true;
+    __markBodyRead(this);
     return __handOverBody(this, await this._consume());
   }
   async blob() {
     return __celld.__blobOf(await this.arrayBuffer(),
       this.headers.get("content-type") || "");
   }
+  get bodyUsed() { return __bodyUsed(this); }
+  // workerd's `Response::clone`: the clone has the body's other branch, a
+  // copy of the headers with their guard, a copy of `cf`, and the same
+  // status, statusText, URL list and type. The constructor's checks don't
+  // apply, as a network response's don't, so `Response.error()` clones.
   clone() {
-    if (this.bodyUsed) throw new TypeError("Body has already been consumed");
-    if (this._bodyBytes === null)
-      throw new TypeError("Cannot clone a streaming response before consumption");
-    const response = new Response(
-      this.body === null ? null : this._bodyBytes,
-      {
-        status: this.status, statusText: this.statusText, headers: this.headers,
-        webSocket: this.webSocket, cf: this.cf,
-      },
-    );
+    if (this.#webSocket !== null)
+      throw new TypeError("Cannot clone a response to a WebSocket handshake.");
+    const body = __cloneBody(this);
+    const response = __networkResponse(body, {
+      status: this.status,
+      statusText: this.statusText,
+      // The list, not the iterator, which combines and lower-cases.
+      headers: this.headers.__celldHeaderList,
+      cf: this.cf === undefined ? undefined : structuredClone(this.cf),
+    });
+    if (this.headers._immutable)
+      Object.defineProperty(response.headers, "_immutable", { value: true });
     response.type = this.type;
+    response.url = this.url;
+    response.redirected = this.redirected;
     return response;
   }
 };
@@ -685,7 +727,7 @@ globalThis.Request = class Request {
       // Adopt the prior request's stream; per spec the prior body
       // is disturbed by the new request.
       stream = prior.body;
-      prior.bodyUsed = true;
+      prior._bodyUsed = true;
     }
     this._bodyBytes = stream !== null
       ? null
@@ -726,7 +768,7 @@ globalThis.Request = class Request {
     if (typed && typed.type && !this.headers.has("content-type")) {
       this.headers.set("content-type", typed.type);
     }
-    this.bodyUsed = false;
+    this._bodyUsed = false;
     // The body stream and the signal stay eager, own properties: the RPC and
     // storage serializers fall back to the lift-into-marker path only when a
     // value is not directly structured-cloneable, and a Request's un-cloneable
@@ -770,11 +812,12 @@ globalThis.Request = class Request {
   }
   async _consume() {
     if (__handedOverBodies.has(this)) throw new TypeError(__BODY_USED);
+    if (__closedUnread(this.body)) return new Uint8Array();
     if (this._bodyBytes !== null) return this._bodyBytes;
     return __drainBody(this);
   }
   async text() {
-    this.bodyUsed = true;
+    __markBodyRead(this);
     const bytes = await this._consume();
     return this._body ??= new TextDecoder().decode(bytes);
   }
@@ -783,27 +826,39 @@ globalThis.Request = class Request {
     // The undecoded bytes, not `text()`: a UTF-8 decode replaces each invalid
     // sequence in a binary file part with one U+FFFD, so both the bytes and
     // the length change.
-    this.bodyUsed = true;
+    __markBodyRead(this);
     return __celld.__parseFormData(
       await this._consume(), this.headers.get('content-type'));
   }
   async arrayBuffer() {
-    this.bodyUsed = true;
+    __markBodyRead(this);
     return __handOverBody(this, await this._consume());
   }
   async blob() {
     return __celld.__blobOf(await this.arrayBuffer(),
       this.headers.get("content-type") || "");
   }
+  get bodyUsed() { return __bodyUsed(this); }
+  // workerd's `Request::clone`: the clone has the body's other branch, a
+  // copy of the headers with their guard and of `cf`, and the same method,
+  // URL and redirect mode. It shares the signal the request was made with;
+  // without one, as for a request the Worker received, it has its own.
   clone() {
-    if (this.bodyUsed) throw new TypeError("Body has already been consumed");
-    if (this._bodyBytes === null) {
-      // Streaming body: tee, keep one branch, clone the other.
-      const [left, right] = this.body.tee();
-      this.body = left;
-      return new Request(this, { body: right });
-    }
-    return new Request(this);
+    const body = __cloneBody(this);
+    const init = {
+      method: this.method,
+      headers: this.headers.__celldHeaderList,
+      redirect: this.redirect,
+    };
+    if (this._signalForSubrequests !== null)
+      init.signal = this._signalForSubrequests;
+    if (body !== null) init.body = body;
+    if (this.cf !== undefined) init.cf = structuredClone(this.cf);
+    const request = new Request(this.url, init);
+    if (this.headers._immutable)
+      Object.defineProperty(request.headers, "_immutable", { value: true });
+    request._oneTimeBody = this._oneTimeBody;
+    return request;
   }
 };
 const __makeRequest = __celld.__makeRequest = (
@@ -868,13 +923,13 @@ const __subrequestBody = async (req, absent = false) => {
   __unlockedBody(req);
   const streamId = __hostStreamId(req.body);
   if (streamId === undefined) {
-    req.bodyUsed = true;
+    req._bodyUsed = true;
     return { body: await req._consume(), streamId: undefined };
   }
   // The receiver now owns the one host source. Lock the wrapper so a later
   // read fails instead of racing the receiver, and expose the transfer through
   // the standard Body flag.
-  req.bodyUsed = true;
+  req._bodyUsed = true;
   req.body.getReader();
   return { body: new Uint8Array(), streamId };
 };
@@ -1121,6 +1176,8 @@ const __fetchNetwork = async (req, chain, container) => {
       webSocket: __responseSocket(r),
     },
   );
+  // The server's headers, which the Worker can read but not change.
+  Object.defineProperty(response.headers, "_immutable", { value: true });
   response.url = req.url;
   return response;
 };
@@ -1174,6 +1231,7 @@ const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
       status: raw.status,
       headers: raw.headers,
     });
+    Object.defineProperty(response.headers, "_immutable", { value: true });
     response.url = req.url;
     return response;
   }
@@ -6086,7 +6144,7 @@ class DurableObjectNamespace {
           // instead of racing the cell over one host stream) and mark it used,
           // which is what awaiting the old _consume() did and what workerd
           // reports as request.bodyUsed after the forward.
-          req.bodyUsed = true;
+          req._bodyUsed = true;
           req.body.getReader();
         }
         // Forward the request's headers to the cell as JSON. When they were
@@ -6125,11 +6183,15 @@ class DurableObjectNamespace {
         // socket the host joins to the cell's on `accept()`. A caller that
         // returns this response instead of accepting keeps the direct route
         // its target already describes, and binds nothing.
-        return new Response(body, {
+        const response = new Response(body, {
           status: r.status,
+          statusText: __STATUS_TEXT[r.status] || "",
           headers: r.headers,
           webSocket: __responseSocket(r),
         });
+        // As a service binding's: the headers came from another Worker.
+        Object.defineProperty(response.headers, "_immutable", { value: true });
+        return response;
     };
     const stub = new Proxy(target, { get: (_target, prop) => {
       if (prop === "then") return undefined;

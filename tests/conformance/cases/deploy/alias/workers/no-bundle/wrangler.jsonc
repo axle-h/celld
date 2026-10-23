@@ -1,0 +1,8 @@
+// `alias` with `no_bundle`, which runs no esbuild to apply it.
+{
+  "name": "no-bundle",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "no_bundle": true,
+  "alias": { "thing": "./index.js" }
+}

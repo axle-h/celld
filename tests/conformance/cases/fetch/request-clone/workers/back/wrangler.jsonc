@@ -1,0 +1,6 @@
+// Answers with a streamed body for front to send on as a Request's body.
+{
+  "name": "back",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

@@ -1,0 +1,11 @@
+// A clone of a fetched body whose source has gone quiet, with both bodies
+// cancelled, or both left unread until the host's 60 s idle sweep ends them:
+// the node goes back to idle. The pump's own end once neither branch has a
+// consumer, which it once missed (plan 1.23 review), is pinned by the
+// bounded-poll unit tests in http_streams.rs; this case did not show it.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }]
+}

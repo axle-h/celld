@@ -53,6 +53,13 @@
       "output": [
         "Error: config `observability.logs` declares `sampling`, which Wrangler does not have"
       ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: kv binding KV has no `id`; celld uses the id as the namespace identity, so any stable string serves"
+      ]
     }
   ]
 }

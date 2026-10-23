@@ -1,0 +1,13 @@
+{
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/requests"},
+    {"path": "/signal"},
+    {"path": "/incoming?check=clone", "method": "POST", "headers": {"x-from": "client", "content-type": "text/plain"}, "body": "incoming body"},
+    {"path": "/incoming?check=cloneReadFirst", "method": "POST", "headers": {"x-from": "client", "content-type": "text/plain"}, "body": "incoming body"},
+    {"path": "/incoming?check=afterText", "method": "POST", "headers": {"x-from": "client", "content-type": "text/plain"}, "body": "incoming body"},
+    {"path": "/incoming?check=cf", "method": "POST", "headers": {"x-from": "client", "content-type": "text/plain"}, "body": "incoming body"},
+    {"path": "/incoming?check=clone&chunked", "method": "POST", "headers": {"x-from": "client", "content-type": "text/plain"}, "body": "incoming body", "chunked": true},
+    {"path": "/incoming?check=cloneReadFirst&chunked", "method": "POST", "headers": {"x-from": "client", "content-type": "text/plain"}, "body": "incoming body", "chunked": true}
+  ]
+}

@@ -1,0 +1,7 @@
+// A target file that does not exist.
+{
+  "name": "missing-target",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "alias": { "thing": "./lib/missing" }
+}

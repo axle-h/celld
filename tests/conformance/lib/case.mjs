@@ -12,6 +12,7 @@ const STEP_KEYS = {
   ws: new Set(["ws", "send", "receive", "close", "protocols", "raw", "shutdown", "stall", "record", "drop", "reset", "repeat"]),
   restart: new Set(["restart"]),
   rss: new Set(["rss"]),
+  cpu: new Set(["cpu", "wait"]),
   sockets: new Set(["sockets", "within"]),
   otlp: new Set(["otlp"]),
   deploy: new Set(["deploy", "args"]),
@@ -137,7 +138,7 @@ export function loadCase(root, id) {
     });
   }
   steps.forEach((step, index) => {
-    if (step.kind !== "rss" && step.kind !== "sockets") return;
+    if (step.kind !== "rss" && step.kind !== "sockets" && step.kind !== "cpu") return;
     // workerd runs under wrangler, whose process holds more than the case.
     if (kind !== "celld-only") fail(`steps[${index}]: an "${step.kind}" step measures the celld node, so it needs "kind": "celld-only"`);
   });
@@ -334,6 +335,15 @@ function validateStep(step, fail) {
         fail(`"within" is a number of milliseconds up to 30000, for a "sockets" limit`);
       }
       return { kind, sockets: step.sockets, within: step.within ?? 5000 };
+    case "cpu":
+      if (!(Number.isInteger(step.cpu) && step.cpu > 0 && step.cpu < 1000)) {
+        fail(`"cpu" must be the most milliseconds of CPU the node may use in a second, below 1000`);
+      }
+      // How long the node is left alone before the second is measured.
+      if ("wait" in step && !(Number.isInteger(step.wait) && step.wait >= 0 && step.wait <= 90_000)) {
+        fail(`"wait" is a number of milliseconds up to 90000, for a "cpu" step`);
+      }
+      return { kind, cpu: step.cpu, wait: step.wait ?? 0 };
     case "rss":
       if (!(step.rss === "baseline" || (Number.isInteger(step.rss) && step.rss > 0))) {
         fail(`"rss" must be "baseline" or the most MiB the node's peak memory may grow by`);

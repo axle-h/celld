@@ -1,0 +1,10 @@
+// A fetched body cloned, or teed, and read through one branch first: the
+// other holds what has not been read, charged to the isolate's memory. Past
+// the limit both branches end with workerd's buffering-limit TypeError after
+// what they hold, and the isolate goes on serving.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }]
+}

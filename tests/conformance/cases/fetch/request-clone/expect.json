@@ -1,0 +1,538 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "constructedString": {
+          "clone": {
+            "original": {
+              "url": "https://example.com/a",
+              "method": "POST",
+              "redirect": "follow",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "cf": "object"
+            },
+            "clone": {
+              "url": "https://example.com/a",
+              "method": "POST",
+              "redirect": "follow",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "cf": "object"
+            },
+            "sameSignal": false,
+            "texts": [
+              "a string",
+              "a string"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "a string",
+            "a string"
+          ],
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "url": "https://example.com/a",
+              "method": "POST",
+              "redirect": "follow",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "cf": "object"
+            }
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "headers": {
+            "set": "set",
+            "original": null,
+            "clone": "1"
+          },
+          "cf": {
+            "original": null,
+            "clone": "clone"
+          }
+        },
+        "constructedStream": {
+          "clone": {
+            "original": {
+              "url": "https://example.com/a",
+              "method": "POST",
+              "redirect": "follow",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "cf": null
+            },
+            "clone": {
+              "url": "https://example.com/a",
+              "method": "POST",
+              "redirect": "follow",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "cf": null
+            },
+            "sameSignal": false,
+            "texts": [
+              "one,two,three",
+              "one,two,three"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "one,two,three",
+            "one,two,three"
+          ],
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "url": "https://example.com/a",
+              "method": "POST",
+              "redirect": "follow",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "cf": null
+            }
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "headers": {
+            "set": "set",
+            "original": null,
+            "clone": "1"
+          },
+          "cf": "no cf"
+        },
+        "constructedGet": {
+          "clone": {
+            "original": {
+              "url": "https://example.com/a?q",
+              "method": "GET",
+              "redirect": "manual",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": null,
+              "cf": null
+            },
+            "clone": {
+              "url": "https://example.com/a?q",
+              "method": "GET",
+              "redirect": "manual",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": null,
+              "cf": null
+            },
+            "sameSignal": false,
+            "texts": [
+              "",
+              ""
+            ],
+            "after": [
+              false,
+              false
+            ]
+          },
+          "cloneReadFirst": [
+            "",
+            ""
+          ],
+          "afterPartialRead": "no body",
+          "afterLock": "no body",
+          "afterText": {
+            "clone": {
+              "url": "https://example.com/a?q",
+              "method": "GET",
+              "redirect": "manual",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "headers": {
+            "set": "set",
+            "original": null,
+            "clone": "1"
+          },
+          "cf": "no cf"
+        },
+        "copied": {
+          "clone": {
+            "original": {
+              "url": "https://example.com/b",
+              "method": "PUT",
+              "redirect": "manual",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "cf": null
+            },
+            "clone": {
+              "url": "https://example.com/b",
+              "method": "PUT",
+              "redirect": "manual",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "cf": null
+            },
+            "sameSignal": false,
+            "texts": [
+              "copied",
+              "copied"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "copied",
+            "copied"
+          ],
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "url": "https://example.com/b",
+              "method": "PUT",
+              "redirect": "manual",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "cf": null
+            }
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "headers": {
+            "set": "set",
+            "original": null,
+            "clone": "1"
+          },
+          "cf": "no cf"
+        },
+        "fetchedBody": {
+          "clone": {
+            "original": {
+              "url": "https://example.com/c",
+              "method": "POST",
+              "redirect": "follow",
+              "headers": [],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "cf": null
+            },
+            "clone": {
+              "url": "https://example.com/c",
+              "method": "POST",
+              "redirect": "follow",
+              "headers": [],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "cf": null
+            },
+            "sameSignal": false,
+            "texts": [
+              "one,two,three",
+              "one,two,three"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "one,two,three",
+            "one,two,three"
+          ],
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "url": "https://example.com/c",
+              "method": "POST",
+              "redirect": "follow",
+              "headers": [],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "cf": null
+            }
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "headers": {
+            "set": "set",
+            "original": null,
+            "clone": "1"
+          },
+          "cf": "no cf"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "originalIsInit": true,
+        "same": true,
+        "aborted": [
+          true,
+          true
+        ],
+        "reason": "why"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "original": {
+          "url": "http://origin.test/incoming?check=clone",
+          "method": "POST",
+          "redirect": "manual",
+          "headers": [
+            [
+              "content-type",
+              "text/plain"
+            ],
+            [
+              "x-from",
+              "client"
+            ]
+          ],
+          "bodyUsed": false,
+          "body": "[object ReadableStream]",
+          "cf": "object"
+        },
+        "clone": {
+          "url": "http://origin.test/incoming?check=clone",
+          "method": "POST",
+          "redirect": "manual",
+          "headers": [
+            [
+              "content-type",
+              "text/plain"
+            ],
+            [
+              "x-from",
+              "client"
+            ]
+          ],
+          "bodyUsed": false,
+          "body": "[object ReadableStream]",
+          "cf": "object"
+        },
+        "sameSignal": false,
+        "texts": [
+          "incoming body",
+          "incoming body"
+        ],
+        "after": [
+          true,
+          true
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": [
+        "incoming body",
+        "incoming body"
+      ]
+    },
+    {
+      "status": 200,
+      "body": "TypeError: This ReadableStream is currently locked to a reader,"
+    },
+    {
+      "status": 200,
+      "body": {
+        "original": null,
+        "clone": "clone"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "original": {
+          "url": "http://origin.test/incoming?check=clone&chunked",
+          "method": "POST",
+          "redirect": "manual",
+          "headers": [
+            [
+              "content-type",
+              "text/plain"
+            ],
+            [
+              "x-from",
+              "client"
+            ]
+          ],
+          "bodyUsed": false,
+          "body": "[object ReadableStream]",
+          "cf": "object"
+        },
+        "clone": {
+          "url": "http://origin.test/incoming?check=clone&chunked",
+          "method": "POST",
+          "redirect": "manual",
+          "headers": [
+            [
+              "content-type",
+              "text/plain"
+            ],
+            [
+              "x-from",
+              "client"
+            ]
+          ],
+          "bodyUsed": false,
+          "body": "[object ReadableStream]",
+          "cf": "object"
+        },
+        "sameSignal": false,
+        "texts": [
+          "incoming body",
+          "incoming body"
+        ],
+        "after": [
+          true,
+          true
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": [
+        "incoming body",
+        "incoming body"
+      ]
+    }
+  ]
+}

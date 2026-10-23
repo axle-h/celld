@@ -1,0 +1,8 @@
+// An import of a subpath of an alias key, which esbuild alias would replace
+// too and Wrangler does not.
+{
+  "name": "subpath-import",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "alias": { "thing": "./lib" }
+}

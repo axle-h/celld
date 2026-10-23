@@ -1,0 +1,7 @@
+// A target that names a package, which Wrangler resolves with Node.
+{
+  "name": "package-target",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "alias": { "react": "preact/compat" }
+}

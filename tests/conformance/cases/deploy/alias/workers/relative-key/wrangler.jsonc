@@ -1,0 +1,8 @@
+// A key that is a relative import path: Wrangler matches it as written, and
+// esbuild alias takes only a package name.
+{
+  "name": "relative-key",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "alias": { "./generated/module.js": "./index.js" }
+}

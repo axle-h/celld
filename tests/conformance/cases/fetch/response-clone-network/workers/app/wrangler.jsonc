@@ -1,0 +1,8 @@
+// Clones a Response from global fetch(): workerd tees the network body, and
+// the clone keeps the response's url and redirected (plan 1.23).
+// fetch/response-clone has the same checks on Responses from Fetchers.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

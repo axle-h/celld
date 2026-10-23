@@ -77,6 +77,8 @@ export function describeStep(step) {
       return "restart";
     case "rss":
       return `rss ${step.rss}`;
+    case "cpu":
+      return `cpu ${step.cpu}${step.wait ? ` after ${step.wait} ms` : ""}`;
     case "sockets":
       return `sockets ${step.sockets}`;
     case "otlp":
@@ -97,6 +99,8 @@ async function runStep(session, step) {
       return { restart: true };
     case "rss":
       return { rss: await session.rss(step.rss) };
+    case "cpu":
+      return { cpu: await session.cpu(step.cpu, step.wait) };
     case "sockets":
       return { sockets: await session.sockets(step.sockets, step.within) };
     case "otlp":

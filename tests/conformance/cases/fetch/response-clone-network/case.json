@@ -1,0 +1,11 @@
+{
+  "kind": "celld-only",
+  "reason": "wrangler's createTestHarness sends every global fetch() through a Node outboundService that follows redirects itself, so a fetched Response's url and redirected can't be recorded through it. The expected transcript is recorded from workerd 1.20261001.1 run directly, with `node lib/workerd-direct.mjs fetch/response-clone-network --write` and this case's workerd.capnp; fetch/response-clone records the same checks differentially through Fetchers.",
+  "workers": ["app"],
+  "upstream": true,
+  "env": {"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}"},
+  "steps": [
+    {"path": "/responses?port=${UPSTREAM_PORT}"},
+    {"path": "/backpressure?port=${UPSTREAM_PORT}"}
+  ]
+}

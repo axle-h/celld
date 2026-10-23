@@ -1,0 +1,17 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "file": "lib/file.js",
+        "noext": "lib/noext.js",
+        "dir": "lib/dir/entry.js",
+        "outside": "shared/outside.js",
+        "path": "lib/path.js",
+        "unaliased": "function"
+      }
+    }
+  ]
+}

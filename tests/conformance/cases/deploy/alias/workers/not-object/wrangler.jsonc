@@ -1,0 +1,7 @@
+// `alias` that is not an object.
+{
+  "name": "not-object",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "alias": "./index.js"
+}

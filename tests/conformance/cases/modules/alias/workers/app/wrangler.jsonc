@@ -1,0 +1,19 @@
+// Wrangler's `alias`: each key, imported exactly so, is replaced by the module
+// its value names, resolved as Node's require.resolve resolves a path from the
+// config's directory (a missing extension, a directory's package.json main),
+// and an alias of a Node.js builtin wins over nodejs_compat's. celld refused
+// the key (plan 1.24). deploy/alias has what celld refuses.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "alias": {
+    "virtual-file": "./lib/file.js",
+    "virtual-noext": "./lib/noext",
+    "virtual-dir": "./lib/dir",
+    "@scope/outside": "../shared/outside.js",
+    "node:path": "./lib/path.js",
+    "empty-target": ""
+  }
+}

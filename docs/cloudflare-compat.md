@@ -679,7 +679,7 @@ The accepted top-level keys:
 - `d1_databases`, `kv_namespaces`, `queues`, `workflows`, and
   `r2_buckets`
 - `worker_loaders` and `containers`
-- `define`, `rules`, and `build`
+- `define`, `alias`, `rules`, and `build`
 - `secrets`
 
 These keys configure Cloudflare's platform rather than the Worker, so the
@@ -757,8 +757,22 @@ Wrangler's default rule, so only that type is valid for `.wasm`, and a
 `CompiledWasm` rule without `fallthrough: true` drops it. celld has no other
 default rule: Wrangler's `Text` rule for `.html` and `.sql` and `Data` rule
 for `.bin` need a configured rule.
-`no_bundle` skips esbuild, so `no_bundle` with `define` or `rules` stops the
-deployment.
+`alias` goes to esbuild's `alias`, with Wrangler's checks: it must be an
+object of strings. Each key is an import path, replaced wherever it is
+imported by the file its value names. That value is a path relative to the
+config's directory, or an absolute one, and it is resolved as Node's
+`require.resolve` resolves a path, as in Wrangler: the file itself, then with
+`.js`, `.json` or `.node`, then a directory's `package.json` `main` or its
+`index` file. An empty value aliases nothing, as in Wrangler. An alias of a
+Node.js builtin, such as `node:path`, wins over the runtime's module. Three
+cases that Wrangler accepts stop the deployment, because esbuild's alias
+can't do what Wrangler's plugin does: a key that is not a package name (such
+as `./generated/module.js`, which Wrangler matches as written), a value that
+names a package (Wrangler resolves it with Node), and an import of a
+subpath of a key, such as `pkg/sub` for the key `pkg`, which Wrangler leaves
+to the usual resolution.
+`no_bundle` skips esbuild, so `no_bundle` with `define`, `alias` or `rules`
+stops the deployment.
 
 An asset-only project can omit `main`. `celld deploy` refuses an unsafe asset
 path, and `.assetsignore` requires Wrangler.

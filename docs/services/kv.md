@@ -28,8 +28,10 @@ namespace.
 
 A `kv_namespaces` entry gives a `binding` and an `id`. The `id` is the namespace
 identity, and it can be any string, such as a Cloudflare hexadecimal id or
-`sessions`. Two Workers that name one `id` reach one namespace. celld ignores
-`preview_id`.
+`sessions`. Two Workers that name one `id` reach one namespace. `celld deploy`
+requires an `id` and ignores `preview_id`. `celld dev` binds the namespace as
+`wrangler dev` does: the `preview_id` when there is one, else the `id`, and
+with neither, a namespace named after the binding.
 
 `put()` reads a `ReadableStream` to its end before the write, so
 `put(key, request.body)` works. `list()` returns at most 1000 keys in byte

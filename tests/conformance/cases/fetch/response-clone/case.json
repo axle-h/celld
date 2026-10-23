@@ -1,0 +1,8 @@
+{
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/responses"},
+    {"path": "/backpressure"},
+    {"path": "/other"}
+  ]
+}

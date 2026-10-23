@@ -16,6 +16,7 @@ import { BINARY, CLOSE, TEXT, acceptKey, closePayload, encodeFrame, frameReader,
  *   with that URL as its Location.
  * - `/chain?n=<n>` answers 302 to `/chain?n=<n - 1>`, and `/landed?n=0`
  *   when `n` reaches 0. `/loop` answers 302 to itself.
+ * - `/big?kib=<n>` answers `n` KiB of `x`, written 16 KiB at a time.
  * - `/echo` answers JSON describing the request it received: its method,
  *   path, body, and the headers in `ECHOED`. A `HEAD` response has no body,
  *   so the same JSON is also the `x-echo` header.
@@ -94,6 +95,15 @@ export async function startUpstream() {
       case "/echo":
         await echo(request, url, response);
         return;
+      case "/big": {
+        response.writeHead(200, { "content-type": "application/octet-stream" });
+        const chunk = Buffer.alloc(16 * 1024, "x");
+        for (let n = Number(url.searchParams.get("kib")) / 16; n > 0; n--) {
+          if (!response.write(chunk)) await new Promise((resolve) => response.once("drain", resolve));
+        }
+        response.end();
+        return;
+      }
       default:
         response.writeHead(200, { "content-type": "text/plain" }).end("upstream");
     }

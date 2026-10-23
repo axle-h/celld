@@ -1,0 +1,73 @@
+{
+  "steps": [
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: `alias` \"./generated/module.js\" is not a package path; celld applies `alias` with esbuild's, which replaces only an import of a package name such as \"pkg\" or \"@scope/pkg\". Import the module by such a name, or deploy with Wrangler"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: `alias` \"react\" names the package \"preact/compat\"; celld resolves an alias target only as a file path, relative to the config's directory (Wrangler resolves a package with Node's `require.resolve`). Give the file, such as \"./node_modules/preact/compat/<file>\""
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: Expected alias[\"one\"] to be a string, but got number",
+        "Expected alias[\"two\"] to be a string, but got boolean"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: Expected alias to be an object, but got string"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: `alias` \"thing\": cannot find module \"./lib/missing\" from workers/missing-target"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: esbuild failed:",
+        "✘ [ERROR] Cannot read directory \"lib/index.js\": not a directory",
+        "✘ [ERROR] Could not resolve \"<case>/workers/subpath-import/lib/index.js/sub.js\" (originally \"thing/sub.js\")",
+        "    index.js:1:16:",
+        "      1 │ import sub from \"thing/sub.js\";",
+        "        ╵                 ~~~~~~~~~~~~~~",
+        "  The path \"thing/sub.js\" was remapped to \"<case>/workers/subpath-import/lib/index.js/sub.js\" using the alias feature, which then couldn't be resolved. Keep in mind that import path aliases are resolved in the current working directory.",
+        "2 errors"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: config sets `no_bundle` with `alias`; those keys only change the esbuild run, and `no_bundle` does not run esbuild"
+      ]
+    },
+    {
+      "exit": 0,
+      "worker": "accepted",
+      "output": [
+        "note: `alias` \"nothing\" has an empty target, so it aliases nothing",
+        " celld <version>",
+        "───────────────────────────────────────────────",
+        "Total Upload: <size> / gzip: <size>",
+        "Your Worker has no bindings.",
+        "Bundled accepted (<time>)"
+      ]
+    }
+  ]
+}

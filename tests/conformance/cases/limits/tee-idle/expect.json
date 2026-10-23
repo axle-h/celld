@@ -1,0 +1,8 @@
+{
+  "steps": [
+    {"status": 200, "body": "cancelled both"},
+    {"cpu": "at most 300 ms in 1 s"},
+    {"status": 200, "body": "left both unread"},
+    {"cpu": "at most 300 ms in 1 s"}
+  ]
+}

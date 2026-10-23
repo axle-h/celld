@@ -1,0 +1,1896 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "constructedString": {
+          "clone": {
+            "original": {
+              "status": 202,
+              "statusText": "Took",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 202,
+              "statusText": "Took",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "a string",
+              "a string"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "a string",
+            "a string"
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 202,
+              "statusText": "Took",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "a string",
+              "a string",
+              "a string"
+            ]
+          },
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "status": 202,
+              "statusText": "Took",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "whole": true,
+            "cloneIsRest": true
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterCancel": {
+            "clone": {
+              "status": 202,
+              "statusText": "Took",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "cancelClone": {
+            "text": "a string",
+            "cloneUsed": true
+          },
+          "cancelOriginal": {
+            "text": "a string",
+            "originalUsed": true
+          },
+          "headers": {
+            "set": "set",
+            "original": null,
+            "clone": "1"
+          },
+          "arrayBuffer": [
+            8,
+            8
+          ],
+          "cachePut": "not cacheable"
+        },
+        "constructedStream": {
+          "clone": {
+            "original": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "one,two,three",
+              "one,two,three"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "one,two,three",
+            "one,two,three"
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "one,two,three",
+              "one,two,three",
+              "one,two,three"
+            ]
+          },
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "whole": true,
+            "cloneIsRest": true
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterCancel": {
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "front"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "cancelClone": {
+            "text": "one,two,three",
+            "cloneUsed": true
+          },
+          "cancelOriginal": {
+            "text": "one,two,three",
+            "originalUsed": true
+          },
+          "headers": {
+            "set": "set",
+            "original": null,
+            "clone": "1"
+          },
+          "arrayBuffer": [
+            13,
+            13
+          ],
+          "cachePut": "one,two,three"
+        },
+        "constructedNull": {
+          "clone": {
+            "original": {
+              "status": 204,
+              "statusText": "No Content",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [],
+              "bodyUsed": false,
+              "body": null,
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 204,
+              "statusText": "No Content",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [],
+              "bodyUsed": false,
+              "body": null,
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "",
+              ""
+            ],
+            "after": [
+              false,
+              false
+            ]
+          },
+          "cloneReadFirst": [
+            "",
+            ""
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 204,
+              "statusText": "No Content",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [],
+              "bodyUsed": false,
+              "body": null,
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "",
+              "",
+              ""
+            ]
+          },
+          "afterPartialRead": "no body",
+          "afterLock": "no body",
+          "afterText": {
+            "clone": {
+              "status": 204,
+              "statusText": "No Content",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [],
+              "bodyUsed": false,
+              "body": null,
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "afterCancel": "no body",
+          "cancelClone": {
+            "text": "",
+            "cloneUsed": false
+          },
+          "cancelOriginal": {
+            "text": "",
+            "originalUsed": false
+          },
+          "headers": {
+            "set": "set",
+            "original": null,
+            "clone": "1"
+          },
+          "arrayBuffer": [
+            0,
+            0
+          ],
+          "cachePut": "not cacheable"
+        },
+        "responseJson": {
+          "clone": {
+            "original": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "application/json"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "application/json"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "{\"a\":1}",
+              "{\"a\":1}"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "{\"a\":1}",
+            "{\"a\":1}"
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "application/json"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "{\"a\":1}",
+              "{\"a\":1}",
+              "{\"a\":1}"
+            ]
+          },
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "application/json"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "whole": true,
+            "cloneIsRest": true
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterCancel": {
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "application/json"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "cancelClone": {
+            "text": "{\"a\":1}",
+            "cloneUsed": true
+          },
+          "cancelOriginal": {
+            "text": "{\"a\":1}",
+            "originalUsed": true
+          },
+          "headers": {
+            "set": "set",
+            "original": null,
+            "clone": "1"
+          },
+          "arrayBuffer": [
+            7,
+            7
+          ],
+          "cachePut": "{\"a\":1}"
+        },
+        "responseError": {
+          "clone": {
+            "original": {
+              "status": 0,
+              "statusText": "",
+              "ok": false,
+              "redirected": false,
+              "url": "",
+              "type": "error",
+              "headers": [],
+              "bodyUsed": false,
+              "body": null,
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 0,
+              "statusText": "",
+              "ok": false,
+              "redirected": false,
+              "url": "",
+              "type": "error",
+              "headers": [],
+              "bodyUsed": false,
+              "body": null,
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "",
+              ""
+            ],
+            "after": [
+              false,
+              false
+            ]
+          },
+          "cloneReadFirst": [
+            "",
+            ""
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 0,
+              "statusText": "",
+              "ok": false,
+              "redirected": false,
+              "url": "",
+              "type": "error",
+              "headers": [],
+              "bodyUsed": false,
+              "body": null,
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "",
+              "",
+              ""
+            ]
+          },
+          "afterPartialRead": "no body",
+          "afterLock": "no body",
+          "afterText": {
+            "clone": {
+              "status": 0,
+              "statusText": "",
+              "ok": false,
+              "redirected": false,
+              "url": "",
+              "type": "error",
+              "headers": [],
+              "bodyUsed": false,
+              "body": null,
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "afterCancel": "no body",
+          "cancelClone": {
+            "text": "",
+            "cloneUsed": false
+          },
+          "cancelOriginal": {
+            "text": "",
+            "originalUsed": false
+          },
+          "headers": {
+            "set": "set",
+            "original": null,
+            "clone": "1"
+          },
+          "arrayBuffer": [
+            0,
+            0
+          ],
+          "cachePut": "not cacheable"
+        },
+        "r2Body": {
+          "clone": {
+            "original": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "an R2 object",
+              "an R2 object"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "an R2 object",
+            "an R2 object"
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "an R2 object",
+              "an R2 object",
+              "an R2 object"
+            ]
+          },
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "whole": true,
+            "cloneIsRest": true
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterCancel": {
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "",
+              "type": "default",
+              "headers": [],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "cancelClone": {
+            "text": "an R2 object",
+            "cloneUsed": true
+          },
+          "cancelOriginal": {
+            "text": "an R2 object",
+            "originalUsed": true
+          },
+          "headers": {
+            "set": "set",
+            "original": null,
+            "clone": "1"
+          },
+          "arrayBuffer": [
+            12,
+            12
+          ],
+          "cachePut": "an R2 object"
+        },
+        "serviceBinding": {
+          "clone": {
+            "original": {
+              "status": 201,
+              "statusText": "Created",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/body",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 201,
+              "statusText": "Created",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/body",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "one,two,three",
+              "one,two,three"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "one,two,three",
+            "one,two,three"
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 201,
+              "statusText": "Created",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/body",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "one,two,three",
+              "one,two,three",
+              "one,two,three"
+            ]
+          },
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "status": 201,
+              "statusText": "Created",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/body",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "whole": true,
+            "cloneIsRest": true
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterCancel": {
+            "clone": {
+              "status": 201,
+              "statusText": "Created",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/body",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "cancelClone": {
+            "text": "one,two,three",
+            "cloneUsed": true
+          },
+          "cancelOriginal": {
+            "text": "one,two,three",
+            "originalUsed": true
+          },
+          "headers": {
+            "set": "TypeError: Can't modify immutable headers.",
+            "original": null,
+            "clone": null
+          },
+          "arrayBuffer": [
+            13,
+            13
+          ],
+          "cachePut": "not cacheable"
+        },
+        "serviceBindingOk": {
+          "clone": {
+            "original": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/ok",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/ok",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "one,two,three",
+              "one,two,three"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "one,two,three",
+            "one,two,three"
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/ok",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "one,two,three",
+              "one,two,three",
+              "one,two,three"
+            ]
+          },
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/ok",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "whole": true,
+            "cloneIsRest": true
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterCancel": {
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/ok",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "cancelClone": {
+            "text": "one,two,three",
+            "cloneUsed": true
+          },
+          "cancelOriginal": {
+            "text": "one,two,three",
+            "originalUsed": true
+          },
+          "headers": {
+            "set": "TypeError: Can't modify immutable headers.",
+            "original": null,
+            "clone": null
+          },
+          "arrayBuffer": [
+            13,
+            13
+          ],
+          "cachePut": "one,two,three"
+        },
+        "serviceBindingBytes": {
+          "clone": {
+            "original": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/bytes",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/bytes",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "fixed bytes",
+              "fixed bytes"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "fixed bytes",
+            "fixed bytes"
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/bytes",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "fixed bytes",
+              "fixed bytes",
+              "fixed bytes"
+            ]
+          },
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/bytes",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "whole": true,
+            "cloneIsRest": true
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterCancel": {
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": false,
+              "url": "http://back/bytes",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain;charset=UTF-8"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "cancelClone": {
+            "text": "fixed bytes",
+            "cloneUsed": true
+          },
+          "cancelOriginal": {
+            "text": "fixed bytes",
+            "originalUsed": true
+          },
+          "headers": {
+            "set": "TypeError: Can't modify immutable headers.",
+            "original": null,
+            "clone": null
+          },
+          "arrayBuffer": [
+            11,
+            11
+          ],
+          "cachePut": "fixed bytes"
+        },
+        "serviceBindingRedirected": {
+          "clone": {
+            "original": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": true,
+              "url": "http://back/ok?landed",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": true,
+              "url": "http://back/ok?landed",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "one,two,three",
+              "one,two,three"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "one,two,three",
+            "one,two,three"
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": true,
+              "url": "http://back/ok?landed",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "one,two,three",
+              "one,two,three",
+              "one,two,three"
+            ]
+          },
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": true,
+              "url": "http://back/ok?landed",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "whole": true,
+            "cloneIsRest": true
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterCancel": {
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": true,
+              "url": "http://back/ok?landed",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "cancelClone": {
+            "text": "one,two,three",
+            "cloneUsed": true
+          },
+          "cancelOriginal": {
+            "text": "one,two,three",
+            "originalUsed": true
+          },
+          "headers": {
+            "set": "TypeError: Can't modify immutable headers.",
+            "original": null,
+            "clone": null
+          },
+          "arrayBuffer": [
+            13,
+            13
+          ],
+          "cachePut": "one,two,three"
+        },
+        "serviceBindingManual": {
+          "clone": {
+            "original": {
+              "status": 302,
+              "statusText": "Found",
+              "ok": false,
+              "redirected": false,
+              "url": "http://back/redirect",
+              "type": "default",
+              "headers": [
+                [
+                  "location",
+                  "/ok?landed"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 302,
+              "statusText": "Found",
+              "ok": false,
+              "redirected": false,
+              "url": "http://back/redirect",
+              "type": "default",
+              "headers": [
+                [
+                  "location",
+                  "/ok?landed"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "",
+              ""
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "",
+            ""
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 302,
+              "statusText": "Found",
+              "ok": false,
+              "redirected": false,
+              "url": "http://back/redirect",
+              "type": "default",
+              "headers": [
+                [
+                  "location",
+                  "/ok?landed"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "",
+              "",
+              ""
+            ]
+          },
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "status": 302,
+              "statusText": "Found",
+              "ok": false,
+              "redirected": false,
+              "url": "http://back/redirect",
+              "type": "default",
+              "headers": [
+                [
+                  "location",
+                  "/ok?landed"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "whole": true,
+            "cloneIsRest": true
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterCancel": {
+            "clone": {
+              "status": 302,
+              "statusText": "Found",
+              "ok": false,
+              "redirected": false,
+              "url": "http://back/redirect",
+              "type": "default",
+              "headers": [
+                [
+                  "location",
+                  "/ok?landed"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "cancelClone": {
+            "text": "",
+            "cloneUsed": true
+          },
+          "cancelOriginal": {
+            "text": "",
+            "originalUsed": true
+          },
+          "headers": {
+            "set": "TypeError: Can't modify immutable headers.",
+            "original": null,
+            "clone": null
+          },
+          "arrayBuffer": [
+            0,
+            0
+          ],
+          "cachePut": "not cacheable"
+        },
+        "durableObject": {
+          "clone": {
+            "original": {
+              "status": 201,
+              "statusText": "Created",
+              "ok": true,
+              "redirected": false,
+              "url": "http://store/body",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 201,
+              "statusText": "Created",
+              "ok": true,
+              "redirected": false,
+              "url": "http://store/body",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "one,two,three",
+              "one,two,three"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "one,two,three",
+            "one,two,three"
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 201,
+              "statusText": "Created",
+              "ok": true,
+              "redirected": false,
+              "url": "http://store/body",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "one,two,three",
+              "one,two,three",
+              "one,two,three"
+            ]
+          },
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "status": 201,
+              "statusText": "Created",
+              "ok": true,
+              "redirected": false,
+              "url": "http://store/body",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "whole": true,
+            "cloneIsRest": true
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterCancel": {
+            "clone": {
+              "status": 201,
+              "statusText": "Created",
+              "ok": true,
+              "redirected": false,
+              "url": "http://store/body",
+              "type": "default",
+              "headers": [
+                [
+                  "content-type",
+                  "text/plain"
+                ],
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "cancelClone": {
+            "text": "one,two,three",
+            "cloneUsed": true
+          },
+          "cancelOriginal": {
+            "text": "one,two,three",
+            "originalUsed": true
+          },
+          "headers": {
+            "set": "TypeError: Can't modify immutable headers.",
+            "original": null,
+            "clone": null
+          },
+          "arrayBuffer": [
+            13,
+            13
+          ],
+          "cachePut": "not cacheable"
+        },
+        "durableObjectRedirected": {
+          "clone": {
+            "original": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": true,
+              "url": "http://store/ok?landed",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": true,
+              "url": "http://store/ok?landed",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "one,two,three",
+              "one,two,three"
+            ],
+            "after": [
+              true,
+              true
+            ]
+          },
+          "cloneReadFirst": [
+            "one,two,three",
+            "one,two,three"
+          ],
+          "cloneOfClone": {
+            "again": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": true,
+              "url": "http://store/ok?landed",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "texts": [
+              "one,two,three",
+              "one,two,three",
+              "one,two,three"
+            ]
+          },
+          "afterPartialRead": {
+            "usedBefore": true,
+            "usedAfter": false,
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": true,
+              "url": "http://store/ok?landed",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "whole": true,
+            "cloneIsRest": true
+          },
+          "afterLock": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterText": "TypeError: This ReadableStream is currently locked to a reader,",
+          "afterCancel": {
+            "clone": {
+              "status": 200,
+              "statusText": "OK",
+              "ok": true,
+              "redirected": true,
+              "url": "http://store/ok?landed",
+              "type": "default",
+              "headers": [
+                [
+                  "x-from",
+                  "back"
+                ]
+              ],
+              "bodyUsed": false,
+              "body": "[object ReadableStream]",
+              "webSocket": null,
+              "cf": null
+            },
+            "text": ""
+          },
+          "cancelClone": {
+            "text": "one,two,three",
+            "cloneUsed": true
+          },
+          "cancelOriginal": {
+            "text": "one,two,three",
+            "originalUsed": true
+          },
+          "headers": {
+            "set": "TypeError: Can't modify immutable headers.",
+            "original": null,
+            "clone": null
+          },
+          "arrayBuffer": [
+            13,
+            13
+          ],
+          "cachePut": "one,two,three"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "constructedStream": {
+          "originalFirst": [
+            4194304,
+            4194304
+          ],
+          "cloneFirst": [
+            4194304,
+            4194304
+          ],
+          "cloneNeverRead": 4194304,
+          "together": [
+            4194304,
+            4194304
+          ],
+          "readerOnOriginal": [
+            4194304,
+            4194304
+          ]
+        },
+        "serviceBinding": {
+          "originalFirst": [
+            4194304,
+            4194304
+          ],
+          "cloneFirst": [
+            4194304,
+            4194304
+          ],
+          "cloneNeverRead": 4194304,
+          "together": [
+            4194304,
+            4194304
+          ],
+          "readerOnOriginal": [
+            4194304,
+            4194304
+          ]
+        },
+        "durableObject": {
+          "originalFirst": [
+            4194304,
+            4194304
+          ],
+          "cloneFirst": [
+            4194304,
+            4194304
+          ],
+          "cloneNeverRead": 4194304,
+          "together": [
+            4194304,
+            4194304
+          ],
+          "readerOnOriginal": [
+            4194304,
+            4194304
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "redirectHeaders": "TypeError: Can't modify immutable headers.",
+        "constructed": "TypeError: Cannot clone a response to a WebSocket handshake.",
+        "serviceBinding": "TypeError: Cannot clone a response to a WebSocket handshake."
+      }
+    }
+  ]
+}

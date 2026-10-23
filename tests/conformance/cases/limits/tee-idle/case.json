@@ -1,0 +1,11 @@
+{
+  "kind": "celld-only",
+  "reason": "measures the celld node's CPU while it is idle (plan 1.23), which workerd under wrangler's harness can't show",
+  "workers": ["app", "back"],
+  "steps": [
+    {"path": "/cancel-both"},
+    {"cpu": 300},
+    {"path": "/unread"},
+    {"cpu": 300, "wait": 75000}
+  ]
+}

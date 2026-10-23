@@ -1,0 +1,13 @@
+// Each namespace app's bindings could name, by `id` alone.
+{
+  "name": "peer",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "kv_namespaces": [
+    { "binding": "BOTH_ID", "id": "both-id" },
+    { "binding": "BOTH_PREVIEW", "id": "both-preview" },
+    { "binding": "PREVIEW_ONLY", "id": "preview-only" },
+    { "binding": "ID_ONLY", "id": "id-only" },
+    { "binding": "NEITHER", "id": "NEITHER" }
+  ]
+}

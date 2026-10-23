@@ -1,0 +1,14 @@
+// Clones a Response from each source and checks what the clone keeps:
+// workerd tees the body, and the clone keeps every property, `url` and
+// `redirected` included (Response::clone in api/http.c++). celld refused to
+// clone a streamed body, and its clones lost `url` and `redirected`. Found by
+// plan 0.5's integration adapter (plan 1.23).
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }],
+  "durable_objects": { "bindings": [{ "name": "STORE", "class_name": "Store" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Store"] }],
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "clone" }]
+}

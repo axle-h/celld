@@ -119,9 +119,9 @@ export default {
 };
 
 // A request with a JavaScript stream body, forwarded to a Durable Object,
-// which drains the body into a buffer. The drained buffer is not shared: a
-// clone keeps the body, and what the reader does to the buffer it read
-// does not reach the clone.
+// which drains the body into a buffer. The drained buffer is not shared:
+// after the forward, a clone and a read of the request both refuse, as in
+// workerd, so neither reaches it.
 async function forwarded(env) {
   const text = "forwarded body";
   const body = new ReadableStream({

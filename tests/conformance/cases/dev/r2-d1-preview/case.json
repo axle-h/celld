@@ -1,0 +1,7 @@
+{
+  "workers": ["app", "peer"],
+  "xfail": "1.44",
+  "steps": [
+    {"path": "/"}
+  ]
+}

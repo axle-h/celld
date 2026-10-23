@@ -1,0 +1,32 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "responseContentType": "text/plain;charset=UTF-8",
+        "requestContentType": "text/plain;charset=UTF-8",
+        "statusText": {
+          "200": "OK",
+          "404": "Not Found",
+          "json": "OK",
+          "redirect": "Temporary Redirect",
+          "serviceBinding": "Made",
+          "network": "OK"
+        },
+        "partialRead": [
+          "ab",
+          "TypeError: Body has already been used. It can only be used once. Use tee() first if you need to read it twice."
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "original": "TypeError: Can't modify immutable headers.",
+        "clone": "TypeError: Can't modify immutable headers."
+      }
+    }
+  ]
+}

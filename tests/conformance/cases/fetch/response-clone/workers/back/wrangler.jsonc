@@ -1,0 +1,6 @@
+// Answers front's requests with bodies to clone.
+{
+  "name": "back",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

@@ -77,6 +77,17 @@ export async function startCelld({ binary, esbuild, dir, workers, env, publicPor
       const grown = Math.ceil((memoryKiB(pid, "VmHWM") - baseline) / 1024);
       return grown <= limit ? `grew at most ${limit} MiB` : `grew ${grown} MiB, more than ${limit} MiB`;
     },
+    // The CPU the node uses in one second while the case leaves it alone,
+    // after `wait` ms: a task that spins shows as most of a core. The
+    // transcript keeps the verdict, not the time, which varies by run.
+    async cpu(limit, wait) {
+      const pid = nodePid(node.child.pid);
+      await new Promise((resolve) => setTimeout(resolve, wait));
+      const before = cpuMs(pid);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const used = cpuMs(pid) - before;
+      return used <= limit ? `at most ${limit} ms in 1 s` : `${used} ms in 1 s, past ${limit} ms`;
+    },
     // Counts the node's connections to the ports `watch` names: the
     // upstream's, and the client ports of the raw `ws` steps. `"baseline"`
     // notes the count; a number then waits up to `within` ms for the node
@@ -180,6 +191,15 @@ function watchedConnections(pid, ports) {
     }
   }
   return count;
+}
+
+// The CPU time all the node's threads have used, user and system, in ms
+// (`/proc/<pid>/stat` fields 14 and 15, in clock ticks of 10 ms).
+function cpuMs(pid) {
+  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  // The command name is in parentheses and can hold spaces.
+  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  return (Number(fields[11]) + Number(fields[12])) * 10;
 }
 
 function memoryKiB(pid, field) {

@@ -142,6 +142,15 @@ APIs, and Wrangler configuration.
   passes the budget as it is read. Stream a larger body instead. After
   `arrayBuffer()` or `blob()` hands a body over, reading it again throws
   `Body has already been used`, as in workerd.
+- A clone or `tee()` of a body the host holds (a fetched body, a request
+  body, an R2 object's) holds what its slower branch has not read yet on the
+  host, charged to the budget. All of an isolate's tees together hold at
+  most half the budget, so the branches being read have the other half. Past that, both branches end with
+  Cloudflare's `TypeError: ReadableStream.tee() buffer limit exceeded. …`
+  after what they hold, and the isolate lives on; workerd run locally has no
+  such limit. A clone or tee of a stream the Worker made buffers in the
+  isolate, so past the limit it condemns the isolate instead. Read clones
+  and tees in parallel.
 - A request has a CPU limit only when a Dynamic Worker sets `cpuMs`. See
   [Dynamic Workers](services/dynamic-workers.md#differences-from-cloudflare).
 

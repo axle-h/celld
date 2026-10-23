@@ -1,0 +1,7 @@
+// Targets that are not strings: Wrangler names each.
+{
+  "name": "not-strings",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "alias": { "one": 1, "two": true, "three": "./index.js" }
+}

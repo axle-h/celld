@@ -1,0 +1,13 @@
+{
+  "kind": "celld-only",
+  "reason": "celld limits (plan 1.23): workerd run locally buffers a tee's slower branch without a limit (its LimitEnforcer's buffering limit is unlimited), so the branch is never refused there. Cloudflare's is, with the TypeError this case expects (api/util.c++).",
+  "workers": ["app", "back"],
+  "steps": [
+    {"path": "/clone?mb=16"},
+    {"path": "/clone?mb=400"},
+    {"path": "/tee?mb=400"},
+    {"path": "/clone?mb=16"},
+    {"path": "/shared"},
+    {"path": "/clone?mb=16"}
+  ]
+}

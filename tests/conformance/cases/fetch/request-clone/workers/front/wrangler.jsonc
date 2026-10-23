@@ -1,0 +1,11 @@
+// Clones a Request from each source and checks what the clone keeps: workerd
+// tees the body, copies the headers with their guard and `cf`, and keeps the
+// method, URL, redirect mode and signal (Request::clone in api/http.c++).
+// celld refused to clone a used body with its own text, and shared `cf`
+// with the clone (plan 1.23).
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }]
+}

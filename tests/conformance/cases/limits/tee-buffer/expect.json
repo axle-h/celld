@@ -1,0 +1,80 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "first": {
+          "mb": 16,
+          "error": null
+        },
+        "second": {
+          "mb": 16,
+          "error": null
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "first": {
+          "read": true,
+          "error": "TypeError: ReadableStream.tee() buffer limit exceeded. This error usually occurs when a Request or Response with a large body is cloned, then only one of the clones is read, forcing the Workers runtime to buffer the entire body in memory. To fix this issue, remove unnecessary calls to Request/Response.clone() and ReadableStream.tee(), and always read clones/tees in parallel."
+        },
+        "second": {
+          "read": true,
+          "error": "TypeError: ReadableStream.tee() buffer limit exceeded. This error usually occurs when a Request or Response with a large body is cloned, then only one of the clones is read, forcing the Workers runtime to buffer the entire body in memory. To fix this issue, remove unnecessary calls to Request/Response.clone() and ReadableStream.tee(), and always read clones/tees in parallel."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "first": {
+          "read": true,
+          "error": "TypeError: ReadableStream.tee() buffer limit exceeded. This error usually occurs when a Request or Response with a large body is cloned, then only one of the clones is read, forcing the Workers runtime to buffer the entire body in memory. To fix this issue, remove unnecessary calls to Request/Response.clone() and ReadableStream.tee(), and always read clones/tees in parallel."
+        },
+        "second": {
+          "read": true,
+          "error": "TypeError: ReadableStream.tee() buffer limit exceeded. This error usually occurs when a Request or Response with a large body is cloned, then only one of the clones is read, forcing the Workers runtime to buffer the entire body in memory. To fix this issue, remove unnecessary calls to Request/Response.clone() and ReadableStream.tee(), and always read clones/tees in parallel."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "first": {
+          "mb": 16,
+          "error": null
+        },
+        "second": {
+          "mb": 16,
+          "error": null
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "alonePast48MiB": true,
+        "sharedUnder32MiB": true,
+        "errors": [
+          "TypeError: ReadableStream.tee() buffer limit exceeded. This error usually occurs when a Request or Response with a large body is cloned, then only one of the clones is read, forcing the Workers runtime to buffer the entire body in memory. To fix this issue, remove unnecessary calls to Request/Response.clone() and ReadableStream.tee(), and always read clones/tees in parallel.",
+          "TypeError: ReadableStream.tee() buffer limit exceeded. This error usually occurs when a Request or Response with a large body is cloned, then only one of the clones is read, forcing the Workers runtime to buffer the entire body in memory. To fix this issue, remove unnecessary calls to Request/Response.clone() and ReadableStream.tee(), and always read clones/tees in parallel."
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "first": {
+          "mb": 16,
+          "error": null
+        },
+        "second": {
+          "mb": 16,
+          "error": null
+        }
+      }
+    }
+  ]
+}

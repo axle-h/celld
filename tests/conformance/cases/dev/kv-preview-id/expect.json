@@ -1,0 +1,16 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "BOTH_ID": null,
+        "BOTH_PREVIEW": "BOTH",
+        "PREVIEW_ONLY": "PREVIEW_ONLY",
+        "ID_ONLY": "ID_ONLY",
+        "NEITHER": "NEITHER"
+      }
+    }
+  ]
+}

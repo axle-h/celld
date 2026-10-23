@@ -1,0 +1,8 @@
+// An alias celld applies, and one with an empty target, which aliases
+// nothing, as in Wrangler.
+{
+  "name": "accepted",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "alias": { "thing": "./lib/thing", "nothing": "" }
+}

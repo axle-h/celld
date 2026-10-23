@@ -1,0 +1,13 @@
+// What a body and a Response get when the Worker doesn't say, and what a
+// Worker may do with them. workerd gives a string body a
+// `text/plain;charset=UTF-8` Content-Type, a Response with no statusText its
+// status's reason phrase, and a Response from a service binding or the
+// network the statusText its target gave. text() refuses a body that has been read from,
+// and a received request's headers, and its clone's, are immutable. celld
+// does none of these (plan 1.43, found by 1.23).
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }]
+}

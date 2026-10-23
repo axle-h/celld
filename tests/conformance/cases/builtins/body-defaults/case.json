@@ -1,0 +1,10 @@
+{
+  "workers": ["app", "back"],
+  "upstream": true,
+  "env": {"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}"},
+  "xfail": "1.43",
+  "steps": [
+    {"path": "/?port=${UPSTREAM_PORT}"},
+    {"path": "/incoming", "method": "POST", "headers": {"x-from": "client"}, "body": "incoming body"}
+  ]
+}

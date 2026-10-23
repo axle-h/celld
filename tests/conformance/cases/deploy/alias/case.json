@@ -1,0 +1,15 @@
+{
+  "kind": "celld-only",
+  "reason": "celld deploy --dry-run refusals of Wrangler's `alias` (plan 1.24); workerd has no deploy step. modules/alias records what an accepted alias does, differentially",
+  "workers": ["relative-key", "package-target", "not-strings", "not-object", "missing-target", "subpath-import", "no-bundle", "accepted"],
+  "steps": [
+    {"deploy": "relative-key"},
+    {"deploy": "package-target"},
+    {"deploy": "not-strings"},
+    {"deploy": "not-object"},
+    {"deploy": "missing-target"},
+    {"deploy": "subpath-import"},
+    {"deploy": "no-bundle"},
+    {"deploy": "accepted"}
+  ]
+}

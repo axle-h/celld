@@ -1,0 +1,16 @@
+// Under `wrangler dev`, and so `celld dev`, a KV binding is the namespace its
+// `preview_id` names, else its `id`'s, and with neither, a namespace named
+// after the binding. celld dev required `id` and ignored `preview_id` (plan
+// 1.25). peer binds each namespace by `id`, to show which one app wrote to.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "kv_namespaces": [
+    { "binding": "BOTH", "id": "both-id", "preview_id": "both-preview" },
+    { "binding": "PREVIEW_ONLY", "preview_id": "preview-only" },
+    { "binding": "ID_ONLY", "id": "id-only" },
+    { "binding": "NEITHER" }
+  ],
+  "services": [{ "binding": "PEER", "service": "peer" }]
+}
