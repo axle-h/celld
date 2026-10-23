@@ -255,18 +255,25 @@ const __chunkTake = (st) => {
 const __chunkCopy = (chunk) => ArrayBuffer.isView(chunk)
   ? new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength).slice()
   : chunk;
+// workerd converts a cancel reason into an Error before it rejects the read
+// in flight with it (cancelErrorTypePropagation).
+const __cancelError = (reason) => reason instanceof Error
+  ? reason
+  : new Error(reason === undefined ? "Stream was cancelled." : String(reason));
 // A platform stream: a body, a Blob's stream, a compression stream's output, a
 // stream received over RPC. In workerd these are internal byte streams, so a
 // BYOB reader works on them. `pull()` returns the next chunk (or a promise of
 // it), `null` at the end; `cancel(reason)` stops the source.
 //
-// A default reader reads through the ordinary stream machinery. A BYOB reader
-// reads through `_ictl`, an internal controller over the same chunks (see
-// ChunkedInternalController in byte_streams.js), with workerd's internal-stream
-// semantics: one read at a time, a Uint8Array whatever the view's type, and a
-// cancel that rejects the read in flight. `_ictl` names
-// ReadableStreamBYOBReader, which compiles the lazy byte-stream prelude, so a
-// Worker that never asks for a BYOB reader never pays for it.
+// A default reader reads through the ordinary stream machinery, with the
+// internal-stream contract streams.js gives the streams registered with
+// `__streamIo.internal`. A BYOB reader reads through `_ictl`, an internal
+// controller over the same chunks (see ChunkedInternalController in
+// byte_streams.js). Both have workerd's internal-stream semantics: one read
+// at a time, a cancel that rejects the read in flight, and for BYOB a
+// Uint8Array whatever the view's type. `_ictl` names ReadableStreamBYOBReader, which compiles the lazy
+// byte-stream prelude, so a Worker that never asks for a BYOB reader never
+// pays for it.
 class CelldChunkStream extends ReadableStream {
   constructor(pull, cancel) {
     const st = {
@@ -290,6 +297,7 @@ class CelldChunkStream extends ReadableStream {
       },
     }, { highWaterMark: 0 });
     this._chunks = st;
+    __celld.__streamIo.internal(this);
   }
   getReader(options) {
     if (options !== undefined && options !== null &&
@@ -308,6 +316,11 @@ class CelldChunkStream extends ReadableStream {
   _take() { return __chunkTake(this._chunks); }
   _cancel(reason) {
     this._byob?._cancelled(reason);
+    if (this._readRequests.length > 0) {
+      const error = __cancelError(reason);
+      for (const request of this._readRequests) request.reject(error);
+      this._readRequests = [];
+    }
     return super._cancel(reason);
   }
   // Branches of the same kind, read from one default reader on this stream.
@@ -410,17 +423,25 @@ class CelldBodyStream extends CelldChunkStream {
 // one, and only while none of its bytes are held here: the part of a chunk a
 // BYOB read left, or a read in flight. A brand check, not a property: a
 // stream id is a capability for whatever body the host holds under it, and a
-// Worker can put any property on its own stream.
+// Worker can put any property on its own stream. A body another request or
+// Durable Object owns throws workerd's error, so no consumer takes it over.
 let __hostStreamId;
 // A body the host holds: a fetched body, a streamed request body, an R2
 // object's body, a Dynamic Worker's response. Each chunk is a Uint8Array the
 // host moved in without a copy.
+//
+// The body belongs to the request or Durable Object that received it, as in
+// workerd, where it is an I/O object of that IoContext: reading, cancelling,
+// teeing or sending it on from any other fails with workerd's cross-request
+// error, before the stream's own state is consulted (`__streamIo.own` in
+// streams.js). The host refuses the id the same way (plan 1.26).
 class CelldHttpBodyStream extends CelldChunkStream {
   #id;
   static {
     __hostStreamId = (body) => {
       if (typeof body !== "object" || body === null || !(#id in body))
         return undefined;
+      __celld.__streamIo.check(body);
       const st = body._chunks;
       return st.rest === null && st.pulling === null && !st.done &&
           body._queue.length === 0
@@ -436,8 +457,10 @@ class CelldHttpBodyStream extends CelldChunkStream {
       return typeof chunk === "string" ? null : chunk;
     }, () => { __http_stream_cancel(id); });
     this.#id = id;
+    __celld.__streamIo.own(this, "ReadableStreamSource");
   }
   tee(cloneForBranch2 = false) {
+    __celld.__streamIo.check(this);
     if (this.locked) throw new TypeError("ReadableStream is locked");
     const id = __hostStreamId(this);
     if (id === undefined) return super.tee(cloneForBranch2);
@@ -928,8 +951,10 @@ const __subrequestBody = async (req, absent = false) => {
   }
   // The receiver now owns the one host source. Lock the wrapper so a later
   // read fails instead of racing the receiver, and expose the transfer through
-  // the standard Body flag.
+  // the standard Body flag, and on the stream: a Response whose body was sent
+  // on reads as used, as in workerd.
   req._bodyUsed = true;
+  req.body._disturbed = true;
   req.body.getReader();
   return { body: new Uint8Array(), streamId };
 };
@@ -6145,6 +6170,7 @@ class DurableObjectNamespace {
           // which is what awaiting the old _consume() did and what workerd
           // reports as request.bodyUsed after the forward.
           req._bodyUsed = true;
+          req.body._disturbed = true;
           req.body.getReader();
         }
         // Forward the request's headers to the cell as JSON. When they were

@@ -67,7 +67,8 @@
         "fetched untouched": {
           "response": "Response: back's body",
           "request": "accepted",
-          "text": "Response: back's body"
+          "text": "Response: back's body",
+          "fetch": "Response: back's body"
         },
         "fetched locked": {
           "response": "TypeError: This ReadableStream is currently locked to a reader.",

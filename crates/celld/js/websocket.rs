@@ -19,13 +19,11 @@ pub(super) struct WsCapture {
     promise: Option<v8::Global<v8::Promise>>,
 }
 
-/// workerd's text for an I/O object used from a request other than the one
-/// that created it.
-const CROSS_REQUEST_IO: &str = "Cannot perform I/O on behalf of a different request. I/O \
-     objects (such as streams, request/response bodies, and others) created in the context \
-     of one request handler cannot be accessed from a different request's handler. This is \
-     a limitation of Cloudflare Workers which allows us to improve overall performance. \
-     (I/O type: WebSocket)";
+/// workerd's text for a socket used from a request other than the one that
+/// created it.
+fn cross_request_io() -> String {
+    foreign_io_error(false, "WebSocket")
+}
 
 /// The refusal for a non-zero id that names no socket the running code
 /// could register again: it closed, or it was never allocated.
@@ -67,7 +65,7 @@ fn may_use(owner: &WsOwner, id: u64) -> Result<bool, String> {
     match ws_access(id, owner) {
         WsAccess::Owned => Ok(true),
         WsAccess::Unknown => Ok(false),
-        WsAccess::Other => Err(CROSS_REQUEST_IO.to_string()),
+        WsAccess::Other => Err(cross_request_io()),
     }
 }
 
@@ -80,7 +78,7 @@ fn claim(owner: &WsOwner, id: u64) -> Result<u64, String> {
     match ws_access(id, owner) {
         WsAccess::Owned => Ok(id),
         WsAccess::Unknown => Err(NOT_VALID.to_string()),
-        WsAccess::Other => Err(CROSS_REQUEST_IO.to_string()),
+        WsAccess::Other => Err(cross_request_io()),
     }
 }
 
@@ -109,7 +107,7 @@ pub(super) fn admit_target(context: &IoContext, target: &WsTarget) -> Result<(),
         return Ok(());
     }
     if ws_granted_elsewhere(target, &owner) || ws_access(target.id, &owner) == WsAccess::Other {
-        return Err(CROSS_REQUEST_IO.to_string());
+        return Err(cross_request_io());
     }
     Err(NOT_VALID.to_string())
 }
@@ -201,7 +199,7 @@ pub(super) fn transfer_worker_websocket_handoff(
 /// The message for a handed-over socket that cannot be used.
 fn handoff_refusal(refusal: WorkerHandoffRefusal) -> String {
     match refusal {
-        WorkerHandoffRefusal::OtherRequest => CROSS_REQUEST_IO.to_string(),
+        WorkerHandoffRefusal::OtherRequest => cross_request_io(),
         WorkerHandoffRefusal::Gone => {
             "The WebSocket that the subrequest returned is no longer open".to_string()
         }
@@ -1428,7 +1426,7 @@ mod tests {
             caller.worker_handoffs.lock().unwrap().push(token.clone());
             assert_eq!(
                 take_request_worker_handoff(&other, &token).err().as_deref(),
-                Some(CROSS_REQUEST_IO)
+                Some(cross_request_io().as_str())
             );
             // Still the caller's, and still open.
             assert!(queue.registered());
@@ -1471,7 +1469,7 @@ mod tests {
     }
 
     fn cross_request() -> Option<String> {
-        Some(CROSS_REQUEST_IO.to_string())
+        Some(cross_request_io())
     }
 
     #[test]
@@ -2068,18 +2066,18 @@ mod tests {
                 for target in [&stolen, &unknown] {
                     let refused = call_op(scope, op_ws_bind_target, &[target]).unwrap_err();
                     assert!(
-                        refused.contains(CROSS_REQUEST_IO) || refused.contains(NOT_VALID),
+                        refused.contains(&cross_request_io()) || refused.contains(NOT_VALID),
                         "{refused}"
                     );
                     let refused = read_forged(scope, target).err().unwrap();
                     assert!(
-                        refused.contains(CROSS_REQUEST_IO) || refused.contains(NOT_VALID),
+                        refused.contains(&cross_request_io()) || refused.contains(NOT_VALID),
                         "{refused}"
                     );
                 }
                 assert!(call_op(scope, op_ws_bind_target, &[&stolen])
                     .unwrap_err()
-                    .contains(CROSS_REQUEST_IO));
+                    .contains(&cross_request_io()));
                 // The same target under a grant to this request: admitted, and
                 // the grant is consumed by that one use.
                 let granted: WsTarget = serde_json::from_str(&stolen).unwrap();

@@ -8,6 +8,7 @@ use crate::engine_api::HttpChunkStream;
 use crate::engine_api::HttpResponse;
 use crate::engine_api::HttpResponseWebSocket;
 use crate::engine_api::RequestBody;
+use crate::ws_registry::WsOwner;
 use anyhow::Result;
 use futures_util::StreamExt as _;
 use std::collections::HashMap;
@@ -36,6 +37,13 @@ pub(crate) const HTTP_STREAM_REGISTRATION_CLOSED: &str = "the HTTP stream servic
 pub(crate) const HTTP_TEE_BRANCH_CAPACITY: usize = 16;
 const RESPONSE_STREAM_CONSUMER_CANCELED: &str = "response stream consumer canceled";
 const RESPONSE_STREAM_CLOSE_IN_PROGRESS: &str = "response stream close is already in progress";
+/// workerd's error for a body used by code other than the request or Durable
+/// Object that owns it: worded for a Durable Object when one uses another's.
+/// The harness refuses with it first; the host refuses with it too, for an id
+/// that reaches an op some other way.
+pub(crate) fn foreign_stream_error(object: bool) -> String {
+    crate::ws_registry::foreign_io_error(object, "ReadableStreamSource")
+}
 pub(crate) enum HttpStreamSource {
     Response(reqwest::Response),
     Receiver(tokio::sync::mpsc::Receiver<Result<Vec<u8>, String>>),
@@ -119,6 +127,29 @@ enum HttpSourceLeaseMode {
     Transfer,
 }
 
+/// What the running code may do with a stream id.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HttpStreamAccess {
+    /// The running code owns the stream.
+    Owned,
+    /// The id names no registered stream: it finished, expired or was
+    /// never allocated. The ops answer it as they always have.
+    Unknown,
+    /// Another request or Durable Object owns the stream, or none does yet.
+    /// `object` when a Durable Object owns it and one is asking.
+    Other { object: bool },
+}
+
+impl HttpStreamAccess {
+    /// workerd's error for a use the running code may not make.
+    pub(crate) fn refusal(self) -> Option<String> {
+        match self {
+            Self::Other { object } => Some(foreign_stream_error(object)),
+            Self::Owned | Self::Unknown => None,
+        }
+    }
+}
+
 enum HttpStreamSourceSlot {
     Available(HttpStreamSource),
     Leased {
@@ -135,6 +166,11 @@ pub(crate) struct HttpStreamEntry {
     /// Request contexts that can still read this source. A dispatch guard can
     /// reclaim the entry only while this is zero.
     owners: usize,
+    /// The request or Durable Object whose code may use this id, as for a
+    /// socket (`WsOwner`). `None` until the host hands the id to one: an
+    /// incoming body before its handler claims it, or a host-only stream.
+    /// The ops refuse every other caller.
+    owner: Option<WsOwner>,
     active_writes: usize,
     active_closes: usize,
     closing: bool,
@@ -153,6 +189,7 @@ impl HttpStreamEntry {
             source: HttpStreamSourceSlot::Available(source),
             termination: Arc::new(HttpStreamTermination::new()),
             owners: 0,
+            owner: None,
             active_writes: 0,
             active_closes: 0,
             closing: false,
@@ -587,8 +624,19 @@ impl HttpStreamService {
 
     #[must_use = "a rejected HTTP stream must not publish an ID"]
     pub(crate) fn register_source(self: &Arc<Self>, source: HttpStreamSource) -> Option<u64> {
+        self.register_source_for(source, None)
+    }
+
+    /// Register `source` for `owner`, the code its id is handed to.
+    #[must_use = "a rejected HTTP stream must not publish an ID"]
+    pub(crate) fn register_source_for(
+        self: &Arc<Self>,
+        source: HttpStreamSource,
+        owner: Option<WsOwner>,
+    ) -> Option<u64> {
         let stream_id = NEXT_HTTP_STREAM_ID.fetch_add(1, Ordering::Relaxed);
-        self.register(stream_id, source, None).then_some(stream_id)
+        self.register(stream_id, source, None, owner)
+            .then_some(stream_id)
     }
 
     #[must_use = "a rejected response stream must not publish an ID"]
@@ -596,12 +644,14 @@ impl HttpStreamService {
         self: &Arc<Self>,
         receiver: tokio::sync::mpsc::Receiver<Result<Vec<u8>, String>>,
         writer: ResponseStreamWriter,
+        owner: Option<WsOwner>,
     ) -> Option<u64> {
         let stream_id = NEXT_HTTP_STREAM_ID.fetch_add(1, Ordering::Relaxed);
         self.register(
             stream_id,
             HttpStreamSource::Receiver(receiver),
             Some(writer),
+            owner,
         )
         .then_some(stream_id)
     }
@@ -611,6 +661,7 @@ impl HttpStreamService {
         stream_id: u64,
         source: HttpStreamSource,
         writer: Option<ResponseStreamWriter>,
+        mut stream_owner: Option<WsOwner>,
     ) -> bool {
         let mut candidate_source = Some(source);
         let mut candidate_writer = writer;
@@ -632,10 +683,10 @@ impl HttpStreamService {
                 );
                 let generation = Self::next_sequence(&mut state.next_generation);
                 let deadline_ms = now_ms.saturating_add(HTTP_STREAM_IDLE_TIMEOUT_MS);
-                state.sources.insert(
-                    stream_id,
-                    HttpStreamEntry::new(generation, deadline_ms, candidate_source.take().unwrap()),
-                );
+                let mut entry =
+                    HttpStreamEntry::new(generation, deadline_ms, candidate_source.take().unwrap());
+                entry.owner = stream_owner.take();
+                state.sources.insert(stream_id, entry);
                 if let Some(writer) = candidate_writer.take() {
                     state.response_writers.insert(stream_id, writer);
                 }
@@ -712,6 +763,40 @@ impl HttpStreamService {
             generation,
             armed: true,
         })
+    }
+
+    /// Claim an incoming body for `owner`, the handler it is delivered to,
+    /// which from then on is the only code that may use its id.
+    pub(crate) fn claim_for(
+        self: &Arc<Self>,
+        stream_id: u64,
+        owner: WsOwner,
+    ) -> Option<HttpStreamClaim> {
+        let claim = self.claim(stream_id)?;
+        if let Some(entry) = self
+            .state
+            .lock()
+            .unwrap()
+            .sources
+            .get_mut(&stream_id)
+            .filter(|entry| entry.generation == claim.generation)
+        {
+            entry.owner = Some(owner);
+        }
+        Some(claim)
+    }
+
+    /// Whether `owner` may use `stream_id`. An op checks before it acts on an
+    /// id that JavaScript passed it.
+    pub(crate) fn access(&self, stream_id: u64, owner: &WsOwner) -> HttpStreamAccess {
+        match self.state.lock().unwrap().sources.get(&stream_id) {
+            None => HttpStreamAccess::Unknown,
+            Some(entry) if entry.owner.as_ref() == Some(owner) => HttpStreamAccess::Owned,
+            Some(entry) => HttpStreamAccess::Other {
+                object: matches!(owner, WsOwner::Cell(_))
+                    && matches!(entry.owner, Some(WsOwner::Cell(_))),
+            },
+        }
     }
 
     fn release_claim(&self, stream_id: u64, generation: u64) {
@@ -1756,9 +1841,13 @@ pub(crate) fn claim_http_stream(stream_id: u64) -> Option<HttpStreamClaim> {
 /// under a token that only that request receives (`wsWorker`). Every other path has nowhere to put a
 /// socket, so a response that carries one is an error rather than a socket
 /// silently dropped.
+///
+/// A streamed body's id is registered for `stream_owner`, the code that made
+/// the call: only it may read the body, or send it on.
 pub(crate) fn encode_http_response(
     mut response: HttpResponse,
     ws_target: Option<crate::ws_registry::WsCaller>,
+    stream_owner: Option<WsOwner>,
     stream_service: &Arc<HttpStreamService>,
 ) -> Result<String, String> {
     let mut obj = serde_json::json!({
@@ -1786,7 +1875,8 @@ pub(crate) fn encode_http_response(
         }
     }
     if let Some(stream) = response.stream.take() {
-        let Some(stream_id) = stream_service.register_source(HttpStreamSource::Stream(stream))
+        let Some(stream_id) =
+            stream_service.register_source_for(HttpStreamSource::Stream(stream), stream_owner)
         else {
             return Err(HTTP_STREAM_REGISTRATION_CLOSED.into());
         };
@@ -2095,18 +2185,20 @@ impl HttpTeeBranch {
 /// the slower branch's chunks are charged with `charge`. A chunk the charge
 /// refuses stops the tee as workerd's buffering limit does: both branches end
 /// with `HTTP_TEE_BUFFER_LIMIT` after what they hold, and the source is
-/// cancelled.
+/// cancelled. The branches belong to `owner`, the code that teed.
 pub(crate) fn prepare_http_stream_tee(
     service: &Arc<HttpStreamService>,
     source: HttpTransferredStream,
     charge: HttpTeeCharge,
+    owner: Option<WsOwner>,
 ) -> Result<((u64, u64), HttpTeePump), &'static str> {
     let (tx1, rx1) = tokio::sync::mpsc::channel(HTTP_TEE_BRANCH_CAPACITY);
     let (tx2, rx2) = tokio::sync::mpsc::channel(HTTP_TEE_BRANCH_CAPACITY);
-    let Some(id1) = service.register_source(HttpStreamSource::Receiver(rx1)) else {
+    let Some(id1) = service.register_source_for(HttpStreamSource::Receiver(rx1), owner.clone())
+    else {
         return Err(HTTP_STREAM_REGISTRATION_CLOSED);
     };
-    let Some(id2) = service.register_source(HttpStreamSource::Receiver(rx2)) else {
+    let Some(id2) = service.register_source_for(HttpStreamSource::Receiver(rx2), owner) else {
         service.cancel_source(id1);
         return Err(HTTP_STREAM_REGISTRATION_CLOSED);
     };
@@ -2285,7 +2377,7 @@ mod tests {
             }
             Some(Box::new(Held(counter.clone(), len)) as Box<dyn Send + Sync>)
         });
-        let (ids, pump) = prepare_http_stream_tee(&service, source, charge).unwrap();
+        let (ids, pump) = prepare_http_stream_tee(&service, source, charge, None).unwrap();
         crate::asyncrt::spawn(pump);
         (ids, held)
     }
@@ -2335,7 +2427,7 @@ mod tests {
             .unwrap();
         let source = service.checkout_transfer(id, None).unwrap();
         let charge: HttpTeeCharge = Box::new(|_| Some(Box::new(()) as Box<dyn Send + Sync>));
-        let (ids, pump) = prepare_http_stream_tee(&service, source, charge).unwrap();
+        let (ids, pump) = prepare_http_stream_tee(&service, source, charge, None).unwrap();
         let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
         crate::asyncrt::spawn(Counted {
@@ -2437,6 +2529,77 @@ mod tests {
         });
     }
 
+    /// A stream id answers only the code it was handed to: the owner it was
+    /// registered for, the handler that claimed an incoming body, and the
+    /// code that teed it, for each branch.
+    #[test]
+    fn a_stream_answers_only_its_owner() {
+        crate::asyncrt::test_host_runtime().block_on(async {
+            use HttpStreamAccess::*;
+            let service = http_stream_service();
+            let request = WsOwner::Request(u64::MAX - 10);
+            let other = WsOwner::Request(u64::MAX - 11);
+            let cell = WsOwner::Cell("owned-a".into());
+            let (_sender, receiver) = tokio::sync::mpsc::channel(1);
+            let id = service
+                .register_source_for(HttpStreamSource::Receiver(receiver), Some(request.clone()))
+                .unwrap();
+            assert_eq!(service.access(id, &request), Owned);
+            assert_eq!(service.access(id, &other), Other { object: false });
+            assert_eq!(service.access(id, &cell), Other { object: false });
+
+            // An incoming body is no one's until its handler claims it.
+            let (_sender, receiver) = tokio::sync::mpsc::channel(1);
+            let incoming = service
+                .register_source(HttpStreamSource::Receiver(receiver))
+                .unwrap();
+            assert_eq!(service.access(incoming, &cell), Other { object: false });
+            let claim = service.claim_for(incoming, cell.clone()).unwrap();
+            assert_eq!(service.access(incoming, &cell), Owned);
+            assert_eq!(service.access(incoming, &request), Other { object: false });
+            // Another Durable Object is told so in workerd's words for one.
+            assert_eq!(
+                service.access(incoming, &WsOwner::Cell("owned-b".into())),
+                Other { object: true }
+            );
+            drop(claim);
+            assert_eq!(service.access(incoming, &cell), Unknown);
+
+            // A body sent on to another handler becomes that handler's when it
+            // claims it: the sender no longer owns it.
+            let (_sender, receiver) = tokio::sync::mpsc::channel(1);
+            let sent = service
+                .register_source_for(HttpStreamSource::Receiver(receiver), Some(request.clone()))
+                .unwrap();
+            let claim = service.claim_for(sent, cell.clone()).unwrap();
+            assert_eq!(service.access(sent, &cell), Owned);
+            assert_eq!(service.access(sent, &request), Other { object: false });
+            drop(claim);
+
+            // A facet is a Durable Object of its own, not its parent.
+            let facet = WsOwner::Cell(crate::engine_api::facet_cell("owned-a", &["child".into()]));
+            let (_sender, receiver) = tokio::sync::mpsc::channel(1);
+            let parents = service
+                .register_source_for(HttpStreamSource::Receiver(receiver), Some(cell.clone()))
+                .unwrap();
+            assert_eq!(service.access(parents, &facet), Other { object: true });
+            service.cancel_source(parents);
+
+            // A tee's branches belong to the code that teed.
+            let source = service.checkout_transfer(id, None).unwrap();
+            let charge: HttpTeeCharge = Box::new(|_| Some(Box::new(()) as Box<dyn Send + Sync>));
+            let ((left, right), pump) =
+                prepare_http_stream_tee(&service, source, charge, Some(request.clone())).unwrap();
+            for branch in [left, right] {
+                assert_eq!(service.access(branch, &request), Owned);
+                assert_eq!(service.access(branch, &other), Other { object: false });
+                service.cancel_source(branch);
+                assert_eq!(service.access(branch, &request), Unknown);
+            }
+            drop(pump);
+        });
+    }
+
     #[test]
     fn encoding_a_worker_socket_parks_it_registered() {
         crate::asyncrt::test_host_runtime().block_on(async {
@@ -2451,6 +2614,7 @@ mod tests {
                     owner: crate::ws_registry::WsOwner::Request(u64::MAX),
                     retired: Default::default(),
                 }),
+                None,
                 &http_stream_service(),
             )
             .unwrap();
@@ -2484,6 +2648,7 @@ mod tests {
             let (socket, queue) = worker_socket();
             let encoded = encode_http_response(
                 upgrade(Some(HttpResponseWebSocket::Worker(socket))),
+                None,
                 None,
                 &http_stream_service(),
             );

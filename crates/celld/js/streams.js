@@ -22,6 +22,94 @@ const _rsc_brand = Symbol("ReadableStreamController");
 
 const RELEASED =
   "This ReadableStream reader has been released.";
+const ONE_READ =
+  "This ReadableStream only supports a single pending read " +
+  "request at a time.";
+const OUTSTANDING =
+  "Cannot call releaseLock() on a reader with outstanding " +
+  "read promises.";
+
+// workerd's internal streams: request and response bodies,
+// Blob streams, compression output, IdentityTransformStream
+// readables. Their default reader is still a
+// ReadableStreamDefaultReader, with the internal contract:
+// one read in flight (a second rejects), and releaseLock()
+// throws while it is pending. A stream's `hooks` may replace
+// how the reader reads, releases and reports closed
+// (IdentityTransformStream's controller); `pending()` says
+// whether a read is in flight.
+const internalStreams = new WeakMap();
+const queuedReadPending = (s) => s._readRequests.length > 0;
+
+// Streams that belong to one request or Durable Object, as
+// workerd's I/O objects do: the check throws workerd's
+// cross-request error for any other. Keyed by the stream, so
+// nothing a Worker sets on a stream reaches it.
+const ioChecks = new WeakMap();
+const ioCheck = (stream) => {
+  const check = ioChecks.get(stream);
+  if (check !== undefined) check();
+};
+const ioRefusal = (stream) => {
+  try { ioCheck(stream); }
+  catch (e) { return Promise.reject(e); }
+  return undefined;
+};
+// A refused read also errors the stream with the refusal, as workerd's
+// does: a reader's `closed` then rejects with it. Every other refusal
+// leaves the stream as it was.
+const readRefusal = (stream) => {
+  try { ioCheck(stream); }
+  catch (e) {
+    const internal = internalStreams.get(stream);
+    if (internal?.error !== undefined) internal.error(e);
+    else if (!stream._closed && !stream._errored) stream._controller?.error(e);
+    return Promise.reject(e);
+  }
+  return undefined;
+};
+
+// workerd's text for an I/O object used by code that does not
+// own it. Tokens come from `__ws_owner()`: even for a request,
+// odd for a Durable Object.
+function crossOwnerError(running, owner, kind) {
+  const object = running % 2 === 1 && owner % 2 === 1;
+  return new Error(object
+    ? "Cannot perform I/O on behalf of a different Durable " +
+      "Object. I/O objects (such as streams, request/response " +
+      "bodies, and others) created in the context of one " +
+      "Durable Object cannot be accessed from a different " +
+      "Durable Object in the same isolate. This is a " +
+      "limitation of Cloudflare Workers which allows us to " +
+      "improve overall performance. (I/O type: " + kind + ")"
+    : "Cannot perform I/O on behalf of a different request. " +
+      "I/O objects (such as streams, request/response bodies, " +
+      "and others) created in the context of one request " +
+      "handler cannot be accessed from a different request's " +
+      "handler. This is a limitation of Cloudflare Workers " +
+      "which allows us to improve overall performance. " +
+      "(I/O type: " + kind + ")");
+}
+
+__celld.__streamIo = Object.freeze({
+  // Give `stream` the internal-stream reader contract.
+  internal(stream, hooks = {}) {
+    internalStreams.set(stream, hooks);
+  },
+  // Tie `stream` to the code running now, refusing any other
+  // with workerd's error for an I/O object of type `kind`.
+  own(stream, kind) {
+    const owner = __ws_owner();
+    ioChecks.set(stream, () => {
+      const running = __ws_owner();
+      if (running !== owner)
+        throw crossOwnerError(running, owner, kind);
+    });
+  },
+  check: ioCheck,
+  refusal: ioRefusal,
+  readRefusal,
+});
 
 class ReadableStreamDefaultController {
   #stream;
@@ -124,6 +212,17 @@ class ReadableStreamDefaultReader {
       return Promise.reject(
         new TypeError(RELEASED));
     const s = this.#stream;
+    const internal = internalStreams.get(s);
+    if (internal !== undefined) {
+      const refused = readRefusal(s);
+      if (refused !== undefined) return refused;
+      if ((internal.pending ?? queuedReadPending)(s))
+        return Promise.reject(new TypeError(ONE_READ));
+      if (internal.read !== undefined) {
+        s._disturbed = true;
+        return internal.read(this);
+      }
+    }
     s._disturbed = true;
     if (s._errored)
       return Promise.reject(s._error);
@@ -154,8 +253,21 @@ class ReadableStreamDefaultReader {
   }
 
   releaseLock() {
+    const s = this.#stream;
+    const internal = internalStreams.get(s);
+    if (!this.#released && internal !== undefined &&
+        (internal.pending ?? queuedReadPending)(s))
+      throw new TypeError(OUTSTANDING);
+    this._release();
+  }
+
+  // The release itself. An internal stream's reader refuses
+  // releaseLock() with a read pending; a pipe that shuts down
+  // still releases it (pipeTo's finish).
+  _release() {
     if (!this.#released) {
       const s = this.#stream;
+      internalStreams.get(s)?.release?.(this);
       // Reject pending read requests per spec.
       for (const r of s._readRequests)
         r.reject(new TypeError(RELEASED));
@@ -170,13 +282,18 @@ class ReadableStreamDefaultReader {
     if (this.#released)
       return Promise.reject(
         new TypeError(RELEASED));
-    return this.#stream._closedPromise;
+    const s = this.#stream;
+    const internal = internalStreams.get(s);
+    if (internal?.closed !== undefined) return internal.closed(this);
+    return s._closedPromise;
   }
 
   cancel(reason) {
     if (this.#released)
       return Promise.reject(
         new TypeError(RELEASED));
+    const refused = ioRefusal(this.#stream);
+    if (refused !== undefined) return refused;
     return this.#stream._cancel(reason);
   }
 }
@@ -427,15 +544,10 @@ class ReadableStream {
     this._queueSizes = [];
     this._queueTotalSize = 0;
     this._disturbed = true;
-    // Workerd's internal (native) streams reject a pending
-    // read() when the stream is cancelled; spec JS streams
-    // resolve it {done: true}. Compression streams opt in
-    // to the internal behavior (compression_streams.js).
-    if (this._cancelRejectsReads) {
-      for (const r of this._readRequests)
-        r.reject(reason);
-      this._readRequests = [];
-    }
+    // Spec JS streams resolve a pending read() {done: true}.
+    // workerd's internal streams reject it instead; the
+    // harness's platform streams do that before this runs
+    // (CelldChunkStream._cancel).
     this._finishClose();
     if (this._cancelFn) {
       let result;
@@ -452,6 +564,8 @@ class ReadableStream {
   }
 
   cancel(reason) {
+    const refused = ioRefusal(this);
+    if (refused !== undefined) return refused;
     if (this._locked)
       return Promise.reject(new TypeError(
         "Cannot cancel a locked ReadableStream"));
@@ -459,6 +573,7 @@ class ReadableStream {
   }
 
   tee(cloneForBranch2 = false) {
+    ioCheck(this);
     // Branches of a byte stream are byte streams, so
     // they support BYOB reads; the source is still read
     // through a default reader (coalesced chunks).
@@ -552,6 +667,10 @@ class ReadableStream {
         !(destination instanceof WritableStream))
       return Promise.reject(new TypeError(
         "pipeTo destination must be WritableStream"));
+    // A stream another request owns refuses the pipe before
+    // anything else, as its reads would.
+    const refused = ioRefusal(this);
+    if (refused !== undefined) return refused;
     // Read options eagerly (getters may have
     // side effects).
     let preventClose = false;
@@ -600,7 +719,7 @@ class ReadableStream {
           'abort', abortListener);
       }
       function finish(isError, error) {
-        reader.releaseLock();
+        reader._release();
         writer.releaseLock();
         if (signal && abortListener)
           signal.removeEventListener(

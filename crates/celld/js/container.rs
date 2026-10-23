@@ -20,19 +20,6 @@ use super::*;
 use crate::container::{self, CellContainer, ContainerEngine, ExecParams, StartParams};
 use std::time::Duration;
 
-/// workerd's text for an I/O object used during another Durable Object's
-/// event (`IoContext::throwNotCurrentJsError`).
-const CROSS_OBJECT_IO: &str = "Cannot perform I/O on behalf of a different Durable Object. I/O \
-     objects (such as streams, request/response bodies, and others) created in the context of \
-     one Durable Object cannot be accessed from a different Durable Object in the same isolate. \
-     This is a limitation of Cloudflare Workers which allows us to improve overall performance.";
-
-/// The same, for a use outside any Durable Object event.
-const CROSS_REQUEST_IO: &str = "Cannot perform I/O on behalf of a different request. I/O \
-     objects (such as streams, request/response bodies, and others) created in the context of \
-     one request handler cannot be accessed from a different request's handler. This is a \
-     limitation of Cloudflare Workers which allows us to improve overall performance.";
-
 /// The refusal for a running object that has no container on this node.
 const NO_CONTAINER: &str = "this Durable Object has no container";
 
@@ -47,14 +34,10 @@ enum IoType {
     OutgoingFactory,
 }
 
-/// workerd's error for an I/O object of another object or request.
+/// workerd's error for an I/O object of another object or request
+/// (`IoContext::throwNotCurrentJsError`).
 fn foreign_io(in_cell_event: bool, io: IoType) -> String {
-    let text = if in_cell_event {
-        CROSS_OBJECT_IO
-    } else {
-        CROSS_REQUEST_IO
-    };
-    format!("{text} (I/O type: {io:?})")
+    crate::ws_registry::foreign_io_error(in_cell_event, &format!("{io:?}"))
 }
 
 /// The scope of the Durable Object (or facet) whose event `context` runs.

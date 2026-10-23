@@ -62,9 +62,7 @@ export default {
           const text = await new Request("http://x/", { method: "POST", body: stream }).text();
           return new Response(text);
         });
-        // celld refuses to send a fetched body on as a subrequest body ("the
-        // body stream is not owned"), a separate gap, so that row stops here.
-        if (sent !== undefined && !(source === "fetched" && state === "untouched"))
+        if (sent !== undefined)
           row.fetch = await attempt(() => env.BACK.fetch(sent));
         out[`${source} ${state}`] = row;
       }

@@ -373,8 +373,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 32 | 1.19 trace context across RPC and the peer tunnel | done | `0477165` |
 | 33 | 1.20 redirect handling through the same Fetcher | done | `1e23fdb`, starter `86b89b1` |
 | 34 | 1.22 WebSocket follow-ups; bounded send queues and socket lifetimes (security) | done | `5a59ae1` |
-| 35 | 1.23 `clone()` tees, 1.24 `alias` (package keys), 1.25 KV `preview_id` | done | see log |
-| 36+ | Phase 1 in plan order (1.26, 1.45, 1.28-1.30, 1.34, 1.36-1.44), and the 1.4 props key-order follow-up | queued | |
+| 35 | 1.23 `clone()` tees, 1.24 `alias` (package keys), 1.25 KV `preview_id` | done | `b9ee195`, starter `d5e7133` |
+| 36 | 1.26 stream ownership on the host, readers and IdentityTransformStream | done | see log |
+| 37+ | Phase 1 in plan order (1.45, 1.28-1.30, 1.34, 1.36-1.44, 1.46, 1.47), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -2973,6 +2974,187 @@ refuse the keys they don't model. Pinned by `dev/r2-d1-preview` (xfail).
   can't take a BYOB reader, and `releaseLock` with a read pending rejects
   the read instead of throwing.
 
+**As built.**
+- **What workerd does** (probed). A body an IoContext received is an I/O
+  object of it. From another request it is refused with the cross-request
+  error, `(I/O type: ReadableStreamSource)` (the cross-object text between
+  Durable Objects).
+  - Making a reader, `new Response(body)`, `locked` and a reader's `closed`
+    are not refused. `tee()` throws. Reads, `cancel()`, `text()`,
+    `pipeTo()`, iteration and a subrequest taking the body reject.
+    Returning the body as a response fails the request; a service
+    binding's caller gets the error.
+  - A refused read also errors the stream: `closed` then rejects with the
+    refusal.
+  - An `IdentityTransformStream` is an I/O object too: its readable is
+    refused as a body is, its writable's `write()`, `close()` and `abort()`
+    with `(I/O type: Writable)`. A `TransformStream` made by one request
+    is not refused in another, but reads and writes there never settle
+    (`cancel()`, `close()`, `abort()` do settle). So a body piped through
+    one and stashed delivers nothing later. Plain `ReadableStream`s cross
+    requests freely.
+  - Once a request ends, a pipe it was pumping stops, and its promise never
+    settles.
+  - Internal streams: one read in flight, a second rejects with "only
+    supports a single pending read request". `releaseLock()` throws
+    "outstanding read promises" while one is pending. A cancel rejects it
+    with the reason as an Error ("Stream was cancelled." for none), and
+    later reads are done. The reader is the standard
+    `ReadableStreamDefaultReader`, from `getReader()` or its constructor.
+  - An `IdentityTransformStream` read is served on a later turn even when
+    written bytes wait, so a second read, a `releaseLock()` or a cancel in
+    the read's turn meets it in flight. BYOB answers a `Uint8Array` of the
+    bytes filled, whatever the view, and `readAtLeast` counts the view's
+    elements. `tee()` branches take BYOB readers.
+  - A `TransformStream` starts with backpressure on: a write's transform
+    waits for a read. celld ran it at once, so a pipe from a pull source
+    with `highWaterMark: 0` into one filled memory until the isolate hit its
+    limit.
+  - Two things the probes showed are wrangler's harness, not workerd: its
+    `drainBody` middleware reads an unread request body after the handler
+    answers. So a request body stashed past its request reads as locked,
+    and a service echoing `request.body` as its response fails with "Body
+    has already been used". Cases echo with `text()`.
+- **Host** (`http_streams.rs`, `js.rs`). Each `HttpStreamEntry` records an
+  owner, a `WsOwner` as 1.21's sockets do, from the running event when the
+  id is handed out:
+  - the caller of every fetch that answers with a body: network, service
+    binding, Durable Object, facet, Worker Loader, `globalOutbound`, assets
+    (`encode_http_response` takes it);
+  - R2 `get`, `__response_stream_create` and both tee branches;
+  - an incoming body's handler, which claims it (`claim_for`, which
+    replaces the sender's owner). A cell event now claims after its frame
+    is pushed, so the owner is the object (a facet is its own).
+
+  `access(id, owner)` answers Owned, Other (another owner, or none yet), or
+  Unknown (finished or never registered: the op answers as before, so
+  nothing leaks). Read, read_all, tee, cancel, the three response-stream
+  writer ops and `read_response` refuse Other. So does the body transfer
+  of every subrequest kind. The text comes from both owners' kinds, through
+  one builder shared with sockets and containers
+  (`ws_registry::foreign_io_error`).
+  - A pump an ended request left reading already stops, as in workerd
+    (probed: a `pipeTo` stops writing, and its promise never settles): the
+    host drops the request's pending ops when it ends.
+  - **Decision: no read refusal keyed on retirement.** It was tried and
+    reverted. A request is marked retired (`ws_retired`) once its 101 is
+    returned, while its sockets' handlers still run and read bodies, so
+    `websocket/cross-request-socket` hung.
+  - `read_response` reports what `__readResponse` threw by its message,
+    without the old "readResponse threw:" prefix, so a service binding's
+    caller gets workerd's error. `websocket/forged-response-target`'s
+    hand-written expectation changed with it.
+- **Forwarding a fetched body.** `transfer_body_stream(id, owner)` sends
+  any id the running code owns. A request's incoming body moves with the
+  claim it holds; any other id is claimed at the transfer. So a body a
+  subrequest answered with is sent on as in workerd, and
+  `streams/body-usable`'s skipped row runs.
+  - The sender's body now reads as used (`_disturbed`), as in workerd.
+    Before, only the new Request's flag was set.
+- **Streams** (`streams.js`, `writable_stream.js`, `byte_streams.js`,
+  `harness.js`). Two registries keyed by the stream, in WeakMaps, so
+  nothing a Worker sets reaches them (`__celld.__streamIo`):
+  - `internal(stream, hooks)`: the internal-stream contract, inside
+    `ReadableStreamDefaultReader` itself, for every platform stream
+    (`CelldChunkStream`) and `IdentityTransformStream` readable. The
+    contract is one read in flight, and `releaseLock()` throwing while it
+    is pending. The hooks let `IdentityTransformStream`'s controller serve
+    the reads and keep a per-reader `closed`. `CelldChunkStream._cancel`
+    rejects the pending read with the reason as an Error, replacing
+    `_cancelRejectsReads`, which only compression streams set and which
+    rejected with the raw reason.
+  - `own(stream, kind)`: the stream belongs to the code running now.
+    Checked first by both readers' reads and cancels, `cancel()`, `tee()`,
+    `pipeTo()`, `__hostStreamId` (`text()`, a subrequest's body, the
+    response path), and by a writer's `write()`, `close()` and `abort()`
+    and the writable's own `close()` and `abort()`. Host bodies and both
+    sides of an `IdentityTransformStream` (unless made at global scope)
+    are owned.
+  - `pipeTo()` releases its reader through `_release()`, so a shutdown with
+    a read in flight still unlocks.
+- **`TransformStream`** (`writable_stream.js`) has spec backpressure: a
+  write waits until the readable is read, an enqueue that fills the readable
+  sets it again, and an error, a cancel or an abort clears it. It records
+  the `__ws_owner` token of the code that made it, unless that is global
+  scope. Another owner's pull and write return a promise that never
+  settles.
+- **`IdentityTransformStream`** (`identity_transform_stream.js`).
+  - Reads are served on a later turn.
+  - BYOB answers `Uint8Array`.
+  - Both readers' `releaseLock()` throws with a read pending (`_reading`
+    for the BYOB reader).
+  - A cancel rejects the read in flight.
+  - `tee()` reads the readable through one reader as a platform stream and
+    tees that, so the branches take BYOB readers. They buffer in the
+    isolate, as 1.23's JS tees do.
+- **Decision: no lease for same-isolate RPC.** A host body returned or
+  passed over a same-isolate RPC is read under its owner, since the
+  entrypoint shares its caller's owner. Probed: a fetched body or Response
+  returned from `ctx.exports`, passed to it as an argument or in a Request,
+  `waitUntil` reads, `clone()` and `tee()` all still read the whole body.
+  Cross-isolate RPC streams are still Phase 7.
+- **Decision: a refused read errors the stream,** as the probes show
+  workerd's does (a reader's `closed` rejects with the refusal afterwards).
+  Every other refusal leaves the stream as it was.
+- **Internal signatures changed**, for the out-of-tree
+  `celld_internal_tests` suite to follow:
+  - `js::claim_http_stream`'s re-export is gone (`claim_for` replaces it in
+    `own_body_stream`);
+  - `HttpStreamService::register`, `register_response_pair`,
+    `encode_http_response` and `prepare_http_stream_tee` take an owner;
+  - `IoContext::transfer_body_stream` takes the owner and returns
+    `Result<RequestBodyGuard, Option<String>>`;
+  - `HttpStreamAccess::Other` carries `object`;
+  - the `CROSS_REQUEST_IO` constants in `js/websocket.rs` and
+    `js/container.rs` are now `foreign_io_error`.
+- **Tests.**
+  - `streams/cross-request-body` (differential): bodies one request
+    stashed, each used by a later request (read, read then `closed`, BYOB
+    read, cancel, tee, `text()`, sent on, `pipeTo`, iteration, and
+    `closed` alone, which waits):
+    - fetched by the Worker;
+    - answered by a Dynamic Worker;
+    - fetched by the Dynamic Worker itself and used in its next request.
+
+    These go through real Loader dispatch.
+  - `streams/cross-request-response-body` (differential, through a
+    reporting Worker's service binding): each kind returned as a later
+    request's response fails the call with workerd's error.
+  - `streams/cross-request-wrappers` (differential): a fetched body piped
+    through a `TransformStream` and through an `IdentityTransformStream`,
+    unread and read once, then read by a later request; each read, BYOB
+    read, cancel, write, close and abort of a stashed transform of each
+    kind.
+  - `streams/platform-default-reader` (differential): a fetched body, an
+    `IdentityTransformStream`, a `DecompressionStream`, a Blob stream and a
+    streamed request body. Checks: a second read, a cancel with each kind of
+    reason and a `releaseLock()` with a read in flight, in the read's turn
+    and after it waited; the reader's class, constructor, prototype and tag,
+    and `new ReadableStreamDefaultReader(stream)` keeping the contract.
+  - `streams/byob-identity-transform` (differential): the shared BYOB
+    checks, the view types, `readAtLeast` on a `Uint16Array`, tee branches,
+    and `releaseLock()` with a read in flight, with and without written
+    bytes.
+  - Unit: `http_streams::tests::a_stream_answers_only_its_owner` covers:
+    owner, claim, a claim replacing the sender, a facet and its parent as
+    different owners, tee branches, finished ids.
+    `js::http_stream_owner_tests::a_stream_id_is_refused_to_code_that_does_not_own_it`
+    calls every op, `read_response` and the body transfer through V8 with
+    another request's id: as a request, as a Durable Object, and from a
+    second isolate standing for a Loader child. Each is refused, the
+    owner's stream is untouched, and the owner can still send it on.
+- **Verification.**
+  - `cargo fmt --check`, clippy `-D warnings` and `cargo test --workspace`
+    (264 passed) are clean, and so is the lab build.
+  - Conformance `--runtime=both`: 136 PASS, 18 XFAIL, exit 0 (was 131 and
+    15). At HEAD, every new passing case and the un-skipped
+    `streams/body-usable` row fail.
+  - Starter e2e `all --fresh --quick` matches the baseline: S0, S1, S2, S9,
+    S11, B0 and B6 pass.
+  - Integration exits 0. `workshop-user-directory` passes, and every pending
+    suite's first error is unchanged.
+- **Found.** 1.46.
+
 ### 1.45 Wrangler `alias` via esbuild's service protocol (found by 1.24)
 
 1.24 maps `alias` to esbuild's CLI `--alias`, which takes only package-name
@@ -2993,6 +3175,48 @@ what Wrangler's does.
 - Estimated at 400–700 lines.
 - It unblocks `workshop-blueprints`' redeploy case, and removes 1.24's
   refusals of relative keys, package targets and subpath imports.
+
+### 1.46 Stream and entrypoint gaps found by 1.26
+
+Each differs from workerd 1.20261001.1 and is pinned xfail:
+- `streams/identity-transform-writer`: after an `IdentityTransformStream`'s
+  readable is cancelled, celld rejects the writer with the reason every
+  time. workerd rejects with `Error: Network connection lost.` when a read
+  was in flight. After a write the cancel rejected, a write or `close()`
+  finds `TypeError: This WritableStream has been closed.`.
+- `streams/object-request-body-after-response`: a Durable Object that
+  keeps its request's body past the response and reads it in a later event
+  gets celld's "HTTP stream N expired or is not registered". workerd's is
+  `TypeError: Can't read from request stream after response has been
+  sent.`. A fix has to end the body when the response is sent, not when the
+  event retires (later `waitUntil` work), so it is not a remap of the
+  error.
+- `exports/entrypoint-without-fetch`: `fetch()` on a `ctx.exports`
+  entrypoint with no fetch handler throws `Entrypoint "Source" has no fetch
+  handler`. workerd's is `Handler does not export a fetch() function.`.
+
+Also from the second review of 1.26, not yet pinned:
+- The JS ownership check can be stepped round through public underscore
+  internals (`readable._ictl._read()`, `writable._write()`, `_cancel()`,
+  `reader._release()`). The host check stays the boundary; move these behind
+  module-private state.
+- One foreign pull on a stashed `TransformStream` wedges it for its owner
+  too (pull is never called again). Check workerd and pin it.
+- `CompressionStream` and `DecompressionStream` inherit the TransformStream
+  behaviour (another request's use hangs). workerd's are native internal
+  streams and probably refuse with the cross-request error; probe and match.
+- `read_response` drops a `TypeError`'s name ("Worker failed: <message>").
+
+### 1.47 Hung requests (found by 1.26)
+
+A request whose promise can never settle (`await new Promise(() => {})`, or
+one only another request could resolve) hangs in celld until the client
+disconnects or the handler budget ends; the runtime reports a request idle
+only when it has ops pending (`runtime.rs` ~2530-2591). workerd cancels it
+at once with "The Workers runtime canceled this request because it detected
+that your Worker's code had hung and would never generate a response." (500).
+A dev node with such a request reports `draining` on shutdown. Detect it as
+workerd does and pin it with a differential case.
 
 ### 1.27 Container scope comes from JS (found by 1.9) — security
 

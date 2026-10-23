@@ -159,12 +159,10 @@ The `tail` and `email` handlers are unavailable.
 - celld expires an unclaimed and inactive HTTP stream after 60 seconds. A
   successful stream operation starts a new 60-second period.
 - An expired or unknown stream reports an error instead of EOF.
-- A default reader on a platform stream (a request or response body, an R2
-  object's or a KV value's body, `Blob.stream()`, a compression stream's
-  output, or a stream received over RPC) accepts several pending reads, and a
-  cancel ends a pending read as done, except on a compression stream. workerd
-  allows one read at a time and rejects the pending read. BYOB readers on
-  these streams behave as in workerd.
+- An `IdentityTransformStream`'s writer, after its readable is cancelled,
+  rejects with the cancel reason. workerd rejects with "Network connection
+  lost." when a read was in flight, and refuses a write or close after a
+  write the cancel rejected as "This WritableStream has been closed.".
 
 ### [WebSockets](https://developers.cloudflare.com/workers/runtime-apis/websockets/)
 

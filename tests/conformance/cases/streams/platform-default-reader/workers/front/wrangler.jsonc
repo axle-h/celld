@@ -1,0 +1,10 @@
+// A default reader on each platform stream: workerd's internal streams allow
+// one pending read, refuse releaseLock() while it is pending, and reject it
+// when the stream is cancelled, with the reason as an Error. celld allowed
+// several, released them, and resolved them as done (plan 1.26).
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }]
+}

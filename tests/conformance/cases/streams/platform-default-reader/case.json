@@ -1,0 +1,20 @@
+{
+  "workers": [
+    "front",
+    "back"
+  ],
+  "steps": [
+    {
+      "path": "/"
+    },
+    {
+      "path": "/request",
+      "method": "POST",
+      "body": "the request body",
+      "chunked": true
+    },
+    {
+      "path": "/reader"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+// A body one request received, returned as a later request's response (plan
+// 1.26): refused with workerd's cross-request error, whether the Worker
+// fetched the body or a Dynamic Worker answered with it. One isolate (the
+// case's env), so the later request sees the stashed bodies.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }],
+  "worker_loaders": [{ "binding": "LOADER" }]
+}

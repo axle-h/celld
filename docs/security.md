@@ -333,6 +333,44 @@ owner, so a hibernatable socket still works after the object wakes.
   `ctx` they are called on, as in workerd, and throw a `TypeError` outside a
   Durable Object event.
 
+## Body stream ownership
+
+A body the host holds for a script (a fetched body, an incoming request's
+body, an R2 object's body, a Dynamic Worker's response, a body the script
+streams as its response) is reachable only from the code it belongs to, as
+in workerd: the request that received it, or the Durable Object whose event
+did. Every event of a Durable Object is the same owner; a facet is an owner
+of its own.
+
+- **Body objects.** A host body records the owner of the code that received
+  it. Reading it (by either kind of reader), cancelling, teeing or piping
+  it, or sending it on as a subrequest's body or a response, from any other
+  request or Durable Object fails with workerd's cross-request (or
+  cross-object) I/O error, `(I/O type: ReadableStreamSource)`, before
+  anything else is checked. A refused read also errors the stream with that
+  error, as workerd's does, so a reader's `closed` rejects with it; every
+  other refusal leaves the stream as it was. Making a reader, `closed`,
+  `new Response(body)` and `locked` are not refused, as in workerd.
+- **Transform streams.** An `IdentityTransformStream` (and so a
+  `FixedLengthStream`) belongs to the request or Durable Object that made
+  it: its readable is refused as a body is, and its writable's `write()`,
+  `close()` and `abort()` with `(I/O type: Writable)`. A `TransformStream`
+  is not refused, but read or written by another request, the read or the
+  write never settles, as in workerd, so a body piped through one is never
+  delivered there. Either made at global scope belongs to no one. Plain
+  `ReadableStream`s and `WritableStream`s a script makes belong to no one,
+  as in workerd.
+- **Host ids.** The host records each body stream's owner from the running
+  event as it hands the id over: the caller of the fetch that answered with
+  it, the handler an incoming body is delivered to, the code that teed it.
+  Every op that takes a stream id from a script checks that owner, and
+  refuses another owner's id, or an id no code owns yet, with the same
+  error. This covers reads, tee, cancel, the writes of a streamed response,
+  the body of the script's response, and a body sent on as a subrequest's.
+- **Ended requests.** When a request ends, the host drops the operations
+  still pending for it, so a pipe it left pumping a body stops, and its
+  promise never settles, as in workerd.
+
 ## Container ownership
 
 A Durable Object reaches only its own container. The host takes the

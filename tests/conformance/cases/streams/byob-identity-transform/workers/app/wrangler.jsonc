@@ -1,0 +1,10 @@
+// BYOB readers on an IdentityTransformStream's readable, an internal stream
+// in workerd: a read answers with a Uint8Array whatever the view's type, a
+// tee() branch takes a BYOB reader, and releaseLock() throws while a read is
+// in flight. celld answered with the view's type, refused BYOB on a branch,
+// and released the lock, rejecting the read (plan 1.26).
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

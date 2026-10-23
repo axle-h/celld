@@ -1,0 +1,10 @@
+{
+  "env": {"CELLD_MAX_STATELESS_ISOLATES": "1"},
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/stash"},
+    {"path": "/use"},
+    {"path": "/child/stash"},
+    {"path": "/child/use"}
+  ]
+}

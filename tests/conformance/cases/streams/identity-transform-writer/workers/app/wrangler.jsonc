@@ -1,0 +1,10 @@
+// An IdentityTransformStream's writer after its readable is cancelled
+// (found by plan 1.26). workerd errors the writer with the cancel reason,
+// but with "Network connection lost." when a read was in flight, and a write
+// or close after a write the cancel rejected finds the stream closed. celld
+// errors the writer with the reason every time.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

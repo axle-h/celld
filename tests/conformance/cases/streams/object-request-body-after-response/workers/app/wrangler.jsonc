@@ -1,0 +1,11 @@
+// A Durable Object keeps its request's body unread past the response, and
+// reads it in a later event (found by plan 1.26). workerd refuses the read:
+// "Can't read from request stream after response has been sent.". celld
+// has dropped the body by then, and fails with its own error.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": { "bindings": [{ "name": "OBJ", "class_name": "Keeper" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Keeper"] }]
+}

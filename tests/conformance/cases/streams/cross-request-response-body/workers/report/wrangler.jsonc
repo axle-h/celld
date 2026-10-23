@@ -1,0 +1,9 @@
+// Reports what a later request's response, the stashed body, comes to: the
+// caller sees the request fail. A service binding carries it, so both
+// runtimes report it the same way.
+{
+  "name": "report",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "FRONT", "service": "front" }]
+}

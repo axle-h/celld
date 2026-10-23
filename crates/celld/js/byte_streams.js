@@ -560,6 +560,9 @@ class ReadableStreamBYOBReader {
   read(view, options) {
     if (this._released)
       return Promise.reject(new TypeError(RELEASED));
+    // A stream another request owns refuses first (streams.js).
+    const refused = __celld.__streamIo.readRefusal(this._s);
+    if (refused !== undefined) return refused;
     if (!ArrayBuffer.isView(view))
       return Promise.reject(new TypeError(
         "Failed to execute 'read' on 'ReadableStreamBYOBReader': " +
@@ -602,7 +605,7 @@ class ReadableStreamBYOBReader {
   cancel(reason) {
     if (this._released)
       return Promise.reject(new TypeError(RELEASED));
-    return this._s._cancel(reason);
+    return __celld.__streamIo.refusal(this._s) ?? this._s._cancel(reason);
   }
 
   get closed() {

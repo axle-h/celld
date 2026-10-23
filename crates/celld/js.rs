@@ -103,8 +103,9 @@ pub(crate) use crate::host_channels::QUEUE_DISPATCH_TX;
 pub(crate) use crate::host_channels::RPC_CALL_TX;
 pub(crate) use crate::host_channels::SVC_CALL_TX;
 pub(crate) use crate::host_channels::SVC_RPC_TX;
-pub(crate) use crate::http_streams::claim_http_stream;
 pub(crate) use crate::http_streams::encode_http_response;
+#[cfg(test)]
+pub(crate) use crate::http_streams::foreign_stream_error;
 pub(crate) use crate::http_streams::http_stream_read;
 #[cfg(all(test, celld_internal_tests))]
 pub(crate) use crate::http_streams::http_stream_read_source_first_for_test;
@@ -119,6 +120,7 @@ pub(crate) use crate::http_streams::retain_first_http_cleanup_panic;
 #[cfg(all(test, celld_internal_tests))]
 pub(crate) use crate::http_streams::settle_http_stream_read;
 pub use crate::http_streams::take_body_stream;
+pub(crate) use crate::http_streams::HttpStreamAccess;
 #[cfg(all(test, celld_internal_tests))]
 pub(crate) use crate::http_streams::HttpStreamActivityError;
 #[cfg(all(test, celld_internal_tests))]
@@ -6188,9 +6190,6 @@ fn start_cell_event<'s>(
     let runtime_state = actor_runtime_state(tc);
     let context = IoContext::tracked(&runtime_state);
     adopt_user_spans(&context);
-    if let Some(stream_id) = body_stream_id {
-        context.own_body_stream(stream_id);
-    }
     let guard = CurrentGuard::enter(context.clone());
     let previous_io_context = install_io_context(tc, &context);
     context.begin_cpu_turn();
@@ -6208,6 +6207,10 @@ fn start_cell_event<'s>(
         // one without the other.
         root: storage::embedded_root_gate(scope),
     });
+    // After the frame, which names the object that owns the body from now on.
+    if let Some(stream_id) = body_stream_id {
+        context.own_body_stream(stream_id);
+    }
     if capture_frames {
         ws_capture_begin();
     }
@@ -8633,9 +8636,14 @@ fn op_svc_call_impl(
             }
         };
     let body_guard = match body.stream_id() {
-        Some(stream_id) => match current_context().transfer_body_stream(stream_id) {
-            Some(guard) => guard,
-            None => return loader_throw(scope, "service binding: the body stream is not owned"),
+        Some(stream_id) => match current_context()
+            .transfer_body_stream(stream_id, &websocket::owner_of(&event_context(scope)))
+        {
+            Ok(guard) => guard,
+            Err(Some(refusal)) => return loader_throw(scope, &refusal),
+            Err(None) => {
+                return loader_throw(scope, "service binding: the body stream is not owned")
+            }
         },
         None => RequestBodyGuard::of(&body),
     };
@@ -8674,12 +8682,15 @@ fn op_svc_call_impl(
         reply: tx,
     };
     let ws_issuer = Some(ws_caller(scope));
+    let stream_owner = ws_issuer.as_ref().map(|caller| caller.owner.clone());
     let stream_service = http_stream_service();
     let id = asyncrt::enqueue(async move {
         let mut cancel_guard = cancel_guard;
         gated_channel_send(gate, &SVC_CALL_TX, request, "no service binding channel").await?;
         let result = match rx.await {
-            Ok(Ok(response)) => encode_http_response(response, ws_issuer, &stream_service),
+            Ok(Ok(response)) => {
+                encode_http_response(response, ws_issuer, stream_owner, &stream_service)
+            }
             Ok(Err(error)) => Err(format!("{error}")),
             Err(error) => Err(format!("service dropped: {error}")),
         };
@@ -9547,9 +9558,12 @@ fn op_loader_fetch(
         (None, None)
     };
     let mut body_guard = match body.stream_id() {
-        Some(stream_id) => match current_context().transfer_body_stream(stream_id) {
-            Some(guard) => guard,
-            None => return loader_throw(scope, "worker loader: the body stream is not owned"),
+        Some(stream_id) => match current_context()
+            .transfer_body_stream(stream_id, &websocket::owner_of(&event_context(scope)))
+        {
+            Ok(guard) => guard,
+            Err(Some(refusal)) => return loader_throw(scope, &refusal),
+            Err(None) => return loader_throw(scope, "worker loader: the body stream is not owned"),
         },
         None => RequestBodyGuard::of(&body),
     };
@@ -9560,6 +9574,7 @@ fn op_loader_fetch(
         .map(|entry| entry.loaded.clone());
     let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Service);
     let ws_issuer = Some(ws_caller(scope));
+    let stream_owner = ws_issuer.as_ref().map(|caller| caller.owner.clone());
     let stream_service = http_stream_service();
     let async_id = asyncrt::enqueue(async move {
         let mut cancel_guard = cancel_guard;
@@ -9611,7 +9626,7 @@ fn op_loader_fetch(
         // context. That context owns an unread body tail through its
         // waitUntil work.
         body_guard.disarm();
-        encode_http_response(response, ws_issuer, &stream_service)
+        encode_http_response(response, ws_issuer, stream_owner, &stream_service)
     });
     let response = promise_for(scope, async_id);
     if let Some(request_id) = cancel_id {
@@ -10281,9 +10296,12 @@ fn op_facet_fetch(
             Err(error) => return loader_throw(scope, &format!("facet headers: {error}")),
         };
     let mut body_guard = match body.stream_id() {
-        Some(stream_id) => match current_context().transfer_body_stream(stream_id) {
-            Some(guard) => guard,
-            None => return loader_throw(scope, "facet: the body stream is not owned"),
+        Some(stream_id) => match current_context()
+            .transfer_body_stream(stream_id, &websocket::owner_of(&event_context(scope)))
+        {
+            Ok(guard) => guard,
+            Err(Some(refusal)) => return loader_throw(scope, &refusal),
+            Err(None) => return loader_throw(scope, "facet: the body stream is not owned"),
         },
         None => RequestBodyGuard::of(&body),
     };
@@ -10300,6 +10318,7 @@ fn op_facet_fetch(
     let host = FacetHost::of(loader);
     let trace = current_trace_context(scope);
     let ws_issuer = Some(ws_caller(scope));
+    let stream_owner = ws_issuer.as_ref().map(|caller| caller.owner.clone());
     let stream_service = http_stream_service();
     let async_id = asyncrt::enqueue(async move {
         let facet = prepare_facet(
@@ -10346,7 +10365,7 @@ fn op_facet_fetch(
                 };
                 facet.gate_response(socket).await?;
                 facet.attach_websocket(&response);
-                encode_http_response(response, ws_issuer, &stream_service)
+                encode_http_response(response, ws_issuer, stream_owner, &stream_service)
             }
             Ok(Err(error)) => Err(format!("{error}")),
             Err(_) => match driving.await {
@@ -10549,9 +10568,14 @@ fn op_do_call_impl(
             }
         };
     let body_guard = match body.stream_id() {
-        Some(stream_id) => match current_context().transfer_body_stream(stream_id) {
-            Some(guard) => guard,
-            None => return loader_throw(scope, "durable object: the body stream is not owned"),
+        Some(stream_id) => match current_context()
+            .transfer_body_stream(stream_id, &websocket::owner_of(&event_context(scope)))
+        {
+            Ok(guard) => guard,
+            Err(Some(refusal)) => return loader_throw(scope, &refusal),
+            Err(None) => {
+                return loader_throw(scope, "durable object: the body stream is not owned")
+            }
         },
         None => RequestBodyGuard::of(&body),
     };
@@ -10586,11 +10610,14 @@ fn op_do_call_impl(
         parent: current_trace_context(scope),
     };
     let ws_issuer = Some(ws_caller(scope));
+    let stream_owner = ws_issuer.as_ref().map(|caller| caller.owner.clone());
     let stream_service = http_stream_service();
     let id = asyncrt::enqueue(async move {
         gated_channel_send(gate, &DO_CALL_TX, request, "no proxy channel").await?;
         let result = match rx.await {
-            Ok(Ok(response)) => encode_http_response(response, ws_issuer, &stream_service),
+            Ok(Ok(response)) => {
+                encode_http_response(response, ws_issuer, stream_owner, &stream_service)
+            }
             Ok(Err(e)) => Err(format!("{e}")),
             Err(e) => Err(format!("proxy dropped: {e}")),
         };
@@ -10877,9 +10904,12 @@ fn op_fetch(
             .then(|| deadline.number_value(scope).unwrap_or(0.0) as u64)
     };
     let mut body_guard = match body.as_ref().and_then(RequestBody::stream_id) {
-        Some(stream_id) => match current_context().transfer_body_stream(stream_id) {
-            Some(guard) => guard,
-            None => return loader_throw(scope, "fetch: the body stream is not owned"),
+        Some(stream_id) => match current_context()
+            .transfer_body_stream(stream_id, &websocket::owner_of(&event_context(scope)))
+        {
+            Ok(guard) => guard,
+            Err(Some(refusal)) => return loader_throw(scope, &refusal),
+            Err(None) => return loader_throw(scope, "fetch: the body stream is not owned"),
         },
         None => RequestBodyGuard(None),
     };
@@ -10914,12 +10944,15 @@ fn op_fetch(
             reply: tx,
         };
         let ws_issuer = Some(ws_caller(scope));
+        let stream_owner = ws_issuer.as_ref().map(|caller| caller.owner.clone());
         let stream_service = http_stream_service();
         let id = asyncrt::enqueue(async move {
             let mut cancel_guard = cancel_guard;
             gated_channel_send(gate, &SVC_CALL_TX, request, "no service binding channel").await?;
             let result = match rx.await {
-                Ok(Ok(response)) => encode_http_response(response, ws_issuer, &stream_service),
+                Ok(Ok(response)) => {
+                    encode_http_response(response, ws_issuer, stream_owner, &stream_service)
+                }
                 Ok(Err(error)) => Err(format!("{error}")),
                 Err(error) => Err(format!("globalOutbound Fetcher dropped: {error}")),
             };
@@ -10981,6 +11014,7 @@ fn op_fetch(
         (None, None, None)
     };
     let stream_service = http_stream_service();
+    let stream_owner = Some(websocket::owner_of(&event_context(scope)));
     let id = asyncrt::enqueue(async move {
         // Held, not disarmed: this op has several early returns, and the guard
         // removes its registry entry on every one of them when it drops. The
@@ -11099,8 +11133,8 @@ fn op_fetch(
                         )
                     })
                     .collect::<Vec<_>>();
-                let Some(stream_id) =
-                    stream_service.register_source(HttpStreamSource::Response(resp))
+                let Some(stream_id) = stream_service
+                    .register_source_for(HttpStreamSource::Response(resp), stream_owner)
                 else {
                     let error = format!("fetch: {HTTP_STREAM_REGISTRATION_CLOSED}");
                     finish(false, Some(status), Some(error.clone()));
@@ -11165,12 +11199,13 @@ fn op_asset_fetch(
             .is_ok()
     });
     let stream_service = http_stream_service();
+    let stream_owner = Some(websocket::owner_of(&event_context(scope)));
     let id = asyncrt::enqueue(async move {
         if !sent {
             return Err("no asset resolver channel".to_string());
         }
         match rx.await {
-            Ok(Ok(response)) => encode_http_response(response, None, &stream_service),
+            Ok(Ok(response)) => encode_http_response(response, None, stream_owner, &stream_service),
             Ok(Err(error)) => Err(format!("asset fetch: {error}")),
             Err(error) => Err(format!("asset resolver dropped: {error}")),
         }
@@ -11182,11 +11217,26 @@ fn tee_http_stream(
     service: &Arc<HttpStreamService>,
     source: HttpTransferredStream,
     budget: Arc<BackingStoreBudget>,
+    owner: WsOwner,
 ) -> Result<(u64, u64), &'static str> {
     let charge = Box::new(move |len| TeeHold::charge(&budget, len));
-    let (ids, pump) = prepare_http_stream_tee(service, source, charge)?;
+    let (ids, pump) = prepare_http_stream_tee(service, source, charge, Some(owner))?;
     asyncrt::op_handle().spawn(pump);
     Ok(ids)
+}
+
+/// Refuse a stream id that another request or Durable Object owns, or that
+/// no code owns yet, with workerd's cross-request error, and answer whether
+/// it did. The harness checks first, so this is what refuses an id that
+/// reaches an op by any other path. An id that names no stream is not
+/// refused: the op answers it as a finished stream.
+fn refuse_foreign_stream(scope: &mut v8::PinScope, stream_id: u64) -> bool {
+    let owner = websocket::owner_of(&event_context(scope));
+    let Some(refusal) = http_stream_service().access(stream_id, &owner).refusal() else {
+        return false;
+    };
+    loader_throw(scope, &refusal);
+    true
 }
 
 fn op_http_stream_read(
@@ -11195,6 +11245,9 @@ fn op_http_stream_read(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let stream_id = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
+    if refuse_foreign_stream(scope, stream_id) {
+        return;
+    }
     let service = http_stream_service();
     let read = http_stream_read(service, stream_id);
     let id = asyncrt::enqueue(async move {
@@ -11219,6 +11272,9 @@ fn op_http_stream_read_all(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let stream_id = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
+    if refuse_foreign_stream(scope, stream_id) {
+        return;
+    }
     let expected = args
         .get(1)
         .is_number()
@@ -11273,6 +11329,9 @@ fn op_http_stream_tee(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let stream_id = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
+    if refuse_foreign_stream(scope, stream_id) {
+        return;
+    }
     let Some(budget) = scope.get_slot::<Arc<BackingStoreBudget>>().cloned() else {
         let message = v8::String::new(scope, "the isolate has no backing-store budget").unwrap();
         let exception = v8::Exception::type_error(scope, message);
@@ -11287,7 +11346,8 @@ fn op_http_stream_tee(
         scope.throw_exception(exception);
         return;
     };
-    let ids = match tee_http_stream(&service, source, budget) {
+    let owner = websocket::owner_of(&event_context(scope));
+    let ids = match tee_http_stream(&service, source, budget, owner) {
         Ok(ids) => ids,
         Err(error) => {
             let message = v8::String::new(scope, error).unwrap();
@@ -11307,6 +11367,9 @@ fn op_http_stream_cancel(
     _rv: v8::ReturnValue<v8::Value>,
 ) {
     let stream_id = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
+    if refuse_foreign_stream(scope, stream_id) {
+        return;
+    }
     http_stream_service().cancel_source(stream_id);
 }
 
@@ -11317,9 +11380,12 @@ fn op_response_stream_create(
 ) {
     let (writer, receiver) = tokio::sync::mpsc::channel(1);
     let (finished, _) = tokio::sync::watch::channel(false);
-    let Some(stream_id) = http_stream_service()
-        .register_response_pair(receiver, ResponseStreamWriter::new(writer, finished))
-    else {
+    let owner = websocket::owner_of(&event_context(scope));
+    let Some(stream_id) = http_stream_service().register_response_pair(
+        receiver,
+        ResponseStreamWriter::new(writer, finished),
+        Some(owner),
+    ) else {
         let message = v8::String::new(scope, HTTP_STREAM_REGISTRATION_CLOSED).unwrap();
         let exception = v8::Exception::type_error(scope, message);
         scope.throw_exception(exception);
@@ -11334,6 +11400,9 @@ fn op_response_stream_write(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let stream_id = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
+    if refuse_foreign_stream(scope, stream_id) {
+        return;
+    }
     let bytes = args
         .get(1)
         .try_cast::<v8::ArrayBufferView>()
@@ -11373,6 +11442,9 @@ fn op_response_stream_closed(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let stream_id = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
+    if refuse_foreign_stream(scope, stream_id) {
+        return;
+    }
     let (writer, mut finished) = http_stream_service()
         .writer_close_watch(stream_id)
         .map(|(writer, finished)| (Some(writer), Some(finished)))
@@ -11401,6 +11473,9 @@ fn op_response_stream_close(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let stream_id = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
+    if refuse_foreign_stream(scope, stream_id) {
+        return;
+    }
     let error = args.get(1).to_rust_string_lossy(scope);
     let close = response_stream_close(http_stream_service(), stream_id, error);
     let id = asyncrt::enqueue(async move {
@@ -11408,6 +11483,164 @@ fn op_response_stream_close(
         Ok(String::new())
     });
     rv.set(promise_for(scope, id));
+}
+
+#[cfg(test)]
+mod http_stream_owner_tests {
+    use super::*;
+
+    /// Call `op` through V8 with string arguments, as a script that bypassed
+    /// the harness would. Answers what it returned, or the message it threw.
+    fn call_op(
+        scope: &mut v8::PinScope,
+        op: impl v8::MapFnTo<v8::FunctionCallback>,
+        args: &[&str],
+    ) -> Result<String, String> {
+        let tc = std::pin::pin!(v8::TryCatch::new(scope));
+        let tc = &mut tc.init();
+        let function = v8::Function::new(tc, op).unwrap();
+        let args: Vec<v8::Local<v8::Value>> = args
+            .iter()
+            .map(|arg| v8::String::new(tc, arg).unwrap().into())
+            .collect();
+        let recv = v8::undefined(tc).into();
+        match function.call(tc, recv, &args) {
+            Some(value) => Ok(value.to_rust_string_lossy(tc)),
+            None => Err(tc
+                .exception()
+                .map(|error| error.to_rust_string_lossy(tc))
+                .unwrap_or_default()),
+        }
+    }
+
+    fn worker(name: &str) -> Worker {
+        let config = Arc::new(WorkerConfig::new(WorkerConfigOptions {
+            src: "export default { fetch() { return new Response(); } };\n".into(),
+            script_name: name.into(),
+            do_classes: Vec::new(),
+            bindings: Vec::new(),
+            r2_bindings: Vec::new(),
+            d1_bindings: Vec::new(),
+            kv_bindings: Vec::new(),
+            queue_bindings: Vec::new(),
+            queue_consumers: Vec::new(),
+            workflow_bindings: Vec::new(),
+            vars: Vec::new(),
+            node: String::new(),
+            modules: Vec::new(),
+            compat: Compat::default(),
+        }));
+        Worker::load_config(config).unwrap()
+    }
+
+    /// Every op that takes a stream id from JavaScript, called with `id` by
+    /// the code running in `scope`, and `__readResponse` naming it as a
+    /// response body: the refusal each answered with, or what it did.
+    fn uses(scope: &mut v8::PinScope, body: u64, writer: u64) -> Vec<Result<String, String>> {
+        let (body, writer) = (body.to_string(), writer.to_string());
+        let mut out = vec![
+            call_op(scope, op_http_stream_read, &[&body]),
+            call_op(scope, op_http_stream_read_all, &[&body]),
+            call_op(scope, op_http_stream_tee, &[&body]),
+            call_op(scope, op_http_stream_cancel, &[&body]),
+            call_op(scope, op_response_stream_closed, &[&writer]),
+            call_op(scope, op_response_stream_close, &[&writer, ""]),
+        ];
+        // A write takes its bytes as a typed array.
+        let tc = std::pin::pin!(v8::TryCatch::new(scope));
+        let tc = &mut tc.init();
+        let function = v8::Function::new(tc, op_response_stream_write).unwrap();
+        let id = v8::String::new(tc, &writer).unwrap().into();
+        let buffer = v8::ArrayBuffer::new(tc, 1);
+        let bytes = v8::Uint8Array::new(tc, buffer, 0, 1).unwrap().into();
+        let recv = v8::undefined(tc).into();
+        out.push(match function.call(tc, recv, &[id, bytes]) {
+            Some(value) => Ok(value.to_rust_string_lossy(tc)),
+            None => Err(tc
+                .exception()
+                .map(|error| error.to_rust_string_lossy(tc))
+                .unwrap_or_default()),
+        });
+        for id in [&body, &writer] {
+            let source = format!(
+                "__celld.__readResponse = () => ({{ status: 200, bodyBytes: new Uint8Array(), \
+                 bodyStreamId: {id}, headersJson: \"[]\", wsTargetJson: \"null\", \
+                 workerSocketId: 0 }});"
+            );
+            run_internal_snippet(tc, &source).expect("the reader is replaced");
+            let ret = v8::undefined(tc).into();
+            out.push(
+                read_response(tc, ret)
+                    .map(|_| "read".to_string())
+                    .map_err(|error| error.to_string()),
+            );
+        }
+        out
+    }
+
+    /// A stream id that one request owns is refused to a later request in
+    /// its isolate and to a Loader child, in every op that takes one, in
+    /// `__readResponse`, and when sent on as a subrequest's body.
+    #[test]
+    fn a_stream_id_is_refused_to_code_that_does_not_own_it() {
+        let _ = crate::asyncrt::test_host_runtime();
+        Engine::init();
+        // On a thread started after V8, as `runtime::init_v8` requires.
+        std::thread::spawn(|| {
+            let mut parent = worker("owner-parent");
+            let mut child = worker("owner-child");
+            let _runtime = crate::asyncrt::test_host_runtime().enter();
+            let service = http_stream_service();
+            let owner = IoContext::new();
+            let owner_id = websocket::owner_of(&owner);
+            let (_sender, receiver) = tokio::sync::mpsc::channel(1);
+            let body = service
+                .register_source_for(HttpStreamSource::Receiver(receiver), Some(owner_id.clone()))
+                .unwrap();
+            let (writer, receiver) = tokio::sync::mpsc::channel(1);
+            let (finished, _) = tokio::sync::watch::channel(false);
+            let response = service
+                .register_response_pair(
+                    receiver,
+                    ResponseStreamWriter::new(writer, finished),
+                    Some(owner_id.clone()),
+                )
+                .unwrap();
+            // Another request in the owner's isolate, a Durable Object there,
+            // and a Loader child's request in an isolate of its own.
+            let strangers = [
+                (false, IoContext::new()),
+                (false, cell_event_context_for_test("owner-cell")),
+                (true, IoContext::new()),
+            ];
+            for (in_child, stranger) in strangers {
+                let isolate = if in_child { &mut child } else { &mut parent };
+                let _current = CurrentGuard::enter(stranger.clone());
+                let refusals = isolate.with_scope_for_test(|scope| uses(scope, body, response));
+                for refusal in refusals {
+                    let refusal = refusal.unwrap_err();
+                    assert!(refusal.contains(&foreign_stream_error(false)), "{refusal}");
+                }
+                for id in [body, response] {
+                    assert!(matches!(
+                        stranger.transfer_body_stream(id, &websocket::owner_of(&stranger)),
+                        Err(Some(_))
+                    ));
+                }
+            }
+            // The refusals took nothing from the owner.
+            for id in [body, response] {
+                assert_eq!(service.access(id, &owner_id), HttpStreamAccess::Owned);
+            }
+            let _current = CurrentGuard::enter(owner.clone());
+            let guard = owner.transfer_body_stream(body, &owner_id);
+            assert!(guard.is_ok());
+            drop(guard);
+            service.cancel_source(response);
+        })
+        .join()
+        .unwrap();
+    }
 }
 
 /// Timer op behind `setTimeout`: a promise resolving after `ms`.
@@ -13418,9 +13651,12 @@ impl IoContext {
         }
     }
 
+    /// Take over the incoming body `stream_id` for the code running here,
+    /// which becomes the only code that may use the id.
     #[doc(hidden)]
     pub fn own_body_stream(&self, stream_id: u64) {
-        let Some(claim) = claim_http_stream(stream_id) else {
+        let Some(claim) = http_stream_service().claim_for(stream_id, websocket::owner_of(self))
+        else {
             return;
         };
         let replaced = self.body_streams.lock().unwrap().insert(stream_id, claim);
@@ -13429,11 +13665,30 @@ impl IoContext {
         drop(replaced);
     }
 
-    fn transfer_body_stream(&self, stream_id: u64) -> Option<RequestBodyGuard> {
-        let claim = self.body_streams.lock().unwrap().remove(&stream_id)?;
+    /// Hand the body `stream_id` that `owner`, the running code, sends as a
+    /// subrequest's body to that subrequest. Any id the running code owns
+    /// can be sent: its own incoming body moves with the claim this request
+    /// holds, and any other is claimed now. `Err(Some(error))` is workerd's
+    /// error for another owner's body, and `Err(None)` an id that names no
+    /// body it can send.
+    fn transfer_body_stream(
+        &self,
+        stream_id: u64,
+        owner: &WsOwner,
+    ) -> Result<RequestBodyGuard, Option<String>> {
+        let service = http_stream_service();
+        match service.access(stream_id, owner) {
+            refused @ HttpStreamAccess::Other { .. } => return Err(refused.refusal()),
+            HttpStreamAccess::Unknown => return Err(None),
+            HttpStreamAccess::Owned => {}
+        }
+        let claim = self.body_streams.lock().unwrap().remove(&stream_id);
         // Move the exact service claim into the guard. A later asynchronous
         // drop cannot resolve through another ambient Domain.
-        Some(RequestBodyGuard::transferred(claim))
+        match claim.or_else(|| service.claim(stream_id)) {
+            Some(claim) => Ok(RequestBodyGuard::transferred(claim)),
+            None => Err(None),
+        }
     }
 
     /// Replace one request-owned source with the two sources created by a
@@ -14590,16 +14845,27 @@ fn read_response(scope: &mut v8::PinScope, ret: v8::Local<v8::Value>) -> Result<
     let recv = v8::undefined(scope).into();
     let out = {
         // The reader throws for a response it cannot carry, such as one with
-        // another request's socket. Its message is the Worker's error.
+        // another request's socket or body. Its message is the Worker's error,
+        // as workerd reports it: a service binding's caller gets an Error with
+        // that message.
         let tc = std::pin::pin!(v8::TryCatch::new(scope));
         let tc = &mut tc.init();
         match f.call(tc, recv, &[ret]) {
             Some(out) => out,
             None => {
-                let message = exc!(tc);
+                let message = tc
+                    .exception()
+                    .and_then(|error| error.to_object(tc))
+                    .and_then(|error| {
+                        let key = v8::String::new(tc, "message").unwrap();
+                        error.get(tc, key.into())
+                    })
+                    .filter(|message| message.is_string())
+                    .map(|message| message.to_rust_string_lossy(tc))
+                    .unwrap_or_else(|| exc!(tc));
                 // The caller's own TryCatch still sees it, as before.
                 tc.rethrow();
-                return Err(anyhow!("readResponse threw: {message}"));
+                return Err(anyhow!(message));
             }
         }
     };
@@ -14640,6 +14906,12 @@ fn read_response(scope: &mut v8::PinScope, ret: v8::Local<v8::Value>) -> Result<
         .and_then(|value| value.integer_value(scope))
         .unwrap_or(0)
         .max(0) as u64;
+    let owner = websocket::owner_of(&event_context(scope));
+    if stream_id != 0 {
+        if let Some(refusal) = http_stream_service().access(stream_id, &owner).refusal() {
+            return Err(anyhow!(refusal));
+        }
+    }
     let stream = if stream_id == 0 {
         None
     } else {

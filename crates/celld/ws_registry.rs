@@ -1558,6 +1558,25 @@ pub struct WsMeta {
     pub facet: Option<FacetSocket>,
 }
 
+/// workerd's error for an I/O object (a socket, a body stream, a container)
+/// used by code that does not own it. `object` is a Durable Object using
+/// another one's object, which workerd words differently from every other
+/// case. `kind` is workerd's I/O type.
+pub(crate) fn foreign_io_error(object: bool, kind: &str) -> String {
+    let text = if object {
+        "Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as \
+         streams, request/response bodies, and others) created in the context of one Durable \
+         Object cannot be accessed from a different Durable Object in the same isolate. This \
+         is a limitation of Cloudflare Workers which allows us to improve overall performance."
+    } else {
+        "Cannot perform I/O on behalf of a different request. I/O objects (such as streams, \
+         request/response bodies, and others) created in the context of one request handler \
+         cannot be accessed from a different request's handler. This is a limitation of \
+         Cloudflare Workers which allows us to improve overall performance."
+    };
+    format!("{text} (I/O type: {kind})")
+}
+
 /// Where the events of a facet's socket go, and what proves their output.
 ///
 /// A facet is not a cell: no Worker exports its class under the facet's

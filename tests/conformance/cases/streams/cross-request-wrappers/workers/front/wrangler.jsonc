@@ -1,0 +1,11 @@
+// Streams one request made, used by a later request (plan 1.26). A
+// TransformStream's reads and writes never settle there, so a fetched body
+// piped through one delivers nothing. An IdentityTransformStream is an I/O
+// object, refused with workerd's cross-request error. One isolate (the
+// case's env), so the later request sees the stashed streams.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }]
+}

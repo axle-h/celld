@@ -1,0 +1,26 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "idle": {
+          "write": "Error: stop",
+          "closed": "Error: stop"
+        },
+        "reading": {
+          "read": "Error: stop",
+          "write": "Error: Network connection lost.",
+          "closed": "Error: Network connection lost."
+        },
+        "writing": {
+          "write": "Error: stop",
+          "next": "TypeError: This WritableStream has been closed.",
+          "close": "TypeError: This WritableStream has been closed.",
+          "closed": "Error: stop"
+        }
+      }
+    }
+  ]
+}

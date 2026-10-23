@@ -1,0 +1,1 @@
+{"xfail": "1.46", "workers": ["app"], "steps": [{"path": "/send", "method": "POST", "body": "the request body", "chunked": true}, {"path": "/read"}]}

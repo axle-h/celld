@@ -1,13 +1,16 @@
 // IdentityTransformStream / FixedLengthStream -- Cloudflare's byte
 // pass-through streams. Not spec TransformStreams: in Workerd these are
 // "internal" (native) byte streams, and celld matches that
-// contract. The readable supports one pending read at a time (a second
-// concurrent read rejects), BYOB readers with the readAtLeast()
-// extension, per-reader closed promises that reject on releaseLock, and
-// reader-cancel reasons converted to Errors and propagated to the
-// writer's pending write and close. A write resolves only once its
-// bytes have been read, so the pump buffers nothing and the default
-// read path copies nothing.
+// contract. Both sides belong to the request or Durable Object that
+// made them. The readable supports one pending read at a time (a second
+// concurrent read rejects, and releaseLock() throws while it is
+// pending), BYOB readers with the readAtLeast() extension that answer
+// with a Uint8Array whatever the view's type, per-reader closed promises
+// that reject on releaseLock, tee() branches of the same kind, and
+// reader-cancel reasons converted to Errors, which reject the read in
+// flight and propagate to the writer's pending write and close. A write
+// resolves only once its bytes have been read, so the pump buffers
+// nothing and the default read path copies nothing.
 //
 // Compiled on first access (see LAZY_GLOBALS); a bundle that never names
 // either global never pays for this file.
@@ -63,16 +66,53 @@ class InternalController {
   _consumed = null;  // settles the sink write once _chunk drains
   _readReq = null;   // parked default read
   _pendingPullIntos = [];  // parked BYOB descriptor (at most one)
-  _reader = null;    // current InternalDefaultReader, for closed
+  _readerClosed = null;  // the default reader's closed promise, made on use
   _stream = null;
   _writable = null;
 
   _invalidate() {}   // no BYOB-request surface on internal streams
 
+  // The default reader's closed promise, per reader as in workerd: it
+  // settles with the stream, or rejects when the reader is released.
+  _readerClosedPromise() {
+    if (this._readerClosed === null) {
+      const s = this._stream;
+      const record = Promise.withResolvers();
+      record.promise.catch(() => {});
+      if (s._closed) record.resolve();
+      else if (s._errored) record.reject(s._error);
+      this._readerClosed = record;
+    }
+    return this._readerClosed.promise;
+  }
+
+  _settleReaderClosed(e) {
+    const record = this._readerClosed;
+    if (record === null) return;
+    if (e === null) record.resolve();
+    else record.reject(e);
+  }
+
+  // A default reader's release: what it had pending is refused, and its
+  // closed promise rejects.
+  _released() {
+    const err = new TypeError(RELEASED);
+    if (this._readReq !== null) {
+      this._readReq.reject(err);
+      this._readReq = null;
+    }
+    this._settleReaderClosed(err);
+    this._readerClosed = null;
+  }
+
   _hasPending() {
     return this._readReq !== null ||
       this._pendingPullIntos.length > 0;
   }
+
+  // A read in flight, which keeps a BYOB reader's lock (releaseLock in
+  // byte_streams.js).
+  get _reading() { return this._hasPending(); }
 
   _doneChunk() {
     const c = this._consumed;
@@ -92,9 +132,10 @@ class InternalController {
     else this._chunk = c.subarray(n);
   }
 
+  // Workerd answers a BYOB read on an internal stream with the bytes it
+  // filled, as a Uint8Array, whatever the type of the view passed in.
   _view(d) {
-    return new d.ctor(d.buffer, d.byteOffset,
-                      (d.filled / d.elementSize) | 0);
+    return new Uint8Array(d.buffer, d.byteOffset, d.filled);
   }
 
   // sink.write: deliver a chunk, resolving once it is fully read.
@@ -121,20 +162,26 @@ class InternalController {
     });
   }
 
+  // Workerd serves a read on a later turn even when written bytes wait,
+  // so a second read, a releaseLock() or a cancel in the read's own turn
+  // meets it in flight. A write that arrives first serves it (_deliver).
   _read() {
     const s = this._stream;
     if (s._errored) return Promise.reject(s._error);
-    if (this._chunk !== null) {
-      const v = this._chunk;
-      this._doneChunk();
-      return Promise.resolve(_readResult(v, false));
-    }
     if (s._closed)
       return Promise.resolve(_readResult(undefined, true));
     if (this._hasPending())
       return Promise.reject(new TypeError(ONE_READ));
     return new Promise((resolve, reject) => {
-      this._readReq = { resolve, reject };
+      const req = { resolve, reject };
+      this._readReq = req;
+      Promise.resolve().then(() => {
+        if (this._readReq !== req || this._chunk === null) return;
+        this._readReq = null;
+        const v = this._chunk;
+        this._doneChunk();
+        req.resolve(_readResult(v, false));
+      });
     });
   }
 
@@ -149,27 +196,27 @@ class InternalController {
       byteOffset: view.byteOffset,
       byteLength: view.byteLength,
       filled: 0,
-      elementSize,
       minFill: min * elementSize,
-      ctor: view.constructor,
       req: null,
     };
     try { d.buffer = view.buffer.transfer(); }
     catch (e) { return Promise.reject(e); }
-    if (this._chunk !== null) {
-      this._fill(d);
-      if (d.filled >= d.minFill)
-        return Promise.resolve(_readResult(this._view(d), false));
-    }
     if (s._closed)
       // A post-close BYOB read hands the (transferred) buffer back as
-      // a zero-length view; a readAtLeast cut short by close returns
-      // what it got with done still false.
-      return Promise.resolve(
-        _readResult(this._view(d), d.filled === 0));
+      // a zero-length view.
+      return Promise.resolve(_readResult(this._view(d), true));
+    // Served on a later turn, as a default read is (_read).
     return new Promise((resolve, reject) => {
       d.req = { resolve, reject };
       this._pendingPullIntos.push(d);
+      Promise.resolve().then(() => {
+        if (this._pendingPullIntos[0] !== d || this._chunk === null) return;
+        this._fill(d);
+        if (d.filled >= d.minFill) {
+          this._pendingPullIntos.shift();
+          d.req.resolve(_readResult(this._view(d), false));
+        }
+      });
     });
   }
 
@@ -186,7 +233,7 @@ class InternalController {
     this._pendingPullIntos = [];
     for (const d of pending)
       d.req.resolve(_readResult(this._view(d), d.filled === 0));
-    if (this._reader) this._reader._settleClosed(null);
+    this._settleReaderClosed(null);
   }
 
   // Error the readable side (writer abort, bad write, length
@@ -202,7 +249,7 @@ class InternalController {
     const pending = this._pendingPullIntos;
     this._pendingPullIntos = [];
     for (const d of pending) d.req.reject(e);
-    if (this._reader) this._reader._settleClosed(e);
+    this._settleReaderClosed(e);
     if (this._consumed !== null) {
       const c = this._consumed;
       this._chunk = null;
@@ -212,7 +259,8 @@ class InternalController {
   }
 
   // reader.cancel / readable.cancel: close the read side, convert the
-  // reason, and reject the writer's pending write and close with it.
+  // reason, reject the read in flight with it, and reject the writer's
+  // pending write and close with it.
   _cancel(reason) {
     const s = this._stream;
     if (s._errored) return Promise.reject(s._error);
@@ -223,13 +271,12 @@ class InternalController {
       const r = this._readReq;
       if (r !== null) {
         this._readReq = null;
-        r.resolve(_readResult(undefined, true));
+        r.reject(e);
       }
       const pending = this._pendingPullIntos;
       this._pendingPullIntos = [];
-      for (const d of pending)
-        d.req.resolve(_readResult(undefined, true));
-      if (this._reader) this._reader._settleClosed(null);
+      for (const d of pending) d.req.reject(e);
+      this._settleReaderClosed(null);
       this._writable._errorStream(e);
       if (this._consumed !== null) {
         const c = this._consumed;
@@ -242,71 +289,6 @@ class InternalController {
   }
 }
 
-// Default reader over an internal stream: a per-reader closed promise
-// (rejected by releaseLock) and single-pending-read reads. Subclassing
-// keeps the shared reader prototype free of internal-stream branches.
-class InternalDefaultReader extends ReadableStreamDefaultReader {
-  _released = false;
-  _closedRes = null;
-  _closedRej = null;
-
-  constructor(stream) {
-    super(stream);
-    this._s = stream;
-    this._c = stream._ictl;
-    this._closedP = new Promise((res, rej) => {
-      this._closedRes = res;
-      this._closedRej = rej;
-    });
-    this._closedP.catch(() => {});
-    if (stream._closed) this._settleClosed(null);
-    else if (stream._errored) this._settleClosed(stream._error);
-    else this._c._reader = this;
-  }
-
-  _settleClosed(e) {
-    if (this._closedRes === null) return;
-    if (e === null) this._closedRes();
-    else this._closedRej(e);
-    this._closedRes = null;
-    this._closedRej = null;
-  }
-
-  read() {
-    if (this._released)
-      return Promise.reject(new TypeError(RELEASED));
-    this._s._disturbed = true;
-    return this._c._read();
-  }
-
-  cancel(reason) {
-    if (this._released)
-      return Promise.reject(new TypeError(RELEASED));
-    return this._c._cancel(reason);
-  }
-
-  get closed() {
-    if (this._released)
-      return Promise.reject(new TypeError(RELEASED));
-    return this._closedP;
-  }
-
-  releaseLock() {
-    if (this._released) return;
-    const c = this._c;
-    const err = new TypeError(RELEASED);
-    if (c._readReq !== null) {
-      c._readReq.reject(err);
-      c._readReq = null;
-    }
-    if (c._reader === this) c._reader = null;
-    this._settleClosed(err);
-    this._s._locked = false;
-    this._s._reader = null;
-    this._released = true;
-  }
-}
-
 // Instance overrides so shared prototype paths stay unbranched.
 function internalGetReader(options) {
   if (options !== undefined && options !== null &&
@@ -316,11 +298,22 @@ function internalGetReader(options) {
         "mode must be undefined or 'byob' in call to getReader().");
     return new ReadableStreamBYOBReader(this);
   }
-  return new InternalDefaultReader(this);
+  return new ReadableStreamDefaultReader(this);
 }
 
 function internalCancel(reason) {
   return this._ictl._cancel(reason);
+}
+
+// Workerd tees an internal stream into internal streams, so a branch takes
+// a BYOB reader too. The readable is read through one default reader as a
+// platform stream, and that stream's tee makes the branches.
+function internalTee() {
+  __celld.__streamIo.check(this);
+  const reader = this.getReader();
+  return __celld.__makeInternalByteStream(
+    () => reader.read().then((r) => (r.done ? null : r.value)),
+    (reason) => reader.cancel(reason)).tee();
 }
 
 // FixedLengthStream's expected length, handed to the base constructor
@@ -336,11 +329,21 @@ class IdentityTransformStream {
     const readable = new ReadableStream();
     ctl._stream = readable;
     readable._ictl = ctl;
+    // A default reader is the standard one, with the internal-stream
+    // contract (streams.js), reading from this controller.
+    __celld.__streamIo.internal(readable, {
+      pending: () => ctl._hasPending(),
+      read: () => ctl._read(),
+      release: () => ctl._released(),
+      closed: () => ctl._readerClosedPromise(),
+      error: (e) => ctl._errorRd(e),
+    });
     Object.defineProperties(readable, {
       getReader: { value: internalGetReader, writable: true,
                    configurable: true },
       _cancel: { value: internalCancel, writable: true,
                  configurable: true },
+      tee: { value: internalTee, writable: true, configurable: true },
     });
     // FixedLengthStream implies Content-Length when its readable is a
     // fetch body.
@@ -390,6 +393,13 @@ class IdentityTransformStream {
       }
       return p;
     };
+    // Both sides are I/O objects of the request or Durable Object that
+    // made them, as in workerd: any other is refused. One made at global
+    // scope belongs to no one.
+    if (__wait_until_active()) {
+      __celld.__streamIo.own(readable, 'ReadableStreamSource');
+      __celld.__streamIo.own(writable, 'Writable');
+    }
     this.readable = readable;
     this.writable = writable;
   }

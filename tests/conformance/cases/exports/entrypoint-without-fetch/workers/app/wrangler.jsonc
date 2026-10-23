@@ -1,0 +1,8 @@
+// fetch() on a ctx.exports entrypoint that defines no fetch handler (found
+// by plan 1.26). workerd's error is "Handler does not export a fetch()
+// function."; celld's names the entrypoint instead.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

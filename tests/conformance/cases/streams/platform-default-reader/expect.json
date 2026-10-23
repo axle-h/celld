@@ -1,0 +1,348 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "fetched": {
+          "sameTurn": {
+            "second": {
+              "first": "waiting",
+              "second": "TypeError: This ReadableStream only supports a single pending read request at a time."
+            },
+            "cancel": {
+              "read": "Error: stop",
+              "cancelled": "resolved",
+              "after": {
+                "done": true,
+                "bytes": null
+              }
+            },
+            "release": {
+              "released": "TypeError: Cannot call releaseLock() on a reader with outstanding read promises.",
+              "read": "waiting",
+              "locked": true
+            },
+            "cancelled": {
+              "cancelled": "resolved",
+              "read": {
+                "done": true,
+                "bytes": null
+              },
+              "closed": "resolved"
+            }
+          },
+          "waiting": {
+            "second": {
+              "first": "waiting",
+              "second": "TypeError: This ReadableStream only supports a single pending read request at a time."
+            },
+            "cancel string": {
+              "waited": "waiting",
+              "cancelled": "resolved",
+              "read": "Error: stop",
+              "after": {
+                "done": true,
+                "bytes": null
+              },
+              "closed": "resolved"
+            },
+            "cancel error": {
+              "waited": "waiting",
+              "cancelled": "resolved",
+              "read": "RangeError: stop",
+              "after": {
+                "done": true,
+                "bytes": null
+              },
+              "closed": "resolved"
+            },
+            "cancel none": {
+              "waited": "waiting",
+              "cancelled": "resolved",
+              "read": "Error: Stream was cancelled.",
+              "after": {
+                "done": true,
+                "bytes": null
+              },
+              "closed": "resolved"
+            },
+            "release": {
+              "released": "TypeError: Cannot call releaseLock() on a reader with outstanding read promises.",
+              "read": "waiting",
+              "locked": true,
+              "closed": "waiting"
+            }
+          }
+        },
+        "identity": {
+          "sameTurn": {
+            "second": {
+              "first": "waiting",
+              "second": "TypeError: This ReadableStream only supports a single pending read request at a time."
+            },
+            "cancel": {
+              "read": "Error: stop",
+              "cancelled": "resolved",
+              "after": {
+                "done": true,
+                "bytes": null
+              }
+            },
+            "release": {
+              "released": "TypeError: Cannot call releaseLock() on a reader with outstanding read promises.",
+              "read": "waiting",
+              "locked": true
+            },
+            "cancelled": {
+              "cancelled": "resolved",
+              "read": {
+                "done": true,
+                "bytes": null
+              },
+              "closed": "resolved"
+            }
+          },
+          "waiting": {
+            "second": {
+              "first": "waiting",
+              "second": "TypeError: This ReadableStream only supports a single pending read request at a time."
+            },
+            "cancel string": {
+              "waited": "waiting",
+              "cancelled": "resolved",
+              "read": "Error: stop",
+              "after": {
+                "done": true,
+                "bytes": null
+              },
+              "closed": "resolved"
+            },
+            "cancel error": {
+              "waited": "waiting",
+              "cancelled": "resolved",
+              "read": "RangeError: stop",
+              "after": {
+                "done": true,
+                "bytes": null
+              },
+              "closed": "resolved"
+            },
+            "cancel none": {
+              "waited": "waiting",
+              "cancelled": "resolved",
+              "read": "Error: Stream was cancelled.",
+              "after": {
+                "done": true,
+                "bytes": null
+              },
+              "closed": "resolved"
+            },
+            "release": {
+              "released": "TypeError: Cannot call releaseLock() on a reader with outstanding read promises.",
+              "read": "waiting",
+              "locked": true,
+              "closed": "waiting"
+            }
+          }
+        },
+        "decompressed": {
+          "sameTurn": {
+            "second": {
+              "first": "waiting",
+              "second": "TypeError: This ReadableStream only supports a single pending read request at a time."
+            },
+            "cancel": {
+              "read": "Error: stop",
+              "cancelled": "resolved",
+              "after": {
+                "done": true,
+                "bytes": null
+              }
+            },
+            "release": {
+              "released": "TypeError: Cannot call releaseLock() on a reader with outstanding read promises.",
+              "read": "waiting",
+              "locked": true
+            },
+            "cancelled": {
+              "cancelled": "resolved",
+              "read": {
+                "done": true,
+                "bytes": null
+              },
+              "closed": "resolved"
+            }
+          },
+          "waiting": {
+            "second": {
+              "first": "waiting",
+              "second": "TypeError: This ReadableStream only supports a single pending read request at a time."
+            },
+            "cancel string": {
+              "waited": "waiting",
+              "cancelled": "resolved",
+              "read": "Error: stop",
+              "after": {
+                "done": true,
+                "bytes": null
+              },
+              "closed": "resolved"
+            },
+            "cancel error": {
+              "waited": "waiting",
+              "cancelled": "resolved",
+              "read": "RangeError: stop",
+              "after": {
+                "done": true,
+                "bytes": null
+              },
+              "closed": "resolved"
+            },
+            "cancel none": {
+              "waited": "waiting",
+              "cancelled": "resolved",
+              "read": "Error: Stream was cancelled.",
+              "after": {
+                "done": true,
+                "bytes": null
+              },
+              "closed": "resolved"
+            },
+            "release": {
+              "released": "TypeError: Cannot call releaseLock() on a reader with outstanding read promises.",
+              "read": "waiting",
+              "locked": true,
+              "closed": "waiting"
+            }
+          }
+        },
+        "blob": {
+          "sameTurn": {
+            "second": {
+              "first": {
+                "done": false,
+                "bytes": 16
+              },
+              "second": "TypeError: This ReadableStream only supports a single pending read request at a time."
+            },
+            "cancel": {
+              "read": "Error: stop",
+              "cancelled": "resolved",
+              "after": {
+                "done": true,
+                "bytes": null
+              }
+            },
+            "release": {
+              "released": "TypeError: Cannot call releaseLock() on a reader with outstanding read promises.",
+              "read": {
+                "done": false,
+                "bytes": 16
+              },
+              "locked": true
+            },
+            "cancelled": {
+              "cancelled": "resolved",
+              "read": {
+                "done": true,
+                "bytes": null
+              },
+              "closed": "resolved"
+            }
+          }
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "second": {
+          "first": false,
+          "second": "TypeError: This ReadableStream only supports a single pending read request at a time."
+        },
+        "release": {
+          "released": "TypeError: Cannot call releaseLock() on a reader with outstanding read promises.",
+          "locked": true
+        },
+        "cancel": {
+          "read": "Error: stop",
+          "cancelled": "resolved"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "fetched": {
+          "name": "ReadableStreamDefaultReader",
+          "constructor": true,
+          "prototype": true,
+          "tag": "[object ReadableStreamDefaultReader]",
+          "constructed": {
+            "prototype": true,
+            "first": "waiting",
+            "second": "TypeError: This ReadableStream only supports a single pending read request at a time.",
+            "release": "TypeError: Cannot call releaseLock() on a reader with outstanding read promises.",
+            "cancel": {
+              "cancelled": "resolved",
+              "read": "TypeError: This ReadableStream only supports a single pending read request at a time."
+            }
+          }
+        },
+        "identity": {
+          "name": "ReadableStreamDefaultReader",
+          "constructor": true,
+          "prototype": true,
+          "tag": "[object ReadableStreamDefaultReader]",
+          "constructed": {
+            "prototype": true,
+            "first": "waiting",
+            "second": "TypeError: This ReadableStream only supports a single pending read request at a time.",
+            "release": "TypeError: Cannot call releaseLock() on a reader with outstanding read promises.",
+            "cancel": {
+              "cancelled": "resolved",
+              "read": "TypeError: This ReadableStream only supports a single pending read request at a time."
+            }
+          }
+        },
+        "decompressed": {
+          "name": "ReadableStreamDefaultReader",
+          "constructor": true,
+          "prototype": true,
+          "tag": "[object ReadableStreamDefaultReader]",
+          "constructed": {
+            "prototype": true,
+            "first": "waiting",
+            "second": "TypeError: This ReadableStream only supports a single pending read request at a time.",
+            "release": "TypeError: Cannot call releaseLock() on a reader with outstanding read promises.",
+            "cancel": {
+              "cancelled": "resolved",
+              "read": "TypeError: This ReadableStream only supports a single pending read request at a time."
+            }
+          }
+        },
+        "blob": {
+          "name": "ReadableStreamDefaultReader",
+          "constructor": true,
+          "prototype": true,
+          "tag": "[object ReadableStreamDefaultReader]",
+          "constructed": {
+            "prototype": true,
+            "first": {
+              "done": false,
+              "bytes": 16
+            },
+            "second": "TypeError: This ReadableStream only supports a single pending read request at a time.",
+            "release": "TypeError: Cannot call releaseLock() on a reader with outstanding read promises.",
+            "cancel": {
+              "cancelled": "resolved",
+              "read": "Error: stop"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

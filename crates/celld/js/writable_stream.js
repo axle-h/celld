@@ -13,6 +13,10 @@
 // Brand-check sentinel for internal construction.
 const _wsc_brand = Symbol("WritableStreamController");
 
+// A stream another request owns (an IdentityTransformStream's writable)
+// refuses each operation with workerd's error (streams.js).
+const ioRefusal = __celld.__streamIo.refusal;
+
 class WritableStreamDefaultController {
   #stream;
   #abortController;
@@ -148,6 +152,8 @@ class WritableStreamDefaultWriter {
     if (this.#released)
       return Promise.reject(
         new TypeError("This WritableStream writer has been released."));
+    const refused = ioRefusal(this.#stream);
+    if (refused !== undefined) return refused;
     return this.#stream._write(chunk);
   }
 
@@ -155,6 +161,8 @@ class WritableStreamDefaultWriter {
     if (this.#released)
       return Promise.reject(
         new TypeError("This WritableStream writer has been released."));
+    const refused = ioRefusal(this.#stream);
+    if (refused !== undefined) return refused;
     return this.#stream._close();
   }
 
@@ -162,6 +170,8 @@ class WritableStreamDefaultWriter {
     if (this.#released)
       return Promise.reject(
         new TypeError("This WritableStream writer has been released."));
+    const refused = ioRefusal(this.#stream);
+    if (refused !== undefined) return refused;
     return this.#stream._abort(reason);
   }
 
@@ -534,6 +544,8 @@ class WritableStream {
   get locked() { return this._locked; }
 
   close() {
+    const refused = ioRefusal(this);
+    if (refused !== undefined) return refused;
     if (this._locked)
       return Promise.reject(new TypeError(
         "Cannot close a locked stream"));
@@ -541,6 +553,8 @@ class WritableStream {
   }
 
   abort(reason) {
+    const refused = ioRefusal(this);
+    if (refused !== undefined) return refused;
     if (this._locked)
       return Promise.reject(new TypeError(
         "Cannot abort a locked stream"));
@@ -556,11 +570,16 @@ class WritableStream {
 class TransformStreamDefaultController {
   #rsc;
   #onError;
-  constructor(rsc, onError) {
+  #onEnqueue;
+  constructor(rsc, onError, onEnqueue) {
     this.#rsc = rsc;
     this.#onError = onError;
+    this.#onEnqueue = onEnqueue;
   }
-  enqueue(chunk) { this.#rsc.enqueue(chunk); }
+  enqueue(chunk) {
+    this.#rsc.enqueue(chunk);
+    this.#onEnqueue();
+  }
   terminate() { this.#rsc.close(); }
   error(e) {
     this.#onError(e);
@@ -591,6 +610,36 @@ class TransformStream {
     let cancelled = false;
     let flushing = false;
     let writable;
+    // Spec backpressure: it starts on, a write waits for it to clear
+    // before the transform runs, a read clears it, and an enqueue that
+    // fills the readable's queue sets it again. An error or cancel
+    // clears it, so a parked write wakes and fails.
+    let backpressure = true;
+    let backpressureCleared = null;
+    const setBackpressure = (value) => {
+      backpressure = value;
+      if (!value && backpressureCleared !== null) {
+        const resolve = backpressureCleared.resolve;
+        backpressureCleared = null;
+        resolve();
+      }
+    };
+    const unblocked = () => {
+      if (!backpressure) return undefined;
+      backpressureCleared ??= Promise.withResolvers();
+      return backpressureCleared.promise;
+    };
+    const enqueued = () => {
+      if (rsc.desiredSize !== null && rsc.desiredSize <= 0)
+        setBackpressure(true);
+    };
+    // workerd ties a TransformStream to the request or Durable Object
+    // that made it: read or written by any other, the read or the write
+    // never settles (probed), so a body piped through one is never
+    // delivered there. One made at global scope belongs to no one.
+    const owner = __wait_until_active() ? __ws_owner() : undefined;
+    const foreign = () => owner !== undefined && __ws_owner() !== owner;
+    const never = () => new Promise(() => {});
     const runCancel = (reason) => {
       if (cancelled) return Promise.resolve();
       cancelled = true;
@@ -600,7 +649,12 @@ class TransformStream {
     };
     this.readable = new ReadableStream({
       start(c) { rsc = c; },
+      pull() {
+        if (foreign()) return never();
+        setBackpressure(false);
+      },
       async cancel(reason) {
+        setBackpressure(false);
         if (flushing) return;
         try {
           await runCancel(reason);
@@ -628,7 +682,8 @@ class TransformStream {
     let readableError = null;
     const ctrl = new TransformStreamDefaultController(rsc, (e) => {
       if (readableError === null) readableError = e;
-    });
+      setBackpressure(false);
+    }, enqueued);
     // start runs once at construction per spec. A throw -- sync or
     // async -- must error both sides rather than escape the
     // constructor, so wrap it: the executor turns a sync throw into
@@ -641,7 +696,20 @@ class TransformStream {
     writable = new WritableStream({
       start() { return started; },
       async write(chunk) {
-        if (!transformFn) { rsc.enqueue(chunk); return; }
+        if (foreign()) return never();
+        const waiting = unblocked();
+        if (waiting !== undefined) {
+          await waiting;
+          // An error or a cancel cleared it: the write fails.
+          if (writable._state === 'erroring' ||
+              writable._state === 'errored')
+            throw writable._storedError;
+        }
+        if (!transformFn) {
+          rsc.enqueue(chunk);
+          enqueued();
+          return;
+        }
         try {
           await transformFn.call(transformer, chunk, ctrl);
         } catch (e) {
@@ -678,6 +746,7 @@ class TransformStream {
         });
       },
       async abort(reason) {
+        setBackpressure(false);
         try {
           await runCancel(reason);
           rsc.error(reason);
