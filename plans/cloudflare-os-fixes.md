@@ -376,7 +376,7 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 35 | 1.23 `clone()` tees, 1.24 `alias` (package keys), 1.25 KV `preview_id` | done | `b9ee195`, starter `d5e7133` |
 | 36 | 1.26 stream ownership on the host, readers and IdentityTransformStream | done | `e449d4d` |
 | 37 | 1.45 esbuild service protocol; Wrangler `alias` exactly | done | `60f09d3`, starter `ec3cf7f` |
-| 38 | 1.28 RPC method lookup on every receiver (security) | done | see log |
+| 38 | 1.28 RPC method lookup on every receiver (security) | done | `8e1f06e` |
 | 39 | 1.49 Durable Object scope authorisation (security) | next | |
 | 40+ | Phase 1 in plan order (1.29, 1.30, 1.34, 1.36-1.44, 1.46-1.48), and the 1.4 props key-order follow-up | queued | |
 
@@ -3602,6 +3602,59 @@ check.
 **Also (LOW, from the same review):** a JSON-flavour peer RPC call whose
 arguments are `null` now fails "Malformed Durable Object RPC request"; it
 used to call with no arguments. Only authenticated peers send it.
+
+**Progress (paused, 2026-10-23).** Nothing is implemented yet. No code is
+changed, and no tests or cases have been added. Only the survey below is
+done.
+
+What the next agent needs to know:
+- **Cross-script `script_name` DO bindings are refused at deploy**
+  (`deploy.rs` ~1607, test ~5113). So the only user classes a script may
+  reach are its own `do_classes`: the bindings' classes plus migrated
+  classes. `ctx.exports` namespaces come from the same list
+  (`bootstrap.rs` `inject_namespace_keys`).
+- **A cell scope is `Class:hex`, with no script in it.** User classes are
+  unique across co-hosted scripts until 2.4, so for them a check on the
+  class is a check on the (script, class) pair. The workflow class carries
+  its script (`__Workflow.<script>`).
+- **A class check is not enough for KV, Queue and D1.** These classes are
+  shared fleet-wide (`engine_api.rs` `shared_namespace_key`), so holding
+  any KV binding authorises the class. The grant has to list the exact
+  scopes instead: `kv_cell_scope(id, 0)` per KV binding, `queue_cell_scope`
+  per producer (check whether consumers call the cell too), and
+  `d1_cell_scope` per D1 binding. Build it from `WorkerConfig` at load and
+  keep it on `ActorRuntimeState` (`js.rs` ~3271) next to `script_name`.
+- **Where to put the checks.** The caller-side ops `op_do_call_impl` and
+  `op_rpc_call` (`js.rs` ~10532 and ~10791) take the scope from JS with no
+  check. To cover the peer tunnel, put a caller identity on
+  `DoCallReq`/`RpcCallReq`, check it in `main.rs` `dispatch_rpc_call`
+  (~1422) and in the DO-call dispatch, and carry it in the
+  `peer_tunnel::rpc` frame. Also check `__facet_*`, `__ws_connect` and
+  `__loader_*`.
+- **Dynamic Workers** have `script_name = "__loader:<id>"` (`js.rs` ~9433)
+  and an empty `do_classes`. Their env carries only service routes
+  (`__installLoaderEnv`, `harness.js` ~4435), so their grant should be
+  empty apart from their own facets.
+- **Shared runtime cells run in the first script's isolates**
+  (`generation.rs` `register_cell_class`).
+- **Additional gap (not in the design above).** Storage and alarm ops take
+  the scope from a writable `this._scope` (`harness.js` ~1885, ~2059,
+  ~2206; `ctx.storage.constructor` is reachable), and `op_alarm_set`,
+  `op_alarm_get`, `op_alarm_delete` and the `__storage_*` ops trust it.
+  Storage is looked up per thread (`storage.rs` `dbs`), so this reaches only
+  cells resident in the same isolate. That includes the shared KV, Queue
+  and D1 cells when the attacker's script hosts them. Bind these ops to the
+  running event (`current_cell_event`), as 1.27 did for containers.
+- **Not started:** removing `_stub`/`_namespace`/`_namespaceKey` and the
+  constructor (`harness.js` ~6168, ~8640, ~8987, ~10482; `kv.js`), the
+  `/runtime/`-only `fetch`, re-validation inside the cell methods, the
+  internal path for `__queueDlqAcceptBatch` (`harness.js` ~8113, ~8189,
+  ~8628), the JSON-null peer RPC (`__doRpcRequest`, `harness.js` ~6483),
+  and the fleet-secret id decision (`engine_api.rs`
+  `durable_object_id_key`; the `celld kv`/`d1`/`queue` CLIs derive scopes
+  outside any isolate and would need the secret).
+- **`rpc/rpc-refusals-internal` uses `env.KV._stub`** and similar, so its
+  `/runtime` step has to be rewritten once `_stub` is gone.
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 
