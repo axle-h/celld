@@ -1,0 +1,67 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "alarm": "TypeError: 'alarm' is a reserved method and cannot be called over RPC.",
+        "webSocketMessage": "TypeError: 'webSocketMessage' is a reserved method and cannot be called over RPC.",
+        "webSocketClose": "TypeError: 'webSocketClose' is a reserved method and cannot be called over RPC.",
+        "webSocketError": "TypeError: 'webSocketError' is a reserved method and cannot be called over RPC.",
+        "dup": "TypeError: 'dup' is a reserved method and cannot be called over RPC.",
+        "own": "TypeError: The RPC receiver does not implement the method \"own\".",
+        "ctx": "TypeError: The RPC receiver does not implement the method \"ctx\".",
+        "ctxStorage": "TypeError: The RPC receiver does not implement the method \"ctx\".",
+        "env": "TypeError: The RPC receiver does not implement the method \"env\".",
+        "state": "TypeError: The RPC receiver does not implement the method \"__celldState\".",
+        "stateReset": "TypeError: The RPC receiver does not implement the method \"__celldState\".",
+        "toolsAlarm": "TypeError: 'alarm' is a reserved method and cannot be called over RPC.",
+        "toolsWebSocketMessage": "TypeError: 'webSocketMessage' is a reserved method and cannot be called over RPC.",
+        "toolsFetch": "TypeError: 'fetch' is a reserved method and cannot be called over RPC.",
+        "toolsConnect": "TypeError: 'connect' is a reserved method and cannot be called over RPC.",
+        "toolsDup": "TypeError: 'dup' is a reserved method and cannot be called over RPC."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "alarm": "TypeError: 'alarm' is a reserved method and cannot be called over RPC.",
+        "webSocketMessage": "TypeError: 'webSocketMessage' is a reserved method and cannot be called over RPC.",
+        "webSocketClose": "TypeError: 'webSocketClose' is a reserved method and cannot be called over RPC.",
+        "webSocketError": "TypeError: 'webSocketError' is a reserved method and cannot be called over RPC.",
+        "dup": "TypeError: 'dup' is a reserved method and cannot be called over RPC.",
+        "toolsAlarm": "TypeError: 'alarm' is a reserved method and cannot be called over RPC.",
+        "toolsFetch": "TypeError: 'fetch' is a reserved method and cannot be called over RPC.",
+        "toolsConnect": "TypeError: 'connect' is a reserved method and cannot be called over RPC.",
+        "toolsDup": "TypeError: 'dup' is a reserved method and cannot be called over RPC.",
+        "own": "TypeError: The RPC receiver does not implement the method \"own\".",
+        "ctx": "TypeError: The RPC receiver does not implement the method \"ctx\".",
+        "env": "TypeError: The RPC receiver does not implement the method \"env\"."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "alarm": "TypeError: 'alarm' is a reserved method and cannot be called over RPC.",
+        "webSocketMessage": "TypeError: 'webSocketMessage' is a reserved method and cannot be called over RPC.",
+        "webSocketClose": "TypeError: 'webSocketClose' is a reserved method and cannot be called over RPC.",
+        "webSocketError": "TypeError: 'webSocketError' is a reserved method and cannot be called over RPC.",
+        "dup": "TypeError: 'dup' is a reserved method and cannot be called over RPC.",
+        "toolsAlarm": "TypeError: 'alarm' is a reserved method and cannot be called over RPC.",
+        "toolsFetch": "TypeError: 'fetch' is a reserved method and cannot be called over RPC.",
+        "toolsConnect": "TypeError: 'connect' is a reserved method and cannot be called over RPC.",
+        "toolsDup": "TypeError: 'dup' is a reserved method and cannot be called over RPC."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "own": "TypeError: The RPC receiver does not implement the method \"own\".",
+        "childDup": "TypeError: 'dup' is a reserved method and cannot be called over RPC.",
+        "nothing": "TypeError: The RPC receiver does not implement the method \"nothing\".",
+        "resultDup": "TypeError: 'dup' is a reserved method and cannot be called over RPC."
+      }
+    }
+  ]
+}

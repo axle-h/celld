@@ -146,10 +146,12 @@ The `tail` and `email` handlers are unavailable.
 ### [RPC](https://developers.cloudflare.com/workers/runtime-apis/rpc/)
 
 - An RPC stub, or a stream passed over RPC, cannot cross an isolate boundary.
-- A property path read through an RPC call's result before it is awaited
-  (`stub.method().name`) finds a name the result lacks as `undefined`, and
-  reads a primitive result's members. workerd refuses both: "The RPC
-  receiver does not implement the method".
+- A Durable Object stub's `connect()` throws "Fetcher.connect() is not
+  implemented in celld". workerd hands the object's `connect` handler a
+  socket.
+- celld's service bindings and `ctx.exports` stubs always have
+  `getRpcMethodForTestOnly()`. workerd has it only under the `experimental`
+  flag.
 - An `AbortSignal` in a Durable Object RPC call does not cross a node boundary.
 - A remote RPC retries only when the failed peer attempt did not start the
   method. Use a stable operation ID for an application retry.

@@ -1,0 +1,161 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "greet": {
+          "type": "string",
+          "value": "host:a"
+        },
+        "own": {
+          "error": "TypeError: The RPC receiver does not implement the method \"ownMethod\"."
+        },
+        "ctx": {
+          "error": "TypeError: The RPC receiver does not implement the method \"ctx\"."
+        },
+        "env": {
+          "error": "TypeError: The RPC receiver does not implement the method \"env\"."
+        },
+        "missing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "missingGet": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "version": {
+          "type": "number",
+          "value": 7
+        },
+        "versionCall": {
+          "error": "TypeError: \"version\" is not a function."
+        },
+        "nothing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"nothing\"."
+        },
+        "nothingCall": {
+          "error": "TypeError: The RPC receiver does not implement the method \"nothing\"."
+        },
+        "alarm": {
+          "error": "TypeError: 'alarm' is a reserved method and cannot be called over RPC."
+        },
+        "webSocketMessage": {
+          "error": "TypeError: 'webSocketMessage' is a reserved method and cannot be called over RPC."
+        },
+        "webSocketClose": {
+          "error": "TypeError: 'webSocketClose' is a reserved method and cannot be called over RPC."
+        },
+        "webSocketError": {
+          "error": "TypeError: 'webSocketError' is a reserved method and cannot be called over RPC."
+        },
+        "dup": {
+          "error": "TypeError: 'dup' is a reserved method and cannot be called over RPC."
+        },
+        "queue": {
+          "type": "string",
+          "value": "queue reached"
+        },
+        "scheduled": {
+          "type": "string",
+          "value": "scheduled reached"
+        },
+        "toString": {
+          "type": "boolean",
+          "value": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "label": {
+          "type": "string",
+          "value": "tools"
+        },
+        "undef": {
+          "type": "undefined",
+          "value": null
+        },
+        "missing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "add": {
+          "type": "string",
+          "value": "tools:3"
+        },
+        "deep": {
+          "type": "number",
+          "value": 1
+        },
+        "deepMissing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "labelCall": {
+          "error": "TypeError: \"tools.label\" is not a function."
+        },
+        "listLength": {
+          "error": "TypeError: The RPC receiver does not implement the method \"list\"."
+        },
+        "labelLength": {
+          "error": "TypeError: The RPC receiver does not implement the method \"label\"."
+        },
+        "alarm": {
+          "error": "TypeError: 'alarm' is a reserved method and cannot be called over RPC."
+        },
+        "fetch": {
+          "error": "TypeError: 'fetch' is a reserved method and cannot be called over RPC."
+        },
+        "connect": {
+          "error": "TypeError: 'connect' is a reserved method and cannot be called over RPC."
+        },
+        "dup": {
+          "error": "TypeError: 'dup' is a reserved method and cannot be called over RPC."
+        },
+        "missingThenAlarm": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "viaCall": {
+          "error": "TypeError: The RPC receiver does not implement the method \"length\"."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "kinds": {
+          "0": "undefined",
+          "toString": "Object.prototype",
+          "valueOf": "Object.prototype",
+          "hasOwnProperty": "Object.prototype",
+          "isPrototypeOf": "Object.prototype",
+          "propertyIsEnumerable": "Object.prototype",
+          "toLocaleString": "Object.prototype",
+          "__defineGetter__": "Object.prototype",
+          "__lookupGetter__": "Object.prototype",
+          "constructor": "function",
+          "then": "undefined",
+          "fetch": "function",
+          "connect": "function",
+          "id": "object",
+          "name": "string",
+          "dup": "RpcProperty",
+          "greet": "RpcProperty",
+          "call": "RpcProperty",
+          "bind": "RpcProperty"
+        },
+        "in": {
+          "0": false,
+          "toString": true,
+          "then": false,
+          "greet": true,
+          "dup": true,
+          "fetch": true
+        },
+        "constructorIsProperty": false,
+        "tag": "[object DurableObject]",
+        "sameConnect": true
+      }
+    }
+  ]
+}

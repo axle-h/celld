@@ -1,0 +1,10 @@
+{
+  "xfail": "1.48",
+  "workers": ["front"],
+  "steps": [
+    {"path": "/handler"},
+    {"path": "/no-handler"},
+    {"path": "/arguments"},
+    {"path": "/identity"}
+  ]
+}

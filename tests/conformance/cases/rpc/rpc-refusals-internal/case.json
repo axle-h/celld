@@ -1,0 +1,9 @@
+{
+  "kind": "celld-only",
+  "reason": "names no workerd client sends without the experimental flag (getRpcMethodForTestOnly, which celld always has), and celld's runtime cells, which workerd lacks",
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/hook"},
+    {"path": "/runtime"}
+  ]
+}

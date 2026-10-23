@@ -1,0 +1,6 @@
+// The entrypoints `front` asks for names a stub answers locally.
+{
+  "name": "back",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

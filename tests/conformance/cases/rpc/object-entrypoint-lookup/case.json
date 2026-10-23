@@ -1,0 +1,7 @@
+{
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/service"},
+    {"path": "/exports"}
+  ]
+}

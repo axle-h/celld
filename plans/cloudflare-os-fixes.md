@@ -375,8 +375,10 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 34 | 1.22 WebSocket follow-ups; bounded send queues and socket lifetimes (security) | done | `5a59ae1` |
 | 35 | 1.23 `clone()` tees, 1.24 `alias` (package keys), 1.25 KV `preview_id` | done | `b9ee195`, starter `d5e7133` |
 | 36 | 1.26 stream ownership on the host, readers and IdentityTransformStream | done | `e449d4d` |
-| 37 | 1.45 esbuild service protocol; Wrangler `alias` exactly | done | see log |
-| 38+ | Phase 1 in plan order (1.28-1.30, 1.34, 1.36-1.44, 1.46, 1.47), and the 1.4 props key-order follow-up | queued | |
+| 37 | 1.45 esbuild service protocol; Wrangler `alias` exactly | done | `60f09d3`, starter `ec3cf7f` |
+| 38 | 1.28 RPC method lookup on every receiver (security) | done | see log |
+| 39 | 1.49 Durable Object scope authorisation (security) | next | |
+| 40+ | Phase 1 in plan order (1.29, 1.30, 1.34, 1.36-1.44, 1.46-1.48), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -3457,6 +3459,149 @@ still differ from workerd:
   `connect`.
 - workerd puts `Symbol.dispose` on every object RPC result; celld does so only
   when the result carries stubs.
+
+**As built (done).** One walker, `__rpcPath`, applies workerd's
+`tryGetProperty` to every receiver: stub targets, class and plain-object
+entrypoints, Durable Objects and call results. `__stubResolve`,
+`__entrypointResolve`, `__walkable` and `__rpcTargetMethod` are gone.
+- **Reserved names.** Every name on a path is checked against the reserved
+  set of the target where the call started. An entrypoint or Durable Object
+  reserves `constructor`, `fetch`, `connect`, `alarm`, the three
+  `webSocket*` handlers and `dup`. A transient target (an RpcStub's, or a
+  call result's) reserves `constructor` and `dup`. So `stub.tools.alarm()`
+  is refused as well as `stub.alarm()`.
+- **Durable Objects.** A DO is looked up as an entrypoint: class members
+  only, so `ctx`, `env`, own-property methods and celld's `__celldState`
+  are hidden. A member that reads `undefined` is a missing method, and the
+  texts are workerd's. A stub member is now an RpcProperty. Awaiting it
+  reads the property, and a longer path is walked at the object. The method
+  stays the first name, and the rest of the path rides with the arguments
+  as `{ path, args }` (`__doRpcRequest`), with null args for a read. A plain
+  call still sends an array, so the wire is unchanged for it.
+- **Runtime cells.** The KV, Queue, D1 and Workflow cells answer only the
+  methods their bindings call, called directly (`__runtimeClass(name, cls,
+  methods)`). At HEAD, user code could reach these stubs through
+  `env.QUEUE._stub` and call `_purge`, `_setPaused`, `_peek` or `__kvSweep`.
+- **Plain-object entrypoints** use the same walker in own-property mode.
+  Reads and paths work, as on workerd: `await env.SVC.value` and
+  `env.SVC.nested.fn(x)`. A function on the path is called as
+  fn(arg, env, ctx) with its object as `this`, under workerd's arity rules,
+  including "RPC function has unreasonable length attribute". At HEAD,
+  `constructor(x)` called `Object(x)`, and `alarm`, `dup` and `connect`
+  reached the handler.
+- **Client side.** RpcStub, RpcPromise, RpcProperty, `ctx.exports`, service
+  bindings and DO stubs answer their prototype chain's names locally, which
+  includes Object.prototype's. Array indices are `undefined`, as workerd's
+  wildcard never sees them. `in` reports what workerd reports. RpcStub,
+  RpcPromise and RpcProperty carry workerd's `toString()` tags
+  (`[object JsRpcStub]` and so on). A DO stub's `constructor` and tag come
+  from a local `DurableObject` stub class.
+- **Value-session pipelining** (`__walkLocal`) applies workerd's
+  call-pipeline rules. A plain object exposes its own properties, which may
+  be `undefined`. A stub passes the path to its target, and a DO stub or
+  service binding is walked as a Fetcher. Anything else (a primitive, an
+  array, a Date, a Map, a Response, an Error) refuses its first name. An
+  array is no longer walkable mid-path on either side.
+- **Proxy RpcTargets.** A returned Proxy that claims RpcTarget's prototype
+  still crosses as a stub, but its call has no pipeline: its marker says
+  so, and the stub it revives as refuses a pipelined name. `new
+  RpcStub(proxy)`, or the stub passed on, keeps a pipeline, as on workerd.
+- **`connect` on DO stubs** is a native method, one function for every
+  stub. celld has no connect handlers, so it throws "Fetcher.connect() is
+  not implemented in celld", as `queue()` does (1.48).
+- **`Symbol.dispose`.** Every object a call or property read answers with
+  gets its own non-enumerable, writable, configurable disposer. It is empty
+  unless the result carries stubs. The lift never forwards the empty one.
+- **Server-side Object.prototype names** are still refused before user
+  code. workerd reads the member and compares it with Object.prototype's.
+  The two differ only for a name that no workerd client sends without the
+  `experimental` flag.
+- **Cases.**
+  - Differential: `rpc/do-method-lookup`, `rpc/client-names`,
+    `rpc/object-entrypoint-lookup` and `rpc/result-dispose`, and
+    `rpc/rpc-refusals` (refusals only). `rpc/pipeline-receiver-rules` is
+    extended and no longer xfail.
+  - `rpc/rpc-refusals-internal` is celld-only. It covers the test hook's
+    Object.prototype names and the runtime cells.
+  - `rpc/do-connect` and `rpc/client-shapes` are xfail until 1.48.
+  - Every new case and the extended one fail at HEAD. At HEAD, the refusal
+    cases reached a DO's `alarm` and `webSocket*` handlers, `dup` and
+    own-property methods; an entrypoint's reserved names one step down a
+    path; an object entrypoint's `alarm`, `dup`, `webSocket*`, `connect`
+    and `constructor`; a transient `dup` through a path; and the Queue and
+    KV cells' internal methods.
+
+### 1.48 Follow-ups found by 1.28
+
+- **Security: runtime-cell stubs are reachable.** Moved to 1.49, which the
+  review of 1.28 widened to cross-script reach.
+- **`connect()` on a DO stub** should reach the object's `connect(socket)`
+  handler, as on workerd (`rpc/do-connect`, xfail). A service binding's
+  and a `ctx.exports` stub's `connect` are still RPC names, which the
+  target refuses as reserved. workerd's is the native Fetcher method.
+- **Client shapes.** These differ from workerd (`rpc/client-shapes`, xfail):
+  - A DO stub's `fetch` is a new function per stub; workerd's is one (in
+    `rpc/do-connect`).
+  - RpcPromise inherits from Promise.prototype.
+  - Stubs and pipeline nodes report the own keys `length`, `name` and
+    `prototype`.
+  - A DO stub's own keys are `id`, `name`; workerd's are `name`, `id`.
+  - A service binding's and a `ctx.exports` stub's `toString()` give
+    `[object Object]` and `[object Function]`, not `[object Fetcher]` and
+    `[object LoopbackServiceStub]`.
+- **Facet and Worker Loader stubs** still send array indices as names.
+  They refuse property reads and paths, as before.
+
+### 1.49 Durable Object scope authorisation (found by the 1.28 review) — security, next
+
+**Problem.** Nothing on the host ties a caller to the Durable Object scopes
+it may reach. Verified in `celld dev` with two scripts, where `attacker`
+used only its own bindings:
+- **Cross-script reach.** Namespace keys are fixed strings
+  (`engine_api.rs` ~597-640: `cells:v1:queue:__Queue`,
+  `cells:v1:<len>:<script>:<class>`), `DurableObjectNamespace` takes the
+  class and key as plain constructor arguments (`harness.js` ~6168), and
+  `dispatch_rpc_call` (`main.rs`) checks only that a scope is well formed.
+  `attacker` read `victim`'s KV values (`env.KV._namespace()`), queued
+  messages (the Queue cell's `peek`), D1 rows (the D1 cell's `exec`), called
+  a method on `victim`'s own Durable Object, and read its Workflow status.
+- **Operator handlers.** `_stub.fetch()` on a Worker's own runtime bindings
+  reaches the cells' operator handlers (`harness.js` ~8572-8620 Queue
+  info/purge/pause/resume/peek/redrive and `/__qSettle`; ~8772-8800 D1
+  migrate and exec; `kv.js` ~674-770). A producer-only Queue binding could
+  peek, pause and purge a fleet-wide queue. (D1's engine authoriser still
+  refuses `_cf_*` and `_litestream*` writes.)
+- **Cell methods trust the caller's validation.** The allowlisted methods
+  are validated in the caller's isolate only: `_stub.__kvPut` stored a
+  5000-byte key (public limit 512), and `_stub.__queueDlqAcceptBatch`
+  (cell-to-cell, yet on the binding allowlist) took a caller-chosen id, a
+  wrong declared size and a `deadLetterSource` naming another queue.
+
+**Design.**
+- Enforce on the host: every DO fetch, RPC, alarm and WebSocket call to a
+  scope is checked against the calling script's authorised namespaces: the
+  classes its own bindings and `ctx.exports` name, runtime classes only
+  through a binding it holds, and (from Phase 2) whatever a verified
+  capability token grants. Cross-script DO bindings (`script_name`) and
+  Phase 4 facets of another script's class must go through that check, not
+  around it.
+- Take namespace keys, `_stub`, `_namespace` and the
+  `DurableObjectNamespace` constructor out of user reach (private state or
+  closures); refuse `fetch` on runtime classes except on the authenticated
+  `/runtime/` route.
+- Re-validate every limit inside the cell methods (keys, sizes, ids, content
+  types, metadata), and give cell-to-cell calls (`__queueDlqAcceptBatch`) an
+  internal path that a binding's allowlist does not include.
+- Consider deriving DO ids with a fleet secret so an id is not computable
+  from public strings alone (as Phase 2's D7 key does for tokens).
+
+**Tests.** Celld-only refusal cases with two scripts, one per path above
+(neutral framing: each expects the refusal), and unit tests on the host
+check.
+
+**Also (LOW, from the same review):** a JSON-flavour peer RPC call whose
+arguments are `null` now fails "Malformed Durable Object RPC request"; it
+used to call with no arguments. Only authenticated peers send it.
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 

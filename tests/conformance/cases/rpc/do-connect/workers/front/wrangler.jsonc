@@ -1,0 +1,14 @@
+// `connect()` on a Durable Object stub, which reaches the object's connect
+// handler as a socket.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": {
+    "bindings": [
+      { "name": "WITH", "class_name": "WithHandler" },
+      { "name": "WITHOUT", "class_name": "WithoutHandler" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WithHandler", "WithoutHandler"] }]
+}

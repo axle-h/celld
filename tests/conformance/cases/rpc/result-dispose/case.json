@@ -1,0 +1,7 @@
+{
+  "workers": ["front"],
+  "steps": [
+    {"path": "/durable-object"},
+    {"path": "/stub"}
+  ]
+}

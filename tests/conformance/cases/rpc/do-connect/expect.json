@@ -1,0 +1,78 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "opened": {
+          "type": "string",
+          "value": "{\"remoteAddress\":\"example.com:80\"}"
+        },
+        "read": {
+          "type": "string",
+          "value": "hello from the object"
+        },
+        "closed": {
+          "type": "string",
+          "value": "closed"
+        },
+        "seen": {
+          "type": "object",
+          "value": {
+            "args": 3,
+            "socket": "[object Socket]"
+          }
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "opened": {
+          "error": "Error: proxy request failed, cannot connect to the specified address. It looks like you might be trying to connect to a HTTP-based service — consider using fetch instead"
+        },
+        "read": {
+          "type": "string",
+          "value": ""
+        },
+        "closed": {
+          "error": "Error: proxy request failed, cannot connect to the specified address. It looks like you might be trying to connect to a HTTP-based service — consider using fetch instead"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "none": {
+          "threw": "TypeError: Failed to execute 'connect' on 'Fetcher': parameter 1 is not of type 'SocketAddress or string'."
+        },
+        "object": {
+          "opened": {
+            "error": "Error: proxy request failed, cannot connect to the specified address. It looks like you might be trying to connect to a HTTP-based service — consider using fetch instead"
+          },
+          "read": {
+            "type": "string",
+            "value": ""
+          },
+          "closed": {
+            "error": "Error: proxy request failed, cannot connect to the specified address. It looks like you might be trying to connect to a HTTP-based service — consider using fetch instead"
+          }
+        },
+        "noPort": {
+          "threw": "TypeError: Specified address is missing port."
+        },
+        "detached": {
+          "threw": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "connect": true,
+        "fetch": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "promiseIsPromise": false,
+        "stubKeys": [],
+        "promiseKeys": [],
+        "propertyKeys": [],
+        "hostKeys": [
+          "name",
+          "id"
+        ],
+        "hostOwnKeys": [
+          "name",
+          "id"
+        ],
+        "serviceTag": "[object Fetcher]",
+        "exportsTag": "[object LoopbackServiceStub]"
+      }
+    }
+  ]
+}

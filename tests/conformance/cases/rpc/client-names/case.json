@@ -1,0 +1,10 @@
+{
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/stub"},
+    {"path": "/promise"},
+    {"path": "/property"},
+    {"path": "/exports"},
+    {"path": "/service"}
+  ]
+}

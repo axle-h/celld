@@ -1,0 +1,10 @@
+// Method lookup on a Durable Object called through its stub.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": {
+    "bindings": [{ "name": "HOST", "class_name": "Host" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Host"] }]
+}

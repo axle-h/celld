@@ -1,4 +1,4 @@
-// Receiver rules for a path pipelined through a Durable Object call's result.
+// Receiver rules for a path pipelined through a call's result.
 {
   "name": "front",
   "main": "index.js",

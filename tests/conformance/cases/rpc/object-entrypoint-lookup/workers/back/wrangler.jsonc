@@ -1,0 +1,6 @@
+// A plain-object default export, called by `front` over RPC.
+{
+  "name": "back",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

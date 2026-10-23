@@ -1,0 +1,9 @@
+{
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/durable-object"},
+    {"path": "/entrypoint"},
+    {"path": "/object"},
+    {"path": "/transient"}
+  ]
+}

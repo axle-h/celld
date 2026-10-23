@@ -4386,6 +4386,9 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
     }
   },
   };
+  // The Fetcher's own members, and Object.prototype's, are answered here,
+  // and an array index is nothing.
+  Object.setPrototypeOf(target, __cf.ServiceStub.prototype);
   // An omitted entrypoint selects the module's default export, which may be a
   // WorkerEntrypoint or an object handler. `entrypoint = "Name"` selects that
   // named class. Any property other than a reserved Fetcher method is an
@@ -4415,7 +4418,7 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
         !__cell.compat.serviceBindingExtraHandlers)
       return __makeNode(session, [prop], null);
     if (Reflect.has(base, prop)) return Reflect.get(base, prop);
-    if (typeof prop !== "string") return undefined;
+    if (__rpcLocalName(prop, base)) return undefined;
     if (__cell.compat.fetcherGetPutDelete &&
         (prop === "get" || prop === "put" || prop === "delete"))
       return __fetcherHelper(base.fetch, prop);
@@ -4781,20 +4784,33 @@ const __stubDisposedError = () =>
 // Shared brand value for RpcTarget instances; see the RpcTarget
 // constructor.
 const __rpcNoClone = () => {};
-// Workerd method-visibility rules by target kind: an RpcTarget
-// exposes inherited methods/accessors (never own instance state,
-// never Object.prototype); a plain object or function exposes own
-// properties only. Property reads go through normal [[Get]] so
+// Workerd method-visibility rules by target kind: an RpcTarget, an
+// entrypoint or a Durable Object exposes inherited methods/accessors (never
+// own instance state, never Object.prototype); a plain object or function
+// exposes own properties only. Property reads go through normal [[Get]] so
 // Proxy handlers participate, as in Workerd.
 const __rpcNoSuchMethod = (prop) => new TypeError(
   'The RPC receiver does not implement the method "' + prop + '".');
-// An RpcTarget's or an entrypoint instance's member, as workerd's
-// tryGetProperty() finds it: one [[Get]], never `in`, so a Proxy's `get`
-// trap answers for it and its `has` trap is not asked. An own property
-// (by [[GetOwnProperty]], which a Proxy's trap answers too) stays hidden,
-// and a read of undefined is a missing method. Object.prototype's names
-// are refused before any user code runs: workerd's stubs answer them
-// locally, but celld's stubs forward every string key.
+// Reserved names, by the kind of target a call starts at (worker-rpc.c++
+// isReservedName): a transient target -- an RpcStub's, or a call result's
+// pipeline -- reserves two, and an entrypoint or a Durable Object also
+// reserves its handlers. Every name on a path is checked against the set of
+// the target the call started at, before any user code runs.
+const __transientReserved = new Set(["constructor", "dup"]);
+const __entrypointReserved = new Set([
+  "constructor", "fetch", "connect", "alarm",
+  "webSocketMessage", "webSocketClose", "webSocketError", "dup",
+]);
+const __rpcReservedError = (prop) => new TypeError("'" + prop +
+  "' is a reserved method and cannot be called over RPC.");
+// A class member, as workerd's tryGetProperty() finds it: one [[Get]], never
+// `in`, so a Proxy's `get` trap answers for it and its `has` trap is not
+// asked. An own property (by [[GetOwnProperty]], which a Proxy's trap
+// answers too) stays hidden, and a read of undefined is a missing method.
+// Object.prototype's names are refused before any user code runs. Workerd
+// reads them and compares with Object.prototype's, but no stub sends one:
+// celld's stubs answer them locally, as workerd's do, so only a peer or the
+// test hook can ask, and the stricter refusal runs nothing for them.
 const __rpcClassMember = (target, prop) => {
   if (prop in Object.prototype || Object.hasOwn(target, prop))
     throw __rpcNoSuchMethod(prop);
@@ -4802,26 +4818,34 @@ const __rpcClassMember = (target, prop) => {
   if (value === undefined) throw __rpcNoSuchMethod(prop);
   return value;
 };
+// A plain object's or a function's member: its own properties only, which
+// may hold undefined.
+const __rpcOwnMember = (target, prop) => {
+  if (!Object.hasOwn(target, prop)) throw __rpcNoSuchMethod(prop);
+  return target[prop];
+};
 // Bind through the intrinsic because a callable proxy can implement `.bind`
 // as a remote property. Reading that property can turn a valid named RPC
 // method into a non-function. Keep this rule shared by every RPC binding site.
 const __rpcBindMethod = (value, receiver) =>
   Reflect.apply(Function.prototype.bind, value, [receiver]);
-const __stubResolve = (target, prop) => {
-  let value;
-  if (target instanceof __cf.RpcTarget) {
-    value = __rpcClassMember(target, prop);
-  } else if (Object.hasOwn(target, prop)) {
-    value = target[prop];
-  } else {
-    throw __rpcNoSuchMethod(prop);
-  }
-  // Keep celld's own stubs and pipeline nodes unwrapped because the wrapper
-  // would lose their metadata.
-  return typeof value === "function" && !__stubMeta.has(value) &&
+// A member a property read answers with: a function stays bound to the
+// object it was read from. celld's own stubs and pipeline nodes stay
+// unwrapped because the wrapper would lose their metadata.
+const __rpcBindMember = (value, receiver) =>
+  typeof value === "function" && !__stubMeta.has(value) &&
       !(value instanceof __cf.RpcPromise) &&
       !(value instanceof __cf.RpcProperty)
-    ? __rpcBindMethod(value, target) : value;
+    ? __rpcBindMethod(value, receiver) : value;
+// A name a stub, a pipeline node or a Fetcher reads locally rather than
+// as RPC: an array index, which workerd's wildcard property never sees
+// (V8 hands indexed keys to a separate interceptor), and every name the
+// stub's own prototype chain has, which includes Object.prototype's.
+const __rpcLocalName = (prop, proto) => {
+  if (typeof prop !== "string" || prop in proto) return true;
+  const first = prop.charCodeAt(0);
+  return first >= 48 && first <= 57 &&
+    /^(?:0|[1-9][0-9]*)$/.test(prop) && Number(prop) < 4294967295;
 };
 // ---- streams over RPC ------------------------------------------
 // A live stream crosses as a handle in the caps table: the sender
@@ -5122,6 +5146,14 @@ const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
       const marker = { "__celld$stub": entry.id,
                        t: __stubIsolate,
                        c: typeof target === "function" };
+      // A Proxy that claims to be an RpcTarget crosses as a stub, but a
+      // call that returns one has no pipeline: workerd's brand check
+      // (isInstanceOf<JsRpcTarget>) fails for it. The stub it revives as
+      // says so (`__walkLocal`); a stub passed on from there is an
+      // ordinary one.
+      if (typeof target !== "function" &&
+          __util_proxy_details(target) !== undefined)
+        marker.np = true;
       seen.set(v, marker);
       return marker;
     }
@@ -5199,7 +5231,7 @@ const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
     const disposerSource = originals.get(v) ?? v;
     const disposer = disposerSource[Symbol.dispose];
     if (allowCapabilities && !Array.isArray(v) &&
-        typeof disposer === "function") {
+        typeof disposer === "function" && disposer !== __rpcNoDisposer) {
       lifted = true;
       caps = true;
       const entry = __newEntry(__rpcBindMethod(disposer, disposerSource));
@@ -5332,7 +5364,10 @@ const __stubRevive = (value) => {
         ? __foreignStub()
         : __makeStub(entry, v.c);
       const meta = __stubMeta.get(stub);
-      if (meta) handles.push(meta);
+      if (meta) {
+        handles.push(meta);
+        if (v.np === true) meta.noPipeline = true;
+      }
       stubs.set(v, stub);
       return stub;
     }
@@ -5401,74 +5436,90 @@ const __foreignStub = () => {
   __foreignStubs.add(stub);
   return stub;
 };
-// Workerd's entrypoint method-visibility rules (worker-rpc.c++
-// EntrypointJsRpcTarget::isReservedName): reserved names are refused
-// before the instance is read; otherwise a member is found as an
-// RpcTarget's is -- never own instance state (env/ctx live there) and
-// never Object.prototype. `scheduled` is not reserved: it is an ordinary
-// method over RPC.
-const __entrypointReserved = new Set([
-  "constructor", "fetch", "connect", "alarm",
-  "webSocketMessage", "webSocketClose", "webSocketError", "dup",
-]);
-const __entrypointResolve = (inst, prop) => {
-  if (__entrypointReserved.has(prop))
-    throw new TypeError("'" + prop +
-      "' is a reserved method and cannot be called over RPC.");
-  const value = __rpcClassMember(inst, prop);
-  return typeof value === "function" && !__stubMeta.has(value) &&
-      !(value instanceof __cf.RpcPromise) &&
-      !(value instanceof __cf.RpcProperty)
-    ? __rpcBindMethod(value, inst) : value;
+// The kind of receiver a pipelined path reaches, by workerd's
+// tryGetProperty(): "own" (a plain object or a function), "class" (an
+// RpcTarget, or a Proxy whose prototype chain claims to be one), "stub" (one
+// of this isolate's stubs, whose target takes the rest of the path),
+// "foreign" (a stub from another isolate), "fetcher" (a Durable Object stub
+// or a service binding, read as a class) and "node" (a member read off a
+// fetcher, which a path descends through only there). null has no members,
+// so the name that reached it is a missing method: a primitive, an array, a
+// class instance, or an RpcPromise.
+const __rpcReceiverKind = (v, inFetcher) => {
+  if (v === null || (typeof v !== "object" && typeof v !== "function"))
+    return null;
+  if (__stubMeta.has(v)) return "stub";
+  if (__foreignStubs.has(v)) return "foreign";
+  if (__doStubMeta.has(v) || __outboundMeta.has(v)) return "fetcher";
+  if (v instanceof __cf.RpcPromise || v instanceof __cf.RpcProperty)
+    return inFetcher ? "node" : null;
+  if (Object.getPrototypeOf(v) === Object.prototype) return "own";
+  if (v instanceof __cf.RpcTarget) return "class";
+  return typeof v === "function" ? "own" : null;
 };
-// A pipeline hop may continue only through plain data, functions,
-// RpcTargets, and stubs -- never through an RPC promise/property
-// handle or a class instance (Workerd's receiver rules).
-const __walkable = (v) =>
-  v instanceof __cf.RpcPromise || v instanceof __cf.RpcProperty
-    ? false
-    : typeof v === "function" || v instanceof __cf.RpcTarget ||
-      (typeof v === "object" && v !== null &&
-        (Object.getPrototypeOf(v) === Object.prototype ||
-          Array.isArray(v)));
-// Receiver-side pipeline walk: resolve `path` from `root`, then
-// GET the final member (`args` null) or CALL it. Errors name the
-// path walked so far, as Workerd's do. A stub mid-walk continues
-// against its own target, in the stub's owning context.
-const __rpcWalk = async (root, path, args, entrypointRoot) => {
+// The kind of target a stub wraps: an RpcTarget exposes class members, and
+// anything else `new RpcStub()` or a lift accepts exposes its own.
+const __rpcTargetKind = (target) =>
+  __stubMeta.has(target) ? "stub"
+    : target instanceof __cf.RpcTarget ? "class" : "own";
+// Resolve `path` from `root`, a receiver of kind `kind`, then GET the final
+// member (`args` null) or CALL it with the object it was read from as
+// `this`. `reserved` is the reserved set of the target the call started at,
+// which every name is checked against. A stub met on the way takes the rest
+// of the path through `hop(meta, rest)`. `handler` is set for a plain-object
+// entrypoint, whose functions are called as fn(arg, env, ctx) with
+// `handler.props` selecting the ctx. Errors name the path, as workerd's do.
+const __rpcPath = (root, kind, path, args, reserved, hop, handler) => {
   let value = root;
+  let receiver;
   for (let i = 0; i < path.length; i++) {
-    const meta = __stubMeta.get(value);
-    if (meta) {
+    if (kind === "stub") {
+      const meta = __stubMeta.get(value);
       if (meta.disposed) throw __stubDisposedError();
-      const rest = path.slice(i);
-      return await __ctxRun(meta.entry.ctx,
-        () => __rpcWalk(meta.entry.target, rest, args, false));
+      return hop(meta, path.slice(i));
     }
-    if (i > 0 && !__walkable(value))
-      throw __rpcNoSuchMethod(path[i - 1]);
+    if (kind === "foreign") throw __foreignStubError();
     const prop = path[i];
-    const next = entrypointRoot && i === 0
-      ? __entrypointResolve(value, prop)
-      : __stubResolve(value, prop);
-    if (i === path.length - 1) {
-      if (args === null) return next;
-      if (typeof next !== "function")
-        throw new TypeError(
-          '"' + path.join(".") + '" is not a function.');
-      return next(...args);
+    if (reserved.has(prop)) throw __rpcReservedError(prop);
+    receiver = value;
+    value = kind === "own" ? __rpcOwnMember(value, prop)
+      : kind === "node" ? value[prop]
+      : __rpcClassMember(value, prop);
+    if (i < path.length - 1) {
+      kind = __rpcReceiverKind(value, kind === "fetcher" || kind === "node");
+      if (kind === null) throw __rpcNoSuchMethod(prop);
     }
-    if (next instanceof __cf.RpcPromise ||
-        next instanceof __cf.RpcProperty)
-      throw __rpcNoSuchMethod(prop);
-    value = next;
   }
   // An empty path applies the root itself (a callable stub).
-  if (args === null) return value;
+  if (path.length === 0) {
+    if (args === null) return value;
+    if (typeof value !== "function")
+      throw new TypeError("The RPC stub is not callable.");
+    return value(...args);
+  }
+  if (args === null) return __rpcBindMember(value, receiver);
   if (typeof value !== "function")
-    throw new TypeError("The RPC stub is not callable.");
-  return value(...args);
+    throw new TypeError('"' + path.join(".") + '" is not a function.');
+  if (handler !== undefined)
+    return __callObjectEntrypoint(
+      value, receiver, path.join("."), args, handler.props);
+  return Reflect.apply(value, receiver, args);
 };
+// Receiver-side pipeline walk at a stub's target, in the stub's owning
+// context. A stub the walk meets continues the same way at its own target.
+const __rpcAtTarget = (target, path, args, reserved) => __rpcPath(
+  target, __rpcTargetKind(target), path, args, reserved,
+  (meta, rest) => __ctxRun(meta.entry.ctx,
+    () => __rpcAtTarget(meta.entry.target, rest, args, reserved)));
+// A call into an entrypoint or a Durable Object instance (`kind` "class"),
+// or a plain-object entrypoint (`kind` "own", with `handler`). `scheduled`
+// is not reserved: it is an ordinary method over RPC.
+const __rpcAtEntrypoint = (root, kind, path, args, handler) => __rpcPath(
+  root, kind, path, args, __entrypointReserved,
+  (meta, rest) => __ctxRun(meta.entry.ctx,
+    () => __rpcAtTarget(meta.entry.target, rest, args,
+      __entrypointReserved)),
+  handler);
 // One stub-mediated op: clone through the RPC envelope both ways,
 // so nested stubs, errors, and uncloneables behave exactly as a
 // dispatched call. Args serialize in the caller's context (its
@@ -5518,8 +5569,8 @@ const __stubOp = (meta, path, args) => {
         const decoded =
           argsSc === null ? null : __rpcDesArgs(argsSc);
         try {
-          return await __rpcWalk(entry.target, path,
-            decoded === null ? null : decoded.args, false);
+          return await __rpcAtTarget(entry.target, path,
+            decoded === null ? null : decoded.args, __transientReserved);
         } finally {
           if (decoded !== null) __disposeReceived(decoded.received);
         }
@@ -5543,36 +5594,34 @@ const __stubOp = (meta, path, args) => {
       (error) => { untrack(); reject(error); });
   });
 };
-// Resolve a path against a local, already-revived value. A hop
-// landing on a same-isolate stub delegates the rest of the path
-// to the stub's target; everything else is a plain [[Get]] so
-// Durable Object stubs and Proxies participate.
-const __walkLocal = (parent, path, args) => {
-  for (let i = 0; i < path.length; i++) {
-    const meta = __stubMeta.get(parent);
-    if (meta) return __stubOp(meta, path.slice(i), args);
-    if (__foreignStubs.has(parent)) throw __foreignStubError();
-    const prop = path[i];
-    const member = parent == null ? undefined : parent[prop];
-    if (i < path.length - 1) {
-      parent = member;
-      continue;
-    }
-    if (args === null) return member;
-    if (typeof member !== "function") {
-      if (member === undefined) throw __rpcNoSuchMethod(prop);
-      throw new TypeError('"' + prop + '" is not a function.');
-    }
-    // [[Call]] directly: `.apply` on a stub proxy would be a
-    // remote property access, not an invocation.
-    return Reflect.apply(member, parent, args);
+// Resolve a pipelined path against a call's result where it arrived, as
+// workerd's call pipeline does (serializeJsValueWithPipeline): a plain
+// object exposes its own properties, a stub hands the path to its target,
+// and a Durable Object stub or a service binding is walked as a fetcher.
+// Any other result -- a primitive, an array, a class instance, a Response,
+// or a Proxy that claims to be an RpcTarget -- has no pipeline, so its first
+// name is a missing method. Its reserved names are a transient target's.
+const __walkLocal = (root, path, args) => {
+  const meta = __stubMeta.get(root);
+  if (meta !== undefined) {
+    if (path.length !== 0 && meta.noPipeline === true)
+      throw __rpcNoSuchMethod(path[0]);
+    return __stubOp(meta, path, args);
   }
-  if (args === null) return parent;
-  const meta = __stubMeta.get(parent);
-  if (meta) return __stubOp(meta, [], args);
-  if (typeof parent !== "function")
-    throw new TypeError("The RPC value is not callable.");
-  return parent(...args);
+  if (__foreignStubs.has(root)) throw __foreignStubError();
+  if (path.length === 0) {
+    if (args === null) return root;
+    if (typeof root !== "function")
+      throw new TypeError("The RPC value is not callable.");
+    return root(...args);
+  }
+  const kind = __doStubMeta.has(root) || __outboundMeta.has(root)
+    ? "fetcher"
+    : root !== null && typeof root === "object" &&
+        Object.getPrototypeOf(root) === Object.prototype ? "own" : null;
+  if (kind === null) throw __rpcNoSuchMethod(path[0]);
+  return __rpcPath(root, kind, path, args, __transientReserved,
+    (stub, rest) => __stubOp(stub, rest, args));
 };
 // A session is one place pipeline ops resolve: the local value a
 // call returned, a same-isolate stub's target, or a named
@@ -5591,6 +5640,20 @@ const __disposeRpcResult = (value) => {
   const disposer = value[Symbol.dispose];
   if (typeof disposer === "function") disposer.call(value);
 };
+// Every object an RPC call or property read answers with has its own
+// Symbol.dispose, as workerd's deserializeRpcReturnValue() gives it: the
+// one that disposes the stubs it carries (`__rpcDes`), or else one that
+// does nothing. A stub answers with its own. The lift never sends the empty
+// one on as a capability.
+const __rpcNoDisposer = () => {};
+const __rpcResultDisposer = (value) => {
+  if (value !== null && typeof value === "object" &&
+      !__stubMeta.has(value) && !Object.hasOwn(value, Symbol.dispose))
+    Reflect.defineProperty(value, Symbol.dispose, {
+      value: __rpcNoDisposer, writable: true, configurable: true,
+    });
+  return value;
+};
 const __valueSession = (call) => {
   let settled = false;
   let result;
@@ -5599,6 +5662,7 @@ const __valueSession = (call) => {
   // second handler would save this tick but mark every call's rejection
   // as handled.)
   const promise = call.then((value) => {
+    __rpcResultDisposer(value);
     if (session.disposed) {
       __disposeRpcResult(value);
     } else {
@@ -5630,13 +5694,14 @@ const __valueSession = (call) => {
 // RpcPromise -> its call's session, for the disposer every RpcPromise
 // shares from RpcPromise.prototype, as in workerd.
 const __rpcPromiseSessions = new WeakMap();
+// workerd's text for a method called on the wrong kind of object.
+const __illegalInvocation = () => new TypeError(
+  "Illegal invocation: function called with incorrect `this` " +
+  "reference. See https://developers.cloudflare.com/workers/" +
+  "observability/errors/#illegal-invocation-errors for details.");
 const __rpcPromiseSession = (node) => {
   const session = __rpcPromiseSessions.get(node);
-  if (session === undefined)
-    throw new TypeError(
-      "Illegal invocation: function called with incorrect `this` " +
-      "reference. See https://developers.cloudflare.com/workers/" +
-      "observability/errors/#illegal-invocation-errors for details.");
+  if (session === undefined) throw __illegalInvocation();
   return session;
 };
 const __stubSession = (meta) => ({
@@ -5676,7 +5741,8 @@ const __entrypointSession = (name, local, script, propsSc) => ({
 // MAX_PROPERTY_DEPTH. An RpcPromise (an empty path, always over a
 // call's value session) is disposable through RpcPromise.prototype;
 // an RpcProperty is not. Like workerd's wildcard property, every
-// string name is `in` a node.
+// string name but an array index is `in` a node, and a name its brand's
+// prototype chain has (Object.prototype's among them) is read there.
 const __makeNode = (session, path, ctx) => {
   let promise;
   const value = () => {
@@ -5688,23 +5754,23 @@ const __makeNode = (session, path, ctx) => {
       if (path.length === 0) return session.root();
       if (ctx !== null && ctx !== __ctxNow())
         return Promise.reject(__ctxError("Pipeline"));
-      return session.get(path);
+      return session.get(path).then(__rpcResultDisposer);
     })();
   };
   const brand =
     path.length === 0 ? __cf.RpcPromise : __cf.RpcProperty;
   const node = new Proxy(function () {}, {
     getPrototypeOf: () => brand.prototype,
-    has: (_b, p) =>
-      typeof p === "string" || (p === Symbol.dispose && path.length === 0),
-    get: (_b, p) => {
-      if (p === Symbol.dispose) return brand.prototype[Symbol.dispose];
+    has: (_b, p) => !__rpcLocalName(p, brand.prototype) ||
+      Reflect.has(brand.prototype, p),
+    get: (_b, p, receiver) => {
       if (p === "then")
         return (onOk, onErr) => value().then(onOk, onErr);
       if (p === "catch") return (onErr) => value().catch(onErr);
       if (p === "finally")
         return (onDone) => value().finally(onDone);
-      if (typeof p !== "string") return undefined;
+      if (__rpcLocalName(p, brand.prototype))
+        return Reflect.get(brand.prototype, p, receiver);
       if (path.length >= 5120)
         throw new TypeError(
           "RPC pipelined property chain is too deep.");
@@ -5731,9 +5797,15 @@ const __makeStub = (entry, callable) => {
   const meta =
     { entry, callable, disposed: false, ctx: __ctxNow() };
   __ctxRegister(meta);
+  // As workerd's JsRpcStub: `dup` and Symbol.dispose are its own, a name
+  // RpcStub.prototype's chain has is read there, and every other string
+  // but `then` and an array index is a remote member.
   const stub = new Proxy(function () {}, {
     getPrototypeOf: () => __cf.RpcStub.prototype,
-    get: (_b, prop) => {
+    has: (_b, prop) => prop === "dup" || prop === Symbol.dispose ||
+      (prop !== "then" && !__rpcLocalName(prop, __cf.RpcStub.prototype)) ||
+      Reflect.has(__cf.RpcStub.prototype, prop),
+    get: (_b, prop, receiver) => {
       if (prop === "then") return undefined;
       if (prop === Symbol.dispose) return () => __disposeStub(meta);
       if (prop === "dup") return () => {
@@ -5741,7 +5813,8 @@ const __makeStub = (entry, callable) => {
         entry.refs++;
         return __makeStub(entry, callable);
       };
-      if (typeof prop !== "string") return undefined;
+      if (__rpcLocalName(prop, __cf.RpcStub.prototype))
+        return Reflect.get(__cf.RpcStub.prototype, prop, receiver);
       return __makeNode(__stubSession(meta), [prop], __ctxNow());
     },
     apply: (_b, _this, args) => __makeNode(
@@ -5764,9 +5837,12 @@ const __entrypointStub = (name, props) => {
   const session = __entrypointSession(name, true, null, propsSc);
   const stub = new Proxy(function () {}, {
     getPrototypeOf: () => __cf.ServiceStub.prototype,
-    get: (_b, prop) => {
+    get: (_b, prop, receiver) => {
       if (prop === "then") return undefined;
-      if (typeof prop !== "string") return undefined;
+      // Object.prototype's names, and the rest of the prototype chain, are
+      // the stub's own, as on a workerd Fetcher.
+      if (__rpcLocalName(prop, __cf.ServiceStub.prototype))
+        return Reflect.get(__cf.ServiceStub.prototype, prop, receiver);
       if (prop === "getRpcMethodForTestOnly")
         return (n) => __makeNode(session, [String(n)], null);
       // A Fetcher's fetch() is an HTTP request, as a service binding's is.
@@ -6010,6 +6086,7 @@ const __rpcDes = (bytes) => {
         !__stubMeta.has(value) &&
         (handles.length > 0 || disposers.length > 0)) {
       Object.defineProperty(value, Symbol.dispose, {
+        writable: true,
         configurable: true,
         value: () => {
           for (const handle of handles) __disposeStub(handle);
@@ -6040,6 +6117,14 @@ const __fetcherStatus = (res, method) => {
   throw new Error("HTTP " + method + " request failed: " + res.status +
     " " + (res.statusText || __STATUS_TEXT[res.status] || ""));
 };
+// A Durable Object stub's `connect()`, which workerd's Fetcher sends to the
+// object's connect handler as a socket. celld has no connect handlers, so it
+// fails at first use, as `queue()` does, rather than reach the object as RPC.
+// One function serves every stub, as Fetcher.prototype.connect does.
+function __doStubConnect() {
+  if (!__doStubMeta.has(this)) throw __illegalInvocation();
+  throw new Error("Fetcher.connect() is not implemented in celld");
+}
 const __fetcherHelper = (fetch, prop) => {
   if (prop === "get") return async (url, type) => {
     const res = await fetch(url, { method: "GET" });
@@ -6075,6 +6160,11 @@ function makeNamespace(className) {
 }
 // A named class: SDKs sniff bindings by constructor name (workers-rs
 // EnvBinding requires `constructor.name === "DurableObjectNamespace"`).
+// The class of a Durable Object stub's own members, as workerd's: its
+// `constructor`, and the name Object.prototype.toString() gives the stub.
+const __DurableObjectStub = class DurableObject {
+  get [Symbol.toStringTag]() { return "DurableObject"; }
+};
 class DurableObjectNamespace {
   constructor(className, namespaceKey) {
     Object.defineProperty(this, "_className", { value: className });
@@ -6123,7 +6213,9 @@ class DurableObjectNamespace {
     if (dispatchName !== undefined) __cell.idNames[scope] = dispatchName;
     // Fetch and native RPC use the same host routing/activation seam.
     // Never expose `.then`: a DO stub is not itself a promise.
-    const target = { id, name: dispatchName };
+    const target = Object.create(__DurableObjectStub.prototype);
+    target.id = id;
+    target.name = dispatchName;
     const abortMarker = "__CELLD_ACTOR_ABORT__:";
     const processExitMarker = "__CELLD_PROCESS_EXIT__:";
     let brokenReason = null;
@@ -6219,26 +6311,38 @@ class DurableObjectNamespace {
         Object.defineProperty(response.headers, "_immutable", { value: true });
         return response;
     };
-    const stub = new Proxy(target, { get: (_target, prop) => {
-      if (prop === "then") return undefined;
-      if (Reflect.has(_target, prop)) return Reflect.get(_target, prop);
-      if (prop === "fetch") return doFetch;
-      if (typeof prop !== "string") return undefined;
-      if (__cell.compat.fetcherGetPutDelete &&
-          (prop === "get" || prop === "put" || prop === "delete"))
-        return __fetcherHelper(doFetch, prop);
-      // Every cell RPC goes out through the host, whichever node owns the
-      // target. Same-process dispatch re-enters this isolate, where the
-      // abort and exit markers revive; bytes that land elsewhere revive as
-      // loud foreign stubs. The call returns an RpcPromise, as in workerd,
-      // so a caller can pipeline through its result before awaiting it
-      // (`stub.open().method()`, or a Proxy that forwards to it).
-      return (...args) => __makeNode(__valueSession(invoke(
-        async () => __rpcDes(await __rpc_call(
-          scope, dispatchName ?? null, prop, __rpcOut(args, true, true),
-        )),
-      )), [], __ctxNow());
-    }});
+    // Every cell RPC goes out through the host, whichever node owns the
+    // target. Same-process dispatch re-enters this isolate, where the
+    // abort and exit markers revive; bytes that land elsewhere revive as
+    // loud foreign stubs. The first name is the method; the rest of a path,
+    // or a property read, rides with the arguments (`__doRpcRequest`).
+    const call = (path, args) => invoke(async () => __rpcDes(await __rpc_call(
+      scope, dispatchName ?? null, path[0], __rpcOut(
+        path.length === 1 && args !== null
+          ? args : { path: path.slice(1), args },
+        true, true),
+    )));
+    const session = { get: (path) => call(path, null), call };
+    // A member is an RpcProperty, as on workerd's Fetcher: calling it returns
+    // an RpcPromise, so a caller can pipeline through its result before
+    // awaiting it (`stub.open().method()`, or a Proxy that forwards to it),
+    // and awaiting it reads the property. `fetch` and `connect` are the
+    // Fetcher's own methods, never RPC.
+    const stub = new Proxy(target, {
+      has: (_target, prop) => Reflect.has(_target, prop) ||
+        (prop !== "then" && !__rpcLocalName(prop, _target)),
+      get: (_target, prop) => {
+        if (prop === "then") return undefined;
+        if (Reflect.has(_target, prop)) return Reflect.get(_target, prop);
+        if (prop === "fetch") return doFetch;
+        if (prop === "connect") return __doStubConnect;
+        if (__rpcLocalName(prop, _target)) return undefined;
+        if (__cell.compat.fetcherGetPutDelete &&
+            (prop === "get" || prop === "put" || prop === "delete"))
+          return __fetcherHelper(doFetch, prop);
+        return __makeNode(session, [prop], null);
+      },
+    });
     __doStubMeta.set(stub, id);
     return stub;
   }
@@ -6361,7 +6465,7 @@ const __dispatchTo = __celld.__dispatchTo = async (
     __endActorEvent(actorEvent);
   }
 };
-const __rpcTargetMethod = async (scope, method) => {
+const __rpcTargetInstance = async (scope) => {
   const inst = await _readyInstance(scope);
   if (!inst.__celldState._rpcOk)
     throw new TypeError(
@@ -6370,10 +6474,32 @@ const __rpcTargetMethod = async (scope, method) => {
       "order to enable RPC, make sure your class extends the " +
       "special class `DurableObject`, which can be imported from " +
       "the module \"cloudflare:workers\".");
-  const fn = inst[method];
-  if (typeof fn !== "function")
-    throw new TypeError(method + " is not a function");
-  return [inst, fn];
+  return inst;
+};
+// A Durable Object call names its first step as `method`. Its arguments
+// are the call's, or for a property read or a longer path
+// `{ path: [rest], args }`, with null args for a read. Stubs only ever send
+// an array of arguments, so the two cannot be confused.
+const __doRpcRequest = (method, value) => {
+  if (Array.isArray(value)) return [[method], value];
+  if (value !== null && typeof value === "object" &&
+      Array.isArray(value.path) &&
+      value.path.every((name) => typeof name === "string") &&
+      (value.args === null || Array.isArray(value.args)))
+    return [[method, ...value.path], value.args];
+  throw new TypeError("Malformed Durable Object RPC request.");
+};
+// One call into a Durable Object, by workerd's rules for an entrypoint: its
+// handler names are reserved, and only class members are visible. A runtime
+// class (`__runtimeClass`) answers only the methods it names, called
+// directly, so its internal methods are not RPC.
+const __doRpcCall = (scope, inst, path, args) => {
+  const methods =
+    __runtimeRpcMethods.get(__cell.classes[scope.split(":")[0]]);
+  if (methods !== undefined &&
+      (path.length !== 1 || args === null || !methods.has(path[0])))
+    throw __rpcNoSuchMethod(path[0]);
+  return __rpcAtEntrypoint(inst, "class", path, args);
 };
 // The byte path always lifts stub-able values into the reply: the
 // markers carry the isolate token, so they revive only back in this
@@ -6386,8 +6512,10 @@ __celld.__dispatchRpc = async (scope, method, args) => {
     // A string is the legacy JSON flavor; bytes are V8 structured clone.
     // Answer in kind.
     if (typeof args === "string") {
-      const [inst, fn] = await __rpcTargetMethod(scope, method);
-      const result = await inst.__celldState._untilReset(fn.apply(inst, JSON.parse(args)));
+      const inst = await __rpcTargetInstance(scope);
+      const [path, callArgs] = __doRpcRequest(method, JSON.parse(args));
+      const result = await inst.__celldState._untilReset(
+        __doRpcCall(scope, inst, path, callArgs));
       return JSON.stringify(result) ?? "null";
     }
     return await __ctxRun(undefined, () => (async () => {
@@ -6400,8 +6528,10 @@ __celld.__dispatchRpc = async (scope, method, args) => {
             const broken = __brokenActors.get(scope);
             if (broken !== undefined) throw broken;
           }
-          const [inst, fn] = await __rpcTargetMethod(scope, method);
-          return inst.__celldState._untilReset(fn.apply(inst, decoded.args));
+          const inst = await __rpcTargetInstance(scope);
+          const [path, callArgs] = __doRpcRequest(method, decoded.args);
+          return inst.__celldState._untilReset(
+            __doRpcCall(scope, inst, path, callArgs));
         }, true);
       } finally {
         __disposeReceived(decoded.received);
@@ -6605,19 +6735,20 @@ __celld.__dispatchEntrypointQueue = async (name, incoming) => {
     })),
   };
 };
-// Workerd's simple-handler RPC rules (worker-rpc.c++): a non-class
-// handler method is called as fn(arg, env, ctx), the client must send
-// exactly one argument, and the handler must not declare more than
-// (arg, env, ctx). The messages are Workerd's, verbatim.
-const __callObjectEntrypoint = (handler, method, args, props) => {
-  const fn = handler[method];
-  if (typeof fn !== "function")
+// Workerd's simple-handler RPC rules (worker-rpc.c++
+// invokeFnInsertingEnvCtx): a function a plain-object entrypoint exposes,
+// at `name` on its path, is called as fn(arg, env, ctx) with `receiver` as
+// `this`. Its declared length must be at most three, and the client must
+// send exactly one argument. The messages are Workerd's, verbatim.
+const __callObjectEntrypoint = (fn, receiver, name, args, props) => {
+  let arity = Number(fn.length);
+  arity = Number.isNaN(arity) ? 0 : Math.trunc(arity);
+  if (arity < 0 || arity >= 256)
     throw new TypeError(
-      'The RPC receiver does not implement the method "' + method +
-      '".');
-  if (fn.length > 3)
+      "RPC function has unreasonable length attribute: " + arity);
+  if (arity > 3)
     throw new TypeError(
-      'Cannot call handler function "' + method + '" over RPC ' +
+      'Cannot call handler function "' + name + '" over RPC ' +
       "because it has the wrong number of arguments. A simple " +
       "function handler can only be called over RPC if it has " +
       "exactly the arguments (arg, env, ctx), where only the first " +
@@ -6626,13 +6757,14 @@ const __callObjectEntrypoint = (handler, method, args, props) => {
       "WorkerEntrypoint) instead.");
   if (args.length !== 1)
     throw new TypeError(
-      'Attempted to call RPC function "' + method + '" with the ' +
+      'Attempted to call RPC function "' + name + '" with the ' +
       "wrong number of arguments. When calling a top-level handler " +
       "function that is not declared as part of a class, you must " +
       "always send exactly one argument. In order to support " +
       "variable numbers of arguments, the server must use " +
       "class-based syntax (extending WorkerEntrypoint) instead.");
-  return fn.call(handler, args[0], __cell.env, __entrypointContext(props));
+  return Reflect.apply(fn, receiver,
+    [args[0], __cell.env, __entrypointContext(props)]);
 };
 let __nextPendingEventId = 1;
 const __pendingEvents = new Map();
@@ -6675,19 +6807,16 @@ const __entrypointOp = (name, path, argsSc, local, props) => {
       let result;
       try {
         const handler = __cell.objectEntrypoints[name];
+        const args = decoded === null ? null : decoded.args;
         if (handler !== undefined) {
-          // Simple-handler entrypoints expose single-method calls
-          // only; property GETs and deeper paths are refused.
-          if (argsSc === null || path.length !== 1)
-            throw __rpcNoSuchMethod(path[0]);
-          result = __callObjectEntrypoint(
-            handler, path[0], decoded.args, props);
+          // A plain-object entrypoint exposes its own properties, and
+          // its functions also receive env and ctx.
+          result = __rpcAtEntrypoint(handler, "own", path, args, { props });
         } else {
           // Each top-level operation constructs once here, so neither its
           // fields nor its constructor context reach the next invocation.
           const inst = __newEntrypointInstance(name, props);
-          result = __rpcWalk(inst, path,
-            decoded === null ? null : decoded.args, true);
+          result = __rpcAtEntrypoint(inst, "class", path, args);
         }
       } finally {
         drain = __endEvent();
@@ -6970,11 +7099,17 @@ const __cell = __celld.__cell = {
 // or the js_rpc flag; the class is the runtime's own, so grant it here rather
 // than make every user set a flag. It is not the application's export, so it
 // stays out of ctx.exports.
+// `methods` are the only names its stub may call: the rest of its methods
+// serve its own events, and a stub that user code reaches through its
+// binding must not call them. They are keyed by class, so a script's
+// `__Workflow.<script>` alias shares them.
 const __runtimeClasses = new Set();
-const __runtimeClass = (name, cls) => {
+const __runtimeRpcMethods = new WeakMap();
+const __runtimeClass = (name, cls, methods) => {
   __cell.classes[name] = cls;
   __cell.doExports[name] = true;
   __runtimeClasses.add(name);
+  __runtimeRpcMethods.set(cls, new Set(methods));
 };
 // Whether a class in `__cell.classes` is the runtime's rather than the
 // application's: one registered above, the cron class (`.cron`, which needs
@@ -7012,7 +7147,8 @@ const {
   atob: (text) => $$atob(text, true),
 });
 
-__runtimeClass("__KvNamespace", __KvNamespaceCell);
+__runtimeClass("__KvNamespace", __KvNamespaceCell,
+  ["__kvGet", "__kvPut", "__kvDelete", "__kvList"]);
 
 const __makeKvNamespace = __celld.__makeKvNamespace = (id, cellName) =>
   new __KvNamespace(() => __cell.makeNamespace("__KvNamespace"), cellName);
@@ -8489,7 +8625,8 @@ class __QueueCell {
   }
 }
 
-__runtimeClass("__Queue", __QueueCell);
+__runtimeClass("__Queue", __QueueCell,
+  ["__queueSend", "__queueMetrics", "__queueDlqAcceptBatch"]);
 
 class Queue {
   constructor(queue, cellName, deliveryDelay) {
@@ -8686,7 +8823,8 @@ class __D1DatabaseCell {
   }
 }
 
-__runtimeClass("__D1Database", __D1DatabaseCell);
+__runtimeClass("__D1Database", __D1DatabaseCell,
+  ["__d1Query", "__d1Batch", "__d1Exec"]);
 
 // Validate and encode bind values once, at the public boundary, exactly as
 // upstream does (workerd d1-api.ts). Byte-shaped values become byte arrays --
@@ -10292,7 +10430,10 @@ const __WorkflowCell = (() => {
   }
   };
 })();
-__runtimeClass("__Workflow", __WorkflowCell);
+__runtimeClass("__Workflow", __WorkflowCell, [
+  "__wfCreate", "__wfStatus", "__wfTerminate", "__wfSendEvent", "__wfPause",
+  "__wfResume", "__wfRestart", "__wfDelete",
+]);
 
 class NonRetryableError extends Error {
   constructor(message, name = "NonRetryableError") {
@@ -10565,6 +10706,7 @@ const __cf = __celld.__cf = {
   // loopback stub; the constructor returns the proxy, so instanceof
   // works through __makeStub's getPrototypeOf trap.
   RpcStub: class RpcStub {
+    get [Symbol.toStringTag]() { return "JsRpcStub"; }
     constructor(target) {
       if (target === null ||
           (typeof target !== "object" && typeof target !== "function"))
@@ -10576,8 +10718,11 @@ const __cf = __celld.__cf = {
   },
   RpcPromise: class RpcPromise extends Promise {
     [Symbol.dispose]() { __rpcPromiseSession(this).dispose(); }
+    get [Symbol.toStringTag]() { return "JsRpcPromise"; }
   },
-  RpcProperty: class RpcProperty {},
+  RpcProperty: class RpcProperty {
+    get [Symbol.toStringTag]() { return "JsRpcProperty"; }
+  },
   ServiceStub: class ServiceStub {},
   // `import { waitUntil } from "cloudflare:workers"`: register into
   // the current event or extend its active background work. Outside either

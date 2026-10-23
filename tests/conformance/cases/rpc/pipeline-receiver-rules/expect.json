@@ -15,6 +15,144 @@
           "error": "TypeError: The RPC receiver does not implement the method \"toFixed\"."
         }
       }
+    },
+    {
+      "status": 200,
+      "body": {
+        "field": {
+          "type": "string",
+          "value": "value"
+        },
+        "undef": {
+          "type": "undefined",
+          "value": null
+        },
+        "deep": {
+          "type": "number",
+          "value": 1
+        },
+        "deepMissing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "fieldCall": {
+          "error": "TypeError: \"field\" is not a function."
+        },
+        "list": {
+          "type": "object",
+          "value": [
+            1,
+            2
+          ]
+        },
+        "listLength": {
+          "error": "TypeError: The RPC receiver does not implement the method \"list\"."
+        },
+        "listIndex": {
+          "type": "undefined",
+          "value": null
+        },
+        "string": {
+          "error": "TypeError: The RPC receiver does not implement the method \"length\"."
+        },
+        "array": {
+          "error": "TypeError: The RPC receiver does not implement the method \"length\"."
+        },
+        "arrayIndex": {
+          "type": "undefined",
+          "value": null
+        },
+        "date": {
+          "error": "TypeError: The RPC receiver does not implement the method \"getTime\"."
+        },
+        "map": {
+          "error": "TypeError: The RPC receiver does not implement the method \"size\"."
+        },
+        "bytes": {
+          "error": "TypeError: The RPC receiver does not implement the method \"length\"."
+        },
+        "error": {
+          "error": "TypeError: The RPC receiver does not implement the method \"message\"."
+        },
+        "response": {
+          "error": "TypeError: The RPC receiver does not implement the method \"status\"."
+        },
+        "null": {
+          "error": "TypeError: The RPC receiver does not implement the method \"x\"."
+        },
+        "undefined": {
+          "error": "TypeError: The RPC receiver does not implement the method \"x\"."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": {
+          "type": "string",
+          "value": "run:a"
+        },
+        "label": {
+          "type": "string",
+          "value": "obj"
+        },
+        "fetch": {
+          "type": "string",
+          "value": "result fetch reached"
+        },
+        "alarm": {
+          "type": "string",
+          "value": "result alarm reached"
+        },
+        "dup": {
+          "error": "TypeError: 'dup' is a reserved method and cannot be called over RPC."
+        },
+        "nestedList": {
+          "error": "TypeError: The RPC receiver does not implement the method \"list\"."
+        },
+        "nestedTarget": {
+          "type": "string",
+          "value": "target:n"
+        },
+        "nestedTargetDup": {
+          "error": "TypeError: 'dup' is a reserved method and cannot be called over RPC."
+        },
+        "target": {
+          "type": "string",
+          "value": "target:t"
+        },
+        "targetNothing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"nothing\"."
+        },
+        "targetDup": {
+          "error": "TypeError: 'dup' is a reserved method and cannot be called over RPC."
+        },
+        "proxy": {
+          "error": "TypeError: The RPC receiver does not implement the method \"greet\"."
+        },
+        "proxyAwaited": {
+          "type": "string",
+          "value": "proxy:p"
+        },
+        "stubbedProxy": {
+          "type": "string",
+          "value": "proxy:s"
+        },
+        "fn": {
+          "type": "string",
+          "value": "fn:f"
+        },
+        "fnProp": {
+          "type": "number",
+          "value": 3
+        },
+        "fnName": {
+          "type": "string",
+          "value": "fn"
+        },
+        "fnMissing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        }
+      }
     }
   ]
 }

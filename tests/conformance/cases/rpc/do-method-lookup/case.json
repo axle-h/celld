@@ -1,0 +1,8 @@
+{
+  "workers": ["front"],
+  "steps": [
+    {"path": "/lookup"},
+    {"path": "/paths"},
+    {"path": "/stub"}
+  ]
+}

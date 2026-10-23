@@ -1,0 +1,14 @@
+// Refusals only: RPC calls that must never reach their target.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": {
+    "bindings": [{ "name": "HOST", "class_name": "Host" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Host"] }],
+  "services": [
+    { "binding": "ENTRY", "service": "back", "entrypoint": "Entry" },
+    { "binding": "OBJECT", "service": "back" }
+  ]
+}

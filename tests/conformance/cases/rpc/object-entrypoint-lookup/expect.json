@@ -1,0 +1,170 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "greet": {
+          "type": "object",
+          "value": {
+            "arg": "a",
+            "env": "object",
+            "ctx": "function"
+          }
+        },
+        "greetTwo": {
+          "error": "TypeError: Attempted to call RPC function \"greet\" with the wrong number of arguments. When calling a top-level handler function that is not declared as part of a class, you must always send exactly one argument. In order to support variable numbers of arguments, the server must use class-based syntax (extending WorkerEntrypoint) instead."
+        },
+        "greetNone": {
+          "error": "TypeError: Attempted to call RPC function \"greet\" with the wrong number of arguments. When calling a top-level handler function that is not declared as part of a class, you must always send exactly one argument. In order to support variable numbers of arguments, the server must use class-based syntax (extending WorkerEntrypoint) instead."
+        },
+        "short": {
+          "type": "string",
+          "value": "short"
+        },
+        "four": {
+          "error": "TypeError: Cannot call handler function \"four\" over RPC because it has the wrong number of arguments. A simple function handler can only be called over RPC if it has exactly the arguments (arg, env, ctx), where only the first argument comes from the client. To support multi-argument RPC functions, use class-based syntax (extending WorkerEntrypoint) instead."
+        },
+        "tooLong": {
+          "error": "TypeError: RPC function has unreasonable length attribute: 300"
+        },
+        "value": {
+          "type": "number",
+          "value": 7
+        },
+        "valueCall": {
+          "error": "TypeError: \"value\" is not a function."
+        },
+        "undef": {
+          "type": "undefined",
+          "value": null
+        },
+        "missing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "missingGet": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "whoami": {
+          "type": "string",
+          "value": "nested:b"
+        },
+        "deep": {
+          "type": "number",
+          "value": 1
+        },
+        "nestedMissing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "nestedAlarm": {
+          "error": "TypeError: 'alarm' is a reserved method and cannot be called over RPC."
+        },
+        "listLength": {
+          "error": "TypeError: The RPC receiver does not implement the method \"list\"."
+        },
+        "alarm": {
+          "error": "TypeError: 'alarm' is a reserved method and cannot be called over RPC."
+        },
+        "webSocketMessage": {
+          "error": "TypeError: 'webSocketMessage' is a reserved method and cannot be called over RPC."
+        },
+        "webSocketClose": {
+          "error": "TypeError: 'webSocketClose' is a reserved method and cannot be called over RPC."
+        },
+        "webSocketError": {
+          "error": "TypeError: 'webSocketError' is a reserved method and cannot be called over RPC."
+        },
+        "dup": {
+          "error": "TypeError: 'dup' is a reserved method and cannot be called over RPC."
+        },
+        "hasOwnProperty": {
+          "type": "boolean",
+          "value": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "greet": {
+          "type": "object",
+          "value": {
+            "arg": "a",
+            "env": "object",
+            "ctx": "function"
+          }
+        },
+        "greetTwo": {
+          "error": "TypeError: Attempted to call RPC function \"greet\" with the wrong number of arguments. When calling a top-level handler function that is not declared as part of a class, you must always send exactly one argument. In order to support variable numbers of arguments, the server must use class-based syntax (extending WorkerEntrypoint) instead."
+        },
+        "greetNone": {
+          "error": "TypeError: Attempted to call RPC function \"greet\" with the wrong number of arguments. When calling a top-level handler function that is not declared as part of a class, you must always send exactly one argument. In order to support variable numbers of arguments, the server must use class-based syntax (extending WorkerEntrypoint) instead."
+        },
+        "short": {
+          "type": "string",
+          "value": "short"
+        },
+        "four": {
+          "error": "TypeError: Cannot call handler function \"four\" over RPC because it has the wrong number of arguments. A simple function handler can only be called over RPC if it has exactly the arguments (arg, env, ctx), where only the first argument comes from the client. To support multi-argument RPC functions, use class-based syntax (extending WorkerEntrypoint) instead."
+        },
+        "tooLong": {
+          "error": "TypeError: RPC function has unreasonable length attribute: 300"
+        },
+        "value": {
+          "type": "number",
+          "value": 7
+        },
+        "valueCall": {
+          "error": "TypeError: \"value\" is not a function."
+        },
+        "undef": {
+          "type": "undefined",
+          "value": null
+        },
+        "missing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "missingGet": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "whoami": {
+          "type": "string",
+          "value": "nested:b"
+        },
+        "deep": {
+          "type": "number",
+          "value": 1
+        },
+        "nestedMissing": {
+          "error": "TypeError: The RPC receiver does not implement the method \"missing\"."
+        },
+        "nestedAlarm": {
+          "error": "TypeError: 'alarm' is a reserved method and cannot be called over RPC."
+        },
+        "listLength": {
+          "error": "TypeError: The RPC receiver does not implement the method \"list\"."
+        },
+        "alarm": {
+          "error": "TypeError: 'alarm' is a reserved method and cannot be called over RPC."
+        },
+        "webSocketMessage": {
+          "error": "TypeError: 'webSocketMessage' is a reserved method and cannot be called over RPC."
+        },
+        "webSocketClose": {
+          "error": "TypeError: 'webSocketClose' is a reserved method and cannot be called over RPC."
+        },
+        "webSocketError": {
+          "error": "TypeError: 'webSocketError' is a reserved method and cannot be called over RPC."
+        },
+        "dup": {
+          "error": "TypeError: 'dup' is a reserved method and cannot be called over RPC."
+        },
+        "hasOwnProperty": {
+          "type": "boolean",
+          "value": false
+        }
+      }
+    }
+  ]
+}

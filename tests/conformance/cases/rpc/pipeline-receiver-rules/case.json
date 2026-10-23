@@ -1,7 +1,8 @@
 {
-  "xfail": "1.28",
   "workers": ["front"],
   "steps": [
-    {"path": "/"}
+    {"path": "/"},
+    {"path": "/kinds"},
+    {"path": "/stubs"}
   ]
 }

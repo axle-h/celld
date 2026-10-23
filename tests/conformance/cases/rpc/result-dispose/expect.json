@@ -1,0 +1,121 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "obj": {
+          "own": true,
+          "type": "function",
+          "enumerable": false,
+          "writable": true,
+          "configurable": true,
+          "returns": "undefined"
+        },
+        "keys": [
+          "field",
+          "inner"
+        ],
+        "array": {
+          "own": true,
+          "type": "function",
+          "enumerable": false,
+          "writable": true,
+          "configurable": true,
+          "returns": "undefined"
+        },
+        "date": {
+          "own": true,
+          "type": "function",
+          "enumerable": false,
+          "writable": true,
+          "configurable": true,
+          "returns": "undefined"
+        },
+        "map": {
+          "own": true,
+          "type": "function",
+          "enumerable": false,
+          "writable": true,
+          "configurable": true,
+          "returns": "undefined"
+        },
+        "bytes": {
+          "own": true,
+          "type": "function",
+          "enumerable": false,
+          "writable": true,
+          "configurable": true,
+          "returns": "undefined"
+        },
+        "error": {
+          "own": true,
+          "type": "function",
+          "enumerable": false,
+          "writable": true,
+          "configurable": true,
+          "returns": "undefined"
+        },
+        "response": {
+          "own": true,
+          "type": "function",
+          "enumerable": false,
+          "writable": true,
+          "configurable": true,
+          "returns": "undefined"
+        },
+        "stub": {
+          "own": true,
+          "type": "function",
+          "enumerable": false,
+          "writable": true,
+          "configurable": true,
+          "returns": "undefined"
+        },
+        "number": "primitive",
+        "get": {
+          "own": true,
+          "type": "function",
+          "enumerable": false,
+          "writable": true,
+          "configurable": true,
+          "returns": "undefined"
+        },
+        "pipelined": {
+          "own": true,
+          "type": "function",
+          "enumerable": false,
+          "writable": true,
+          "configurable": true,
+          "returns": "undefined"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "obj": {
+          "own": true,
+          "type": "function",
+          "enumerable": false,
+          "writable": true,
+          "configurable": true,
+          "returns": "undefined"
+        },
+        "target": {
+          "own": false,
+          "type": "function"
+        },
+        "get": {
+          "own": true,
+          "type": "function",
+          "enumerable": false,
+          "writable": true,
+          "configurable": true,
+          "returns": "undefined"
+        }
+      }
+    }
+  ]
+}
