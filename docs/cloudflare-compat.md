@@ -755,20 +755,29 @@ Wrangler's default rule, so only that type is valid for `.wasm`, and a
 `CompiledWasm` rule without `fallthrough: true` drops it. celld has no other
 default rule: Wrangler's `Text` rule for `.html` and `.sql` and `Data` rule
 for `.bin` need a configured rule.
-`alias` goes to esbuild's `alias`, with Wrangler's checks: it must be an
-object of strings. Each key is an import path, replaced wherever it is
-imported by the file its value names. That value is a path relative to the
-config's directory, or an absolute one, and it is resolved as Node's
-`require.resolve` resolves a path, as in Wrangler: the file itself, then with
-`.js`, `.json` or `.node`, then a directory's `package.json` `main` or its
-`index` file. An empty value aliases nothing, as in Wrangler. An alias of a
-Node.js builtin, such as `node:path`, wins over the runtime's module. Three
-cases that Wrangler accepts stop the deployment, because esbuild's alias
-can't do what Wrangler's plugin does: a key that is not a package name (such
-as `./generated/module.js`, which Wrangler matches as written), a value that
-names a package (Wrangler resolves it with Node), and an import of a
-subpath of a key, such as `pkg/sub` for the key `pkg`, which Wrangler leaves
-to the usual resolution.
+`alias` works as in Wrangler, through the same esbuild plugin: it must be an
+object of strings. Each key is an import path, relative ones included, and an
+import of exactly that path, from any file, gets the module its value names.
+An import that only starts with a key, such as `pkg/sub` for the key `pkg`,
+resolves as usual. The value is resolved with Node's `require.resolve` from
+the config's directory, when its key is first imported: a path, with Node's
+file probing (`.js`, `.json`, `.node`, a directory's `package.json` `main` or
+its `index`), or a package by its `exports` under Node's `require` conditions.
+A target that does not resolve fails the build with Node's error, and a
+Node.js builtin as a target fails it with esbuild's. An empty value aliases
+nothing. An alias of a Node.js builtin, such as `node:path`, wins over the
+runtime's module. The resolution follows the conditions that
+`NODE_OPTIONS` adds with `--conditions` or `-C`, and `--no-addons`, as
+Wrangler's Node does; `NODE_OPTIONS` with `--preserve-symlinks` or
+`--no-require-module` stops the build. celld refuses the key `__proto__`,
+which Wrangler's config parser drops, and `alias` in a Python Worker: esbuild
+bundles only celld's JavaScript shell around a Python Worker, not its Python
+code. The resolution does not search Node's global folders (`NODE_PATH`,
+`~/.node_modules`), and it resolves `wrangler` from the project like any
+package, where Wrangler resolves its own package first.
+esbuild does not read `NODE_PATH` either, as under Wrangler, whose esbuild
+API ignores it: an import that only `NODE_PATH` finds fails to resolve.
+(celld ran esbuild's CLI before, which reads it.)
 `no_bundle` skips esbuild, so `no_bundle` with `define`, `alias` or `rules`
 stops the deployment.
 

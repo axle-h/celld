@@ -1,17 +1,26 @@
 {
   "steps": [
     {
-      "exit": 1,
-      "worker": null,
+      "exit": 0,
+      "worker": "relative-key",
       "output": [
-        "Error: `alias` \"./generated/module.js\" is not a package path; celld applies `alias` with esbuild's, which replaces only an import of a package name such as \"pkg\" or \"@scope/pkg\". Import the module by such a name, or deploy with Wrangler"
+        " celld <version>",
+        "───────────────────────────────────────────────",
+        "Total Upload: <size> / gzip: <size>",
+        "Your Worker has no bindings.",
+        "Bundled relative-key (<time>)"
       ]
     },
     {
       "exit": 1,
       "worker": null,
       "output": [
-        "Error: `alias` \"react\" names the package \"preact/compat\"; celld resolves an alias target only as a file path, relative to the config's directory (Wrangler resolves a package with Node's `require.resolve`). Give the file, such as \"./node_modules/preact/compat/<file>\""
+        "Error: esbuild failed:",
+        "✘ [ERROR] Cannot find module 'preact/compat' [plugin alias]",
+        "    index.js:1:18:",
+        "      1 │ import React from \"react\";",
+        "        ╵                   ~~~~~~~",
+        "1 error"
       ]
     },
     {
@@ -33,7 +42,12 @@
       "exit": 1,
       "worker": null,
       "output": [
-        "Error: `alias` \"thing\": cannot find module \"./lib/missing\" from workers/missing-target"
+        "Error: esbuild failed:",
+        "✘ [ERROR] Cannot find module './lib/missing' [plugin alias]",
+        "    index.js:1:18:",
+        "      1 │ import thing from \"thing\";",
+        "        ╵                   ~~~~~~~",
+        "1 error"
       ]
     },
     {
@@ -41,13 +55,43 @@
       "worker": null,
       "output": [
         "Error: esbuild failed:",
-        "✘ [ERROR] Cannot read directory \"lib/index.js\": not a directory",
-        "✘ [ERROR] Could not resolve \"<case>/workers/subpath-import/lib/index.js/sub.js\" (originally \"thing/sub.js\")",
+        "✘ [ERROR] Could not resolve \"thing/sub.js\"",
         "    index.js:1:16:",
         "      1 │ import sub from \"thing/sub.js\";",
         "        ╵                 ~~~~~~~~~~~~~~",
-        "  The path \"thing/sub.js\" was remapped to \"<case>/workers/subpath-import/lib/index.js/sub.js\" using the alias feature, which then couldn't be resolved. Keep in mind that import path aliases are resolved in the current working directory.",
-        "2 errors"
+        "  You can mark the path \"thing/sub.js\" as external to exclude it from the bundle, which will remove this error and leave the unresolved path in the bundle.",
+        "1 error"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: esbuild failed:",
+        "✘ [ERROR] Package subpath './dist/index.js' is not defined by \"exports\" in <node_modules>/capnweb/package.json [plugin alias]",
+        "    index.js:1:16:",
+        "      1 │ import rpc from \"rpc\";",
+        "        ╵                 ~~~~~",
+        "1 error"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: esbuild failed:",
+        "✘ [ERROR] Plugin \"alias\" returned a non-absolute path: node:fs (set a namespace if this is not a file path)",
+        "    index.js:1:18:",
+        "      1 │ import thing from \"thing\";",
+        "        ╵                   ~~~~~~~",
+        "1 error"
+      ]
+    },
+    {
+      "exit": 1,
+      "worker": null,
+      "output": [
+        "Error: `alias` key \"__proto__\" is refused: Wrangler's config parser drops it, so it aliases nothing there"
       ]
     },
     {

@@ -1535,7 +1535,7 @@ mod tests {
     #[test]
     fn only_the_primary_selects_the_application() {
         // deploy_projects runs the dev builds, which a stopping test refuses.
-        let _turn = DEV_BUILD.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = deploy::dev_build_turn();
         host_runtime().block_on(only_the_primary_selects_the_application_on_the_host());
     }
 
@@ -1703,10 +1703,6 @@ mod tests {
         assert!(plan().is_err());
     }
 
-    /// The process-wide registry of `celld dev` builds is shared, so the
-    /// tests that run one take turns.
-    static DEV_BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// Start a `celld dev` build whose command runs `command` in the
     /// background and waits; the background process records its pid and
     /// outlives a kill of the shell alone. Returns the build and that pid.
@@ -1756,6 +1752,19 @@ mod tests {
                 .is_ok_and(|stat| stat.contains(") Z "))
     }
 
+    /// Wait for `pid` to stop running. A signalled process dies soon after
+    /// the signal, not with it.
+    async fn stops(pid: i32) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while running(pid) {
+            if std::time::Instant::now() > deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        true
+    }
+
     async fn stopped_with(
         build: tokio::task::JoinHandle<anyhow::Result<Vec<(PathBuf, deploy::Built)>>>,
     ) -> String {
@@ -1767,7 +1776,7 @@ mod tests {
 
     #[test]
     fn a_hung_build_is_stopped_with_its_process_group() {
-        let _turn = DEV_BUILD.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = deploy::dev_build_turn();
         host_runtime().block_on(async {
             let root = tempfile::tempdir().unwrap();
             let (build, child) = hung_build(
@@ -1782,8 +1791,7 @@ mod tests {
             let error = stopped_with(build).await;
             assert!(stopping.elapsed() < Duration::from_secs(5));
             assert!(error.contains("failed (signal: 15"), "{error}");
-            assert!(!running(child), "the build's child {child} survived");
-            deploy::reset_builds();
+            assert!(stops(child).await, "the build's child {child} survived");
         });
     }
 
@@ -1791,7 +1799,7 @@ mod tests {
     /// build starts once `celld dev` is stopping.
     #[test]
     fn a_build_that_ignores_sigterm_is_killed_and_no_build_follows() {
-        let _turn = DEV_BUILD.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = deploy::dev_build_turn();
         host_runtime().block_on(async {
             let root = tempfile::tempdir().unwrap();
             let (build, child) = hung_build(
@@ -1809,12 +1817,11 @@ mod tests {
             assert!(killing.elapsed() < Duration::from_secs(2));
             assert!(error.contains("failed (signal: 9"), "{error}");
             stopping.await.unwrap();
-            assert!(!running(child), "the build's child {child} survived");
+            assert!(stops(child).await, "the build's child {child} survived");
 
             let config = built_assets_project(root.path());
             let error = stopped_with(spawn_builds(vec![config], false)).await;
             assert_eq!(error, "celld dev is stopping");
-            deploy::reset_builds();
         });
     }
 
@@ -1864,7 +1871,7 @@ mod tests {
 
     #[test]
     fn celld_dev_runs_the_build_command_unless_no_build() {
-        let _turn = DEV_BUILD.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = deploy::dev_build_turn();
         host_runtime().block_on(async {
             let root = tempfile::tempdir().unwrap();
             let config = built_assets_project(root.path());

@@ -1,5 +1,5 @@
-// An import of a subpath of an alias key, which esbuild alias would replace
-// too and Wrangler does not.
+// An import of a subpath of an alias key, which Wrangler leaves to esbuild:
+// no package "thing" is installed, so esbuild cannot resolve it.
 {
   "name": "subpath-import",
   "main": "index.js",

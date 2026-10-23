@@ -1,0 +1,8 @@
+// A file of the package that its `exports` does not list: Node's
+// require.resolve refuses it, though the file exists.
+{
+  "name": "not-exported",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "alias": { "rpc": "capnweb/dist/index.js" }
+}

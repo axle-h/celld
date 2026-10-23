@@ -1,0 +1,9 @@
+// A Node.js builtin as the target: require.resolve returns its name, and
+// esbuild refuses a plugin's path that is not absolute.
+{
+  "name": "builtin-target",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "alias": { "thing": "node:fs" }
+}

@@ -1,7 +1,7 @@
 {
   "kind": "celld-only",
-  "reason": "celld deploy --dry-run refusals of Wrangler's `alias` (plan 1.24); workerd has no deploy step. modules/alias records what an accepted alias does, differentially",
-  "workers": ["relative-key", "package-target", "not-strings", "not-object", "missing-target", "subpath-import", "no-bundle", "accepted"],
+  "reason": "celld deploy --dry-run of Wrangler's `alias` (plans 1.24 and 1.45): the config checks, and the build errors of an imported key whose target does not resolve; workerd has no deploy step. modules/alias records what an accepted alias does, differentially",
+  "workers": ["relative-key", "package-target", "not-strings", "not-object", "missing-target", "subpath-import", "not-exported", "builtin-target", "proto-key", "no-bundle", "accepted"],
   "steps": [
     {"deploy": "relative-key"},
     {"deploy": "package-target"},
@@ -9,7 +9,13 @@
     {"deploy": "not-object"},
     {"deploy": "missing-target"},
     {"deploy": "subpath-import"},
+    {"deploy": "not-exported"},
+    {"deploy": "builtin-target"},
+    {"deploy": "proto-key"},
     {"deploy": "no-bundle"},
     {"deploy": "accepted"}
+  ],
+  "normalize": [
+    {"pattern": "/\\S*/tests/conformance/node_modules/", "replace": "<node_modules>/", "why": "the runner's node_modules path depends on the checkout"}
   ]
 }

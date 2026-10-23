@@ -374,8 +374,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 33 | 1.20 redirect handling through the same Fetcher | done | `1e23fdb`, starter `86b89b1` |
 | 34 | 1.22 WebSocket follow-ups; bounded send queues and socket lifetimes (security) | done | `5a59ae1` |
 | 35 | 1.23 `clone()` tees, 1.24 `alias` (package keys), 1.25 KV `preview_id` | done | `b9ee195`, starter `d5e7133` |
-| 36 | 1.26 stream ownership on the host, readers and IdentityTransformStream | done | see log |
-| 37+ | Phase 1 in plan order (1.45, 1.28-1.30, 1.34, 1.36-1.44, 1.46, 1.47), and the 1.4 props key-order follow-up | queued | |
+| 36 | 1.26 stream ownership on the host, readers and IdentityTransformStream | done | `e449d4d` |
+| 37 | 1.45 esbuild service protocol; Wrangler `alias` exactly | done | see log |
+| 38+ | Phase 1 in plan order (1.28-1.30, 1.34, 1.36-1.44, 1.46, 1.47), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -2879,45 +2880,32 @@ Map it to esbuild's `alias`, as wrangler does.
     The plugin matches an import path exactly, any string, relative ones
     included, and leaves `key/sub` alone. It resolves the value with
     Node's `require.resolve(value, { paths: [projectRoot] })`, the config's
-    directory: a path relative to it, with Node's file probing (`.js`,
-    `.json`, `.node`, a directory's `main` or `index`), or a package by its
-    `require` conditions. An empty value aliases nothing.
+    directory, when the key is imported: a path relative to it, with Node's
+    file probing (`.js`, `.json`, `.node`, a directory's `main` or `index`),
+    or a package by its `require` conditions. An empty value aliases
+    nothing.
   - The plugin comes before the `nodejs_compat` ones, so an alias of
     `node:path` or `fs` wins over unenv.
-- **celld** maps each to esbuild's `--alias:KEY=FILE` (`read_alias`). The
-  value is resolved to its absolute file in Rust, as Node resolves a path
-  (`resolve_alias_target`). esbuild's alias also wins over celld's
-  `--external` for builtins. `no_bundle` with `alias` stops the deploy, as
-  with `define` and `rules`. An empty value prints a note.
-- **Decision: refuse what esbuild's alias can't do, loudly**, since the
-  esbuild CLI has no plugins:
-  - a key that is not a package path by esbuild's rule (`./x.js`, `/x`,
-    `pkg/`, `a/../b`);
-  - a value that names a package, which Node would resolve by its
-    `require` conditions, not esbuild's;
-  - a subpath import of a key. esbuild rewrites `pkg/sub` to a path under
-    the target file, so the build fails with esbuild's "remapped … using the
-    alias feature" error where Wrangler resolves `pkg/sub` as usual.
-  - celld refuses a `null` or array `alias`, which `typeof` calls an
-    object: Wrangler crashes on `null` and reads an array's indexes as
-    keys. The type messages use `typeof` names as Wrangler's do, so a
-    `null` value is "got object".
-  - A directory target whose `package.json` does not parse fails, as Node's
-    `ERR_INVALID_PACKAGE_CONFIG` does, rather than falling back to `index`.
-- **bundleBlueprints still does not deploy.** Its alias key is the relative
-  import `./generated/bundled-blueprints.js`, which esbuild's alias can't
-  take, and no esbuild CLI feature can express it (confirmed by review).
-  **Decision (Alex, 2026-10-23):** celld will support Wrangler's relative
-  keys exactly, through esbuild's service protocol: 1.45. The starter's
-  `status.json` says so for `workshop-blueprints`.
-- **Tests.**
-  - `modules/alias` (differential): a file, a path without its extension,
-    a directory by its `package.json` `main`, a path outside the Worker's
-    directory, `node:path` under `nodejs_compat`, and an empty value.
-  - `deploy/alias` (celld-only): each refusal above, the type errors, a
-    missing file, `no_bundle`, and an accepted config with an empty value.
-  - Unit: `deploy::tests`, the key rule, the type checks, and the target
-    resolution.
+- **celld** first mapped each entry to esbuild's CLI `--alias:KEY=FILE`,
+  with the target resolved in Rust, and refused what that can't express:
+  a key that is not a package path, a package as the target, and a subpath
+  import of a key. **Superseded by 1.45**, which runs Wrangler's plugin
+  itself through esbuild's service protocol: those three refusals and the
+  `--alias` path are gone. What stays from 1.24:
+  - the type checks, with `typeof` names as Wrangler's (`null` is "got
+    object"), and the refusal of a `null` or array `alias`, which `typeof`
+    calls an object: Wrangler crashes on `null` and reads an array's
+    indexes as keys;
+  - `no_bundle` with `alias` stops the deploy, as with `define` and `rules`;
+  - an empty value prints a note;
+  - a directory target whose `package.json` does not parse fails, as
+    Node's `ERR_INVALID_PACKAGE_CONFIG` does.
+- **bundleBlueprints** gives the relative key
+  `./generated/bundled-blueprints.js`, which 1.24 refused. **Decision (Alex,
+  2026-10-23):** support Wrangler's relative keys exactly, through esbuild's
+  service protocol: 1.45.
+- **Tests.** `modules/alias` (differential) and `deploy/alias`
+  (celld-only), as 1.45 extended them; unit tests in `deploy::alias`.
 - Docs: `docs/cloudflare-compat.md`.
 
 ### 1.25 KV `preview_id` under `celld dev` (found by 0.5)
@@ -3175,6 +3163,193 @@ what Wrangler's does.
 - Estimated at 400–700 lines.
 - It unblocks `workshop-blueprints`' redeploy case, and removes 1.24's
   refusals of relative keys, package targets and subpath imports.
+
+**As built.**
+- **One bundling path.** Every esbuild run, the Worker bundle and the
+  Python Worker bundle, goes through `crates/celld/deploy/esbuild.rs`,
+  which drives `esbuild --service=<version> --ping` as esbuild's JS API
+  does. The CLI path and `--alias` are gone.
+  - Sources, at 0.28.1: `cmd/esbuild/service.go` (`handleBuildRequest`,
+    `convertPlugins`, the `on-start`/`on-resolve` requests),
+    `cmd/esbuild/stdio_protocol.go` and `lib/shared/stdio_protocol.ts`
+    (the codec), `lib/shared/common.ts` (`buildOrContextImpl`,
+    `handlePlugins`, `createChannel`), `cmd/esbuild/main.go` (the version
+    check, `--ping`, the CLI's GC setting).
+  - The build request carries the CLI's flags unchanged: the service
+    parses them with the CLI's parser (`cli.ParseBuildOptions`). That parser
+    starts from a silent log with no limit, so celld adds the CLI's
+    `--log-level=info --log-limit=6` (the Python build keeps its
+    `--log-level=warning`). `write: true`, so esbuild writes the output
+    directory as the CLI did. The entry goes in `entries`, absolute, as
+    Wrangler passes it, so an alias key meets it as it would there;
+    esbuild prints paths relative to `absWorkingDir` either way.
+  - The CLI turns Go's collector off for a build of one entry point
+    (`debug.SetGCPercent(-1)`); the service leaves it on, which made the
+    large bundles 6–7% slower. Each service runs one such build and exits,
+    so it runs with `GOGC=off`, as the CLI did, in time and in memory.
+  - With `NODE_PATH` unset, bundles are byte-identical: every Cloudflare OS
+    Worker keeps its deployment version (`7aade69af0ae65d7` for
+    gatekeeper-scheduler, and so on) before and after, and so does a Python
+    Worker.
+  - **Deliberate change: `NODE_PATH` no longer reaches esbuild.** The CLI
+    reads it (`runImpl` in `pkg/cli/cli_impl.go`); the service reads only
+    the request's `nodePaths`, which Wrangler's JS API call leaves empty,
+    and so does celld. **Decision (coordinator, 2026-10-23):** match
+    Wrangler. Recorded in `docs/cloudflare-compat.md` and the upgrade notes
+    in `docs/README.md`.
+- **The codec** is hand-written (~150 lines), no new crate: the protocol is
+  JSON with an int and a byte-array type, length-prefixed, little-endian.
+  Malformed input is an error, never a panic: short values, unknown types,
+  trailing bytes, nesting over 64, a packet over 64 MiB (an answer carries
+  only diagnostics), over 2^20 values in one packet (a value takes a byte
+  on the wire and tens in memory); counts are checked against the bytes
+  left before anything is allocated. Strings decode as
+  the JS API's `TextDecoder` does (U+FFFD).
+- **Diagnostics.** The service's logger writes stderr as the CLI's does,
+  and celld shows that stderr when a build fails, as it showed the CLI's
+  (16 MiB at most). One difference is esbuild's own: the service sets
+  `logger.API = JSAPI`, so a hint that names an option spells it as the JS
+  API does (`"platform: 'node'"`, not `"--platform=node"`). celld's flags
+  mark every bare builtin external, so none of its cases meets one. A
+  refused request (`error` in the answer, such as a flag the parser
+  rejects) prints as `✘ [ERROR] <text>`. Of the deploy/ and modules/ texts,
+  only `deploy/alias` pinned esbuild output, and only its subpath step's
+  text changed, because the behaviour did: Wrangler resolves `thing/sub.js`
+  as usual, so esbuild's own "Could not resolve" replaces the CLI alias's
+  "remapped" error.
+- **Wrangler's plugin** (`deploy/alias.rs`), as `bundleWorker` registers
+  it: one on-resolve callback, `name: "alias"`, whose filter is the
+  `source` of Wrangler's `new RegExp(keys.map(escapeRegex).join("|"))`
+  (line terminators as escapes, `(?:)` when empty), compiled by esbuild as
+  Go does for Wrangler. The callback looks `alias[args.path]` up
+  literally, from any importer and namespace, and only then resolves the
+  value: a target that does not resolve fails only a build that imports
+  its key, with Node's message (`Cannot find module './lib/missing'`,
+  `Package subpath './dist/index.js' is not defined by "exports" in …`),
+  which esbuild places at the import. A Node builtin as the target returns
+  its name, which esbuild refuses as Wrangler's run does (`Plugin "alias"
+  returned a non-absolute path: node:fs`). An import of an
+  `Object.prototype` name the filter passes (`toString` with a key `t`)
+  fails, as `alias["toString"]` does in Wrangler.
+  - **Loud gaps.** The key `__proto__` is refused: Wrangler's JSONC parser
+    assigns it to the prototype, so it aliases nothing there. `alias` in a
+    Python Worker is refused; it was silently ignored before. esbuild
+    bundles only celld's JavaScript shell around a Python Worker, not its
+    Python code.
+- **`require.resolve`**, from Node 26.3's `cjs/loader.js`
+  (`_resolveFilename`, `_findPath`, `tryPackage`, `resolveExports`,
+  `_nodeModulePaths`), `esm/resolve.js` (`packageExportsResolve`,
+  `resolvePackageTarget`, `patternKeyCompare`, the segment checks) and
+  `src/node_modules.cc` (which `package.json` fields count): builtins by
+  name or `node:`, relative and absolute paths with file probing,
+  `node_modules` from the config's directory up, a request that starts
+  with `..` but is not relative (`..foo`, `.../x`) from the working
+  directory (`_resolveLookupPaths` gives it `['.']`), `exports` with
+  patterns, arrays and `null`, under `require`, `node`, `node-addons`,
+  `module-sync` and `default`, in source order (a small ordered JSON type,
+  since `serde_json`'s map sorts), real paths. The segment and separator
+  checks fold ASCII case only, as JavaScript's `/i` without `u` does (`ſ`
+  is not `s`). Error texts are Node's, without the `Require stack` line,
+  which names Wrangler's own file.
+  - `NODE_OPTIONS`, as Wrangler's Node reads it: split as
+    `ParseNodeOptionsEnvVar` splits it (`src/node_options.cc`), each
+    `--conditions=X`, `--conditions X` or `-C X` adds a condition, and
+    `--no-addons` drops `node-addons`. `-C=X` and a `--conditions` without
+    its argument stop the build with Node's message, as Node refuses to
+    start. `--preserve-symlinks` and `--no-require-module` (or
+    `--no-experimental-require-module`), which would change resolution
+    otherwise, stop the build.
+  - Not done, as documented in `docs/cloudflare-compat.md`: Node's global
+    folders (`NODE_PATH`, `~/.node_modules`), which come after every
+    `node_modules` and so only turn a failure into a success, and
+    `trySelf`, Node's resolution of `wrangler` and `wrangler/…` against the
+    running Wrangler; celld resolves them from the project like any
+    package. Node's deprecation warnings (DEP0128, DEP0155, DEP0166) are not
+    printed; the resolution is the same.
+- **Versions.** celld runs `esbuild --version` and speaks the protocol of
+  0.28.0, 0.28.1 and 0.28.2 (read at 0.28.1; 0.28.0 to 0.28.1 changed no
+  protocol file, and 0.28.2 added only `logStyle` to `format-msgs`, which
+  celld does not send). Any other version stops the build: `esbuild 0.27.7
+  (…) is not a version celld can drive: celld speaks the service protocol
+  of esbuild 0.28.0, 0.28.1, 0.28.2. Install one of them, or set
+  CELLD_ESBUILD to its path.` The probe costs ~2 ms a build. It runs as
+  the service does (below). A `CELLD_ESBUILD` with a `/` is made absolute
+  once, against celld's working directory, for the probe and the service,
+  which runs in the build's directory.
+  - CI: `tests/conformance` pins `esbuild-0.28.0` and `esbuild-0.28.2`
+    (npm aliases, in the lockfile) beside `esbuild` 0.28.1, the runner takes
+    `--esbuild VERSION`, and a new `test.yml` step runs `deploy/*`,
+    `modules/*`, `dev/*` and `node/*` on each.
+- **Lifecycle.** One service per build, and its version probe, each spawned
+  through
+  `spawn_build_process`, which `build.command` now shares: it dies with
+  celld (`PR_SET_PDEATHSIG`), and under `celld dev` it leads a process
+  group registered in `DevGroup`, so `stop_builds`/`kill_builds` reach it
+  and none starts once `celld dev` is stopping. A failed exchange kills it;
+  otherwise celld closes stdin, drains stdout, reaps it, and the `Service`
+  guard kills and reaps on any other exit. `--ping` makes esbuild exit if
+  celld vanishes. Checked: no esbuild after five `celld dev` watch
+  rebuilds and a failing one, after SIGTERM to `celld dev`, or after
+  SIGKILL to a `celld deploy` mid-build. Memory and time are bounded as the
+  CLI's were: no timeout, as before; GC off, as before.
+- **Security.** Build-time only: the plugin runs in the `celld deploy`/`celld
+  dev` process, resolving the deployer's own config with the deployer's
+  privileges, as the CLI path's alias did. No Worker code runs during a
+  build, and nothing here is reachable from a running Worker.
+- **Tests.**
+  - Unit, `deploy::esbuild`: random round-trips (2,000 values), the bytes
+    the JS `encodePacket` writes, every truncation, trailing bytes, unknown
+    types, oversized counts and lengths, nesting, invalid UTF-8, the
+    stream framing, 20,000 random byte strings; with a fake esbuild, the
+    version refusal, a protocol break (killed, stderr shown) and a `celld
+    dev` stop (SIGTERM reaches it; none starts after); the value budget;
+    the `CELLD_ESBUILD` path. The fake is written under another name,
+    closed, renamed into place and run until it runs, since a child that
+    another test forks while it is open for writing makes `exec` fail with
+    ETXTBSY until that child execs.
+  - The `celld dev` build tests take turns through a guard that also lets
+    builds start again when it drops, so one failure cannot fail the next,
+    and they wait for a killed child to go instead of asserting at once.
+    The `deploy::` and `dev::` tests passed 200 runs in a row, and the
+    whole library suite 30.
+  - Unit, `deploy::alias`: the config checks, the filter source, literal
+    lookup, and 60 requests on one tree recorded from Node 26.3's
+    `require.resolve` (paths, `main`, invalid configs, builtins, `exports`
+    conditions, patterns, fallbacks, `null`, invalid targets and subpaths,
+    sugar, duplicate keys, `..foo` from the working directory, `ſ`), and
+    the `NODE_OPTIONS` conditions, also recorded from Node.
+  - `modules/alias` (differential): a relative key that no file backs,
+    from two directories; a key that only another import contains; a
+    subpath of a key; a package by its `require` condition (capnweb's
+    CommonJS build, not the `workerd` one); an exported subpath
+    (`wrangler/package.json`).
+  - `deploy/alias` (celld-only): the relative key accepted; a missing
+    package, a missing file, a non-exported subpath and a builtin target,
+    each imported; an unresolvable subpath import; `__proto__`; and a
+    missing target never imported, accepted. Each outcome also checked
+    against `wrangler deploy --dry-run`.
+- Docs: `docs/cloudflare-compat.md`, `README.md`, `docs/README.md`,
+  `docs/services/workers.md`, `celld deploy --help`,
+  `tests/conformance/README.md`.
+- **Results (2026-10-23, after the review fixes).**
+  - Bundling time, `celld deploy --dry-run --no-build` of the seven
+    Cloudflare OS Workers, interleaved with the pre-1.45 binary, 10 rounds:
+    694 ms before, 720 ms after (+3.7 ms a Worker, about 2 ms of it the
+    version probe; the `Bundled` times are unchanged). Without `GOGC=off`
+    it was 757 ms. The final binary: 722 ms a round, same versions.
+  - `cargo test --workspace`: 278 passed (dev and lab profiles).
+  - Conformance (`--runtime=both`): 136 PASS, 18 XFAIL, as before. The
+    bundling cases (15 PASS, 1 XFAIL) also pass on esbuild 0.28.0 and
+    0.28.2.
+  - Starter e2e: S0, S1, S2, S9, S11, B0 and B6 pass, S3, S4, S6, S7, S10
+    and B1–B5 fail, as before.
+  - Integration: `workshop-user-directory` passes, and every pending
+    suite's first error is unchanged. `workshop-blueprints`' redeploy case
+    (bundleBlueprints) now deploys: its generated `workshop-backend.jsonc`
+    carries the key `./generated/bundled-blueprints.js`, which bundles, and
+    the node becomes ready. It fails next on `RPC stubs cannot cross
+    isolate boundaries yet` (Phase 3), as the suite's other cases do. The
+    starter's `status.json` says so.
 
 ### 1.46 Stream and entrypoint gaps found by 1.26
 

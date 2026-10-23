@@ -10,7 +10,16 @@
         "dir": "lib/dir/entry.js",
         "outside": "shared/outside.js",
         "path": "lib/path.js",
-        "unaliased": "function"
+        "unaliased": "function",
+        "generated": "lib/generated.js",
+        "nested": "nested: lib/generated.js",
+        "relativeKey": "lib/noext.js",
+        "containsKey": "lib/file.js",
+        "subpath": "lib/dir/entry.js",
+        "relativeDir": "lib/file.js",
+        "rpc": "function",
+        "rpcIsTheWorkerdBuild": false,
+        "wranglerPackage": "wrangler"
       }
     }
   ]

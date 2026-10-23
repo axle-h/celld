@@ -97,6 +97,20 @@ jobs:
         env:
           CONFORMANCE_REQUIRE: docker
 
+      # celld drives esbuild through its service protocol, which it speaks
+      # only at the versions crates/celld/deploy/esbuild.rs lists. The runs
+      # above use the pinned esbuild 0.28.1; the bundling cases also run on
+      # each other version, which tests/conformance pins as esbuild-VERSION.
+      - name: Conformance bundling cases (each supported esbuild)
+        run: |
+          set -euo pipefail
+          for version in 0.28.0 0.28.2; do
+            node tests/conformance/run.mjs --runtime=celld --esbuild "$version" \
+              --filter 'deploy/*' --filter 'modules/*' --filter 'dev/*' --filter 'node/*'
+          done
+        env:
+          CONFORMANCE_REQUIRE: docker
+
       # Multi-node cases (nodes > 1, with Azurite as a service container)
       # and the tests/fleet scripts join the nightly run when they land.
 

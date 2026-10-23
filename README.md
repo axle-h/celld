@@ -74,7 +74,8 @@ curl -fsSL https://celld.dev/install.sh | sh
 Put `~/.local/bin` on your `PATH` if the installer asks you to.
 
 Worker projects deployed with `celld deploy` need
-[esbuild](https://esbuild.github.io) on `PATH`; asset-only projects do not.
+[esbuild](https://esbuild.github.io) 0.28.0, 0.28.1 or 0.28.2 on `PATH`;
+asset-only projects do not.
 
 The installer keeps each release under `~/.local/lib/celld/releases` and points
 one symlink at the current one. To remove celld, delete the symlink and the

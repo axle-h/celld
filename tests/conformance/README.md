@@ -15,6 +15,7 @@ node run.mjs --runtime=celld                 # celld against expect.json
 node run.mjs --runtime=workerd               # workerd against expect.json
 node run.mjs --filter 'storage/*'            # only matching case ids; repeatable
 node run.mjs --profile release               # run target/release/celld
+node run.mjs --esbuild 0.28.2                # bundle with the pinned esbuild-0.28.2
 node run.mjs --update                        # re-record expect.json from workerd
 CONFORMANCE_REQUIRE=docker node run.mjs      # fail, not skip, a case that needs Docker when none answers
 ```
@@ -33,7 +34,10 @@ case under `.run/`, which is deleted unless the case fails.
   `CELLD_FETCH_PRIVATE_ALLOW`, and with the case's `env`. Any
   other line on stdout fails the case: stdout carries only ready records. When
   the steps finish, it sends `POST /shutdown?handoff=preserve` to the
-  internal origin. `CELLD_ESBUILD` points at this package's esbuild.
+  internal origin. `CELLD_ESBUILD` points at this package's esbuild, 0.28.1,
+  or with `--esbuild VERSION` at its `esbuild-VERSION`: the package pins one
+  per other esbuild version celld supports, which CI runs the bundling cases
+  on.
 - On workerd, it uses wrangler's `createTestHarness`.
 
 ## Adding a case

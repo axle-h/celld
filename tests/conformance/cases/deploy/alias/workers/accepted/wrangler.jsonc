@@ -1,8 +1,9 @@
-// An alias celld applies, and one with an empty target, which aliases
-// nothing, as in Wrangler.
+// An alias celld applies, one with an empty target, which aliases nothing,
+// and one whose target does not exist but is never imported: Wrangler
+// resolves a target only when its key is imported.
 {
   "name": "accepted",
   "main": "index.js",
   "compatibility_date": "2026-09-04",
-  "alias": { "thing": "./lib/thing", "nothing": "" }
+  "alias": { "thing": "./lib/thing", "nothing": "", "unused": "./lib/missing" }
 }

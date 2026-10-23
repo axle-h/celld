@@ -1,4 +1,4 @@
-// A target file that does not exist.
+// A target file that does not exist, imported.
 {
   "name": "missing-target",
   "main": "index.js",

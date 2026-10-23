@@ -128,7 +128,8 @@ the size and SHA-256 of each file. Later builds reuse
 `$XDG_CACHE_HOME/celld/pyodide-0.28.3`, or `~/.cache/celld/pyodide-0.28.3`.
 Set `CELLD_PYTHON_RUNTIME_DIR` to use another directory; a populated directory
 lets a build run offline. A download fails after 60 seconds without data. The
-build needs `esbuild` on `PATH`, or `CELLD_ESBUILD` set to its path.
+build needs `esbuild` 0.28.0, 0.28.1 or 0.28.2 on `PATH`, or `CELLD_ESBUILD`
+set to its path.
 
 A Python deployment requires the `python-workers-v1` feature, and
 `celld deploy` does not check the nodes for it. A running node without the

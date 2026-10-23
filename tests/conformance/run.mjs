@@ -19,12 +19,14 @@ const CASES = join(HERE, "cases");
 // Inside this package, so a Worker that imports a package (capnweb) resolves
 // it from this package's node_modules on both runtimes.
 const SCRATCH = join(HERE, ".run");
-const USAGE = `usage: node run.mjs [--runtime=celld|workerd|both] [--update] [--filter GLOB]... [--profile NAME]
+const USAGE = `usage: node run.mjs [--runtime=celld|workerd|both] [--update] [--filter GLOB]... [--profile NAME] [--esbuild VERSION]
 
   --runtime   which runtime to run the cases on (default: both)
   --update    record expect.json from workerd for the differential cases
   --filter    run only the cases whose id (area/case) matches GLOB; repeatable
   --profile   the cargo profile whose celld binary to run (default: lab)
+  --esbuild   celld's esbuild: the esbuild-VERSION package this package pins
+              besides esbuild, one per version celld supports (default: esbuild)
 
   CONFORMANCE_REQUIRE=docker[,...]  fail, instead of skip, a case whose
                                     "requires" names a requirement this
@@ -43,6 +45,7 @@ function parseOptions() {
         update: { type: "boolean", default: false },
         filter: { type: "string", multiple: true, default: [] },
         profile: { type: "string", default: "lab" },
+        esbuild: { type: "string" },
         help: { type: "boolean", short: "h", default: false },
       },
       strict: true,
@@ -61,13 +64,14 @@ function parseOptions() {
   const runtime = values.update ? "workerd" : (values.runtime ?? "both");
   if (!["celld", "workerd", "both"].includes(runtime)) usage(`--runtime must be celld, workerd or both, not "${runtime}"`);
   if (!/^[\w-]+$/.test(values.profile)) usage(`--profile "${values.profile}" is not a cargo profile name`);
+  if (values.esbuild !== undefined && !/^\d+\.\d+\.\d+$/.test(values.esbuild)) usage(`--esbuild "${values.esbuild}" is not a version`);
   let required;
   try {
     required = mandatoryRequirements();
   } catch (error) {
     usage(error.message);
   }
-  return { runtime, update: values.update, filters: values.filter, profile: values.profile, required };
+  return { runtime, update: values.update, filters: values.filter, profile: values.profile, esbuild: values.esbuild, required };
 }
 
 function usage(message) {
@@ -83,7 +87,8 @@ function toolchain(options) {
   try {
     wrangler = require("wrangler/package.json").version;
     workerd = createRequire(require.resolve("wrangler"))("workerd/package.json").version;
-    esbuild = join(dirname(require.resolve("esbuild/package.json")), "bin", "esbuild");
+    const name = options.esbuild === undefined ? "esbuild" : `esbuild-${options.esbuild}`;
+    esbuild = join(dirname(require.resolve(`${name}/package.json`)), "bin", "esbuild");
   } catch (error) {
     throw new SetupError(`the runner's dependencies are missing (${error.message}); run pnpm install in tests/conformance`);
   }

@@ -223,7 +223,9 @@ RELEASE.2025-09-06T17-38-46Z, which rejects the first deploy
 
 ## Deploy an application
 
-Install `esbuild` on `PATH` if the project contains Worker code. Then run
+Install `esbuild` 0.28.0, 0.28.1 or 0.28.2 on `PATH` if the project contains
+Worker code: celld drives it through its service protocol, which it speaks at
+those versions only, and refuses another. Then run
 `celld deploy` in a Wrangler project:
 
 ```sh
@@ -608,6 +610,9 @@ release, so keep operator tooling and celld releases together.
   so a rolling update is not possible. Stop every node, then start the new
   version. A node that dials a peer on the other version fails the call at
   once and logs `peer_tunnel_version_mismatch` once for that peer.
+  `celld deploy` and `celld dev` need esbuild 0.28.0, 0.28.1 or 0.28.2, and
+  refuse another version. esbuild no longer reads `NODE_PATH`, as under
+  Wrangler, so a bundle that needed it no longer builds.
 
 ## Diagnose a fleet
 
@@ -712,7 +717,7 @@ unset variable selects its default. A Boolean variable accepts only `0` or
 | `CELLD_FETCH_PRIVATE_ALLOW` | Comma-separated `host:port` entries that a Worker's `fetch()` and `new WebSocket()` can reach although they are not public addresses (default: none). See [Limit Worker egress](security.md#limit-worker-egress) |
 | `CELLD_NODE` | An explicit node-session ID: 1 to 128 ASCII letters, numbers, dots, dashes, or underscores, but not `.` or `..` |
 | `CELLD_WATCH` | The local work directory for SQLite and replication |
-| `CELLD_ESBUILD` | The path of the esbuild executable |
+| `CELLD_ESBUILD` | The path of the esbuild executable (0.28.0, 0.28.1 or 0.28.2) |
 | `CELLD_ACTIVATIONS` | Concurrent cold-cell activations (default: 8 per CPU, at least 16, at most 128) |
 | `CELLD_DEPLOY_POLL_S` | The deployment pointer poll interval in seconds (default: 30) |
 | `CELLD_DEPLOY_MAX_AGE_S` | Seconds before celld forces a resident Durable Object onto a new deployment (default: 60; 0 forces at once) |

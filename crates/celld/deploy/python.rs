@@ -19,7 +19,6 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 /// Pyodide release embedded in every Python Worker. Cloudflare runs 0.28.2
@@ -200,6 +199,7 @@ pub fn check_supported_events(object: &Map<String, Value>) -> anyhow::Result<()>
             "no_bundle",
         ),
         (non_empty(object.get("define")), "define"),
+        (non_empty(object.get("alias")), "alias"),
         (non_empty(object.get("rules")), "rules"),
     ] {
         if present {
@@ -213,6 +213,7 @@ pub fn build(
     root: &Path,
     entry: &str,
     compat: &PythonCompat,
+    dev: bool,
 ) -> anyhow::Result<(BundleOutput, Value)> {
     let entry_path = Path::new(entry);
     let main_module = entry_path
@@ -270,7 +271,7 @@ pub fn build(
     std::fs::write(out.join("worker.js"), WORKER_JS)?;
     std::fs::write(out.join("worker.py"), WORKER_PY)?;
     std::fs::write(out.join("files.bin"), pack(&files)?)?;
-    run_esbuild(out)?;
+    run_esbuild(out, dev)?;
     let bundle = std::fs::read(out.join("index.js")).context("read Python Worker bundle")?;
 
     let descriptor = json!({
@@ -584,45 +585,41 @@ fn download_from(
     .map_err(|_| anyhow!("Python runtime download panicked"))?
 }
 
-fn run_esbuild(directory: &Path) -> anyhow::Result<()> {
-    let binary = std::env::var("CELLD_ESBUILD").unwrap_or_else(|_| "esbuild".to_string());
-    let output = Command::new(&binary)
-        .current_dir(directory)
-        .arg("worker.js")
-        .arg("--bundle")
-        .arg("--format=esm")
-        .arg("--platform=browser")
-        .arg("--target=es2022")
-        .arg("--outfile=index.js")
-        .arg("--inject:./shims.js")
-        .arg("--loader:.zip=binary")
-        .arg("--loader:.bin=binary")
-        .arg("--loader:.py=text")
+fn run_esbuild(directory: &Path, dev: bool) -> anyhow::Result<()> {
+    let flags = [
+        "--log-level=warning",
+        // The CLI's default, which the service's parser does not apply.
+        "--log-limit=6",
+        "--bundle",
+        "--format=esm",
+        "--platform=browser",
+        "--target=es2022",
+        "--outfile=index.js",
+        "--inject:./shims.js",
+        "--loader:.zip=binary",
+        "--loader:.bin=binary",
+        "--loader:.py=text",
         // The loader treats a defined `process` as Node. These names are
         // replaced only inside the bundle.
-        .arg("--define:process=undefined")
-        .arg("--define:location=\"https://python-runtime.invalid/\"")
-        .arg("--external:cloudflare:*")
+        "--define:process=undefined",
+        "--define:location=\"https://python-runtime.invalid/\"",
+        "--external:cloudflare:*",
         // The host module that retires an isolate after a fatal error.
-        .arg("--external:celld:python")
+        "--external:celld:python",
         // Dynamic imports on the loader's Node.js path, which never runs.
-        .arg("--external:node:*")
-        .arg("--external:./pyodide.asm.wasm")
-        .arg("--external:./sentinel.wasm")
-        .arg("--log-level=warning")
-        .output()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                anyhow!("esbuild not found ({binary}); install it or set CELLD_ESBUILD")
-            } else {
-                anyhow!("run esbuild: {error}")
-            }
-        })?;
-    if !output.status.success() {
-        bail!(
-            "esbuild failed on the Python Worker bundle:\n{}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        "--external:node:*",
+        "--external:./pyodide.asm.wasm",
+        "--external:./sentinel.wasm",
+    ];
+    let outcome = super::esbuild::run(&super::esbuild::Build {
+        cwd: directory,
+        entry: Path::new("worker.js"),
+        flags: flags.iter().map(|flag| flag.to_string()).collect(),
+        alias: None,
+        dev,
+    })?;
+    if let super::esbuild::Outcome::Failed(log) = outcome {
+        bail!("esbuild failed on the Python Worker bundle:\n{log}");
     }
     Ok(())
 }

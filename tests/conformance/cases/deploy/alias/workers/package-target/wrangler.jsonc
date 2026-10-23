@@ -1,4 +1,5 @@
-// A target that names a package, which Wrangler resolves with Node.
+// A target package that is not installed. Wrangler resolves it with Node's
+// require.resolve when the key is imported, and the build fails.
 {
   "name": "package-target",
   "main": "index.js",

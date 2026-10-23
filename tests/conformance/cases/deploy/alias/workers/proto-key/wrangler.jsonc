@@ -1,0 +1,7 @@
+// The key "__proto__", which Wrangler's config parser drops.
+{
+  "name": "proto-key",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "alias": { "__proto__": "./index.js" }
+}

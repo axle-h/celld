@@ -1,8 +1,11 @@
-// Wrangler's `alias`: each key, imported exactly so, is replaced by the module
-// its value names, resolved as Node's require.resolve resolves a path from the
-// config's directory (a missing extension, a directory's package.json main),
-// and an alias of a Node.js builtin wins over nodejs_compat's. celld refused
-// the key (plan 1.24). deploy/alias has what celld refuses.
+// Wrangler's `alias`: each key, imported exactly so from any file, is
+// replaced by the module its value names, resolved with Node's
+// require.resolve from the config's directory: a path (a missing extension, a
+// directory's package.json main) or a package by its `require` exports
+// condition. The key is any import path, relative ones included, and an
+// import that only starts with a key, or contains one, resolves as usual. An
+// alias of a Node.js builtin wins over nodejs_compat's. deploy/alias has the
+// failures.
 {
   "name": "app",
   "main": "index.js",
@@ -14,6 +17,11 @@
     "virtual-dir": "./lib/dir",
     "@scope/outside": "../shared/outside.js",
     "node:path": "./lib/path.js",
-    "empty-target": ""
+    "empty-target": "",
+    "./generated/module.js": "./lib/generated.js",
+    "./lib/file": "./lib/noext.js",
+    "./lib/dir": "./lib/file.js",
+    "rpc": "capnweb",
+    "wrangler-package": "wrangler/package.json"
   }
 }

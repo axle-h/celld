@@ -39,6 +39,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+mod alias;
+mod esbuild;
 mod python;
 
 /// Config keys we understand. Anything else is an error: refusing is
@@ -284,8 +286,9 @@ OPTIONS:\n  --config PATH          Same as passing PROJECT positionally\n  --no-
 Credentials come from the standard AWS credential chain, from Google\n\
 Application Default Credentials for a gs:// bucket, or from an Azure storage\n\
 account key, managed identity, or workload identity for an az:// bucket.\n\n\
-Worker projects require `esbuild` on PATH; asset-only projects do not. Static\n\
-assets, service bindings, and vars are supported. Routes are not; use\n\
+Worker projects require `esbuild` 0.28.0, 0.28.1 or 0.28.2 on PATH, or\n\
+CELLD_ESBUILD; asset-only projects do not. Static assets, service bindings,\n\
+and vars are supported. Routes are not; use\n\
 Wrangler for route configuration.\n\
 A config's build.command runs with `sh -c` in build.cwd (default: the\n\
 config's directory) before celld bundles `main`, with the deployer's\n\
@@ -385,9 +388,8 @@ struct BundleConfig {
     /// `define` as `--define:KEY=VALUE`. Each value is a JavaScript
     /// expression, which is what Wrangler and esbuild both take.
     define: BTreeMap<String, String>,
-    /// `alias` as `--alias:KEY=FILE`, each target resolved as Wrangler
-    /// resolves it (`read_alias`).
-    alias: BTreeMap<String, PathBuf>,
+    /// `alias`, which an on-resolve plugin applies as Wrangler's does.
+    alias: alias::Alias,
     /// `rules` as `--loader:.EXT=LOADER`, plus celld's own default rule.
     loaders: BTreeMap<String, Loader>,
 }
@@ -677,7 +679,7 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
         .as_deref()
         .map(|entry| {
             if let Some(compat) = &project.python {
-                let (output, descriptor) = python::build(&root, entry, compat)?;
+                let (output, descriptor) = python::build(&root, entry, compat, options.dev)?;
                 project.metadata["python_runtime"] = descriptor;
                 Ok(output)
             } else if project.no_bundle {
@@ -697,7 +699,7 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
                 wasm.sort_by(|a, b| a.0.cmp(&b.0));
                 Ok(BundleOutput { bundle, wasm })
             } else {
-                run_esbuild(&root, entry, &project.bundle)
+                run_esbuild(&root, entry, &project.bundle, options.dev)
             }
         })
         .transpose()?;
@@ -2635,9 +2637,8 @@ pub(crate) fn builds_stopping() -> bool {
 /// deployer's privileges, like the rest of a build: it is as trusted as
 /// `package.json` scripts. Its stdout goes to stderr, because stdout carries
 /// `celld deploy --json` and `celld dev`'s ready line. It gets no stdin, so a
-/// prompt fails instead of waiting. The shell dies with celld
-/// (`PR_SET_PDEATHSIG`); under `celld dev` it also leads its own process
-/// group, so [`stop_builds`] reaches everything it started.
+/// prompt fails instead of waiting. It runs as [`spawn_build_process`]
+/// runs a build process.
 fn run_build_command(build: &BuildConfig, mode: BuildCommand) -> anyhow::Result<()> {
     note!(
         "Running the build command `{}` in {}",
@@ -2660,8 +2661,46 @@ fn run_build_command(build: &BuildConfig, mode: BuildCommand) -> anyhow::Result<
         .stdin(std::process::Stdio::null())
         .stdout(std::io::stderr())
         .stderr(std::process::Stdio::inherit());
+    let context = || {
+        format!(
+            "run the build command `{}` in {}",
+            build.command,
+            build.cwd.display()
+        )
+    };
+    let what = format!("the build command `{}`", build.command);
+    let (mut child, group) = spawn_build_process(&mut command, mode == BuildCommand::Dev, &what)
+        .map_err(|error| {
+            if error.is::<std::io::Error>() {
+                error.context(context())
+            } else {
+                error
+            }
+        })?;
+    let status = child.wait().with_context(context);
+    drop(group);
+    let status = status?;
+    if !status.success() {
+        bail!(
+            "the build command `{}` failed ({status}); its output is above",
+            build.command
+        );
+    }
+    Ok(())
+}
+
+/// Spawn a build process, `what` naming it: the config's build command, or
+/// esbuild. It dies with celld (`PR_SET_PDEATHSIG`). Under `celld dev` it
+/// also leads its own process group, registered in [`DevGroup`] so that
+/// [`stop_builds`] reaches everything it starts; none starts once `celld
+/// dev` is stopping.
+fn spawn_build_process(
+    command: &mut Command,
+    dev: bool,
+    what: &str,
+) -> anyhow::Result<(std::process::Child, Option<DevGroup>)> {
     #[cfg(unix)]
-    if mode == BuildCommand::Dev {
+    if dev {
         use std::os::unix::process::CommandExt as _;
         command.process_group(0);
     }
@@ -2669,7 +2708,7 @@ fn run_build_command(build: &BuildConfig, mode: BuildCommand) -> anyhow::Result<
     {
         use std::os::unix::process::CommandExt as _;
         let parent = unsafe { libc::getpid() };
-        // The kernel kills the shell when celld dies, even by SIGKILL. The
+        // The kernel kills the process when celld dies, even by SIGKILL. The
         // parent check closes the race in which celld exits between `fork`
         // and `prctl`.
         unsafe {
@@ -2684,24 +2723,29 @@ fn run_build_command(build: &BuildConfig, mode: BuildCommand) -> anyhow::Result<
             });
         }
     }
-    let context = || {
-        format!(
-            "run the build command `{}` in {}",
-            build.command,
-            build.cwd.display()
-        )
-    };
-    if mode == BuildCommand::Dev && builds_stopping() {
-        bail!(
-            "celld dev is stopping, so the build command `{}` did not start",
-            build.command
-        );
+    if dev && builds_stopping() {
+        bail!("celld dev is stopping, so {what} did not start");
     }
-    let mut child = command.spawn().with_context(context)?;
-    let group = i32::try_from(child.id()).context("build process id")?;
-    if mode == BuildCommand::Dev {
+    let child = command.spawn()?;
+    let group = dev
+        .then(|| {
+            i32::try_from(child.id())
+                .context("build process id")
+                .map(DevGroup::register)
+        })
+        .transpose()?;
+    Ok((child, group))
+}
+
+/// A `celld dev` build's process group, in the registry [`stop_builds`]
+/// signals until it is dropped. Drop it once the group's leader is reaped,
+/// so that the id cannot name another group.
+struct DevGroup(i32);
+
+impl DevGroup {
+    fn register(group: i32) -> DevGroup {
         let mut builds = dev_builds();
-        // `stop_builds` ran between the check above and the spawn, and did
+        // `stop_builds` ran between the spawn's check and the spawn, and did
         // not see this group.
         #[cfg(unix)]
         if builds.stopping {
@@ -2710,19 +2754,14 @@ fn run_build_command(build: &BuildConfig, mode: BuildCommand) -> anyhow::Result<
             }
         }
         builds.groups.push(group);
+        DevGroup(group)
     }
-    let status = child.wait().with_context(context);
-    if mode == BuildCommand::Dev {
-        dev_builds().groups.retain(|running| *running != group);
+}
+
+impl Drop for DevGroup {
+    fn drop(&mut self) {
+        dev_builds().groups.retain(|running| *running != self.0);
     }
-    let status = status?;
-    if !status.success() {
-        bail!(
-            "the build command `{}` failed ({status}); its output is above",
-            build.command
-        );
-    }
-    Ok(())
 }
 
 /// Stop every running `celld dev` build, and every later one: SIGTERM to
@@ -2772,6 +2811,29 @@ fn signal_groups(groups: &[i32], signal: i32) {
     }
 }
 
+/// The process-wide registry of `celld dev` builds is shared, so the tests
+/// that stop builds take turns. A turn lets builds start again when it
+/// ends, even when its test fails, so one failure cannot fail the next.
+#[cfg(test)]
+pub(crate) fn dev_build_turn() -> DevBuildTurn {
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    DevBuildTurn {
+        _turn: TURN.lock().unwrap_or_else(|error| error.into_inner()),
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct DevBuildTurn {
+    _turn: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for DevBuildTurn {
+    fn drop(&mut self) {
+        reset_builds();
+    }
+}
+
 /// Let `celld dev` builds start again, for tests that stop one.
 #[cfg(test)]
 pub(crate) fn reset_builds() {
@@ -2790,7 +2852,7 @@ pub(crate) fn build_watch_dirs(config: &Path) -> anyhow::Result<Vec<PathBuf>> {
         .unwrap_or_default())
 }
 
-/// The config's `define` and `rules`, as esbuild arguments.
+/// The config's `define`, `alias` and `rules`, for the esbuild run.
 ///
 /// Wrangler owns the spelling of both keys, so celld reads them as written
 /// rather than inventing a celld-only escape hatch: a project keeps one
@@ -2798,7 +2860,7 @@ pub(crate) fn build_watch_dirs(config: &Path) -> anyhow::Result<Vec<PathBuf>> {
 fn read_bundle_config(object: &Map<String, Value>, root: &Path) -> anyhow::Result<BundleConfig> {
     let mut bundle = BundleConfig {
         define: BTreeMap::new(),
-        alias: read_alias(object, root)?,
+        alias: alias::read_alias(object, root)?,
         loaders: BTreeMap::new(),
     };
     match object.get("define") {
@@ -2924,168 +2986,6 @@ fn read_bundle_config(object: &Map<String, Value>, root: &Path) -> anyhow::Resul
         bundle.loaders.insert(".wasm".to_string(), Loader::Copy);
     }
     Ok(bundle)
-}
-
-/// The config's `alias`, as Wrangler 4.147.0 reads and applies it: an
-/// object of strings, each key an import path that is replaced, wherever it
-/// is imported, by the module its value names. Wrangler's esbuild plugin
-/// matches the import path exactly and resolves the value with Node's
-/// `require.resolve` from the config's directory, ahead of its
-/// `nodejs_compat` aliases, so an alias of a Node.js builtin wins. An empty
-/// value aliases nothing.
-///
-/// celld passes each to esbuild's `alias`, which wins over the builtins'
-/// `--external` in the same way. Where esbuild's alias would do something
-/// else, it fails loudly instead. esbuild takes only a package path as a key
-/// (Wrangler matches `./x` as written too), so another key is refused. A
-/// target is resolved here to its file, as Node resolves a path; a package
-/// name as the target is refused, since Node would resolve it by its
-/// `require` conditions, which esbuild does not apply. And esbuild also
-/// replaces each subpath import of a key, `pkg/sub` with a path under the
-/// target file, which does not exist, so the build fails on an import that
-/// Wrangler resolves as usual.
-fn read_alias(
-    object: &Map<String, Value>,
-    root: &Path,
-) -> anyhow::Result<BTreeMap<String, PathBuf>> {
-    let entries = match object.get("alias") {
-        None => return Ok(BTreeMap::new()),
-        Some(Value::Object(entries)) => entries,
-        // `typeof` calls both an object, which Wrangler then reads: `null`
-        // crashes it and an array's indexes become keys. celld refuses them.
-        Some(Value::Null) => bail!("`alias` must be an object, not null"),
-        Some(Value::Array(_)) => bail!("`alias` must be an object, not an array"),
-        Some(other) => bail!(
-            "Expected alias to be an object, but got {}",
-            json_type(other)
-        ),
-    };
-    // Wrangler reports every entry that is not a string before giving up.
-    let wrong: Vec<String> = entries
-        .iter()
-        .filter(|(_, value)| !value.is_string())
-        .map(|(key, value)| {
-            format!(
-                "Expected alias[\"{key}\"] to be a string, but got {}",
-                json_type(value)
-            )
-        })
-        .collect();
-    if !wrong.is_empty() {
-        bail!("{}", wrong.join("\n"));
-    }
-    let mut alias = BTreeMap::new();
-    for (key, value) in entries {
-        let value = value.as_str().expect("checked above");
-        if value.is_empty() {
-            note!("note: `alias` {key:?} has an empty target, so it aliases nothing");
-            continue;
-        }
-        // esbuild's own rule for an alias name (`validateAlias`): not
-        // relative or absolute, and already clean. Its `--alias:KEY=VALUE`
-        // argument splits at the first `=`.
-        if key.starts_with('.')
-            || key.starts_with('/')
-            || Path::new(key).is_absolute()
-            || key.contains(['=', '\\'])
-            || key.split('/').any(|part| matches!(part, "" | "." | ".."))
-        {
-            bail!(
-                "`alias` {key:?} is not a package path; celld applies `alias` with esbuild's, \
-                 which replaces only an import of a package name such as \"pkg\" or \
-                 \"@scope/pkg\". Import the module by such a name, or deploy with Wrangler"
-            );
-        }
-        alias.insert(key.clone(), resolve_alias_target(root, key, value)?);
-    }
-    Ok(alias)
-}
-
-/// What JavaScript's `typeof` says of a JSON value, as Wrangler's messages
-/// use it: `null` and an array are both `object`.
-fn json_type(value: &Value) -> &'static str {
-    match value {
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Null | Value::Array(_) | Value::Object(_) => "object",
-    }
-}
-
-/// The file an alias target names, as Node's `require.resolve` finds it
-/// from the config's directory: the path itself, then with `.js`, `.json` or
-/// `.node`, then as a directory, by its `package.json` `main` or its
-/// `index` file. The result is absolute, since esbuild resolves an alias
-/// target from its working directory.
-fn resolve_alias_target(root: &Path, key: &str, value: &str) -> anyhow::Result<PathBuf> {
-    let relative =
-        value == "." || value == ".." || value.starts_with("./") || value.starts_with("../");
-    if !relative && !Path::new(value).is_absolute() {
-        bail!(
-            "`alias` {key:?} names the package {value:?}; celld resolves an alias target only \
-             as a file path, relative to the config's directory (Wrangler resolves a package \
-             with Node's `require.resolve`). Give the file, such as \"./node_modules/{value}/<file>\""
-        );
-    }
-    let base = root.join(value);
-    let as_file = |path: &Path| -> Option<PathBuf> {
-        std::iter::once(path.to_path_buf())
-            .chain([".js", ".json", ".node"].into_iter().map(|extension| {
-                let mut with = path.as_os_str().to_owned();
-                with.push(extension);
-                PathBuf::from(with)
-            }))
-            .find(|candidate| candidate.is_file())
-    };
-    let as_index = |dir: &Path| -> Option<PathBuf> {
-        ["index.js", "index.json", "index.node"]
-            .into_iter()
-            .map(|name| dir.join(name))
-            .find(|candidate| candidate.is_file())
-    };
-    // A `package.json` that does not parse fails the resolution, as Node's
-    // ERR_INVALID_PACKAGE_CONFIG does; it does not fall back to `index`.
-    let as_directory = |dir: &Path| -> anyhow::Result<Option<PathBuf>> {
-        let package = dir.join("package.json");
-        let main = match std::fs::read(&package) {
-            Err(_) => None,
-            Ok(bytes) => {
-                let parsed: Value = serde_json::from_slice(&bytes).map_err(|error| {
-                    anyhow!(
-                        "`alias` {key:?}: invalid package config {}: {error}",
-                        package.display()
-                    )
-                })?;
-                parsed
-                    .get("main")
-                    .and_then(Value::as_str)
-                    .filter(|main| !main.is_empty())
-                    .map(str::to_string)
-            }
-        };
-        if let Some(main) = main {
-            let main = dir.join(main);
-            if let Some(found) = as_file(&main).or_else(|| as_index(&main)) {
-                return Ok(Some(found));
-            }
-        }
-        Ok(as_index(dir))
-    };
-    // A target that ends in `/` names a directory only.
-    let file = (!value.ends_with('/')).then(|| as_file(&base)).flatten();
-    let found = match file {
-        Some(file) => Some(file),
-        None => as_directory(&base)?,
-    }
-    .ok_or_else(|| {
-        anyhow!(
-            "`alias` {key:?}: cannot find module {value:?} from {}",
-            root.display()
-        )
-    })?;
-    found
-        .canonicalize()
-        .with_context(|| format!("resolve `alias` {key:?} target {}", found.display()))
 }
 
 /// The file extension a Wrangler module glob selects.
@@ -4045,18 +3945,22 @@ fn collect_unbundled_wasm(
     Ok(())
 }
 
-fn run_esbuild(root: &Path, entry: &str, config: &BundleConfig) -> anyhow::Result<BundleOutput> {
+fn run_esbuild(
+    root: &Path,
+    entry: &str,
+    config: &BundleConfig,
+    dev: bool,
+) -> anyhow::Result<BundleOutput> {
     // node: builtins stay external. Wrangler polyfills them with unenv; celld
     // implements the workerd `nodejs_compat` subset itself, so the runtime
     // provides them.
-    let binary = std::env::var("CELLD_ESBUILD").unwrap_or_else(|_| "esbuild".to_string());
     let outdir = tempfile::tempdir().context("create esbuild output directory")?;
     // esbuild leaves an external builtin from a CommonJS dependency behind
     // its synchronous __require helper. Workerd's Wrangler plugin rewrites
-    // that call to an ESM import, but the esbuild CLI has no equivalent
-    // plugin hook. Give only this generated bundle a lexical bridge to the
-    // same builtin table. A runtime global would make require visible to raw
-    // ESM Workers, which Workerd does not do.
+    // that call to an ESM import; celld has no such plugin. Give only this
+    // generated bundle a lexical bridge to the same builtin table. A runtime
+    // global would make require visible to raw ESM Workers, which Workerd
+    // does not do.
     let commonjs_builtin_bridge = r#"var require = (id) => {
   const name = String(id);
   const builtin = process.getBuiltinModule(name);
@@ -4067,57 +3971,48 @@ fn run_esbuild(root: &Path, entry: &str, config: &BundleConfig) -> anyhow::Resul
   }
   return builtin;
 };"#;
-    let output =
-        Command::new(&binary)
-            .current_dir(root)
-            .arg(entry)
-            .arg("--bundle")
-            .arg("--format=esm")
-            .arg("--platform=browser")
-            .arg("--target=es2024")
-            .arg("--conditions=workerd,worker,browser")
-            .arg(format!("--banner:js={commonjs_builtin_bridge}"))
-            .arg("--external:node:*")
-            .arg("--external:cloudflare:*")
-            .args(
-                crate::js::BARE_NODE_BUILTINS
-                    .iter()
-                    .map(|specifier| format!("--external:{specifier}")),
-            )
-            .args(config.loaders.iter().map(|(extension, loader)| {
-                format!("--loader:{extension}={}", loader.esbuild_name())
-            }))
-            .args(
-                config
-                    .define
-                    .iter()
-                    .map(|(key, value)| format!("--define:{key}={value}")),
-            )
-            .args(
-                config
-                    .alias
-                    .iter()
-                    .map(|(key, path)| format!("--alias:{key}={}", path.display())),
-            )
-            .arg(format!("--outdir={}", outdir.path().display()))
-            .arg("--entry-names=index")
-            .output()
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    anyhow!(
-                        "esbuild not found ({binary}).\n\
-                     `celld deploy` bundles with esbuild; install it and retry,\n\
-                     or set CELLD_ESBUILD to its path."
-                    )
-                } else {
-                    anyhow!("run esbuild: {error}")
-                }
-            })?;
-    if !output.status.success() {
-        bail!(
-            "esbuild failed:\n{}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+    // The CLI's log level and limit come first: the service's parser
+    // (`cli.ParseBuildOptions`) starts from a silent log with no limit.
+    let mut flags = vec![
+        "--log-level=info".to_string(),
+        "--log-limit=6".to_string(),
+        "--bundle".to_string(),
+        "--format=esm".to_string(),
+        "--platform=browser".to_string(),
+        "--target=es2024".to_string(),
+        "--conditions=workerd,worker,browser".to_string(),
+        format!("--banner:js={commonjs_builtin_bridge}"),
+        "--external:node:*".to_string(),
+        "--external:cloudflare:*".to_string(),
+    ];
+    flags.extend(
+        crate::js::BARE_NODE_BUILTINS
+            .iter()
+            .map(|specifier| format!("--external:{specifier}")),
+    );
+    flags.extend(
+        config
+            .loaders
+            .iter()
+            .map(|(extension, loader)| format!("--loader:{extension}={}", loader.esbuild_name())),
+    );
+    flags.extend(
+        config
+            .define
+            .iter()
+            .map(|(key, value)| format!("--define:{key}={value}")),
+    );
+    flags.push(format!("--outdir={}", outdir.path().display()));
+    flags.push("--entry-names=index".to_string());
+    let outcome = esbuild::run(&esbuild::Build {
+        cwd: root,
+        entry: Path::new(entry),
+        flags,
+        alias: Some(&config.alias),
+        dev,
+    })?;
+    if let esbuild::Outcome::Failed(log) = outcome {
+        bail!("esbuild failed:\n{log}");
     }
     let bundle =
         std::fs::read(outdir.path().join("index.js")).context("read esbuild output bundle")?;
@@ -4379,82 +4274,6 @@ mod tests {
                 )
             );
         }
-    }
-
-    #[test]
-    fn alias_keys_follow_esbuilds_rule_for_a_package_path() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("a.js"), "").unwrap();
-        let read =
-            |key: &str| read_alias(&object(json!({ "alias": { key: "./a.js" } })), root.path());
-        for key in ["pkg", "pkg/sub", "@scope/pkg", "node:fs"] {
-            assert!(read(key).is_ok(), "{key}");
-        }
-        for key in [
-            "./x.js", "../x", "/x", ".x", "pkg/", "a//b", "a/./b", "a/../b", "a\\b", "a=b", "",
-        ] {
-            assert!(
-                refusal(read(key)).contains("is not a package path"),
-                "{key}"
-            );
-        }
-    }
-
-    #[test]
-    fn alias_must_be_an_object_of_strings() {
-        let read = |alias: Value| read_alias(&object(json!({ "alias": alias })), Path::new("."));
-        assert_eq!(
-            refusal(read(json!("x"))),
-            "Expected alias to be an object, but got string"
-        );
-        assert_eq!(
-            refusal(read(json!(null))),
-            "`alias` must be an object, not null"
-        );
-        assert_eq!(
-            refusal(read(json!([]))),
-            "`alias` must be an object, not an array"
-        );
-        assert_eq!(
-            refusal(read(json!({ "a": 1, "b": "./c", "d": null }))),
-            "Expected alias[\"a\"] to be a string, but got number\n\
-             Expected alias[\"d\"] to be a string, but got object"
-        );
-        // An empty target aliases nothing, as in Wrangler.
-        assert!(read(json!({ "a": "" })).unwrap().is_empty());
-    }
-
-    #[test]
-    fn alias_targets_resolve_as_node_resolves_a_path() {
-        let root = tempfile::tempdir().unwrap();
-        let at = |path: &str| root.path().join(path);
-        std::fs::create_dir_all(at("lib/main")).unwrap();
-        std::fs::create_dir_all(at("lib/index")).unwrap();
-        for file in [
-            "lib/file.ts",
-            "lib/noext.js",
-            "lib/main/entry.js",
-            "lib/index/index.js",
-        ] {
-            std::fs::write(at(file), "").unwrap();
-        }
-        std::fs::write(at("lib/main/package.json"), r#"{ "main": "entry" }"#).unwrap();
-        let resolve = |value: &str| resolve_alias_target(root.path(), "k", value);
-        let real = |path: &str| at(path).canonicalize().unwrap();
-        assert_eq!(resolve("./lib/file.ts").unwrap(), real("lib/file.ts"));
-        assert_eq!(resolve("./lib/noext").unwrap(), real("lib/noext.js"));
-        assert_eq!(resolve("./lib/main").unwrap(), real("lib/main/entry.js"));
-        assert_eq!(resolve("./lib/index/").unwrap(), real("lib/index/index.js"));
-        assert_eq!(
-            resolve(at("lib/noext").to_str().unwrap()).unwrap(),
-            real("lib/noext.js")
-        );
-        // A package.json that does not parse fails, rather than `index.js`.
-        std::fs::write(at("lib/index/package.json"), "{ not json").unwrap();
-        assert!(refusal(resolve("./lib/index")).contains("invalid package config"));
-        // Node does not try `.ts`.
-        assert!(refusal(resolve("./lib/file")).contains("cannot find module \"./lib/file\""));
-        assert!(refusal(resolve("lib/file.ts")).contains("names the package \"lib/file.ts\""));
     }
 
     #[test]
