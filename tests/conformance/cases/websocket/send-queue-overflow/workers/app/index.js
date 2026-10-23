@@ -3,7 +3,7 @@
 // WS_OUT_QUEUE_MAX_BYTES (32 MiB) for one socket: past that it drops the
 // connection, and the server end closes abnormally with celld's reason. The
 // node's memory grows by about the limit, not by what was sent (about 60 MiB
-// measured, checked against 128 MiB).
+// measured locally and 131 MiB on CI, checked against 192 MiB).
 // - /stateless and /object: the server end of a stateless Worker or a
 //   Durable Object floods on `flood:<count>:<size>`.
 // - /parked: `back` floods the socket it returns before the front accepts

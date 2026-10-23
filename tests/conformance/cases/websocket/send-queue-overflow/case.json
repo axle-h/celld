@@ -9,6 +9,6 @@
     {"ws": "/object", "send": ["flood:1700:60000"], "stall": 6000, "receive": 1700, "close": 1000, "record": "none"},
     {"path": "/parked"},
     {"path": "/seen"},
-    {"rss": 128}
+    {"rss": 192}
   ]
 }

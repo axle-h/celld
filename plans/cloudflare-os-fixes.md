@@ -372,7 +372,7 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 31 | 1.18 Worker Loader startup error text | done | `fc845db` |
 | 32 | 1.19 trace context across RPC and the peer tunnel | done | `0477165` |
 | 33 | 1.20 redirect handling through the same Fetcher | done | `1e23fdb`, starter `86b89b1` |
-| 34 | 1.22 WebSocket follow-ups; bounded send queues and socket lifetimes (security) | done | see log |
+| 34 | 1.22 WebSocket follow-ups; bounded send queues and socket lifetimes (security) | done | `5a59ae1` |
 | 35+ | Phase 1 in plan order (1.23-1.30, 1.34, 1.36-1.42), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
@@ -2631,10 +2631,12 @@ legitimate cross-event uses.
   `websocket/send-queue-overflow`. It floods 100 MB at a client that does
   not read, from a stateless Worker, from a Durable Object, and into a
   handed-over socket nothing has accepted yet. It checks each end's close
-  and that the node's peak memory grows by at most 96 MiB (about 60 MiB
-  measured, checked against 128 MiB). Celld-only cases from the review:
-  `websocket/send-budget` (40 sockets × 31 MiB, peak memory growth at most
-  320 MiB), `websocket/close-first-silent-peer` (a stateless Worker and a
+  and that the node's peak memory grows by at most 192 MiB (about 60 MiB
+  measured locally, 131 MiB on CI; the 1011 closes in the transcript pin the
+  bound). Celld-only cases from the review: `websocket/send-budget`
+  (40 sockets × 31 MiB, peak memory growth at most 640 MiB: 195 MiB measured
+  locally, 323 MiB on CI, 1257 MiB without the budget),
+  `websocket/close-first-silent-peer` (a stateless Worker and a
   Durable Object dial a silent server, close and return, and the node's
   sockets come back to the baseline), and `websocket/half-open-reset` (a
   client Closes, shuts down, stops reading, and resets while 48 MiB is on

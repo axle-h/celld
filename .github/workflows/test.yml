@@ -100,13 +100,20 @@ jobs:
       # Multi-node cases (nodes > 1, with Azurite as a service container)
       # and the tests/fleet scripts join the nightly run when they land.
 
-      # The runner keeps each failed case's working copy under .run/.
+      # The runner keeps each failed case's working copy under .run/. It is
+      # uploaded as one archive, because Durable Object state paths contain
+      # ':', which upload-artifact refuses.
+      - name: Archive kept conformance runs
+        if: failure()
+        run: |
+          if [ -d tests/conformance/.run ]; then
+            tar -czf conformance-run.tar.gz -C tests/conformance .run
+          fi
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: conformance-run
-          path: tests/conformance/.run/
-          include-hidden-files: true
+          path: conformance-run.tar.gz
           if-no-files-found: ignore
 
   report-nightly-failure:

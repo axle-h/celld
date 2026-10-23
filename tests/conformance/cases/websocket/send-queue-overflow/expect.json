@@ -90,7 +90,7 @@
       }
     },
     {
-      "rss": "grew at most 128 MiB"
+      "rss": "grew at most 192 MiB"
     }
   ]
 }

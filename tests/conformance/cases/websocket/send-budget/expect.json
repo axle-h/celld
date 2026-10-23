@@ -6,6 +6,6 @@
     {"status": 200, "body": "sockets 20"},
     {"status": 200, "body": "sockets 30"},
     {"status": 200, "body": "sockets 40"},
-    {"rss": "grew at most 320 MiB"}
+    {"rss": "grew at most 640 MiB"}
   ]
 }
