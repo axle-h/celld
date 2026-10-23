@@ -3,7 +3,8 @@
 This is the ordered plan for the celld changes that let Cloudflare OS run on
 celld, and for how each change is verified. It is written for an engineer or
 agent who has not seen the earlier work: read the **Orientation** section
-first, then work the phases in order.
+first, then work the phases in order. To continue the work in progress, read
+[Resuming this work](#resuming-this-work) next.
 
 Related documents:
 
@@ -327,6 +328,96 @@ write ourselves, before it lands on `main`.
 7. **No spike builds.** Never build, deploy or develop against a branch that
    contains unadopted fork capability code, not even locally for tooling.
    The harness is developed against `main` and fails where `main` fails.
+
+## Resuming this work
+
+Written 2026-10-23, when the work was paused at 1.49. A fresh agent can pick
+it up from here. Alex's standing instruction: **one subagent at a time** (to
+spare usage limits), each started **fresh with a limited context, not
+forked**; queue items in an acceptable order; implement, review, verify, then
+commit and push to `main`; keep this plan current; stop only when truly
+blocked, and otherwise decide from Alex's recorded decisions (workerd is the
+reference, loud gaps, fresh deployments only, the production-quality bar).
+The general method is the `orchestrate-subagents` skill
+(`~/.claude/skills/orchestrate-subagents/SKILL.md`).
+
+**Where to start.** The Progress table below: the row marked `next` (1.49),
+then the `queued` row in order. 1.49 has a "Progress (paused)" note with
+what the last agent found. Nothing is half-implemented in the tree.
+
+**The loop for each item.**
+1. One implementer subagent (`general-purpose`), with a self-contained prompt:
+   the item number, which plan sections to read, scope, rules and the
+   verification list below. It must not commit.
+2. One fresh reviewer subagent, read-only, prompted with the item summary,
+   priorities (security first), and "verify each finding; say explicitly
+   when a severity has nothing".
+3. Decide each finding from Alex's decisions, then send the decisions back to
+   the implementer with SendMessage (it keeps its context). For HIGH
+   findings, send the fixes back to the same reviewer for a focused re-review;
+   repeat until no HIGH or MEDIUM remains.
+4. Verify yourself (the list below), update the item's Progress row, commit
+   (both repos when the starter changed) with the trailers in use, push, and
+   watch CI with `gh run watch <id> --exit-status`. A red CI is fixed before
+   the next item starts.
+5. Every new difference or gap a round turns up becomes a plan item, or a
+   line in an existing follow-up item, with an xfail case where workerd's
+   behaviour is observable.
+
+**Rules every subagent prompt must carry.**
+- No subagents of its own. No git state changes at all: no commit, stash,
+  checkout, reset, worktree, `git rm`, `git restore` or `git add`.
+- Compare against HEAD with `git archive HEAD | tar -x -C <dir>` and its own
+  `CARGO_TARGET_DIR`, both in the session scratchpad. The disk quota is
+  tight, so delete big build dirs afterwards.
+- Never edit the starter's `cloudflare-os/` submodule.
+- Known differences go into the corpus as xfail, never left out.
+- Tests for security fixes only check the refusal. Prompts for security work
+  use neutral wording ("ownership tracking", "expects the refusal"): prompts
+  that ask an agent to demonstrate an attack get stopped by the safety
+  classifier.
+- Make sure none of its background work is still running before it reports.
+
+**Verification, and the baselines at 49693b3.**
+- `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D
+  warnings`; `cargo test --workspace`; `cargo build --profile lab -p celld`.
+- `cd tests/conformance && CONFORMANCE_REQUIRE=docker node run.mjs
+  --runtime=both`. Check the exit code itself: the last line is a summary
+  such as `19 XFAIL, 143 PASS` (the order varies), and wrangler's log lines
+  can come after a failure. Baseline: **143 PASS, 19 XFAIL**. `--filter
+  <glob>` runs a subset; `--esbuild 0.28.0|0.28.2` checks bundling on the
+  other supported versions.
+- Starter e2e, from `~/projects/cloudflare-os-starter`:
+  `CELLD=~/projects/celld/target/lab/celld E2E_PORT=8791
+  E2E_AZURITE_PORT=10010 MOCK_LLM_PORT=11435 celld/e2e.sh all --fresh
+  --quick`, then the same variables with `celld/e2e.sh down --fresh`.
+  Baseline: S0, S1, S2, S9, S11, B0 and B6 pass; S3, S4, S6, S7, S10 and
+  B1-B5 fail (Phase 2/3 reasons); S5, S8, S12 and S13 are skipped. The
+  script exits 1 because of those expected failures. S11 must show no
+  "dropped a frame" lines.
+- Starter integration: `CELLD_INTEGRATION_JOBS=3 celld/integration.sh`
+  (with the same `CELLD`). Baseline: exit 0, the adapter checks and
+  `workshop-user-directory` pass, and 35 suites are pending with the first
+  errors recorded in `celld/integration/status.json`. A changed first error
+  is printed as a warning.
+- CI (`.github/workflows/test.yml`) runs the conformance suite on a slower
+  machine: memory-growth (`rss`) limits need about 1.5x headroom over local
+  measurements (`websocket/send-budget` and `send-queue-overflow` were
+  widened after CI measured more).
+
+**Machine state to know about.**
+- An old trial node (127.0.0.1:8790) and its Azurite container
+  (`celld-azurite`, port 10000) are still running from the first trial.
+  Tests use the alternate ports above; don't stop them without asking Alex.
+- `celld/env.sh` defaults `CELLD` to the release build; tests use the lab
+  build.
+
+**Waiting on Alex.**
+- The Phase 0 gate evidence (row 6) is recorded and awaits his review.
+- Nightly CI failure reports need issues enabled on the fork
+  (`gh repo edit axle-h/celld --enable-issues`).
+- `celld_internal_tests` is an out-of-tree suite; 1.26's As built lists the
+  internal signatures it changed.
 
 ## Progress
 
