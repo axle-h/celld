@@ -1,8 +1,9 @@
 // A client sends its Close to a half-open socket, whose close listener does
 // not reply (before 2026-04-07, so nothing replies automatically), and then
-// shuts down its side of the connection. celld ends the connection once the
-// client's side ends. workerd reads nothing after the Close, so it keeps the
-// connection until the object writes to it.
+// shuts down its side of the connection. workerd reads nothing after the
+// Close, so it keeps the connection until the object writes to it. celld
+// keeps it too, while a Ping now and then finds the client still there
+// (plan item 1.22).
 import { DurableObject } from "cloudflare:workers";
 
 export class Sockets extends DurableObject {

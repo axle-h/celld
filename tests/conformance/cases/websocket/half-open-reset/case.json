@@ -1,0 +1,14 @@
+{
+  "kind": "celld-only",
+  "reason": "whether the node let a connection go is seen only in its open sockets, which workerd's harness cannot count",
+  "workers": ["sockets"],
+  "steps": [
+    {"path": "/seen"},
+    {"sockets": "baseline"},
+    {"ws": "/", "send": [], "receive": 0, "close": 4000, "shutdown": true, "reset": 4000},
+    {"sockets": 0},
+    {"ws": "/?big=1", "send": [], "receive": 0, "close": 4000, "shutdown": true, "reset": 4000},
+    {"sockets": 0},
+    {"path": "/seen"}
+  ]
+}

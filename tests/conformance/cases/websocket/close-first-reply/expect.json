@@ -1,0 +1,159 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "frames": [],
+      "close": {
+        "code": 4041,
+        "reason": "server closes"
+      }
+    },
+    {
+      "frames": [],
+      "close": {
+        "code": 4042,
+        "reason": "server closes"
+      }
+    },
+    {
+      "frames": [],
+      "close": {
+        "code": 4043,
+        "reason": "relayed"
+      }
+    },
+    {
+      "frames": [],
+      "close": {
+        "code": 4044,
+        "reason": "relayed"
+      }
+    },
+    {
+      "frames": [],
+      "close": {
+        "code": 4043,
+        "reason": "relayed"
+      }
+    },
+    {
+      "frames": [],
+      "close": {
+        "code": 4044,
+        "reason": "relayed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "handoff-close": [
+          [
+            "back after close()",
+            2
+          ],
+          [
+            "back close",
+            4044,
+            "front replies",
+            true,
+            3
+          ],
+          [
+            "front close",
+            4044,
+            "back closes",
+            true,
+            2
+          ]
+        ],
+        "hibernatable": [
+          [
+            "after close()",
+            2
+          ],
+          [
+            "close",
+            4042,
+            "",
+            true,
+            3
+          ]
+        ],
+        "object-close": [
+          [
+            "front close",
+            4044,
+            "object closes",
+            true,
+            2
+          ],
+          [
+            "object after close()",
+            2
+          ],
+          [
+            "object close",
+            4044,
+            "front replies",
+            true,
+            3
+          ]
+        ],
+        "relay-handoff-close": [
+          [
+            "back close",
+            4043,
+            "front closes",
+            true,
+            2
+          ],
+          [
+            "front after close()",
+            2
+          ],
+          [
+            "front close",
+            4043,
+            "back replies",
+            true,
+            3
+          ]
+        ],
+        "relay-object-close": [
+          [
+            "front after close()",
+            2
+          ],
+          [
+            "front close",
+            4043,
+            "object replies",
+            true,
+            3
+          ],
+          [
+            "object close",
+            4043,
+            "front closes",
+            true,
+            2
+          ]
+        ],
+        "stateless": [
+          [
+            "after close()",
+            2
+          ],
+          [
+            "close",
+            4041,
+            "",
+            true,
+            3
+          ]
+        ]
+      }
+    }
+  ]
+}

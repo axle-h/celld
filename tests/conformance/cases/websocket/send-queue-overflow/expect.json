@@ -1,0 +1,96 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": "warm"
+    },
+    {
+      "rss": "baseline"
+    },
+    {
+      "close": null,
+      "ended": true
+    },
+    {
+      "close": null,
+      "ended": true
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "close",
+          1011,
+          "celld closed this WebSocket: more than 32 MiB of sent messages waited for the peer to read them",
+          true
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": {
+        "stateless": [
+          [
+            "flooded",
+            null,
+            1
+          ],
+          [
+            "error",
+            "WebSocket closed abnormally: celld closed this WebSocket: more than 32 MiB of sent messages waited for the peer to read them"
+          ],
+          [
+            "close",
+            1006,
+            "celld closed this WebSocket: more than 32 MiB of sent messages waited for the peer to read them",
+            false
+          ]
+        ],
+        "parked": [
+          [
+            "close",
+            1011,
+            "celld closed this WebSocket: more than 32 MiB of sent messages waited for the peer to read them",
+            true
+          ]
+        ],
+        "object": [
+          [
+            "flooded",
+            null,
+            1
+          ],
+          [
+            "error",
+            "WebSocket closed abnormally: celld closed this WebSocket: more than 32 MiB of sent messages waited for the peer to read them"
+          ],
+          [
+            "close",
+            1006,
+            "celld closed this WebSocket: more than 32 MiB of sent messages waited for the peer to read them",
+            false
+          ]
+        ],
+        "back": [
+          [
+            "flooded",
+            1
+          ],
+          [
+            "error",
+            "WebSocket closed abnormally: celld closed this WebSocket: more than 32 MiB of sent messages waited for the peer to read them"
+          ],
+          [
+            "close",
+            1006,
+            "celld closed this WebSocket: more than 32 MiB of sent messages waited for the peer to read them",
+            false
+          ]
+        ]
+      }
+    },
+    {
+      "rss": "grew at most 128 MiB"
+    }
+  ]
+}

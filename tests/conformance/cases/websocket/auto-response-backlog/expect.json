@@ -1,0 +1,20 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": "warm"
+    },
+    {
+      "rss": "baseline"
+    },
+    {
+      "reset": true
+    },
+    {
+      "reset": true
+    },
+    {
+      "rss": "grew at most 64 MiB"
+    }
+  ]
+}

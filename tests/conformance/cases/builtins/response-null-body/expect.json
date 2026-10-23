@@ -1,0 +1,25 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "101 with body": "TypeError: Response with null body status (101, 204, 205, or 304) cannot have a body.",
+        "101 with empty body": "101 null body",
+        "101 with a stream": "TypeError: Response with null body status (101, 204, 205, or 304) cannot have a body.",
+        "204 with body": "TypeError: Response with null body status (101, 204, 205, or 304) cannot have a body.",
+        "204 with empty body": "204 null body",
+        "204 with a stream": "TypeError: Response with null body status (101, 204, 205, or 304) cannot have a body.",
+        "205 with body": "TypeError: Response with null body status (101, 204, 205, or 304) cannot have a body.",
+        "205 with empty body": "205 null body",
+        "205 with a stream": "TypeError: Response with null body status (101, 204, 205, or 304) cannot have a body.",
+        "304 with body": "TypeError: Response with null body status (101, 204, 205, or 304) cannot have a body.",
+        "304 with empty body": "304 null body",
+        "304 with a stream": "TypeError: Response with null body status (101, 204, 205, or 304) cannot have a body.",
+        "statusText newline": "TypeError: Invalid statusText",
+        "statusText tab": "TypeError: Invalid statusText"
+      }
+    }
+  ]
+}

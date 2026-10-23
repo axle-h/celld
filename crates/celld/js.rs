@@ -1419,10 +1419,19 @@ fn resolve_res(tc: &mut v8::PinScope, id: u64, res: Result<asyncrt::OpOut, Strin
             r.resolve(tc, v.into());
         }
         Err(e) => {
-            let s = v8::String::new(tc, &e).unwrap();
-            let ex = if e == BODY_PAST_BUDGET || e == BODY_PASSED_BUDGET {
+            // A subrequest whose target answered a plain request with a
+            // WebSocket fails with workerd's TypeError.
+            let without_upgrade = e
+                .strip_prefix("TypeError: ")
+                .filter(|message| *message == crate::cell_dispatch::WEBSOCKET_WITHOUT_UPGRADE);
+            let ex = if let Some(message) = without_upgrade {
+                let s = v8::String::new(tc, message).unwrap();
+                v8::Exception::type_error(tc, s)
+            } else if e == BODY_PAST_BUDGET || e == BODY_PASSED_BUDGET {
+                let s = v8::String::new(tc, &e).unwrap();
                 v8::Exception::type_error(tc, s)
             } else {
+                let s = v8::String::new(tc, &e).unwrap();
                 v8::Exception::error(tc, s)
             };
             r.reject(tc, ex);
@@ -2542,6 +2551,20 @@ impl BackingStoreBudget {
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 Some(used.saturating_sub(len))
             });
+    }
+}
+
+/// A WebSocket's frames waiting on the host are charged to the budget of the
+/// isolate that sent them, and refused as the allocator refuses one of V8's:
+/// within the budget, so they never hold the isolate past it and never
+/// condemn it. A refused frame closes its socket (`ws_registry`).
+impl crate::ws_registry::WsBudget for BackingStoreBudget {
+    fn charge(&self, bytes: usize) -> bool {
+        self.charge_within(bytes, self.limit)
+    }
+
+    fn release(&self, bytes: usize) {
+        BackingStoreBudget::release(self, bytes);
     }
 }
 

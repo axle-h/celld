@@ -1,0 +1,8 @@
+{
+  "workers": ["app", "back"],
+  "steps": [
+    {"path": "/handoff"},
+    {"path": "/object"},
+    {"path": "/pair"}
+  ]
+}

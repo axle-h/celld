@@ -221,6 +221,7 @@ async function execute(runtime, testCase, tools) {
             publicPort: ports.PUBLIC_PORT,
             internalPort: ports.INTERNAL_PORT,
             observability: testCase.observability,
+            watchPorts: upstream?.ports ?? [],
           })
         : await startWorkerd({ dir, workers: testCase.workers, observability: testCase.observability });
     run.transcript = await runSteps(session, steps, normalize);

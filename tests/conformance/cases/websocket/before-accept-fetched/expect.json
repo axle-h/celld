@@ -1,0 +1,20 @@
+{
+  "workerd": "1.20261001.1",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "send": "TypeError: You must call one of accept() or state.acceptWebSocket() on this WebSocket before sending messages.",
+        "close": "TypeError: You must call one of accept() or state.acceptWebSocket() on this WebSocket before sending messages.",
+        "afterClose": 1,
+        "accept": "allowed",
+        "accepted": 1,
+        "ping": "allowed",
+        "events": [],
+        "closeAfter": "allowed",
+        "closing": 2
+      }
+    }
+  ]
+}

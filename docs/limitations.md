@@ -39,6 +39,15 @@ APIs, and Wrangler configuration.
   the cell moves to another node, so the application must store the
   connection intent and reconnect.
 - A node limits the resident cells and outbound WebSockets.
+- Sent WebSocket messages that wait for a slow peer are bounded at 32 MiB per
+  socket, and by the isolate's memory budget for all of its sockets
+  together. A message past either bound closes its socket with code 1011,
+  and the application sees code 1006. A Durable Object holds at most 32,768
+  hibernatable WebSockets. See [Cloudflare
+  compatibility](cloudflare-compat.md).
+- A socket that closes first waits at most 10 seconds for its peer's reply.
+- `new WebSocket()` cannot go through a Dynamic Worker's `globalOutbound`
+  Fetcher. A `fetch()` upgrade can.
 - A WebSocket that a stateless Worker holds crosses service bindings, Dynamic
   Worker entrypoints and Durable Object calls only within one node. A Durable
   Object on another node cannot return one.

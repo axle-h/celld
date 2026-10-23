@@ -97,7 +97,10 @@ replies the `flags/websocket-*-reply` cases check under different flags.
   redirects `n` times and lands on `/ws/close-first`. A WebSocket upgrade to
   `/ws/close-first?id=<id>` (with optional `code` and `reason`) sends the
   server's Close at once and records the reply, which `/ws/log?id=<id>`
-  answers as JSON once the connection ends.
+  answers as JSON once the connection ends. A WebSocket upgrade to
+  `/ws/silent` is accepted, and the server never sends anything, not even a
+  reply to a Close. One to `/ws/stall` is accepted, and the server never
+  reads either.
   celld's egress policy refuses loopback, so a case that fetches
   the upstream on celld allows it in `env`, as in
   `"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}"`.
@@ -168,8 +171,25 @@ whose support hasn't landed yet: `nodes` greater than 1 or a step's `node`
     its reply,
     its Close (`null` without one), and `ended`: whether the server ended
     the connection within 3 s. `"shutdown": true` also shuts down the
-    client's side of the connection (FIN) after its Close. Neither takes
-    `protocols`.
+    client's side of the connection (FIN) after its Close. A Close the
+    server sends first gets the same code back, and a client that shut down
+    its side no longer answers a Ping. Neither takes `protocols`.
+  - `"stall": <ms>` (up to 20000) makes the raw client read nothing for
+    that long once its frames are sent, as a peer that reads too slowly
+    does. A stalled client records a connection the server ended first,
+    instead of failing the step.
+  - `"record"` says what a raw step's transcript keeps of the frames it
+    received: all of them (`"frames"`, the default), `{"count", "bytes"}`
+    (`"count"`), or nothing (`"none"`).
+  - `"reset": <ms>` (up to 20000) makes the raw client read nothing after
+    its Close and reset the connection (RST) that long after, as a peer that
+    goes away does. The transcript then has only `{"reset": true}`.
+  - `"repeat": <n>` (up to 100000) makes a raw client send each frame of
+    `send` that many times, in one write.
+  - `"drop": true` ends the connection without a Close once the frames are
+    sent (FIN), and reads nothing more. The transcript has only `ended`:
+    whether the server ended the connection within 3 s. It takes neither
+    `close` nor `receive`.
 
   The transcript records the frames received and the close code and reason.
   A text frame is recorded as a string, and a binary frame as
@@ -183,6 +203,24 @@ whose support hasn't landed yet: `nodes` greater than 1 or a step's `node`
     replaces the workerd process and keeps the storage directory. The
     harness can't reopen another harness's storage, because it hard-codes
     `persist: false`.
+
+- **`rss`**: `{"rss": "baseline"}` resets the celld node's peak resident
+  memory (`/proc/<pid>/clear_refs`) and notes where it stands; a later
+  `{"rss": 96}` checks that the peak has grown by at most 96 MiB since. The
+  transcript records the verdict, `"baseline"` or `"grew at most 96 MiB"`,
+  and the growth only when it is over. The step needs `"kind": "celld-only"`.
+
+- **`sockets`**: counts the celld node's TCP connections to the ports the
+  case opened: the upstream's, and the client ports of its raw `ws` steps.
+  Listeners and the runner's own HTTP connections are not counted. It also
+  counts the node's sockets opened since the baseline that no protocol table
+  of `/proc/<pid>/net` lists, such as a connection that a reset removed from
+  the TCP table while the node kept its fd.
+  `{"sockets": "baseline"}` notes the count, and a later `{"sockets": 0}`
+  waits up to `within` ms (5000 by default, at most 30000) for the node to
+  hold at most that many more. It records `"at most 0 more"`, or how many
+  more it held. It shows a connection the node kept after its peer or its
+  owner left. The step needs `"kind": "celld-only"`.
 
 - **`otlp`**: `{"otlp": {"spans": ["celld.fetch", "outer"]}}` waits until
   celld has exported spans with those names (a name listed twice waits for
@@ -241,7 +279,8 @@ such step a case of its own, as `streams/byob-request-body-held-cancel` and
   named `http`, and run `node lib/workerd-direct.mjs <case> --write`. It
   starts the upstream, runs `workerd serve` on that config with the socket on
   a free port, runs the case's `path` steps as the runner does, and writes
-  `expect.json`. Review the result before committing it.
+  `expect.json` with the workerd version it came from. Review the result
+  before committing it.
 
 ### Expected failures
 

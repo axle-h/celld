@@ -1,0 +1,15 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": [
+        "open",
+        "outbound:a",
+        "error",
+        "close 4000 outbound replies"
+      ]
+    }
+  ]
+}

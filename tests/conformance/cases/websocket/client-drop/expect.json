@@ -1,0 +1,52 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "ended": true
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "message",
+          "a"
+        ],
+        [
+          "message",
+          "b"
+        ],
+        [
+          "message",
+          "c"
+        ],
+        [
+          "message",
+          "d"
+        ],
+        [
+          "message",
+          "e"
+        ],
+        [
+          "message",
+          "f"
+        ],
+        [
+          "message",
+          "g"
+        ],
+        [
+          "message",
+          "h"
+        ],
+        [
+          "close",
+          1006,
+          "WebSocket disconnected without sending Close frame.",
+          false
+        ]
+      ]
+    }
+  ]
+}

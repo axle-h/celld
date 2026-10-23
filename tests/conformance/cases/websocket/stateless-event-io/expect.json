@@ -1,0 +1,24 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 4000,
+        "reason": "bye"
+      }
+    },
+    {
+      "status": 200,
+      "body": [
+        "message a",
+        "message a answered",
+        "close 4000",
+        "close 4000 answered"
+      ]
+    }
+  ]
+}

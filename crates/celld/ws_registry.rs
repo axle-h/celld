@@ -69,6 +69,454 @@ pub enum WsOut {
     Close(u16, String),
 }
 
+impl WsOut {
+    fn queue_bytes(&self) -> usize {
+        let payload = match self {
+            Self::Text(text) => text.len(),
+            Self::Binary(bytes) => bytes.len(),
+            Self::Close(_, reason) => reason.len(),
+        };
+        std::mem::size_of::<Self>().saturating_add(payload)
+    }
+}
+
+/// The most bytes of outgoing frames that one socket holds for a peer that
+/// reads more slowly than its application sends.
+///
+/// `send()` cannot wait, in workerd or here, so a Worker that sends faster
+/// than its peer reads queues frames without limit there. This bound is
+/// celld's: a socket over it is closed (see [`WS_OUT_OVERFLOW_CODE`]) rather
+/// than allowed to hold the node's memory. One message admits into an empty
+/// queue whatever its size, so a message up to Cloudflare's 32 MiB limit
+/// always leaves. A socket keeps up to this much in flight as well as what
+/// the kernel buffers, so ordinary traffic, a burst of a few megabytes to a
+/// browser on a slow link included, never reaches it.
+pub const WS_OUT_QUEUE_MAX_BYTES: usize = 32 * 1024 * 1024;
+
+/// The close code a peer receives when its socket's outgoing queue passed
+/// [`WS_OUT_QUEUE_MAX_BYTES`]: an endpoint that cannot go on (RFC 6455
+/// 7.4.1). The application sees its socket close abnormally (1006), with
+/// [`WS_OUT_OVERFLOW_REASON`].
+pub const WS_OUT_OVERFLOW_CODE: u16 = 1011;
+
+/// The reason that goes with [`WS_OUT_OVERFLOW_CODE`], within a Close
+/// frame's 123 bytes. workerd has no such limit, so the text is celld's.
+pub const WS_OUT_OVERFLOW_REASON: &str =
+    "celld closed this WebSocket: more than 32 MiB of sent messages waited for the peer to read them";
+
+/// The reason that goes with [`WS_OUT_OVERFLOW_CODE`] when the isolate's
+/// memory budget, rather than the socket's own bound, could not hold one
+/// more message. The text is celld's.
+pub const WS_OUT_BUDGET_REASON: &str =
+    "celld closed this WebSocket: its isolate's memory limit could not hold more sent messages";
+
+/// How much a socket's outgoing queue may hold, frames being written
+/// included, before the host stops reading the socket for a reply it makes
+/// itself to what the peer sent: an auto-response
+/// (`setWebSocketAutoResponse`). workerd waits for each auto-response to be
+/// written before it reads the next message, so a peer that sends requests
+/// and never reads the replies gets no further than its own buffers. This
+/// lets a burst of replies share the connection instead of waiting one by
+/// one, and holds a peer that does not read to about 1 MiB.
+pub const WS_REPLY_BACKLOG_MAX_BYTES: usize = 1024 * 1024;
+
+/// How many hibernatable WebSockets one Durable Object may hold: Cloudflare's
+/// documented limit of 32,768 per object. workerd has none, and each socket
+/// pins host state that hibernation does not release.
+pub const WS_HIBERNATABLE_PER_OBJECT: usize = 32_768;
+
+/// workerd has no such limit, so the text is celld's.
+pub(crate) const TOO_MANY_HIBERNATABLE: &str = "this Durable Object already holds 32768 \
+     hibernatable WebSockets, the most one can; close one before accepting another";
+
+/// The memory budget that a socket's waiting frames are charged to: the
+/// backing-store budget of the isolate whose code sent them (plan 1.33).
+/// Frames charge it as they queue and give it back as they leave or are
+/// discarded, so every socket of an isolate together holds no more than its
+/// budget allows, however many sockets it has.
+pub(crate) trait WsBudget: Send + Sync {
+    /// Charge `bytes`, or refuse them when the budget cannot hold them.
+    fn charge(&self, bytes: usize) -> bool;
+    fn release(&self, bytes: usize);
+}
+
+/// Why a socket's outgoing channel took no more.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum Overflow {
+    /// The socket's frames passed [`WS_OUT_QUEUE_MAX_BYTES`].
+    Queue = 1,
+    /// The isolate's budget could not hold one more.
+    Budget = 2,
+}
+
+impl Overflow {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::Queue => WS_OUT_OVERFLOW_REASON,
+            Self::Budget => WS_OUT_BUDGET_REASON,
+        }
+    }
+}
+
+/// What one socket's outgoing channel holds, shared by both ends.
+struct WsOutState {
+    queued: std::sync::atomic::AtomicUsize,
+    /// 0, or the `Overflow` that closed the channel.
+    overflowed: std::sync::atomic::AtomicU8,
+    overflow: tokio::sync::Notify,
+    /// The live senders. The last one to go ends the owner's hold on the
+    /// socket (`WsOutWatch::closed`).
+    senders: std::sync::atomic::AtomicUsize,
+    closed: tokio::sync::Notify,
+    /// Wakes a reader waiting for the queue to drain (`ws_await_backlog`).
+    drained: tokio::sync::Notify,
+}
+
+impl WsOutState {
+    fn overflow(&self, why: Overflow) {
+        let _ = self
+            .overflowed
+            .compare_exchange(0, why as u8, Ordering::AcqRel, Ordering::Acquire);
+        self.overflow.notify_waiters();
+    }
+
+    fn overflowed(&self) -> Option<Overflow> {
+        match self.overflowed.load(Ordering::Acquire) {
+            0 => None,
+            1 => Some(Overflow::Queue),
+            _ => Some(Overflow::Budget),
+        }
+    }
+}
+
+/// One queued frame and what it holds of its socket's bound and of its
+/// isolate's budget, which it gives back however it leaves the channel.
+struct QueuedOut {
+    out: Option<WsOut>,
+    bytes: usize,
+    budget: Option<Arc<dyn WsBudget>>,
+    state: Arc<WsOutState>,
+}
+
+impl Drop for QueuedOut {
+    fn drop(&mut self) {
+        self.state.queued.fetch_sub(self.bytes, Ordering::AcqRel);
+        self.state.drained.notify_waiters();
+        if let Some(budget) = &self.budget {
+            budget.release(self.bytes);
+        }
+    }
+}
+
+/// What a frame waiting in `WsMeta::pending` holds of its isolate's budget,
+/// given back as it drops, or moved into the channel with the frame.
+struct PendingCharge {
+    bytes: usize,
+    budget: Option<Arc<dyn WsBudget>>,
+}
+
+impl Drop for PendingCharge {
+    fn drop(&mut self) {
+        if let Some(budget) = self.budget.take() {
+            budget.release(self.bytes);
+        }
+    }
+}
+
+/// What a frame taken from a socket's channel still holds of the socket's
+/// bound and its isolate's budget. A writer keeps it until the frame is on
+/// the connection, so a write that never finishes stays counted.
+pub struct WsOutHeld {
+    _charge: QueuedOut,
+}
+
+impl WsOutHeld {
+    fn take(mut queued: QueuedOut) -> (WsOut, Self) {
+        let out = queued.out.take().expect("a queued frame has its frame");
+        (out, Self { _charge: queued })
+    }
+}
+
+/// The sending end of a socket's outgoing frames, which the registry holds.
+pub struct WsOutSender {
+    tx: tokio::sync::mpsc::UnboundedSender<QueuedOut>,
+    state: Arc<WsOutState>,
+}
+
+impl Clone for WsOutSender {
+    fn clone(&self) -> Self {
+        self.state.senders.fetch_add(1, Ordering::AcqRel);
+        Self {
+            tx: self.tx.clone(),
+            state: self.state.clone(),
+        }
+    }
+}
+
+impl Drop for WsOutSender {
+    fn drop(&mut self) {
+        if self.state.senders.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.state.closed.notify_waiters();
+        }
+    }
+}
+
+/// Whether, and when, a socket's outgoing channel overflowed, and whether
+/// its owner still holds it. Borrows nothing from the receiver.
+#[derive(Clone)]
+pub struct WsOutWatch(Arc<WsOutState>);
+
+impl WsOutWatch {
+    /// Whether the channel overflowed, so the socket is closing.
+    pub fn overflowed(&self) -> bool {
+        self.0.overflowed().is_some()
+    }
+
+    /// The reason the application and the peer see for the overflow, the
+    /// socket's own bound's when it has not overflowed.
+    pub fn reason(&self) -> &'static str {
+        self.0.overflowed().unwrap_or(Overflow::Queue).reason()
+    }
+
+    /// Resolves once the queue overflows.
+    pub async fn overflow(self) {
+        loop {
+            let overflow = self.0.overflow.notified();
+            tokio::pin!(overflow);
+            overflow.as_mut().enable();
+            if self.overflowed() {
+                return;
+            }
+            overflow.await;
+        }
+    }
+
+    /// Resolves once no sender is left: the socket's owner unregistered it,
+    /// or the request that held it ended, so nothing will send on it again.
+    pub async fn closed(self) {
+        loop {
+            let closed = self.0.closed.notified();
+            tokio::pin!(closed);
+            closed.as_mut().enable();
+            if self.0.senders.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            closed.await;
+        }
+    }
+}
+
+/// The receiving end, which the task that writes the socket's frames holds.
+pub struct WsOutReceiver {
+    rx: tokio::sync::mpsc::UnboundedReceiver<QueuedOut>,
+    state: Arc<WsOutState>,
+    /// The overflow's Close has been handed out, so nothing follows it.
+    ended: bool,
+}
+
+/// What became of a frame offered to a socket's outgoing channel.
+#[derive(Debug, PartialEq, Eq)]
+pub enum WsOffered {
+    Queued,
+    /// This frame took the queue past [`WS_OUT_QUEUE_MAX_BYTES`], or past
+    /// what its isolate's budget holds, so the socket closes, and the frame
+    /// and every frame after it go nowhere.
+    Overflowed,
+    /// The socket's queue overflowed already, or its writer went away.
+    Dropped,
+}
+
+/// A socket's outgoing channel, bounded to [`WS_OUT_QUEUE_MAX_BYTES`].
+pub fn ws_out_channel() -> (WsOutSender, WsOutReceiver) {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let state = Arc::new(WsOutState {
+        queued: std::sync::atomic::AtomicUsize::new(0),
+        overflowed: std::sync::atomic::AtomicU8::new(0),
+        overflow: tokio::sync::Notify::new(),
+        senders: std::sync::atomic::AtomicUsize::new(1),
+        closed: tokio::sync::Notify::new(),
+        drained: tokio::sync::Notify::new(),
+    });
+    (
+        WsOutSender {
+            tx,
+            state: state.clone(),
+        },
+        WsOutReceiver {
+            rx,
+            state,
+            ended: false,
+        },
+    )
+}
+
+impl WsOutSender {
+    pub(crate) fn offer(&self, out: WsOut, budget: Option<&Arc<dyn WsBudget>>) -> WsOffered {
+        self.offer_within(out, budget, WS_OUT_QUEUE_MAX_BYTES)
+    }
+
+    fn offer_within(
+        &self,
+        out: WsOut,
+        budget: Option<&Arc<dyn WsBudget>>,
+        bound: usize,
+    ) -> WsOffered {
+        if self.state.overflowed().is_some() {
+            return WsOffered::Dropped;
+        }
+        // A Close is the last frame and small, so it never overflows.
+        let close = matches!(out, WsOut::Close(..));
+        let bytes = if close { 0 } else { out.queue_bytes() };
+        let before = self.state.queued.fetch_add(bytes, Ordering::AcqRel);
+        if !close && before > 0 && before.saturating_add(bytes) > bound {
+            self.state.queued.fetch_sub(bytes, Ordering::AcqRel);
+            self.state.overflow(Overflow::Queue);
+            return WsOffered::Overflowed;
+        }
+        // Charged before it queues, so a frame its isolate cannot hold is
+        // never held: the socket closes instead, and nothing condemns.
+        let budget = budget.filter(|_| bytes > 0);
+        if budget.is_some_and(|budget| !budget.charge(bytes)) {
+            self.state.queued.fetch_sub(bytes, Ordering::AcqRel);
+            self.state.overflow(Overflow::Budget);
+            return WsOffered::Overflowed;
+        }
+        let queued = QueuedOut {
+            out: Some(out),
+            bytes,
+            budget: budget.cloned(),
+            state: self.state.clone(),
+        };
+        match self.tx.send(queued) {
+            Ok(()) => WsOffered::Queued,
+            Err(_) => WsOffered::Dropped,
+        }
+    }
+
+    /// Queue a pending frame with the charge it took as it was buffered.
+    fn enqueue_charged(&self, out: WsOut, mut charge: PendingCharge) {
+        if self.state.overflowed().is_some() {
+            return;
+        }
+        self.state.queued.fetch_add(charge.bytes, Ordering::AcqRel);
+        let queued = QueuedOut {
+            out: Some(out),
+            bytes: charge.bytes,
+            budget: charge.budget.take(),
+            state: self.state.clone(),
+        };
+        // A writer that went away drops it, which gives the charge back.
+        let _ = self.tx.send(queued);
+    }
+
+    /// Queue `out` uncharged, as a test's application does. Public for the
+    /// socket tasks' tests, which live in the binary crate; nothing else
+    /// sends but the registry, which charges the sender's budget.
+    #[doc(hidden)]
+    pub fn send(&self, out: WsOut) -> Result<(), WsOffered> {
+        match self.offer(out, None) {
+            WsOffered::Queued => Ok(()),
+            refused => Err(refused),
+        }
+    }
+
+    /// Close the socket as an overflow does, for a buffer that overflowed
+    /// before this channel existed.
+    fn overflow(&self, why: Overflow) {
+        self.state.overflow(why);
+    }
+}
+
+impl WsOutReceiver {
+    /// The next frame to write. Once the queue overflows, that is a Close
+    /// with [`WS_OUT_OVERFLOW_CODE`], in place of everything still queued,
+    /// and then the end.
+    pub async fn recv(&mut self) -> Option<WsOut> {
+        self.recv_held().await.map(|(out, _held)| out)
+    }
+
+    /// [`recv`](Self::recv), with what the frame holds of its socket's
+    /// bound and its isolate's budget, which stays held until the returned
+    /// [`WsOutHeld`] goes: a writer keeps it until the frame is written.
+    pub async fn recv_held(&mut self) -> Option<(WsOut, WsOutHeld)> {
+        if self.ended {
+            return None;
+        }
+        let next = {
+            let overflow = self.state.overflow.notified();
+            tokio::pin!(overflow);
+            overflow.as_mut().enable();
+            if self.state.overflowed().is_some() {
+                None
+            } else {
+                crate::asyncrt::select_biased! {
+                    "an overflow that ties a queued frame replaces it";
+                    () = overflow => None,
+                    next = self.rx.recv() => Some(next),
+                }
+            }
+        };
+        match next {
+            Some(Some(queued)) if self.state.overflowed().is_none() => {
+                Some(WsOutHeld::take(queued))
+            }
+            Some(None) => None,
+            _ => Some(self.overflow_close()),
+        }
+    }
+
+    /// The next frame, if one is queued now.
+    pub fn try_recv(&mut self) -> Option<WsOut> {
+        self.try_recv_held().map(|(out, _held)| out)
+    }
+
+    /// [`try_recv`](Self::try_recv), with what the frame holds.
+    pub fn try_recv_held(&mut self) -> Option<(WsOut, WsOutHeld)> {
+        if self.ended {
+            return None;
+        }
+        if self.state.overflowed().is_some() {
+            return Some(self.overflow_close());
+        }
+        Some(WsOutHeld::take(self.rx.try_recv().ok()?))
+    }
+
+    fn overflow_close(&mut self) -> (WsOut, WsOutHeld) {
+        self.ended = true;
+        self.rx.close();
+        while self.rx.try_recv().is_ok() {}
+        let reason = self.watch().reason();
+        let held = WsOutHeld {
+            _charge: QueuedOut {
+                out: None,
+                bytes: 0,
+                budget: None,
+                state: self.state.clone(),
+            },
+        };
+        (WsOut::Close(WS_OUT_OVERFLOW_CODE, reason.to_string()), held)
+    }
+
+    /// Whether the queue overflowed, so the socket is closing.
+    pub fn overflowed(&self) -> bool {
+        self.state.overflowed().is_some()
+    }
+
+    /// A handle on this channel that borrows nothing from it.
+    pub fn watch(&self) -> WsOutWatch {
+        WsOutWatch(self.state.clone())
+    }
+
+    /// Take nothing more: the connection this channel wrote to is gone.
+    /// What is still queued gives its charges back now.
+    pub fn finish(&mut self) {
+        self.ended = true;
+        self.rx.close();
+        while self.rx.try_recv().is_ok() {}
+    }
+}
+
 /// Outbound frames together with any positions already reserved in their sockets.
 /// Captured sends reserve positions inside the isolate, before a later RPC can
 /// send. The reservation travels through the handler and Actor gate with the
@@ -918,6 +1366,9 @@ pub(crate) fn take_worker_handoff(
 enum BridgeLeg {
     /// A Close passed through.
     Closed,
+    /// The sending side's queue overflowed while the receiving side's was
+    /// full, and the receiving side got the overflow's Close.
+    Overflowed,
     /// The sending side's registration went away without a Close.
     SourceGone,
     /// The receiving side stopped reading.
@@ -927,24 +1378,34 @@ enum BridgeLeg {
 /// Carry one direction of a bridge until a Close passes or a side goes away.
 ///
 /// Each frame waits for room in the receiving queue, so that queue holds at
-/// most its budget. The other direction runs separately and is never held
-/// up by this one.
-async fn carry_bridge_leg(
-    from: &mut tokio::sync::mpsc::UnboundedReceiver<WsOut>,
-    to: &WsPullSender,
-) -> BridgeLeg {
+/// most its budget, and what the sending side sends meanwhile waits in its
+/// own channel. That channel is bounded too: a receiving side that does not
+/// read makes it overflow, which closes the sending side's socket as a TCP
+/// peer that does not read would. The other direction runs separately and
+/// is never held up by this one.
+async fn carry_bridge_leg(from: &mut WsOutReceiver, to: &WsPullSender) -> BridgeLeg {
+    let overflow = from.watch().overflow();
+    tokio::pin!(overflow);
     loop {
         let frame = match from.recv().await {
             Some(WsOut::Text(text)) => WsPull::Text(text),
             Some(WsOut::Binary(bytes)) => WsPull::Binary(bytes),
             Some(WsOut::Close(code, reason)) => {
                 let _ = to.send_close(code, reason, true);
-                return BridgeLeg::Closed;
+                return if from.overflowed() {
+                    BridgeLeg::Overflowed
+                } else {
+                    BridgeLeg::Closed
+                };
             }
             None => return BridgeLeg::SourceGone,
         };
-        if to.send(frame).await.is_err() {
-            return BridgeLeg::DestinationGone;
+        crate::asyncrt::select_biased! {
+            "an overflow ends the wait for room for a frame it discards";
+            () = &mut overflow => {}
+            sent = to.send(frame) => if sent.is_err() {
+                return BridgeLeg::DestinationGone;
+            },
         }
     }
 }
@@ -954,16 +1415,18 @@ async fn carry_bridge_leg(
 pub(crate) struct WorkerHandoffBridge {
     pub(crate) caller: u64,
     pub(crate) caller_pull: WsPullSender,
-    pub(crate) from_caller: tokio::sync::mpsc::UnboundedReceiver<WsOut>,
+    pub(crate) from_caller: WsOutReceiver,
     pub(crate) target: WorkerWebSocket,
-    pub(crate) from_target: tokio::sync::mpsc::UnboundedReceiver<WsOut>,
+    pub(crate) from_target: WsOutReceiver,
 }
 
 /// Carry frames between a caller that accepted a handed-over Worker socket
 /// and that socket's server end, which another isolate holds.
 ///
 /// Both ends are isolate-polled, so each direction ends in a pull queue with
-/// the usual 1 MiB budget, and each runs on its own.
+/// the usual 1 MiB budget, and each runs on its own. A side whose frames the
+/// other does not read closes once its own channel overflows: the reader
+/// gets the overflow's Close, and the sender closes abnormally.
 ///
 /// A Close from either side reaches the other with the same code and reason.
 /// A Close is a question that the other side answers, automatically or when
@@ -989,23 +1452,28 @@ async fn bridge_worker_handoff_within(
         mut from_target,
     } = bridge;
     let target_pull = target.inbound();
+    let (caller_watch, target_watch) = (from_caller.watch(), from_target.watch());
     {
         let to_target = carry_bridge_leg(&mut from_caller, &target_pull);
         let to_caller = carry_bridge_leg(&mut from_target, &caller_pull);
         tokio::pin!(to_target, to_caller);
         crate::asyncrt::select! {
-            leg = &mut to_target => {
-                if let BridgeLeg::Closed = leg {
-                    // The server end answers the caller's Close.
+            leg = &mut to_target => match leg {
+                // The server end answers the caller's Close.
+                BridgeLeg::Closed => {
                     let _ = asyncrt::timeout(close_timeout, &mut to_caller).await;
                 }
-            }
-            leg = &mut to_caller => {
-                if let BridgeLeg::Closed = leg {
-                    // The caller answers the server end's Close.
+                BridgeLeg::Overflowed => close_overflowed(&caller_pull, &caller_watch),
+                BridgeLeg::SourceGone | BridgeLeg::DestinationGone => {}
+            },
+            leg = &mut to_caller => match leg {
+                // The caller answers the server end's Close.
+                BridgeLeg::Closed => {
                     let _ = asyncrt::timeout(close_timeout, &mut to_target).await;
                 }
-            }
+                BridgeLeg::Overflowed => close_overflowed(&target_pull, &target_watch),
+                BridgeLeg::SourceGone | BridgeLeg::DestinationGone => {}
+            },
         }
     }
     // Whatever is still open closes abnormally. A queue that already holds
@@ -1021,6 +1489,12 @@ async fn bridge_worker_handoff_within(
     ws_pull_unregister(caller);
     ws_unregister(caller);
     drop(target);
+}
+
+/// Tell an isolate-polled socket whose outgoing queue overflowed that it
+/// closed, abnormally, as a socket whose peer went away does.
+pub fn close_overflowed(pull: &WsPullSender, overflow: &WsOutWatch) {
+    let _ = pull.send_close(1006, overflow.reason().to_string(), false);
 }
 
 /// Release a socket that its request adopted and neither returned nor
@@ -1134,8 +1608,25 @@ pub(crate) enum WsAccess {
 #[derive(Default)]
 #[doc(hidden)]
 pub struct WsRegistry {
-    pub(crate) outputs: HashMap<u64, tokio::sync::mpsc::UnboundedSender<WsOut>>,
+    pub(crate) outputs: HashMap<u64, WsOutSender>,
     pub metadata: HashMap<u64, WsMeta>,
+    /// The charge of each frame in a socket's `WsMeta::pending`, in order.
+    /// [`WS_OUT_QUEUE_MAX_BYTES`] bounds their sum as it bounds a socket's
+    /// channel, and each frame keeps its charge into the channel.
+    pending_charges: HashMap<u64, Vec<PendingCharge>>,
+    /// Sockets whose pending frames overflowed before any channel existed.
+    /// The channel that registers for one closes at once.
+    pending_overflowed: HashMap<u64, Overflow>,
+    /// The budget that each socket's next frame is charged to: the isolate
+    /// that last sent on it, which every sending op records again, so after
+    /// an eviction, a generation swap or a redeploy the new isolate pays for
+    /// what it sends. A frame keeps the budget it was charged to.
+    budgets: HashMap<u64, Arc<dyn WsBudget>>,
+    /// How many hibernatable sockets each Durable Object holds, against
+    /// [`WS_HIBERNATABLE_PER_OBJECT`].
+    pub(crate) hibernatable_counts: HashMap<String, usize>,
+    /// The Durable Object each hibernatable socket counts against.
+    pub(crate) hibernatable_objects: HashMap<u64, String>,
     pub(crate) worker_handoffs: HashMap<u64, WsPullSender>,
     /// Worker sockets on their way to the caller of a subrequest.
     worker_handoff_parks: WorkerHandoffs,
@@ -1157,16 +1648,18 @@ pub struct WsRegistry {
     /// its `__ws_half_open` op: dropped when the socket's Close is sent or
     /// the socket goes.
     pub(crate) half_open: HashMap<u64, tokio::sync::oneshot::Sender<()>>,
-    /// Sockets that ended after their peer's Close, newest last. See
-    /// [`ws_ended_after_peer_close`].
+    /// Sockets that ended after their peer's Close, or whose outgoing queue
+    /// overflowed, newest last. See [`ws_ended_after_peer_close`].
     ended_after_peer_close: EndedSockets,
 }
 
 /// The ids of sockets that ended after their peer's Close, so that a frame
 /// their application sends late (a `close()` or `send()` on a half-open
 /// socket after its peer left) is expected rather than a lost frame worth a
-/// warning. Bounded: the oldest ids go first, and a frame for one of them is
-/// reported as any other lost frame is.
+/// warning, and of sockets whose outgoing queue overflowed, whose
+/// application goes on sending until its close event. Bounded: the oldest
+/// ids go first, and a frame for one of them is reported as any other lost
+/// frame is.
 #[derive(Default)]
 struct EndedSockets {
     ids: HashSet<u64>,
@@ -1341,10 +1834,15 @@ impl WsGrants {
 }
 impl WsRegistry {
     #[doc(hidden)]
-    pub fn register(&mut self, id: u64, tx: tokio::sync::mpsc::UnboundedSender<WsOut>) {
-        if let Some(meta) = self.metadata.get_mut(&id) {
-            for pending in meta.pending.drain(..) {
-                let _ = tx.send(pending);
+    pub fn register(&mut self, id: u64, tx: WsOutSender) {
+        let charges = self.pending_charges.remove(&id).unwrap_or_default();
+        if let Some(why) = self.pending_overflowed.remove(&id) {
+            tx.overflow(why);
+        } else if let Some(meta) = self.metadata.get_mut(&id) {
+            // Each frame moves into the channel with the charge it took,
+            // within the bound, which bounded the buffer that held them.
+            for (pending, charge) in meta.pending.drain(..).zip(charges) {
+                tx.enqueue_charged(pending, charge);
             }
         }
         // The owner is gone: the receiver reads what it sent and then the
@@ -1355,14 +1853,45 @@ impl WsRegistry {
         self.outputs.insert(id, tx);
     }
 
+    /// Discard socket `id`'s pending frames and give back their charge.
+    fn clear_pending(&mut self, id: u64) {
+        if let Some(meta) = self.metadata.get_mut(&id) {
+            meta.pending.clear();
+        }
+        // Each charge goes back as it drops.
+        self.pending_charges.remove(&id);
+    }
+
     fn unregister(&mut self, id: u64) -> Option<WsMeta> {
         self.outputs.remove(&id);
+        self.clear_pending(id);
+        self.budgets.remove(&id);
+        self.pending_overflowed.remove(&id);
         self.peer_closed.remove(&id);
         self.released.remove(&id);
         self.half_open.remove(&id);
         // A grant of this socket names nothing any more.
         self.grants.target_gone(id);
+        if let Some(object) = self.hibernatable_objects.remove(&id) {
+            self.uncount_hibernatable(&object);
+        }
         self.metadata.remove(&id)
+    }
+
+    /// One fewer hibernatable socket for the Durable Object `scope`.
+    fn uncount_hibernatable(&mut self, scope: &str) {
+        if let Some(count) = self.hibernatable_counts.get_mut(scope) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.hibernatable_counts.remove(scope);
+            }
+        }
+    }
+
+    /// Record the budget that socket `id`'s next frames are charged to: the
+    /// sending isolate's.
+    pub(crate) fn charge_to(&mut self, id: u64, budget: &Arc<dyn WsBudget>) {
+        self.budgets.insert(id, budget.clone());
     }
 
     #[doc(hidden)]
@@ -1370,12 +1899,56 @@ impl WsRegistry {
         if matches!(out, WsOut::Close(..)) {
             self.half_open.remove(&id);
         }
+        let budget = self.budgets.get(&id).cloned();
         if let Some(tx) = self.outputs.get(&id) {
-            tracing::debug!(ws_id = id, "queued outbound WebSocket frame");
-            let _ = tx.send(out);
-        } else if let Some(meta) = self.metadata.get_mut(&id) {
+            match tx.offer(out, budget.as_ref()) {
+                WsOffered::Queued => tracing::debug!(ws_id = id, "queued outbound WebSocket frame"),
+                WsOffered::Overflowed => {
+                    self.ended_after_peer_close.insert(id);
+                    log_overflow(id);
+                }
+                WsOffered::Dropped => {
+                    tracing::debug!(ws_id = id, "dropped a frame for a closing WebSocket")
+                }
+            }
+        } else if self.metadata.contains_key(&id) {
+            if self.pending_overflowed.contains_key(&id) {
+                tracing::debug!(ws_id = id, "dropped a frame for a closing WebSocket");
+                return;
+            }
+            let close = matches!(out, WsOut::Close(..));
+            let bytes = if close { 0 } else { out.queue_bytes() };
+            let held: usize = self
+                .pending_charges
+                .get(&id)
+                .map_or(0, |charges| charges.iter().map(|charge| charge.bytes).sum());
+            let overflow =
+                if !close && held > 0 && held.saturating_add(bytes) > WS_OUT_QUEUE_MAX_BYTES {
+                    Some(Overflow::Queue)
+                } else if budget
+                    .as_ref()
+                    .is_some_and(|budget| bytes > 0 && !budget.charge(bytes))
+                {
+                    Some(Overflow::Budget)
+                } else {
+                    None
+                };
+            if let Some(why) = overflow {
+                self.clear_pending(id);
+                self.pending_overflowed.insert(id, why);
+                self.ended_after_peer_close.insert(id);
+                log_overflow(id);
+                return;
+            }
+            self.pending_charges
+                .entry(id)
+                .or_default()
+                .push(PendingCharge {
+                    bytes,
+                    budget: budget.filter(|_| bytes > 0),
+                });
             tracing::debug!(ws_id = id, "buffered pre-upgrade WebSocket frame");
-            meta.pending.push(out);
+            self.metadata.get_mut(&id).unwrap().pending.push(out);
         } else {
             log_dropped_frame(self, id);
         }
@@ -1543,12 +2116,7 @@ pub(crate) fn ws_release_unanswered(id: u64, scope: &str) {
 /// backend that has no facet call to record it.
 #[cfg(celld_internal_tests)]
 #[doc(hidden)]
-pub fn ws_register_facet_for_test(
-    id: u64,
-    scope: &str,
-    facet: FacetSocket,
-    tx: tokio::sync::mpsc::UnboundedSender<WsOut>,
-) {
+pub fn ws_register_facet_for_test(id: u64, scope: &str, facet: FacetSocket, tx: WsOutSender) {
     ws_register_hibernatable_for_test(id, scope, tx);
     ws_attach_facet(id, scope, facet);
 }
@@ -1684,17 +2252,13 @@ pub(crate) fn ws_grants_held(owner: &WsOwner) -> usize {
 pub(crate) fn ws_owner(id: u64) -> Option<WsOwner> {
     ws_registry().lock().unwrap().owners.get(&id).cloned()
 }
-pub fn ws_register(id: u64, tx: tokio::sync::mpsc::UnboundedSender<WsOut>) {
+pub fn ws_register(id: u64, tx: WsOutSender) {
     ws_registry().lock().unwrap().register(id, tx);
 }
 
 /// Install one hibernatable socket through a cfg-gated execution backend.
 #[cfg(celld_internal_tests)]
-pub(crate) fn ws_register_hibernatable_for_test(
-    id: u64,
-    scope: &str,
-    tx: tokio::sync::mpsc::UnboundedSender<WsOut>,
-) {
+pub(crate) fn ws_register_hibernatable_for_test(id: u64, scope: &str, tx: WsOutSender) {
     let registry = ws_registry();
     let mut registry = registry.lock().unwrap();
     registry.register(id, tx);
@@ -2271,21 +2835,60 @@ pub fn ws_emit_batch(frames: impl Into<WsBatch>) {
     frames.into().release(Ok(()));
 }
 
+/// Wait until socket `id`'s outgoing queue holds at most
+/// [`WS_REPLY_BACKLOG_MAX_BYTES`], or until it overflowed or its owner let
+/// go of it. The reader calls this after a reply the host made itself, so
+/// that it reads no further than workerd does while the reply waits.
+pub async fn ws_await_backlog(id: u64) {
+    let Some(state) = ws_registry()
+        .lock()
+        .unwrap()
+        .outputs
+        .get(&id)
+        .map(|sender| sender.state.clone())
+    else {
+        return;
+    };
+    loop {
+        let drained = state.drained.notified();
+        tokio::pin!(drained);
+        drained.as_mut().enable();
+        if state.queued.load(Ordering::Acquire) <= WS_REPLY_BACKLOG_MAX_BYTES
+            || state.overflowed().is_some()
+            || state.senders.load(Ordering::Acquire) == 0
+        {
+            return;
+        }
+        drained.await;
+    }
+}
+
 /// Report a frame for socket `id` that has nowhere to go.
 ///
 /// The socket is gone. Silence here is what made a held frame
 /// indistinguishable from a sent one, so a drop is a warning, except for a
 /// socket that ended after its peer's Close: its application may still
-/// answer late, and that answer has no one left to reach.
+/// answer late, and that answer has no one left to reach. A socket whose
+/// queue overflowed was reported once, as it closed.
 pub(crate) fn log_dropped_frame(registry: &WsRegistry, id: u64) {
     if registry.ended_after_peer_close.contains(id) {
         tracing::debug!(
             ws_id = id,
-            "dropped a frame for a socket whose peer closed first"
+            "dropped a frame for a socket that ended before its application stopped sending"
         );
     } else {
         tracing::warn!(ws_id = id, "dropped a frame for a closed WebSocket");
     }
+}
+
+/// Report the socket whose outgoing queue passed [`WS_OUT_QUEUE_MAX_BYTES`],
+/// once: what its application sends from now on goes nowhere.
+fn log_overflow(id: u64) {
+    tracing::warn!(
+        ws_id = id,
+        limit = WS_OUT_QUEUE_MAX_BYTES,
+        "closed a WebSocket whose sent messages waited past its limit or its isolate's memory limit"
+    );
 }
 
 /// Socket `id`, whose peer sent its Close first, has ended: what its
@@ -2729,8 +3332,8 @@ pub(crate) mod tests {
     /// the senders of both sides' frames.
     struct TestBridge {
         caller: WsPullReceiver,
-        to_bridge_from_caller: tokio::sync::mpsc::UnboundedSender<WsOut>,
-        to_bridge_from_target: tokio::sync::mpsc::UnboundedSender<WsOut>,
+        to_bridge_from_caller: WsOutSender,
+        to_bridge_from_target: WsOutSender,
         target: WsPullReceiverHandle,
         done: asyncrt::TaskHandle<()>,
     }
@@ -2738,8 +3341,8 @@ pub(crate) mod tests {
     fn start_bridge(close_timeout: Duration) -> TestBridge {
         let (target, target_queue) = worker_socket();
         let (caller_pull, caller) = ws_pull_channel();
-        let (to_bridge_from_caller, from_caller) = tokio::sync::mpsc::unbounded_channel();
-        let (to_bridge_from_target, from_target) = tokio::sync::mpsc::unbounded_channel();
+        let (to_bridge_from_caller, from_caller) = ws_out_channel();
+        let (to_bridge_from_target, from_target) = ws_out_channel();
         let bridge = WorkerHandoffBridge {
             caller: ws_next_id(),
             caller_pull,
@@ -2800,6 +3403,359 @@ pub(crate) mod tests {
             );
             bridge.done.await.unwrap();
         });
+    }
+
+    #[test]
+    fn a_bridge_side_whose_frames_go_unread_closes_past_its_queue_limit() {
+        asyncrt::test_host_runtime().block_on(async {
+            let mut bridge = start_bridge(Duration::from_secs(5));
+            // The caller never reads, so its 1 MiB queue fills and the
+            // server end's frames wait in that end's own channel.
+            let megabyte = || WsOut::Binary(vec![0; 1024 * 1024]);
+            let mut refused = 0;
+            for _ in 0..40 {
+                if bridge.to_bridge_from_target.send(megabyte()).is_err() {
+                    refused += 1;
+                }
+            }
+            assert!(
+                refused > 0,
+                "the channel stops taking frames past its limit"
+            );
+            // The server end closes abnormally, with celld's reason.
+            assert_eq!(
+                bridge.target.next_close().await,
+                Some((1006, WS_OUT_OVERFLOW_REASON.to_string()))
+            );
+            // The caller gets the overflow's Close after what reached it.
+            let mut caller_close = None;
+            while let Some(frame) = bridge.caller.recv().await {
+                if let Some(close) = close_of(Some(frame)) {
+                    caller_close = Some(close);
+                }
+            }
+            assert_eq!(
+                caller_close,
+                Some((
+                    WS_OUT_OVERFLOW_CODE,
+                    WS_OUT_OVERFLOW_REASON.to_string(),
+                    true
+                ))
+            );
+            bridge.done.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn an_outgoing_queue_closes_once_it_passes_its_budget() {
+        asyncrt::test_host_runtime().block_on(async {
+            let (sender, mut receiver) = ws_out_channel();
+            let frame = |bytes| WsOut::Binary(vec![0; bytes]);
+            // One message enters an empty queue whatever its size.
+            assert_eq!(
+                sender.offer_within(frame(4096), None, 1024),
+                WsOffered::Queued
+            );
+            assert!(
+                matches!(receiver.try_recv(), Some(WsOut::Binary(bytes)) if bytes.len() == 4096)
+            );
+            // Taking it returned its budget.
+            assert_eq!(
+                sender.offer_within(frame(600), None, 1024),
+                WsOffered::Queued
+            );
+            assert_eq!(
+                sender.offer_within(frame(600), None, 1024),
+                WsOffered::Overflowed
+            );
+            assert!(receiver.overflowed());
+            // Nothing more enters, a Close included.
+            assert_eq!(
+                sender.offer_within(frame(1), None, 1024),
+                WsOffered::Dropped
+            );
+            assert_eq!(
+                sender.offer_within(WsOut::Close(1000, String::new()), None, 1024),
+                WsOffered::Dropped
+            );
+            // What was queued gives way to the overflow's Close, then the end.
+            assert!(matches!(
+                receiver.recv().await,
+                Some(WsOut::Close(WS_OUT_OVERFLOW_CODE, reason)) if reason == WS_OUT_OVERFLOW_REASON
+            ));
+            assert!(receiver.recv().await.is_none());
+            assert!(receiver.try_recv().is_none());
+            assert!(
+                WS_OUT_OVERFLOW_REASON.len() <= 123,
+                "a Close reason fits its frame"
+            );
+        });
+    }
+
+    /// A budget of `limit` bytes that counts what it holds.
+    struct TestBudget {
+        limit: usize,
+        used: std::sync::atomic::AtomicUsize,
+    }
+
+    impl WsBudget for TestBudget {
+        fn charge(&self, bytes: usize) -> bool {
+            let used = self.used.load(Ordering::Acquire);
+            if used + bytes > self.limit {
+                return false;
+            }
+            self.used.fetch_add(bytes, Ordering::AcqRel);
+            true
+        }
+
+        fn release(&self, bytes: usize) {
+            self.used.fetch_sub(bytes, Ordering::AcqRel);
+        }
+    }
+
+    fn test_budget(limit: usize) -> (Arc<TestBudget>, Arc<dyn WsBudget>) {
+        let budget = Arc::new(TestBudget {
+            limit,
+            used: std::sync::atomic::AtomicUsize::new(0),
+        });
+        (budget.clone(), budget)
+    }
+
+    #[test]
+    fn queued_frames_are_charged_to_their_isolate_and_given_back() {
+        let (counted, budget) = test_budget(10_000);
+        let (sender, mut receiver) = ws_out_channel();
+        assert_eq!(
+            sender.offer(WsOut::Binary(vec![0; 4000]), Some(&budget)),
+            WsOffered::Queued
+        );
+        assert_eq!(
+            sender.offer(WsOut::Binary(vec![0; 4000]), Some(&budget)),
+            WsOffered::Queued
+        );
+        let held = counted.used.load(Ordering::Acquire);
+        assert!(held >= 8000);
+        // Taking a frame gives its charge back.
+        assert!(receiver.try_recv().is_some());
+        assert!(counted.used.load(Ordering::Acquire) < held);
+        // Past the budget the socket closes, with the budget's reason.
+        assert_eq!(
+            sender.offer(WsOut::Binary(vec![0; 8000]), Some(&budget)),
+            WsOffered::Overflowed
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Some(WsOut::Close(WS_OUT_OVERFLOW_CODE, reason)) if reason == WS_OUT_BUDGET_REASON
+        ));
+        // The discarded frame gave its charge back too.
+        assert_eq!(counted.used.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn a_frame_stays_charged_until_its_writer_lets_it_go() {
+        let (counted, budget) = test_budget(10_000);
+        let (sender, mut receiver) = ws_out_channel();
+        sender.offer(WsOut::Binary(vec![0; 4000]), Some(&budget));
+        let (_frame, held) = receiver.try_recv_held().unwrap();
+        assert!(
+            counted.used.load(Ordering::Acquire) >= 4000,
+            "a write under way stays charged"
+        );
+        drop(held);
+        assert_eq!(counted.used.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn registering_moves_pending_charges_without_charging_again() {
+        // The budget fits the pending frames once, not twice.
+        let (counted, budget) = test_budget(5000);
+        let registry = own_registry();
+        let mut registry = registry.lock().unwrap();
+        let id = 10;
+        registry.metadata.insert(
+            id,
+            WsMeta {
+                scope: String::new(),
+                hibernatable: false,
+                tags: Vec::new(),
+                attachment: None,
+                pending: Vec::new(),
+                auto_response_at: None,
+                facet: None,
+            },
+        );
+        registry.charge_to(id, &budget);
+        registry.emit(id, WsOut::Binary(vec![0; 2000]));
+        registry.emit(id, WsOut::Binary(vec![0; 2000]));
+        let charged = counted.used.load(Ordering::Acquire);
+        let (sender, mut receiver) = ws_out_channel();
+        registry.register(id, sender);
+        assert_eq!(counted.used.load(Ordering::Acquire), charged);
+        assert!(matches!(receiver.try_recv(), Some(WsOut::Binary(_))));
+        assert!(matches!(receiver.try_recv(), Some(WsOut::Binary(_))));
+        assert_eq!(counted.used.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn each_frame_is_charged_to_the_isolate_that_sent_it_last() {
+        let (first, first_budget) = test_budget(10_000);
+        let (second, second_budget) = test_budget(10_000);
+        let registry = own_registry();
+        let mut registry = registry.lock().unwrap();
+        let id = 11;
+        let (sender, mut receiver) = ws_out_channel();
+        registry.register(id, sender);
+        registry.charge_to(id, &first_budget);
+        registry.emit(id, WsOut::Binary(vec![0; 1000]));
+        // A new isolate, after a redeploy, sends on the same socket.
+        registry.charge_to(id, &second_budget);
+        registry.emit(id, WsOut::Binary(vec![0; 1000]));
+        assert!(first.used.load(Ordering::Acquire) >= 1000);
+        assert!(second.used.load(Ordering::Acquire) >= 1000);
+        assert!(receiver.try_recv().is_some());
+        assert_eq!(first.used.load(Ordering::Acquire), 0);
+        assert!(receiver.try_recv().is_some());
+        assert_eq!(second.used.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn a_receiver_that_goes_gives_its_frames_charges_back() {
+        let (counted, budget) = test_budget(10_000);
+        let (sender, receiver) = ws_out_channel();
+        sender.offer(WsOut::Text("x".repeat(1000)), Some(&budget));
+        assert!(counted.used.load(Ordering::Acquire) > 0);
+        drop(receiver);
+        assert_eq!(counted.used.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn pending_frames_are_charged_and_a_refused_one_closes_the_socket() {
+        let (counted, budget) = test_budget(3000);
+        let registry = own_registry();
+        let mut registry = registry.lock().unwrap();
+        let id = 9;
+        registry.metadata.insert(
+            id,
+            WsMeta {
+                scope: String::new(),
+                hibernatable: false,
+                tags: Vec::new(),
+                attachment: None,
+                pending: Vec::new(),
+                auto_response_at: None,
+                facet: None,
+            },
+        );
+        registry.charge_to(id, &budget);
+        registry.emit(id, WsOut::Binary(vec![0; 2000]));
+        assert!(counted.used.load(Ordering::Acquire) >= 2000);
+        registry.emit(id, WsOut::Binary(vec![0; 2000]));
+        assert!(registry.metadata[&id].pending.is_empty());
+        assert_eq!(counted.used.load(Ordering::Acquire), 0);
+        let (sender, mut receiver) = ws_out_channel();
+        registry.register(id, sender);
+        assert!(matches!(
+            receiver.try_recv(),
+            Some(WsOut::Close(WS_OUT_OVERFLOW_CODE, reason)) if reason == WS_OUT_BUDGET_REASON
+        ));
+    }
+
+    #[test]
+    fn the_owner_going_closes_the_watch() {
+        asyncrt::test_host_runtime().block_on(async {
+            let (sender, receiver) = ws_out_channel();
+            let copy = sender.clone();
+            let closed = receiver.watch().closed();
+            tokio::pin!(closed);
+            drop(sender);
+            assert!(
+                asyncrt::timeout(Duration::from_millis(50), &mut closed)
+                    .await
+                    .is_err(),
+                "a sender is left"
+            );
+            drop(copy);
+            asyncrt::timeout(Duration::from_secs(1), closed)
+                .await
+                .expect("no sender is left");
+        });
+    }
+
+    #[test]
+    fn a_close_enters_a_full_queue() {
+        let (sender, mut receiver) = ws_out_channel();
+        assert_eq!(
+            sender.offer_within(WsOut::Binary(vec![0; 2048]), None, 1024),
+            WsOffered::Queued
+        );
+        assert_eq!(
+            sender.offer_within(WsOut::Close(4000, "bye".into()), None, 1024),
+            WsOffered::Queued
+        );
+        assert!(matches!(receiver.try_recv(), Some(WsOut::Binary(_))));
+        assert!(matches!(receiver.try_recv(), Some(WsOut::Close(4000, _))));
+    }
+
+    #[test]
+    fn frames_buffered_before_a_socket_registers_are_bounded() {
+        let registry = own_registry();
+        let mut registry = registry.lock().unwrap();
+        let id = 7;
+        registry.metadata.insert(
+            id,
+            WsMeta {
+                scope: String::new(),
+                hibernatable: false,
+                tags: Vec::new(),
+                attachment: None,
+                pending: Vec::new(),
+                auto_response_at: None,
+                facet: None,
+            },
+        );
+        let megabytes = WS_OUT_QUEUE_MAX_BYTES / (1024 * 1024);
+        for _ in 0..megabytes - 1 {
+            registry.emit(id, WsOut::Binary(vec![0; 1024 * 1024]));
+        }
+        assert_eq!(registry.metadata[&id].pending.len(), megabytes - 1);
+        registry.emit(id, WsOut::Binary(vec![0; 2 * 1024 * 1024]));
+        // Past the budget the buffer empties, and takes nothing more.
+        assert!(registry.metadata[&id].pending.is_empty());
+        registry.emit(id, WsOut::Text("late".into()));
+        assert!(registry.metadata[&id].pending.is_empty());
+        // The channel that registers for the socket closes at once.
+        let (sender, mut receiver) = ws_out_channel();
+        registry.register(id, sender);
+        assert!(matches!(
+            receiver.try_recv(),
+            Some(WsOut::Close(WS_OUT_OVERFLOW_CODE, _))
+        ));
+        assert!(receiver.try_recv().is_none());
+    }
+
+    #[test]
+    fn frames_buffered_within_the_budget_reach_the_channel() {
+        let registry = own_registry();
+        let mut registry = registry.lock().unwrap();
+        let id = 8;
+        registry.metadata.insert(
+            id,
+            WsMeta {
+                scope: String::new(),
+                hibernatable: false,
+                tags: Vec::new(),
+                attachment: None,
+                pending: Vec::new(),
+                auto_response_at: None,
+                facet: None,
+            },
+        );
+        registry.emit(id, WsOut::Text("first".into()));
+        registry.emit(id, WsOut::Close(1000, String::new()));
+        let (sender, mut receiver) = ws_out_channel();
+        registry.register(id, sender);
+        assert!(matches!(receiver.try_recv(), Some(WsOut::Text(text)) if text == "first"));
+        assert!(matches!(receiver.try_recv(), Some(WsOut::Close(1000, _))));
     }
 
     #[test]

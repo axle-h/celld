@@ -1,0 +1,12 @@
+{
+  "workers": ["app", "back"],
+  "steps": [
+    {"ws": "/stateless", "send": ["bye"]},
+    {"ws": "/hibernatable", "send": ["bye"]},
+    {"ws": "/relay-handoff-close", "send": ["bye"]},
+    {"ws": "/handoff-close", "send": ["bye"]},
+    {"ws": "/relay-object-close", "send": ["bye"]},
+    {"ws": "/object-close", "send": ["bye"]},
+    {"path": "/seen"}
+  ]
+}

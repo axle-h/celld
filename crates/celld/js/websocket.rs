@@ -327,9 +327,9 @@ pub(super) fn op_ws_bind_worker_handoff(
         ws_track_request_socket(&context, id);
     }
     ws_register_outbound(id, &cell, facet);
-    let (caller_tx, from_caller) = tokio::sync::mpsc::unbounded_channel();
+    let (caller_tx, from_caller) = ws_out_channel();
     ws_register(id, caller_tx);
-    let (target_tx, from_target) = tokio::sync::mpsc::unbounded_channel();
+    let (target_tx, from_target) = ws_out_channel();
     ws_register(target.id(), target_tx);
     asyncrt::op_handle().spawn(bridge_worker_handoff(WorkerHandoffBridge {
         caller: id,
@@ -560,8 +560,18 @@ fn ws_emit(context: &Arc<IoContext>, id: u64, out: WsOut) {
 
 /// Send or hold one frame on a socket that the code running in `context`
 /// owns. A socket that is not open drops the frame, as a closed one did.
-fn emit_as(context: &Arc<IoContext>, id: u64, out: WsOut) -> Result<(), String> {
+/// What waits on the host for the socket is charged to `budget`, the
+/// sending isolate's.
+fn emit_as(
+    context: &Arc<IoContext>,
+    id: u64,
+    out: WsOut,
+    budget: Option<Arc<dyn WsBudget>>,
+) -> Result<(), String> {
     if may_use(&owner_of(context), id)? {
+        if let Some(budget) = budget {
+            ws_registry().lock().unwrap().charge_to(id, &budget);
+        }
         ws_emit(context, id, out);
     } else {
         log_dropped_frame(&ws_registry().lock().unwrap(), id);
@@ -570,7 +580,10 @@ fn emit_as(context: &Arc<IoContext>, id: u64, out: WsOut) -> Result<(), String> 
 }
 
 fn emit_checked(scope: &mut v8::PinScope, id: u64, out: WsOut) {
-    if let Err(error) = emit_as(&event_context(scope), id, out) {
+    let budget = scope
+        .get_slot::<Arc<BackingStoreBudget>>()
+        .map(|budget| budget.clone() as Arc<dyn WsBudget>);
+    if let Err(error) = emit_as(&event_context(scope), id, out, budget) {
         loader_throw(scope, &error);
     }
 }
@@ -758,9 +771,10 @@ fn egress_refusal(scope: &mut v8::PinScope) -> Option<&'static str> {
         EgressPolicy::Deny => {
             Some("This worker is not permitted to access the internet via global functions.")
         }
-        EgressPolicy::Broker(_) => {
-            Some("A globalOutbound Fetcher cannot broker WebSockets in celld.")
-        }
+        EgressPolicy::Broker(_) => Some(
+            "A globalOutbound Fetcher cannot broker `new WebSocket()` in celld; fetch() with \
+             an `Upgrade: websocket` header reaches it.",
+        ),
     }
 }
 
@@ -771,11 +785,19 @@ fn egress_refusal(scope: &mut v8::PinScope) -> Option<&'static str> {
 /// refusal. `container` is the port of a container's `getTcpPort()` upgrade:
 /// the host lets that port of the running object's own container past the
 /// policy.
+///
+/// Returns null, and dials nothing, when this isolate's network is a
+/// `globalOutbound` Fetcher: the caller sends the upgrade to it as it sends
+/// any request, and the Fetcher's 101 carries the socket back.
 pub(super) fn op_ws_upgrade(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
+    if matches!(actor_runtime_state(scope).egress, EgressPolicy::Broker(_)) {
+        rv.set(v8::null(scope).into());
+        return;
+    }
     // Each dial is a subrequest, as `op_fetch` is, and so is each hop of a
     // followed redirect, which dials again.
     if let Err(error) = event_context(scope).charge_subrequest() {
@@ -1065,11 +1087,42 @@ pub(super) fn op_ws_bind_target(
 
 /// Accept socket `id` (0 allocates one) as a hibernatable socket of `cell`,
 /// the running Durable Object. Returns its id.
-fn accept_hibernatable(cell: &str, id: u64, tags: Vec<String>) -> Result<u64, String> {
+///
+/// `object` is the Durable Object the socket counts against for
+/// [`WS_HIBERNATABLE_PER_OBJECT`]: the cell, or a facet's root. Cloudflare
+/// documents the limit per Durable Object and says nothing of facets, so a
+/// root and its facets share it.
+fn accept_hibernatable(
+    cell: &str,
+    object: &str,
+    id: u64,
+    tags: Vec<String>,
+) -> Result<u64, String> {
+    let held = ws_registry()
+        .lock()
+        .unwrap()
+        .hibernatable_counts
+        .get(object)
+        .copied()
+        .unwrap_or(0);
+    if held >= WS_HIBERNATABLE_PER_OBJECT {
+        return Err(TOO_MANY_HIBERNATABLE.to_string());
+    }
     let id = claim(&WsOwner::Cell(cell.to_string()), id)?;
     let replaced_regular_scope = {
         let registry = ws_registry();
         let mut registry = registry.lock().unwrap();
+        if !registry
+            .metadata
+            .get(&id)
+            .is_some_and(|meta| meta.hibernatable)
+        {
+            *registry
+                .hibernatable_counts
+                .entry(object.to_string())
+                .or_default() += 1;
+            registry.hibernatable_objects.insert(id, object.to_string());
+        }
         let sockets = &mut registry.metadata;
         let replaced_regular_scope = sockets
             .get(&id)
@@ -1124,7 +1177,11 @@ pub(super) fn op_ws_accept(
             )
         }
     };
-    match accept_hibernatable(&cell, id, tags) {
+    // A facet's sockets count against its root.
+    let object = current_cell_event(&event_context(scope))
+        .and_then(|frame| frame.root)
+        .map_or_else(|| cell.clone(), |root| root.cell);
+    match accept_hibernatable(&cell, &object, id, tags) {
         Ok(id) => rv.set(v8::Number::new(scope, id as f64).into()),
         Err(error) => loader_throw(scope, &error),
     }
@@ -1406,9 +1463,9 @@ mod tests {
 
     /// A registered socket that `owner` owns, with the channel its frames
     /// leave by.
-    fn owned_socket(owner: WsOwner) -> (u64, tokio::sync::mpsc::UnboundedReceiver<WsOut>) {
+    fn owned_socket(owner: WsOwner) -> (u64, WsOutReceiver) {
         let id = ws_allocate(owner);
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, rx) = ws_out_channel();
         ws_register(id, tx);
         (id, rx)
     }
@@ -1449,18 +1506,18 @@ mod tests {
                 || WsOut::Close(1000, "done".into()),
             ];
             for out in frames_to_send {
-                assert_eq!(emit_as(&other, id, out()).err(), cross_request());
-                assert_eq!(emit_as(&cell, id, out()).err(), cross_request());
-                emit_as(&owner, id, out()).unwrap();
+                assert_eq!(emit_as(&other, id, out(), None).err(), cross_request());
+                assert_eq!(emit_as(&cell, id, out(), None).err(), cross_request());
+                emit_as(&owner, id, out(), None).unwrap();
             }
-            assert!(matches!(frames.try_recv(), Ok(WsOut::Text(text)) if text == "text"));
-            assert!(matches!(frames.try_recv(), Ok(WsOut::Binary(bytes)) if bytes == [1, 2]));
-            assert!(matches!(frames.try_recv(), Ok(WsOut::Close(1000, _))));
-            assert!(frames.try_recv().is_err());
+            assert!(matches!(frames.try_recv(), Some(WsOut::Text(text)) if text == "text"));
+            assert!(matches!(frames.try_recv(), Some(WsOut::Binary(bytes)) if bytes == [1, 2]));
+            assert!(matches!(frames.try_recv(), Some(WsOut::Close(1000, _))));
+            assert!(frames.try_recv().is_none());
             // An id that names no socket drops the frame, as a closed one did.
             ws_unregister(id);
-            emit_as(&owner, id, WsOut::Text("late".into())).unwrap();
-            emit_as(&other, id, WsOut::Text("late".into())).unwrap();
+            emit_as(&owner, id, WsOut::Text("late".into()), None).unwrap();
+            emit_as(&other, id, WsOut::Text("late".into()), None).unwrap();
         });
     }
 
@@ -1474,14 +1531,14 @@ mod tests {
             // its storage, so the check is asked directly.
             assert_eq!(may_use(&owner_of(&cell_context("later-a")), id), Ok(true));
             assert_eq!(
-                emit_as(&cell_context("later-b"), id, WsOut::Text("x".into())).err(),
+                emit_as(&cell_context("later-b"), id, WsOut::Text("x".into()), None).err(),
                 cross_request()
             );
             assert_eq!(
-                emit_as(&IoContext::new(), id, WsOut::Text("x".into())).err(),
+                emit_as(&IoContext::new(), id, WsOut::Text("x".into()), None).err(),
                 cross_request()
             );
-            assert!(frames.try_recv().is_err());
+            assert!(frames.try_recv().is_none());
             ws_unregister(id);
         });
     }
@@ -1517,15 +1574,18 @@ mod tests {
         // Before any registry access: the shared domain replaces the
         // fallback services, and an id from one would name another\'s socket.
         services_ready();
-        let id = accept_hibernatable("accept-a", 0, vec!["tag".into()]).unwrap();
+        let id = accept_hibernatable("accept-a", "accept-a", 0, vec!["tag".into()]).unwrap();
         assert_eq!(ws_owner(id), Some(WsOwner::Cell("accept-a".into())));
         // Its own cell accepts it again, in any event, and lists it.
-        assert_eq!(accept_hibernatable("accept-a", id, Vec::new()), Ok(id));
+        assert_eq!(
+            accept_hibernatable("accept-a", "accept-a", id, Vec::new()),
+            Ok(id)
+        );
         assert!(list_hibernatable("accept-a", None).contains(&format!("\"id\":{id}")));
         assert!(!list_hibernatable("accept-b", None).contains(&format!("\"id\":{id}")));
         // Another cell neither accepts it nor registers it as its own.
         assert_eq!(
-            accept_hibernatable("accept-b", id, Vec::new()).err(),
+            accept_hibernatable("accept-b", "accept-b", id, Vec::new()).err(),
             cross_request()
         );
         assert_eq!(accept_regular("accept-b", id).err(), cross_request());
@@ -1534,13 +1594,13 @@ mod tests {
         assert!(has_regular_websocket("accept-a"));
         assert_eq!(accept_regular("accept-a", regular), Ok(regular));
         assert_eq!(
-            accept_hibernatable("accept-b", regular, Vec::new()).err(),
+            accept_hibernatable("accept-b", "accept-b", regular, Vec::new()).err(),
             cross_request()
         );
         // An id that names nothing is not a socket to register.
         let unknown = ws_next_id();
         assert_eq!(
-            accept_hibernatable("accept-a", unknown, Vec::new()).err(),
+            accept_hibernatable("accept-a", "accept-a", unknown, Vec::new()).err(),
             Some(NOT_VALID.to_string())
         );
         assert_eq!(
@@ -1556,12 +1616,42 @@ mod tests {
     }
 
     #[test]
+    fn a_durable_object_holds_at_most_its_limit_of_hibernatable_sockets() {
+        services_ready();
+        let cell = "hibernatable-cap";
+        ws_registry()
+            .lock()
+            .unwrap()
+            .hibernatable_counts
+            .insert(cell.to_string(), WS_HIBERNATABLE_PER_OBJECT - 1);
+        let id = accept_hibernatable(cell, cell, 0, Vec::new()).unwrap();
+        assert_eq!(
+            accept_hibernatable(cell, cell, 0, Vec::new()),
+            Err(TOO_MANY_HIBERNATABLE.to_string())
+        );
+        // A facet of the object counts against it too.
+        assert_eq!(
+            accept_hibernatable("hibernatable-cap/facet", cell, 0, Vec::new()),
+            Err(TOO_MANY_HIBERNATABLE.to_string())
+        );
+        // Closing one makes room for another.
+        ws_unregister(id);
+        let again = accept_hibernatable(cell, cell, 0, Vec::new()).unwrap();
+        ws_unregister(again);
+        ws_registry()
+            .lock()
+            .unwrap()
+            .hibernatable_counts
+            .remove(cell);
+    }
+
+    #[test]
     fn attachments_and_auto_response_times_belong_to_the_cell() {
         // Before any registry access: the shared domain replaces the
         // fallback services, and an id from one would name another\'s socket.
         services_ready();
         let owner = WsOwner::Cell("cell-a".into());
-        let id = accept_hibernatable("cell-a", 0, Vec::new()).unwrap();
+        let id = accept_hibernatable("cell-a", "cell-a", 0, Vec::new()).unwrap();
         ws_registry()
             .lock()
             .unwrap()
@@ -1830,7 +1920,7 @@ mod tests {
         // Before any registry access: the shared domain replaces the
         // fallback services, and an id from one would name another\'s socket.
         services_ready();
-        let socket = accept_hibernatable("own-a", 0, Vec::new()).unwrap();
+        let socket = accept_hibernatable("own-a", "own-a", 0, Vec::new()).unwrap();
         let own = cell_context("own-a");
         admit_target(&own, &target(socket, "own-a")).unwrap();
         // Still its own, so again.
@@ -1971,7 +2061,7 @@ mod tests {
             let request = IoContext::new();
             let _current = CurrentGuard::enter(request.clone());
             // Another object's socket, which this request was never handed.
-            let socket = accept_hibernatable("admit-a", 0, Vec::new()).unwrap();
+            let socket = accept_hibernatable("admit-a", "admit-a", 0, Vec::new()).unwrap();
             let stolen = format!(r#"{{"id":{socket},"scope":"admit-a"}}"#);
             let unknown = format!(r#"{{"id":{},"scope":"admit-a"}}"#, ws_next_id());
             worker.with_scope_for_test(|scope| {

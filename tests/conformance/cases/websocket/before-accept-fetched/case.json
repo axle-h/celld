@@ -1,0 +1,10 @@
+{
+  "kind": "celld-only",
+  "reason": "wrangler's createTestHarness sends every global fetch() through Node, whose response carries no WebSocket. The expected transcript is recorded from workerd 1.20261001.1 run directly, with `node lib/workerd-direct.mjs websocket/before-accept-fetched --write` and this case's workerd.capnp.",
+  "workers": ["app"],
+  "upstream": true,
+  "env": {"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}"},
+  "steps": [
+    {"path": "/?t=http://127.0.0.1:${UPSTREAM_PORT}/ws/silent"}
+  ]
+}

@@ -14,6 +14,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadCase } from "./case.mjs";
@@ -54,7 +55,10 @@ try {
     UPSTREAM_PORT: upstream?.ports[0],
     UPSTREAM_PORT_2: upstream?.ports[1],
   });
-  const transcript = { steps: await runSteps({ origin }, steps, normalize) };
+  // The version it came from, as a differential case's recording has.
+  const require = createRequire(join(ROOT, "package.json"));
+  const version = createRequire(require.resolve("wrangler"))("workerd/package.json").version;
+  const transcript = { workerd: version, steps: await runSteps({ origin }, steps, normalize) };
   const text = `${JSON.stringify(transcript, null, 2)}\n`;
   process.stdout.write(text);
   if (flags.includes("--write")) writeFileSync(join(testCase.dir, "expect.json"), text);

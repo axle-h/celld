@@ -1,0 +1,7 @@
+// The stateless Worker that answers the front's upgrade through a service
+// binding.
+{
+  "name": "back",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

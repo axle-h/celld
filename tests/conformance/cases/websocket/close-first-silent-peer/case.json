@@ -1,0 +1,17 @@
+{
+  "kind": "celld-only",
+  "reason": "how long a socket that closed first waits for a silent peer is celld's bound, and workerd's harness cannot count the node's connections",
+  "workers": ["app"],
+  "upstream": true,
+  "env": { "CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}" },
+  "steps": [
+    {"path": "/warm"},
+    {"sockets": "baseline"},
+    {"path": "/dial?t=ws://127.0.0.1:${UPSTREAM_PORT}/ws/silent"},
+    {"path": "/dial?t=ws://127.0.0.1:${UPSTREAM_PORT}/ws/silent"},
+    {"path": "/dial?t=ws://127.0.0.1:${UPSTREAM_PORT}/ws/silent"},
+    {"sockets": 0, "within": 3000},
+    {"path": "/object-dial?t=ws://127.0.0.1:${UPSTREAM_PORT}/ws/silent"},
+    {"sockets": 0, "within": 15000}
+  ]
+}

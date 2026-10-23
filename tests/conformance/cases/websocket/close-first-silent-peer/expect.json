@@ -1,0 +1,12 @@
+{
+  "steps": [
+    {"status": 200, "body": "warm"},
+    {"sockets": "baseline"},
+    {"status": 200, "body": "closed, readyState 2"},
+    {"status": 200, "body": "closed, readyState 2"},
+    {"status": 200, "body": "closed, readyState 2"},
+    {"sockets": "at most 0 more"},
+    {"status": 200, "body": "closed, readyState 2"},
+    {"sockets": "at most 0 more"}
+  ]
+}

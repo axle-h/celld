@@ -28,6 +28,9 @@ import { BINARY, CLOSE, TEXT, acceptKey, closePayload, encodeFrame, frameReader,
  *   it receives, the Close that answers its own, and the connection's end.
  * - `/ws/log?id=<id>` answers that record as JSON, `{received, reply,
  *   ended}`, once the connection has ended or after 3 s.
+ * - A WebSocket upgrade to `/ws/silent` is accepted, and the server never
+ *   sends anything, a reply to a Close included. One to `/ws/stall` is
+ *   accepted, and the server never reads either.
  * - Anything else answers `upstream`.
  */
 // The request headers `/echo` reports, `null` when absent. The rest depend on
@@ -110,6 +113,16 @@ export async function startUpstream() {
           : null;
     if (location !== null) {
       socket.end(`HTTP/1.1 302 Found\r\nLocation: ${location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
+      return;
+    }
+    if (url.pathname === "/ws/silent" || url.pathname === "/ws/stall") {
+      socket.write(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+          `Sec-WebSocket-Accept: ${acceptKey(request.headers["sec-websocket-key"])}\r\n\r\n`,
+      );
+      if (url.pathname === "/ws/stall") socket.pause();
+      else socket.on("data", () => {});
+      socket.on("close", () => upgraded.delete(socket));
       return;
     }
     if (url.pathname !== "/ws/close-first") return socket.destroy();

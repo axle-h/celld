@@ -1,0 +1,8 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/plain", "responseHeaders": ["x-upgrade"]},
+    {"ws": "/pass", "send": ["a", "close"]},
+    {"ws": "/accept", "send": ["a", "close"]}
+  ]
+}

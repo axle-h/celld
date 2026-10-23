@@ -1,0 +1,7 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"ws": "/", "send": ["a", "b", "c", "d", "e", "f", "g", "h"], "drop": true},
+    {"path": "/seen"}
+  ]
+}

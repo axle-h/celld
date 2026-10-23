@@ -196,18 +196,62 @@ The `tail` and `email` handlers are unavailable.
   If the owner connection fails between frames before a Close, the ingress sends
   code 1012. If a frame is incomplete, the ingress closes the transport instead.
 - `acceptWebSocket()` throws above 90 percent of the V8 heap limit.
-- The server end of a socket, the end a Worker or Durable Object returned in
-  a 101 or accepted with `acceptWebSocket()`, is CLOSED at once when it
-  closes first, and fires no close event for the peer's reply. In workerd it
-  is CLOSING until the reply arrives, and its close event then fires. A
-  client end (a dialed socket, one taken from a subrequest's 101, or one end
-  of a `WebSocketPair` that holds both) is CLOSING until the reply, as in
-  workerd.
-- A half-open socket, whose peer sent its Close and has no reply yet, ends
-  within a second of the peer's side of the connection ending, even if the
-  peer still reads; a reply sent in that second still goes out. workerd
-  reads nothing after the Close, so it keeps such a connection until it
-  writes to it.
+- A socket that closes first is CLOSING until its peer's reply, and its close
+  event then carries that reply, as in workerd. celld waits at most 10
+  seconds for the reply, and less if the socket's owner lets go of it first
+  (a stateless request ends, or the socket is unregistered). The close event
+  then reports code 1006. workerd has no such bound while the peer stays
+  connected.
+- A half-open socket, whose peer sent its Close and has no reply yet, stays
+  open after the peer shuts down its side of the connection, as in workerd.
+  celld then sends a Ping every second, and ends the socket when one fails:
+  a peer that closed its connection outright answers the first with a reset.
+  workerd sends no Ping.
+- A connection that ends without a Close gives a close event with code 1006
+  and workerd's reason, `WebSocket disconnected without sending Close
+  frame.`
+- `send()` never waits or throws, as in workerd, and there is no
+  `bufferedAmount`. workerd queues whatever a Worker sends. celld bounds what
+  waits on the host for a peer that reads slowly:
+  - Each socket holds at most 32 MiB of sent messages. One message of any
+    size is always accepted into an empty queue.
+  - Every socket of an isolate together holds no more than the isolate's
+    memory budget (`CELLD_V8_HEAP_LIMIT_MB`), the budget its ArrayBuffers
+    use. The messages count against that budget while they wait.
+  - A message past either bound closes its socket. The peer gets a Close
+    with code 1011 and the reason `celld closed this WebSocket: more than 32
+    MiB of sent messages waited for the peer to read them` or `celld closed
+    this WebSocket: its isolate's memory limit could not hold more sent
+    messages`. The application gets an `error` event, then a close event
+    with code 1006 and the same reason. What it sends after that is
+    dropped. A write still under way 1 second later is abandoned with the
+    connection.
+  - A message being written stays counted until the write finishes. A
+    write that never finishes, to a peer that does not read, stays counted
+    while the socket's owner lives, and is abandoned with its connection 1
+    second after the owner lets go of the socket (a stateless request
+    ends, or the socket is unregistered). workerd has no such bound. So a
+    peer with a zero window holds its socket while the owner lives, by
+    design, and the isolate's budget bounds what it holds.
+  - An auto-response (`setWebSocketAutoResponse`) waits on the host like
+    any other message. While a socket's outgoing queue holds more than 1
+    MiB, celld reads no further from that socket until the queue drains:
+    workerd writes each auto-response before it reads the next message. So
+    a peer that sends requests and never reads the replies is held to about
+    1 MiB. The application's own messages do not pause reading.
+  - A bound never condemns the isolate: the message that does not fit is
+    refused instead of held.
+- `ctx.acceptWebSocket()` throws once a Durable Object holds 32,768
+  hibernatable sockets, Cloudflare's limit: `this Durable Object already
+  holds 32768 hibernatable WebSockets, the most one can; close one before
+  accepting another`. A facet's sockets count against its root object,
+  since Cloudflare documents the limit per Durable Object and does not
+  mention facets. workerd has no limit.
+- A Dynamic Worker whose `globalOutbound` is a Fetcher can make a `fetch()`
+  upgrade: the request goes to the Fetcher, as any other request does, and
+  its 101 carries the socket back. `new WebSocket()` there throws an error
+  that points to that `fetch()` upgrade instead. workerd sends a
+  `new WebSocket()` upgrade to the Fetcher too.
 - A response with a WebSocket to a request without `Upgrade: websocket` fails,
   as in workerd. A Durable Object's `stub.fetch()` call then rejects, and an
   HTTP client receives status 500. The server end of the socket receives a close

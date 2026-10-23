@@ -1,0 +1,14 @@
+{
+  "kind": "celld-only",
+  "reason": "the limit on a WebSocket's outgoing queue is celld's: workerd queues whatever a Worker sends (websocket/send-buffering)",
+  "workers": ["app", "back"],
+  "steps": [
+    {"path": "/warm"},
+    {"rss": "baseline"},
+    {"ws": "/stateless", "send": ["flood:1700:60000"], "stall": 6000, "receive": 1700, "close": 1000, "record": "none"},
+    {"ws": "/object", "send": ["flood:1700:60000"], "stall": 6000, "receive": 1700, "close": 1000, "record": "none"},
+    {"path": "/parked"},
+    {"path": "/seen"},
+    {"rss": 128}
+  ]
+}

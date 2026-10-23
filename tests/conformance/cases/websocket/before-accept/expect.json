@@ -1,0 +1,55 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "send": "TypeError: You must call one of accept() or state.acceptWebSocket() on this WebSocket before sending messages.",
+        "close": "TypeError: You must call one of accept() or state.acceptWebSocket() on this WebSocket before sending messages.",
+        "afterClose": 1,
+        "accept": "allowed",
+        "accepted": 1,
+        "ping": "allowed",
+        "events": [
+          [
+            "message",
+            "back:ping"
+          ]
+        ],
+        "after": 1,
+        "closeAfter": "allowed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "send": "TypeError: You must call one of accept() or state.acceptWebSocket() on this WebSocket before sending messages.",
+        "close": "TypeError: You must call one of accept() or state.acceptWebSocket() on this WebSocket before sending messages.",
+        "afterClose": 1,
+        "accept": "allowed",
+        "accepted": 1,
+        "ping": "allowed",
+        "events": [
+          [
+            "message",
+            "object:ping"
+          ]
+        ],
+        "after": 1,
+        "closeAfter": "allowed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "send": "TypeError: You must call one of accept() or state.acceptWebSocket() on this WebSocket before sending messages.",
+        "close": "TypeError: You must call one of accept() or state.acceptWebSocket() on this WebSocket before sending messages.",
+        "after": 1
+      }
+    }
+  ]
+}

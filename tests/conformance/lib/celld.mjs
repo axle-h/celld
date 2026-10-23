@@ -1,6 +1,7 @@
 // Runs a case on celld with `celld dev`, one supervisor process per start.
 
 import { spawn } from "node:child_process";
+import { readFileSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { FLUSH_MS, startOtlpReceiver } from "./otlp.mjs";
 
@@ -31,7 +32,7 @@ for (const [signal, number] of [["SIGHUP", 1], ["SIGINT", 2], ["SIGTERM", 15]]) 
  * The public listener takes `publicPort`, or a free port when it is 0, and
  * the operator listener `internalPort`, or a free port at each start.
  */
-export async function startCelld({ binary, esbuild, dir, workers, env, publicPort = 0, internalPort, observability }) {
+export async function startCelld({ binary, esbuild, dir, workers, env, publicPort = 0, internalPort, observability, watchPorts = [] }) {
   const configs = [
     ...workers.flatMap((name) => ["-c", `workers/${name}/wrangler.jsonc`]),
     ...(internalPort === undefined ? [] : ["--internal-port", String(internalPort)]),
@@ -56,9 +57,48 @@ export async function startCelld({ binary, esbuild, dir, workers, env, publicPor
     await otlp?.close();
     throw error;
   }
+  let baseline;
+  let socketBaseline;
+  let baselineInodes;
+  const watched = new Set(watchPorts);
   const session = {
     origin: node.ready.public,
     otlp,
+    // `"baseline"` resets the node's peak resident memory and notes where it
+    // stands; a number then checks how far the peak has grown since, in MiB.
+    // The transcript keeps the verdict, not the sizes, which vary by run.
+    async rss(limit) {
+      const pid = nodePid(node.child.pid);
+      if (limit === "baseline") {
+        writeFileSync(`/proc/${pid}/clear_refs`, "5");
+        baseline = memoryKiB(pid, "VmRSS");
+        return "baseline";
+      }
+      const grown = Math.ceil((memoryKiB(pid, "VmHWM") - baseline) / 1024);
+      return grown <= limit ? `grew at most ${limit} MiB` : `grew ${grown} MiB, more than ${limit} MiB`;
+    },
+    // Counts the node's connections to the ports `watch` names: the
+    // upstream's, and the client ports of the raw `ws` steps. `"baseline"`
+    // notes the count; a number then waits up to `within` ms for the node
+    // to hold at most that many more.
+    async sockets(limit, within) {
+      const pid = nodePid(node.child.pid);
+      if (limit === "baseline") {
+        socketBaseline = watchedConnections(pid, watched);
+        baselineInodes = socketInodes(pid);
+        return "baseline";
+      }
+      const deadline = Date.now() + within;
+      const held = () => watchedConnections(pid, watched) - socketBaseline + orphanSockets(pid, baselineInodes);
+      let extra;
+      while ((extra = held()) > limit && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return extra <= limit ? `at most ${limit} more` : `${extra} more, past ${limit}`;
+    },
+    watch(port) {
+      watched.add(port);
+    },
     async restart() {
       await stop(node);
       node = await start(configs);
@@ -78,6 +118,74 @@ export async function startCelld({ binary, esbuild, dir, workers, env, publicPor
     logs: () => stderr.join(""),
   };
   return session;
+}
+
+// The node process that `celld dev` supervises, its only child.
+function nodePid(supervisor) {
+  const children = readFileSync(`/proc/${supervisor}/task/${supervisor}/children`, "utf8").trim().split(/\s+/);
+  if (children.length !== 1 || children[0] === "") throw new Error(`celld dev has ${children.length} child processes, not its node alone`);
+  return Number(children[0]);
+}
+
+// The inodes of the node's open sockets.
+function socketInodes(pid) {
+  const inodes = new Set();
+  for (const fd of readdirSync(`/proc/${pid}/fd`)) {
+    try {
+      const match = /^socket:\[(\d+)\]$/.exec(readlinkSync(`/proc/${pid}/fd/${fd}`));
+      if (match) inodes.add(match[1]);
+    } catch {
+      // The fd closed while it was read.
+    }
+  }
+  return inodes;
+}
+
+// Where each protocol table of the network namespace keeps a socket's inode.
+const INODE_COLUMNS = { tcp: 9, tcp6: 9, udp: 9, udp6: 9, raw: 9, raw6: 9, unix: 6, netlink: 9 };
+
+// The node's sockets opened since the baseline that no protocol table lists:
+// a TCP connection that a reset removed from the table while the node kept
+// its fd open.
+function orphanSockets(pid, baseline) {
+  const listed = new Set();
+  for (const [table, column] of Object.entries(INODE_COLUMNS)) {
+    let text;
+    try {
+      text = readFileSync(`/proc/${pid}/net/${table}`, "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n").slice(1)) {
+      const inode = line.trim().split(/\s+/)[column];
+      if (inode !== undefined) listed.add(inode);
+    }
+  }
+  return [...socketInodes(pid)].filter((inode) => !baseline.has(inode) && !listed.has(inode)).length;
+}
+
+// The node's TCP connections whose remote port is in `ports`: its sockets'
+// inodes, matched in the network namespace's TCP tables. Listeners and
+// connections to anything else (the runner's keep-alive HTTP connections
+// among them) are not counted.
+function watchedConnections(pid, ports) {
+  const inodes = socketInodes(pid);
+  let count = 0;
+  for (const table of ["tcp", "tcp6"]) {
+    for (const line of readFileSync(`/proc/${pid}/net/${table}`, "utf8").split("\n").slice(1)) {
+      const fields = line.trim().split(/\s+/);
+      if (fields.length < 10 || fields[3] === "0A") continue;
+      const remotePort = parseInt(fields[2].split(":")[1], 16);
+      if (inodes.has(fields[9]) && ports.has(remotePort)) count += 1;
+    }
+  }
+  return count;
+}
+
+function memoryKiB(pid, field) {
+  const line = readFileSync(`/proc/${pid}/status`, "utf8").split("\n").find((entry) => entry.startsWith(`${field}:`));
+  if (line === undefined) throw new Error(`/proc/${pid}/status has no ${field}`);
+  return Number(line.split(/\s+/)[1]);
 }
 
 async function launch({ binary, dir, env, args, stderr }) {

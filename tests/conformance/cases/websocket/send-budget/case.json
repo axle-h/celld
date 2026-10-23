@@ -1,0 +1,14 @@
+{
+  "kind": "celld-only",
+  "reason": "the budget that a WebSocket's waiting messages are charged to is celld's isolate memory budget (plan 1.33); workerd queues them without limit",
+  "workers": ["sockets"],
+  "steps": [
+    {"path": "/warm"},
+    {"rss": "baseline"},
+    {"path": "/"},
+    {"path": "/"},
+    {"path": "/"},
+    {"path": "/"},
+    {"rss": 320}
+  ]
+}

@@ -1,0 +1,7 @@
+// The stateless Worker whose socket the front accepts through a service
+// binding.
+{
+  "name": "back",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

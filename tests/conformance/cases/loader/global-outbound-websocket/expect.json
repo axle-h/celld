@@ -1,0 +1,31 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 500,
+      "headers": {
+        "x-upgrade": null
+      },
+      "body": "TypeError: Worker tried to return a WebSocket in a response to a request which did not contain the header \"Upgrade: websocket\"."
+    },
+    {
+      "frames": [
+        "outbound:a"
+      ],
+      "close": {
+        "code": 4000,
+        "reason": "outbound closes"
+      }
+    },
+    {
+      "frames": [
+        "child:outbound:a"
+      ],
+      "close": {
+        "code": 4000,
+        "reason": "child relayed outbound closes"
+      }
+    }
+  ]
+}

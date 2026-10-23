@@ -75,6 +75,10 @@ export function describeStep(step) {
       return `ws ${step.path}`;
     case "restart":
       return "restart";
+    case "rss":
+      return `rss ${step.rss}`;
+    case "sockets":
+      return `sockets ${step.sockets}`;
     case "otlp":
       return `otlp ${step.spans.join(", ")}`;
     case "deploy":
@@ -87,10 +91,14 @@ async function runStep(session, step) {
     case "path":
       return fetchStep(session.origin, step);
     case "ws":
-      return webSocketStep(session.origin, step);
+      return webSocketStep(session, step);
     case "restart":
       await session.restart();
       return { restart: true };
+    case "rss":
+      return { rss: await session.rss(step.rss) };
+    case "sockets":
+      return { sockets: await session.sockets(step.sockets, step.within) };
     case "otlp":
       return { otlp: await session.otlp.take(step.spans, STEP_TIMEOUT_MS) };
     case "deploy":
@@ -160,8 +168,9 @@ function httpFetch(url, { method = "GET", headers = {}, body, signal }) {
   });
 }
 
-function webSocketStep(origin, step) {
-  if (step.raw) return rawWebSocketStep(origin, step);
+function webSocketStep(session, step) {
+  const { origin } = session;
+  if (step.raw) return rawWebSocketStep(session, step);
   const url = new URL(step.path, origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return new Promise((resolve, reject) => {
@@ -216,17 +225,22 @@ function webSocketStep(origin, step) {
   });
 }
 
-// A `ws` step with "raw" or "shutdown": a raw socket, because Node's
-// WebSocket drops frames that arrive after its own Close and cannot shut
-// down its side of the connection. After its Close the client keeps reading
-// (and with "shutdown" sends FIN), and waits up to RAW_WAIT_MS for the server
-// to end the connection. The transcript records every frame (binary as
-// `{"binary": "<base64>"}`; a fragment fails the step), the server's Close
-// (null without one), and whether the server ended the connection.
+// A `ws` step with "raw", "shutdown", "stall" or "record": a raw socket,
+// because Node's WebSocket drops frames that arrive after its own Close,
+// cannot shut down its side of the connection, and reads whatever arrives.
+// After its Close the client keeps reading (and with "shutdown" sends FIN),
+// and waits up to RAW_WAIT_MS for the server to end the connection. A Close
+// the server sends first gets the same code back, as a client answers it.
+// With "stall" the client reads nothing for that long once its frames are
+// sent. The transcript records every frame (binary as
+// `{"binary": "<base64>"}`; a fragment fails the step), or what "record"
+// keeps of them, the server's Close (null without one), and whether the
+// server ended the connection. With "reset" the client reads nothing after
+// its Close and resets the connection later, and records only that.
 const RAW_WAIT_MS = 3000;
 
-function rawWebSocketStep(origin, step) {
-  const url = new URL(step.path, origin);
+function rawWebSocketStep(session, step) {
+  const url = new URL(step.path, session.origin);
   return new Promise((resolve, reject) => {
     const socket = connect(Number(url.port), url.hostname);
     const key = randomBytes(16).toString("base64");
@@ -238,18 +252,36 @@ function rawWebSocketStep(origin, step) {
     const reader = frameReader();
     let timer = setTimeout(() => {
       socket.destroy();
-      reject(new Error(`timed out waiting for ${step.receive} frames; received ${JSON.stringify(frames)}`));
+      reject(new Error(`timed out waiting for ${step.receive} frames; received ${count}`));
     }, STEP_TIMEOUT_MS);
-    const closeIfDone = () => {
-      if (closing || frames.length < step.receive) return;
+    let count = 0;
+    let bytes = 0;
+    const result = (ended) => {
+      if (step.drop) return { ended };
+      const received = step.record === "frames" ? { frames } : step.record === "count" ? { frames: { count, bytes } } : {};
+      return { ...received, close: reply, ended };
+    };
+    const sendClose = (code) => {
       closing = true;
-      socket.write(encodeFrame(CLOSE, closePayload(step.close), true));
+      socket.write(encodeFrame(CLOSE, closePayload(code), true));
       if (step.shutdown) socket.end();
       clearTimeout(timer);
+      if (step.reset > 0) {
+        socket.pause();
+        timer = setTimeout(() => {
+          socket.resetAndDestroy();
+          resolve({ reset: true });
+        }, step.reset);
+        return;
+      }
       timer = setTimeout(() => {
         socket.destroy();
-        resolve({ frames, close: reply, ended: false });
+        resolve(result(false));
       }, RAW_WAIT_MS);
+    };
+    const closeIfDone = () => {
+      if (closing || count < step.receive) return;
+      sendClose(step.close);
     };
     const onFrames = (chunk) => {
       for (const frame of reader.push(chunk)) {
@@ -258,20 +290,32 @@ function rawWebSocketStep(origin, step) {
           socket.destroy();
           return reject(new Error("the server sent a fragmented message, which the raw client does not reassemble"));
         }
-        if (frame.opcode === TEXT) frames.push(frame.payload.toString());
-        else if (frame.opcode === BINARY) frames.push({ binary: frame.payload.toString("base64") });
-        else if (frame.opcode === CLOSE && reply === null) reply = readClose(frame.payload);
-        else if (frame.opcode === PING) socket.write(encodeFrame(PONG, frame.payload, true));
+        if (frame.opcode === TEXT || frame.opcode === BINARY) {
+          count += 1;
+          bytes += frame.payload.length;
+          if (step.record === "frames") {
+            frames.push(frame.opcode === TEXT ? frame.payload.toString() : { binary: frame.payload.toString("base64") });
+          }
+        } else if (frame.opcode === CLOSE && reply === null) {
+          reply = readClose(frame.payload);
+          if (!closing) sendClose(reply.code === 1005 ? null : reply.code);
+        }
+        // A client that shut down its side cannot answer a Ping any more.
+        else if (frame.opcode === PING && !socket.writableEnded) socket.write(encodeFrame(PONG, frame.payload, true));
       }
       closeIfDone();
     };
     socket.on("connect", () => {
+      // A "sockets" step counts the node's end of this connection.
+      session.watch?.(socket.localPort);
       socket.write(
         `GET ${url.pathname}${url.search} HTTP/1.1\r\nHost: ${url.host}\r\nUpgrade: websocket\r\n` +
           `Connection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`,
       );
     });
     socket.on("data", (chunk) => {
+      // A dropping client reads nothing after its frames.
+      if (upgraded && step.drop) return;
       if (upgraded) return onFrames(chunk);
       head = Buffer.concat([head, chunk]);
       const end = head.indexOf("\r\n\r\n");
@@ -283,15 +327,37 @@ function rawWebSocketStep(origin, step) {
         return reject(new Error("the server did not accept the WebSocket upgrade"));
       }
       upgraded = true;
-      for (const frame of step.send) socket.write(encodeFrame(TEXT, frame, true));
-      onFrames(head.subarray(end + 4));
+      const frames = step.send.flatMap((frame) => Array.from({ length: step.repeat }, () => encodeFrame(TEXT, frame, true)));
+      if (frames.length > 0) socket.write(Buffer.concat(frames));
+      if (step.drop) {
+        closing = true;
+        socket.end();
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          socket.destroy();
+          resolve(result(false));
+        }, RAW_WAIT_MS);
+        return;
+      }
+      const rest = head.subarray(end + 4);
+      if (step.stall > 0) {
+        socket.pause();
+        setTimeout(() => {
+          onFrames(rest);
+          socket.resume();
+        }, step.stall);
+      } else {
+        onFrames(rest);
+      }
     });
     socket.on("error", () => {});
     socket.on("close", () => {
       clearTimeout(timer);
       if (!upgraded) return reject(new Error("the connection ended before the upgrade"));
-      if (!closing) return reject(new Error(`the server ended the connection; received ${JSON.stringify(frames)}`));
-      resolve({ frames, close: reply, ended: true });
+      // A server may drop a peer that does not read, so a stalled client
+      // records that end instead of failing.
+      if (!closing && step.stall === 0) return reject(new Error(`the server ended the connection; received ${count} frames`));
+      resolve(result(true));
     });
   });
 }

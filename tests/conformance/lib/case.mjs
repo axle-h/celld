@@ -9,8 +9,10 @@ import { REQUIREMENTS } from "./requirements.mjs";
 const CASE_KEYS = new Set(["kind", "reason", "workers", "env", "upstream", "observability", "nodes", "xfail", "requires", "steps", "normalize"]);
 const STEP_KEYS = {
   path: new Set(["path", "method", "headers", "body", "chunked", "responseHeaders"]),
-  ws: new Set(["ws", "send", "receive", "close", "protocols", "raw", "shutdown"]),
+  ws: new Set(["ws", "send", "receive", "close", "protocols", "raw", "shutdown", "stall", "record", "drop", "reset", "repeat"]),
   restart: new Set(["restart"]),
+  rss: new Set(["rss"]),
+  sockets: new Set(["sockets", "within"]),
   otlp: new Set(["otlp"]),
   deploy: new Set(["deploy", "args"]),
 };
@@ -133,6 +135,17 @@ export function loadCase(root, id) {
     steps.forEach((step, index) => {
       if (!raw.workers.includes(step.worker)) fail(`steps[${index}]: "deploy" must name one of "workers"`);
     });
+  }
+  steps.forEach((step, index) => {
+    if (step.kind !== "rss" && step.kind !== "sockets") return;
+    // workerd runs under wrangler, whose process holds more than the case.
+    if (kind !== "celld-only") fail(`steps[${index}]: an "${step.kind}" step measures the celld node, so it needs "kind": "celld-only"`);
+  });
+  if (steps.some((step) => typeof step.sockets === "number") && steps.findIndex((step) => step.sockets === "baseline") === -1) {
+    fail(`a "sockets" limit is measured from an earlier "sockets": "baseline" step`);
+  }
+  if (steps.some((step) => typeof step.rss === "number") && steps.findIndex((step) => step.rss === "baseline") === -1) {
+    fail(`an "rss" limit is measured from an earlier "rss": "baseline" step`);
   }
   steps.forEach((step, index) => {
     if (step.kind !== "otlp") return;
@@ -259,9 +272,21 @@ function validateStep(step, fail) {
       // With "close", the client closes after "receive" frames (by default
       // one per frame sent). Without it, the step waits for the server to
       // close.
+      // "drop" ends the connection without a Close once the frames are
+      // sent, as a client that goes away does, and waits for the server to
+      // end it too.
+      if ("drop" in step) {
+        if (step.drop !== true) fail(`"drop" must be true when present`);
+        for (const key of ["close", "receive", "protocols", "raw", "shutdown", "stall", "record", "reset", "repeat"]) {
+          if (key in step) fail(`"drop" cannot be used with "${key}"`);
+        }
+        return { kind, path: step.ws, send, receive: 0, raw: true, drop: true, stall: 0, record: "frames", reset: 0, repeat: 1 };
+      }
       if (!("close" in step)) {
         if ("receive" in step) fail(`"receive" needs "close"; without "close" the step waits for the server to close`);
-        if ("raw" in step || "shutdown" in step) fail(`"raw" and "shutdown" need "close"`);
+        if ("raw" in step || "shutdown" in step || "stall" in step || "record" in step || "reset" in step || "repeat" in step) {
+          fail(`"raw", "shutdown", "stall", "record", "reset" and "repeat" need "close"`);
+        }
         return { kind, path: step.ws, send, receive: Infinity, protocols };
       }
       // null closes with no status code (an empty Close, 1005 at the server).
@@ -275,15 +300,45 @@ function validateStep(step, fail) {
       const shutdown = step.shutdown ?? false;
       if (typeof shutdown !== "boolean") fail(`"shutdown" must be a boolean`);
       if (typeof (step.raw ?? false) !== "boolean") fail(`"raw" must be a boolean`);
-      const raw = (step.raw ?? false) || shutdown;
-      if (raw && protocols !== undefined) fail(`"raw" and "shutdown" cannot be used with "protocols"`);
+      // "stall" stops reading for that many milliseconds once the frames
+      // are sent, as a peer that reads too slowly does. "record" says what
+      // the transcript keeps of the frames received: all of them ("frames",
+      // the default), their number and size ("count"), or nothing ("none").
+      const stall = step.stall ?? 0;
+      if (!Number.isInteger(stall) || stall < 0 || stall > 20_000) fail(`"stall" must be a number of milliseconds up to 20000`);
+      const record = step.record ?? "frames";
+      if (!["frames", "count", "none"].includes(record)) fail(`"record" must be "frames", "count" or "none"`);
+      // "reset" makes the client read nothing after its Close and reset the
+      // connection that many milliseconds later, as a peer that goes away
+      // does. The transcript then has only `reset`.
+      const reset = step.reset ?? 0;
+      if (!Number.isInteger(reset) || reset < 0 || reset > 20_000) fail(`"reset" must be a number of milliseconds up to 20000`);
+      // "repeat" sends each frame of "send" that many times, in one write.
+      const repeat = step.repeat ?? 1;
+      if (!Number.isInteger(repeat) || repeat < 1 || repeat > 100_000) fail(`"repeat" must be a count from 1 to 100000`);
+      const raw = (step.raw ?? false) || shutdown || "stall" in step || "record" in step || reset > 0 || repeat > 1;
+      if (raw && protocols !== undefined) fail(`"raw", "shutdown", "stall" and "record" cannot be used with "protocols"`);
       const receive = step.receive ?? send.length;
       if (!Number.isInteger(receive) || receive < 0) fail(`"receive" must be a non-negative integer`);
-      return { kind, path: step.ws, send, receive, close: step.close, protocols, raw, shutdown };
+      return { kind, path: step.ws, send, receive, close: step.close, protocols, raw, shutdown, stall, record, reset, repeat };
     }
     case "restart":
       if (step.restart !== true) fail(`"restart" must be true`);
       return { kind };
+    case "sockets":
+      if (!(step.sockets === "baseline" || (Number.isInteger(step.sockets) && step.sockets >= 0))) {
+        fail(`"sockets" must be "baseline" or how many more connections than then the node may hold`);
+      }
+      // How long a limit waits for the node to let connections go.
+      if ("within" in step && (step.sockets === "baseline" || !Number.isInteger(step.within) || step.within < 0 || step.within > 30_000)) {
+        fail(`"within" is a number of milliseconds up to 30000, for a "sockets" limit`);
+      }
+      return { kind, sockets: step.sockets, within: step.within ?? 5000 };
+    case "rss":
+      if (!(step.rss === "baseline" || (Number.isInteger(step.rss) && step.rss > 0))) {
+        fail(`"rss" must be "baseline" or the most MiB the node's peak memory may grow by`);
+      }
+      return { kind, rss: step.rss };
     case "otlp": {
       if (!isObject(step.otlp)) fail(`"otlp" must be an object`);
       for (const key of Object.keys(step.otlp)) {

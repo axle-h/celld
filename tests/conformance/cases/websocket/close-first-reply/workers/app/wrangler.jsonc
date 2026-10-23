@@ -1,0 +1,13 @@
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "LOG", "class_name": "Log" },
+      { "name": "SOCKETS", "class_name": "Sockets" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Log", "Sockets"] }]
+}

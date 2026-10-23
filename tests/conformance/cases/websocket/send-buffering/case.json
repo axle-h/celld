@@ -1,0 +1,8 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"ws": "/stateless", "send": ["flood:70:60000"], "stall": 2000, "receive": 70, "close": 1000, "record": "count"},
+    {"ws": "/object", "send": ["flood:70:60000"], "stall": 2000, "receive": 70, "close": 1000, "record": "count"},
+    {"path": "/seen"}
+  ]
+}

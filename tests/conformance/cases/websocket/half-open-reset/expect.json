@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"status": 200, "body": []},
+    {"sockets": "baseline"},
+    {"reset": true},
+    {"sockets": "at most 0 more"},
+    {"reset": true},
+    {"sockets": "at most 0 more"},
+    {"status": 200, "body": [["close", 4000, false], ["close", 4000, true], ["sent late"]]}
+  ]
+}

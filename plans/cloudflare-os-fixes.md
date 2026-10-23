@@ -371,8 +371,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 30 | 1.17 close replies on WebSockets; half-open sockets end on disconnect | done | `4d139d5` |
 | 31 | 1.18 Worker Loader startup error text | done | `fc845db` |
 | 32 | 1.19 trace context across RPC and the peer tunnel | done | `0477165` |
-| 33 | 1.20 redirect handling through the same Fetcher | done | see log |
-| 34+ | Phase 1 in plan order (1.22-1.30, 1.34, 1.36-1.41), and the 1.4 props key-order follow-up | queued | |
+| 33 | 1.20 redirect handling through the same Fetcher | done | `1e23fdb`, starter `86b89b1` |
+| 34 | 1.22 WebSocket follow-ups; bounded send queues and socket lifetimes (security) | done | see log |
+| 35+ | Phase 1 in plan order (1.23-1.30, 1.34, 1.36-1.42), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -2476,6 +2477,253 @@ legitimate cross-event uses.
   buffer are unbounded for every socket. Add a per-socket byte budget with
   backpressure (a `bufferedAmount` model) or a close on overflow (1009/1011),
   and make the 1.7 bridge propagate its pull-queue backpressure into it.
+
+**As built (done).**
+- **Outgoing frames are bounded.** workerd queues whatever a Worker sends:
+  `send()` never waits or throws, there is no `bufferedAmount`, and every
+  message arrives once a slow client reads (`websocket/send-buffering`).
+  celld keeps that below a per-socket bound and closes past it:
+  - Each socket's channel comes from `ws_out_channel()`, bounded to
+    `WS_OUT_QUEUE_MAX_BYTES`, 32 MiB. It is a documented constant, as the
+    1 MiB pull-queue budget is. One message enters an empty queue whatever
+    its size, so a message up to Cloudflare's 32 MiB limit always leaves,
+    and a Close always enters.
+  - **Decision:** close on overflow, since `send()` cannot wait. The queued
+    frames are discarded, and the peer gets a Close with 1011 and celld's
+    reason. The application sees an `error` event and then a close event
+    with 1006 and the same reason. What it sends after that is dropped with
+    one warning in all.
+  - A write already under way when the queue overflows gets 1 s
+    (`WS_OUT_OVERFLOW_GRACE`). After that the connection is dropped, so a
+    peer that never reads holds no task.
+  - `WsMeta.pending` has the same bound. A socket whose buffer overflowed
+    before its channel registered closes as soon as one does.
+  - **Per isolate too.** The per-socket bound alone let one Durable Object
+    hold 1.3 GB in 40 sockets (review). Waiting frames, queued or pending,
+    are now charged to the sending isolate's backing-store budget (1.33),
+    through a `WsBudget` that every sending op records again on its socket,
+    so after an eviction, a generation swap or a redeploy the new isolate
+    pays for what it sends (re-review N2). Each frame carries the budget it
+    was charged to, in the channel and in `WsMeta.pending`, and a pending
+    frame moves into the channel with its charge rather than taking a
+    second one (N3). The charge goes back once the frame is written, not
+    when the writer takes it, so a write that never finishes stays counted
+    (N1).
+    **Decision:** a frame the budget cannot hold closes its socket (1011
+    with its own reason, 1006 to the application), as the per-socket
+    overflow does. The charge is taken before the frame queues, within the
+    budget, as the allocator charges V8's allocations, so it is refused
+    rather than held and never condemns the isolate. That follows 1.35's
+    rule that only memory actually held past the budget condemns. A refusal
+    in `send()` was not an option, since workerd never throws there.
+  - A Durable Object holds at most 32,768 hibernatable sockets
+    (`WS_HIBERNATABLE_PER_OBJECT`, Cloudflare's documented limit; workerd
+    has none, so the error text is celld's). A facet's sockets count
+    against its root: Cloudflare documents the limit per Durable Object
+    and says nothing of facets.
+  - **A write that never finishes** (a peer that does not read) is
+    abandoned with its connection 1 s (`WS_OUT_ABANDON_GRACE`) after the
+    socket's owner lets go of it, as after an overflow. While the owner
+    lives it stays charged, so the budget bounds it, and there is no
+    no-progress timeout, since workerd has none. The half-open socket with
+    a full window follows the same rules. Before this, a stateless Worker
+    that sent 30 MiB on each of three sockets to a server that never read,
+    five times, left 15 connections and 533 MiB 60 s later. A peer with a
+    zero window therefore holds its socket while the owner lives, by
+    design, bounded by the budget (final review, F5 and F6).
+  - **Auto-responses wait for the peer (final review F1).** A reply the
+    host makes itself, from `setWebSocketAutoResponse`, was charged to no
+    budget, since a hibernatable socket whose JavaScript sent nothing has
+    none: 20 clients sending 16,000 requests each took the node from 51 to
+    668 MiB in 8 s. workerd's `LegacyHibernationManagerImpl::readLoop`
+    `co_await`s each auto-response's write (`maybeWriteBarrier`) before it
+    receives the next message. celld now waits after an auto-response
+    while the socket's queue holds more than `WS_REPLY_BACKLOG_MAX_BYTES`
+    (1 MiB) and reads no further meanwhile (`ws_await_backlog`), so a burst
+    of replies still shares the connection. **Decision:** only host-made
+    replies pause reading. A Pong already does, since the reader writes it
+    before it reads on, and the Close reply is the last frame. The
+    application's own messages do not, as in workerd: a client that sends
+    before it reads would otherwise deadlock against them.
+  - The half-open probe's Ping gives up 1 s after the owner lets go, as an
+    application write does (F3). Before, a Ping blocked by a zero window
+    hid the owner's going.
+  - In the 1.7 bridge and the `stub.fetch` pipe, each direction waits for
+    room in the receiving 1 MiB pull queue. Meanwhile the sending side's own
+    channel fills, so a reader that never reads makes the sender close
+    abnormally once that channel passes its bound, and the reader gets the
+    overflow's Close.
+  - Not bounded here: frames held behind an output gate
+    (`WsFlushState`) or captured during a handler's turn. They wait only
+    until the gate answers or the turn ends.
+- **A `stub.fetch` socket that a stateless request accepted** registers its
+  pump as `waitUntil`, as a handed-over socket does, so the request lives
+  while the socket is open.
+- **`worker_websocket_task` waits for `drained()`** (at most 10 s) before it
+  releases the socket's queue. The messages and the Close still queued for
+  the Worker are no longer lost. A connection that ends without a Close now
+  reports kj's reason, `WebSocket disconnected without sending Close
+  frame.`, as workerd does (`websocket/client-drop`).
+- **Before `accept()`.** In workerd, a socket that a pair or a response made
+  reads OPEN until it closes, even before `accept()`, and `send()` and
+  `close()` on it throw `You must call one of accept() or
+  state.acceptWebSocket() on this WebSocket before sending messages.` celld
+  read CONNECTING, queued such a `close()` and never sent it, and dropped
+  such a `send()`. It now matches (`websocket/before-accept`).
+- **Response status.** The status converts as a WebIDL `long`: a value that
+  is not a finite number is 0, a fraction truncates, and a value outside 32
+  bits throws workerd's TypeError. Without a WebSocket the range is 200-599,
+  and with one the status must be 101, each with workerd's RangeError text
+  (`builtins/response-status`). A network response keeps the status the
+  origin sent.
+- **An end that closes first is CLOSING until its peer's reply, and its
+  close event carries that reply**, as in workerd. The pump goes on reading
+  after the application's Close: frames the peer still sends are delivered,
+  and the peer's Close becomes the close state. A connection that ends first
+  gives 1006. The pipe hands the caller's reply to the object, waiting at
+  most 10 s, and the bridge already carried it. Reading the transport ends
+  the wait when the peer goes away. **Decision (from the review):** the
+  socket task's wait for the reply also ends when the owner lets go of the
+  socket (its last sender goes, as when a stateless request retires), and
+  after `WORKER_BRIDGE_CLOSE_TIMEOUT` (10 s) at most, as the bridge's and the
+  pipe's do. Without that, a stateless Worker that dialed a silent server,
+  closed and returned kept the connection: five were still open 70 s later.
+  workerd ends them with the IoContext, and has no bound for a Durable
+  Object. The reader no longer answers a Ping after the application's
+  Close.
+  `websocket/server-close-event` loses its xfail, and
+  `websocket/close-first-reply` covers each kind of end: a stateless
+  Worker's, a hibernatable one, both ends of a handed-over socket, and both
+  ends of a `stub.fetch` socket.
+- **Half-open sockets survive a peer's FIN.** While waiting for the
+  application's reply, a socket whose peer shut down its side keeps waiting,
+  as workerd does. It sends a Ping every `HALF_OPEN_PROBE_INTERVAL` (1 s). A
+  peer that closed its socket outright also sent a FIN, but it answers the
+  Ping with a reset, so the next Ping fails and the wait ends within about
+  2 s. The 1.17 leak does not come back. The review found that the probe
+  waited for the writer's lock in a select branch while the application's
+  write, suspended mid-frame, held it, so the task, its fd and the object's
+  residency leaked. The probe now skips a tick while a write is under way,
+  which a reset fails on its own. A connection that fails still gets
+  `REPLY_AFTER_PEER_LEFT`. `websocket/half-open-shutdown` loses its xfail.
+  `websocket/half-open-disconnect`, which pinned the old divergence, is
+  gone. Host tests on a loopback TCP connection cover both peers.
+- **`globalOutbound` and a 101.** A Dynamic Worker's `fetch()` upgrade
+  through a `globalOutbound` Fetcher was refused ("cannot broker
+  WebSockets"). It now goes to the Fetcher as an ordinary request
+  (`__ws_upgrade` answers null for a broker), and the Fetcher's 101 carries
+  the socket back, to pass on or to `accept()`. A service-binding or broker
+  target that answers a plain request with a WebSocket now fails with
+  workerd's TypeError, which it used to pass through
+  (`loader/global-outbound-websocket`). `new WebSocket()` through a broker
+  is still refused (1.42).
+- **Runner.** Raw `ws` steps gained `"stall"` (read nothing for a while),
+  `"record"` (`"count"` or `"none"`), `"drop"` (end without a Close) and
+  `"reset"` (reset the connection a while after the Close). A raw client
+  answers a Close the server sends first, and does not answer a Ping after
+  it shut down its side. Celld-only `rss` and `sockets` steps check how far
+  the node's peak memory and its open sockets grew from a baseline. The
+  upstream gained `/ws/silent`. All of these are documented in the README.
+- **Cases.** New differential cases: `websocket/send-buffering`,
+  `websocket/before-accept`, `websocket/close-first-reply`,
+  `websocket/client-drop`, `builtins/response-status` and
+  `loader/global-outbound-websocket`. New celld-only case:
+  `websocket/send-queue-overflow`. It floods 100 MB at a client that does
+  not read, from a stateless Worker, from a Durable Object, and into a
+  handed-over socket nothing has accepted yet. It checks each end's close
+  and that the node's peak memory grows by at most 96 MiB (about 60 MiB
+  measured, checked against 128 MiB). Celld-only cases from the review:
+  `websocket/send-budget` (40 sockets × 31 MiB, peak memory growth at most
+  320 MiB), `websocket/close-first-silent-peer` (a stateless Worker and a
+  Durable Object dial a silent server, close and return, and the node's
+  sockets come back to the baseline), and `websocket/half-open-reset` (a
+  client Closes, shuts down, stops reading, and resets while 48 MiB is on
+  its way; the node lets the connection go). `websocket/before-accept-fetched`
+  records the network `fetch()` upgrade's socket from workerd run directly.
+  `websocket/blocked-write-owner` (from the re-review) has a stateless
+  Worker send 30 MiB on each of three sockets to a server that never reads,
+  three times: each time the connections go within 5 s, and no later socket
+  closes for the budget. The `sockets` step counts only the node's
+  connections to the case's ports (the upstream's and the raw clients'), and
+  takes a `within`; `close-first-silent-peer`'s stateless part allows 3 s,
+  so it fails when owner release is broken (checked), and the object's part
+  15 s. It also counts sockets opened since its baseline that no
+  `/proc/<pid>/net` table lists: a reset removes a connection from the TCP
+  table while a leaked fd stays open, so `half-open-reset` passed with the
+  H1 leak until then (F2); it fails with the leak restored now (checked).
+  `blocked-write-owner` checks peak memory against 200 MiB (119 MiB
+  measured; an N1 regression is about 290). `websocket/auto-response-backlog`
+  (F1): two clients send 100,000 auto-response requests each and never
+  read; peak memory grows by at most 64 MiB. Without the wait, each socket
+  queued past its 32 MiB bound and closed, which the transcript catches.
+  The raw `ws` step gained `"repeat"`.
+  New xfails for 1.42: `builtins/response-null-body`,
+  `websocket/stateless-event-io`, `loader/global-outbound-websocket-dial`
+  and `websocket/error-after-close`. At the previous commit, every new case fails except
+  `websocket/send-buffering`, which pins what both runtimes do below the
+  bound, and the four xfails still fail. `client-drop` lost six of its
+  eight messages, which `socket is not registered` replaced.
+  `close-first-reply` timed out on the relayed `stub.fetch` socket. The
+  overflow case's parked socket hung. The review's three cases fail on the
+  first version of this change: 3 and 4 sockets kept, 1 socket kept, and
+  1257 MiB of growth. `blocked-write-owner` fails on the second version
+  (3, 6 and 9 connections kept). The whole corpus: 123 PASS and 13 XFAIL (was 109 and
+  11).
+- **Unit tests.** The channel's budget, a Close entering a full queue, the
+  pending buffer's bound, the bridge's overflow, charges given back as
+  frames leave or a receiver goes, a pending frame the budget refuses, the
+  watch on the owner, the hibernatable cap, a Ping blocked by a zero window
+  giving up once the owner goes (fails without the fix), the reply after the
+  application's Close, a peer leaving instead, the owner letting go, an
+  overflow abandoning a blocked write, the two half-open peers on TCP, and
+  a reset during a blocked write (which hangs with the old probe).
+- **Review repros** (the reviewer's scripts, before and after):
+  - Half-open, 20 MiB sent late, client resets: the node held 8 sockets
+    40 s later, against 7 before the client came; now 7.
+  - Five dial, close and return requests against a silent server: 12
+    sockets and 5 open server connections 70 s later; now 7 and 0.
+  - 40 hibernatable sockets × 31 MiB: RSS from 55 to 1311 MiB; now 56 to
+    207 MiB.
+  - Five requests, each sending 30 MiB on three sockets to a server that
+    never reads: 22 node sockets (15 connections) and 533 MiB 60 s later;
+    now 7 node sockets and 50 MiB (the script still counts 4 of its
+    own server sockets open: they are paused, so they never read the FIN).
+  - 20 clients × 16,000 auto-response requests, never reading: RSS 50
+    (51) → 668 MiB before; now 51 → 83 MiB.
+  - The same 40 sockets with idle eviction at 2 s: 194 MiB before and 196
+    MiB after; the isolate was the same throughout, since the sockets kept
+    the object resident, so this run does not exercise N2, which the unit
+    test `each_frame_is_charged_to_the_isolate_that_sent_it_last` covers.
+- **Docs.** `docs/cloudflare-compat.md` describes the close-first wait, the
+  half-open probe, the bounds with their codes and reasons, the hibernatable
+  cap and the `globalOutbound` upgrade. `docs/limitations.md` lists the
+  bounds.
+
+### 1.42 Follow-ups found by 1.22
+
+- **Null body status and `statusText`.** workerd refuses a body with status
+  101, 204, 205 or 304 unless it is empty: `Response with null body status
+  (101, 204, 205, or 304) cannot have a body.` It treats an empty one as
+  null, and refuses a control character in `statusText` (`Invalid
+  statusText`). celld accepts both. Responses that celld builds from the
+  network and from other isolates must first get a null body for those
+  statuses, as workerd builds them, or the check would refuse them. Pinned
+  by `builtins/response-null-body` (xfail).
+- **Socket events of a stateless Worker after its response.** A message or
+  close event that calls a Durable Object (or does other I/O) after the
+  response has gone never gets an answer in celld: the call goes out, but
+  the request has retired. workerd keeps the request while its socket is
+  open. Pinned by `websocket/stateless-event-io` (xfail).
+- **`new WebSocket()` through a `globalOutbound` Fetcher.** workerd sends
+  the upgrade to the Fetcher. celld refuses the dial, and a `fetch()`
+  upgrade reaches it (1.22). Pinned by
+  `loader/global-outbound-websocket-dial` (xfail).
+- **An `error` event after a clean close.** Under wrangler, workerd fires
+  `error` with "Network connection lost." after the close event of a
+  socket whose client closed cleanly. celld fires none. Find out whether
+  wrangler's proxy in front of workerd causes it: `lib/workerd-direct.mjs`
+  needs `ws` steps for that. Pinned by `websocket/error-after-close`
+  (xfail).
 
 ### 1.23 `Response.clone()` on fetched bodies (found by 0.5)
 

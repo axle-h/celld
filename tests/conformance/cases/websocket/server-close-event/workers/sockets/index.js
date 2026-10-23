@@ -1,7 +1,6 @@
-// A Durable Object closes an accepted WebSocket first. In workerd the socket
-// is CLOSING until the client's reply arrives, and then its close event
-// fires with the client's code. celld marks the socket CLOSED as it sends
-// its Close and never reports the reply (plan item 1.22).
+// A Durable Object closes an accepted WebSocket first. The socket is CLOSING
+// until the client's reply arrives, and then its close event fires with the
+// client's code (plan item 1.22).
 import { DurableObject } from "cloudflare:workers";
 
 export class Sockets extends DurableObject {

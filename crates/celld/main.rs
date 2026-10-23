@@ -2469,6 +2469,7 @@ async fn dispatch_service_call(app: AppHandle, call: SvcCallReq) {
     // guard here as well, so a missing runtime or a cancellation before
     // admission cannot leave the source in the process registry.
     let mut body_guard = call.body_guard;
+    let upgrade = requests_websocket_upgrade(&call.headers);
     let response = match &app.runtime {
         Some(runtime) => {
             runtime
@@ -2491,6 +2492,19 @@ async fn dispatch_service_call(app: AppHandle, call: SvcCallReq) {
         // context. Keep an unread tail there until its waitUntil work ends.
         body_guard.disarm();
     }
+    // workerd checks the target's response against the request it answers,
+    // as a Durable Object call does. Dropping a Worker socket releases it; a
+    // Durable Object's socket the target passed on needs its close.
+    let response = match response {
+        Ok(mut response) if !upgrade && response.websocket.is_some() => {
+            let error = format!("TypeError: {WEBSOCKET_WITHOUT_UPGRADE}");
+            if let Some(HttpResponseWebSocket::Cell(target)) = response.websocket.take() {
+                websocket::reject_accepted_websocket(&app, &target, &error).await;
+            }
+            Err(anyhow::anyhow!(error))
+        }
+        response => response,
+    };
     let _ = call.reply.send(response);
 }
 

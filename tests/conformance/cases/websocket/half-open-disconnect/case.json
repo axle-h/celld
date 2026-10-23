@@ -1,9 +1,0 @@
-{
-  "kind": "celld-only",
-  "reason": "celld ends a half-open WebSocket when the client's side of the connection ends, where workerd keeps it until the object writes (websocket/half-open-shutdown); this pins celld's side",
-  "workers": ["sockets"],
-  "steps": [
-    {"ws": "/", "send": ["a"], "close": 4000, "shutdown": true},
-    {"path": "/seen"}
-  ]
-}

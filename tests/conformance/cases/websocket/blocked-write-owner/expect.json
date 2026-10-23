@@ -1,0 +1,14 @@
+{
+  "steps": [
+    {"status": 200, "body": "warm"},
+    {"sockets": "baseline"},
+    {"rss": "baseline"},
+    {"status": 200, "body": []},
+    {"sockets": "at most 0 more"},
+    {"status": 200, "body": []},
+    {"sockets": "at most 0 more"},
+    {"status": 200, "body": []},
+    {"sockets": "at most 0 more"},
+    {"rss": "grew at most 200 MiB"}
+  ]
+}

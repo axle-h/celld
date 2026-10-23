@@ -460,12 +460,31 @@ for (const bodyStream of [CelldChunkStream, CelldBodyStream, CelldHttpBodyStream
 }
 __celld.__makeInternalByteStream = (pull, cancel) =>
   new CelldChunkStream(pull, cancel);
+// workerd converts a Response's status as a WebIDL `long`: a value that is
+// not a finite number is 0, a fraction truncates (-0.5 to 0, not -0), and a
+// value outside the 32-bit range throws.
+const __statusOf = (value) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  const status = Math.trunc(number);
+  if (status < -2147483648 || status > 2147483647)
+    throw new TypeError(
+      "Value out of range. Must be between -2147483648 and 2147483647 (inclusive).");
+  return status === 0 ? 0 : status;
+};
+// The Response that a network response becomes passes this as the
+// constructor's third argument, which no application code can reach. An
+// origin can answer with any three-digit status, and workerd builds that
+// Response without the constructor's checks.
+const __NETWORK_RESPONSE = Object.freeze({ __proto__: null });
+const __networkResponse = (body, init) => new __NetworkResponse(body, init, __NETWORK_RESPONSE);
 globalThis.Response = class Response {
   // Read-only, as in workerd, so the socket a response carries is the one it
   // was made with.
   #webSocket = null;
   get webSocket() { return this.#webSocket; }
-  constructor(body, init = {}) {
+  constructor(body, init = {}, origin = undefined) {
+    const fromNetwork = origin === __NETWORK_RESPONSE;
     // Streaming/iterable detection runs only for object bodies, so
     // the common string path skips every instanceof below.
     let stream = null;
@@ -500,7 +519,9 @@ globalThis.Response = class Response {
       : stream !== null
         ? stream
         : new CelldBodyStream(this);
-    this.status = init.status === undefined ? 200 : Number(init.status);
+    this.status = init.status === undefined
+      ? 200
+      : fromNetwork ? Number(init.status) : __statusOf(init.status);
     this.statusText = init.statusText === undefined ? "" : String(init.statusText);
     this.headers = new Headers(init.headers);
     if (typed && typed.type && !this.headers.has("content-type"))
@@ -510,12 +531,18 @@ globalThis.Response = class Response {
       throw new TypeError(
         "Failed to construct 'Response': member webSocket is not of type WebSocket.");
     this.#webSocket = webSocket;
-    // Workerd admits 101 only for a response that carries a WebSocket. A
-    // cross-isolate upgrade carries a client end made from the target.
-    if (this.status === 101 && this.#webSocket === null) {
-      throw new RangeError(
-        "Responses may only be constructed with status codes in the range " +
-        "200 to 599, inclusive.");
+    // Workerd admits 101, and only 101, for a response that carries a
+    // WebSocket. A cross-isolate upgrade carries a client end made from the
+    // target.
+    if (fromNetwork) {
+      // As the origin sent it.
+    } else if (webSocket === null) {
+      if (this.status < 200 || this.status > 599)
+        throw new RangeError(
+          "Responses may only be constructed with status codes in the range " +
+          "200 to 599, inclusive.");
+    } else if (this.status !== 101) {
+      throw new RangeError("Responses with a WebSocket must have status code 101.");
     }
     this.ok = this.status >= 200 && this.status <= 299;
     this.redirected = false;
@@ -602,6 +629,9 @@ globalThis.Response = class Response {
     return response;
   }
 };
+// Captured as it is defined: a Worker that replaces globalThis.Response
+// must not receive the network token.
+const __NetworkResponse = globalThis.Response;
 // Hoisted: this would otherwise allocate an array and scan it on
 // every Request construction, which is the HTTP hot path.
 const __HTTP_METHODS = new Set(
@@ -1027,7 +1057,9 @@ const __fetchNetwork = async (req, chain, container) => {
   // `fetch(url, { headers: { Upgrade: "websocket" } })` is the other way
   // Cloudflare opens an outbound socket, and the one most examples use.
   if ((req.headers.get("upgrade") ?? "").toLowerCase() === "websocket") {
-    return await __fetchWebSocketUpgrade(req, container);
+    const upgraded = await __fetchWebSocketUpgrade(req, container);
+    // A globalOutbound Fetcher takes the upgrade as an ordinary request.
+    if (upgraded !== null) return upgraded;
   }
   // The caller's signal, never the incoming request's own.
   const signal = req._signalForSubrequests;
@@ -1081,7 +1113,7 @@ const __fetchNetwork = async (req, chain, container) => {
     : r.body !== undefined ? r.body : Uint8Array.from(r.bodyBytes || []);
   // A globalOutbound Fetcher is a service binding, so its target can answer
   // with a WebSocket the same way.
-  const response = new Response(
+  const response = __networkResponse(
     responseBody,
     {
       status: r.status,
@@ -1120,6 +1152,8 @@ const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
       JSON.stringify(Array.from(req.headers)),
       container,
     );
+    // This isolate's network is a globalOutbound Fetcher.
+    if (upgrade === null) return null;
     id = upgrade.id;
     state.id = id;
     __socketSet(id, socket);
@@ -1136,7 +1170,7 @@ const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
     // The server answered without upgrading. That is an ordinary response,
     // not a connection error, and it is returned unchanged.
     __socketDelete(id);
-    const response = new Response(new Uint8Array(raw.body), {
+    const response = __networkResponse(new Uint8Array(raw.body), {
       status: raw.status,
       headers: raw.headers,
     });
@@ -11793,6 +11827,9 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       // one it opened. The host pipe is not built until `accept()`, so a
       // response passed straight back out is left alone.
       polled: bound !== null || init.polled === true,
+      // `new WebSocket(url)` made it. Any other socket sends nothing until
+      // it is accepted.
+      dialed,
       pumping: false,
       pumpDone: undefined,
       // The token of a Worker socket that a subrequest's 101 handed over,
@@ -11901,7 +11938,12 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       this.dispatchEvent(event);
     });
   }
-  get readyState() { return this.#s.readyState; }
+  // A socket that a pair or a response made is OPEN until it closes, as in
+  // workerd, even while it waits for accept(): only a dialed one connects.
+  get readyState() {
+    const s = this.#s;
+    return s.readyState === __WS_CONNECTING && !s.dialed ? __WS_OPEN : s.readyState;
+  }
   get url() { return this.#s.url; }
   get protocol() { return this.#s.protocol; }
   get extensions() { return this.#s.extensions; }
@@ -12045,10 +12087,24 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       }
       s.accepted = true;
       s.readyState = __WS_OPEN;
-      if (s.polled) this.#startPump();
+      if (s.polled) {
+        const pump = this.#startPump();
+        // As for a handed-over socket above: a Durable Object's socket that
+        // a stateless request accepted keeps that request while it is open.
+        if (s.bound && !__currentActorScope()) __registerWaitUntil(pump);
+      }
       return;
     }
     s.accepted = true;
+  }
+  // workerd's refusal of send() and close() on a socket that a pair or a
+  // response made and that nothing accepted yet.
+  #requireAccepted() {
+    const s = this.#s;
+    if (!s.dialed && !s.accepted && !s.hibernatable)
+      throw new TypeError(
+        "You must call one of accept() or state.acceptWebSocket() on this " +
+        "WebSocket before sending messages.");
   }
   send(data) {
     const s = this.#s;
@@ -12057,6 +12113,7 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
     // half-open one, whose peer's Close arrived, still can.
     if (s.closedOutgoing)
       throw new TypeError("Can't call WebSocket send() after close().");
+    this.#requireAccepted();
     if (s.readyState !== __WS_OPEN && !(s.readyState === __WS_CLOSING && s.closedIncoming))
       throw new DOMException("WebSocket is not open", "InvalidStateError");
     const binary = data instanceof ArrayBuffer || ArrayBuffer.isView(data);
@@ -12126,6 +12183,7 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
     if (s.closedOutgoing || s.readyState === __WS_CLOSED) {
       return;
     }
+    this.#requireAccepted();
     const connecting = s.readyState === __WS_CONNECTING;
     s.closedOutgoing = true;
     s.readyState = s.closedIncoming ? __WS_CLOSED : __WS_CLOSING;
@@ -12143,9 +12201,8 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       queueMicrotask(() => peer.#dispatchClose(code, reason, true));
       return;
     }
-    // The host does not report the peer's reply to a Close this end sent
-    // first, so the socket is CLOSED at once.
-    s.readyState = __WS_CLOSED;
+    // CLOSING until the peer's reply, which the host delivers as this end's
+    // close event.
     if (s.accepted && !s.target) {
       s.pending.push(["close", code, reason]);
       return;

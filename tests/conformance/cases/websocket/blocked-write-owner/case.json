@@ -1,0 +1,19 @@
+{
+  "kind": "celld-only",
+  "reason": "what a write that never finishes holds, and when celld abandons it, is celld's: workerd queues and writes without a budget",
+  "workers": ["app"],
+  "upstream": true,
+  "env": { "CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}" },
+  "steps": [
+    {"path": "/warm"},
+    {"sockets": "baseline"},
+    {"rss": "baseline"},
+    {"path": "/dial?t=ws://127.0.0.1:${UPSTREAM_PORT}/ws/stall"},
+    {"sockets": 0, "within": 5000},
+    {"path": "/dial?t=ws://127.0.0.1:${UPSTREAM_PORT}/ws/stall"},
+    {"sockets": 0, "within": 5000},
+    {"path": "/dial?t=ws://127.0.0.1:${UPSTREAM_PORT}/ws/stall"},
+    {"sockets": 0, "within": 5000},
+    {"rss": 200}
+  ]
+}

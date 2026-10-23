@@ -1,0 +1,38 @@
+{
+  "kind": "celld-only",
+  "reason": "what the host holds for auto-responses a client does not read is celld's bound; workerd waits for each to be written, which its harness cannot show as memory",
+  "workers": [
+    "sockets"
+  ],
+  "steps": [
+    {
+      "path": "/warm"
+    },
+    {
+      "rss": "baseline"
+    },
+    {
+      "ws": "/",
+      "send": [
+        "p"
+      ],
+      "repeat": 100000,
+      "receive": 0,
+      "close": 1000,
+      "reset": 6000
+    },
+    {
+      "ws": "/",
+      "send": [
+        "p"
+      ],
+      "repeat": 100000,
+      "receive": 0,
+      "close": 1000,
+      "reset": 6000
+    },
+    {
+      "rss": 64
+    }
+  ]
+}
