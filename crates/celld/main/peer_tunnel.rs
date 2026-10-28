@@ -9,7 +9,7 @@
 //! interprets the inner bytes, so the headers the cell must receive
 //! byte-faithful (`Host`, `Content-Length`, `Upgrade`) are data here, not
 //! metadata. Per-call control (scope, cell name, request id, capacity
-//! handoff, the caller's trace context) rides `x-cells-*` headers on the
+//! handoff, the caller's trace context, the caller) rides `x-cells-*` headers on the
 //! inner request; node A overwrites and node B strips them, so the reserved
 //! names cannot be smuggled by an application in either direction.
 //!
@@ -38,7 +38,7 @@ use super::*;
 use celld::js::HttpChunkStream;
 
 pub(crate) const TUNNEL_PROTOCOL: &str = "celld-tunnel";
-pub(crate) const TUNNEL_VERSION: &str = "6";
+pub(crate) const TUNNEL_VERSION: &str = "7";
 pub(crate) const VERSION_HEADER: &str = "x-cells-tunnel-version";
 pub(crate) const KIND_HEADER: &str = "x-cells-tunnel-kind";
 pub(crate) const SCOPE_HEADER: &str = "x-cells-scope";
@@ -49,17 +49,112 @@ pub(crate) const HANDOFF_HEADER: &str = "x-cells-capacity-handoff";
 /// it from the context the host read at the call site, never from the
 /// application's headers, so a cell joins its caller's trace on any node.
 pub(crate) const TRACE_HEADER: &str = "x-cells-traceparent";
+/// Who made the call: `host`, or `script:<name>` for a Worker script's code.
+/// Node B checks the call against the grant its own deployment gives that
+/// script, so a call is refused on the owner as it is on the caller's node.
+pub(crate) const CALLER_HEADER: &str = "x-cells-caller";
+/// The cell whose event made a script's call, when one did.
+pub(crate) const CALLER_EVENT_HEADER: &str = "x-cells-caller-event";
 
 /// The inner headers node A owns. A overwrites them on the way in and B
 /// strips them on the way out, so an application header with a reserved name
 /// is dropped rather than obeyed.
-const CONTROL_HEADERS: [&str; 5] = [
+const CONTROL_HEADERS: [&str; 7] = [
     SCOPE_HEADER,
     NAME_HEADER,
     REQUEST_ID_HEADER,
     HANDOFF_HEADER,
     TRACE_HEADER,
+    CALLER_HEADER,
+    CALLER_EVENT_HEADER,
 ];
+
+/// The caller of a tunneled call as it crosses: the script by name, since a
+/// grant is this node's own and the owner builds the script's from its own
+/// deployment (see `forwarded_caller`).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum TunnelCaller {
+    Host,
+    Script {
+        script: String,
+        event: Option<String>,
+    },
+}
+
+impl TunnelCaller {
+    pub(crate) fn of(caller: &Caller) -> Self {
+        match caller {
+            Caller::Host => TunnelCaller::Host,
+            Caller::Script(caller) => TunnelCaller::Script {
+                script: caller.grant.script().to_string(),
+                event: caller.event.clone(),
+            },
+        }
+    }
+
+    /// Node B: the caller, with the grant `grant_of` gives its script under
+    /// this node's deployment. A script it does not deploy (a Dynamic Worker,
+    /// or a script of another deployment) reaches no cell.
+    pub(crate) fn resolve(
+        self,
+        grant_of: impl FnOnce(&str) -> Option<Arc<celld::scope_grant::ScopeGrant>>,
+    ) -> Caller {
+        match self {
+            TunnelCaller::Host => Caller::Host,
+            TunnelCaller::Script { script, event } => {
+                let grant = grant_of(&script)
+                    .unwrap_or_else(|| Arc::new(celld::scope_grant::ScopeGrant::none(&script)));
+                Caller::Script(celld::scope_grant::ScriptCaller { grant, event })
+            }
+        }
+    }
+
+    /// Node A: the caller's headers on an inner request.
+    fn write(&self, inner: hyper::http::request::Builder) -> hyper::http::request::Builder {
+        match self {
+            TunnelCaller::Host => inner.header(CALLER_HEADER, "host"),
+            TunnelCaller::Script { script, event } => {
+                let inner = inner.header(CALLER_HEADER, format!("script:{script}"));
+                match event {
+                    Some(event) => inner.header(CALLER_EVENT_HEADER, event.as_str()),
+                    None => inner,
+                }
+            }
+        }
+    }
+
+    /// Node B: the caller an inner request names. `None` when it names none,
+    /// which only a peer that is not this version sends: the call is refused.
+    fn read(headers: &hyper::HeaderMap) -> Option<TunnelCaller> {
+        let caller = headers.get(CALLER_HEADER)?.to_str().ok()?;
+        if caller == "host" {
+            return Some(TunnelCaller::Host);
+        }
+        let script = caller.strip_prefix("script:")?;
+        let event = match headers.get(CALLER_EVENT_HEADER) {
+            Some(event) => Some(
+                event
+                    .to_str()
+                    .ok()
+                    .filter(|event| celld_logic::cell::valid_cell_scope(event))?
+                    .to_string(),
+            ),
+            None => None,
+        };
+        Some(TunnelCaller::Script {
+            script: script.to_string(),
+            event,
+        })
+    }
+}
+
+/// The refusal for an inner request that names no caller.
+fn missing_caller() -> HttpReply {
+    peer_response(response(
+        StatusCode::BAD_REQUEST,
+        "the tunneled call names no caller",
+    ))
+}
 
 enum TunnelKind {
     Do,
@@ -74,6 +169,7 @@ pub(crate) struct TunnelControl {
     pub(crate) request_id: Option<celld::js::RequestId>,
     pub(crate) capacity_handoff: bool,
     pub(crate) parent: Option<celld::telemetry::TraceContext>,
+    pub(crate) caller: TunnelCaller,
 }
 
 /// The caller's trace context from an inner request, as a remote parent.
@@ -86,15 +182,17 @@ fn trace_parent(headers: &hyper::HeaderMap) -> Option<celld::telemetry::TraceCon
         .map(celld::telemetry::ParentContext::context)
 }
 
-/// Node B: the control fields of an inner fetch. `None` when the scope is
-/// missing or malformed.
-fn tunnel_control(headers: &hyper::HeaderMap) -> Option<TunnelControl> {
+/// Node B: the control fields of an inner fetch, or the refusal when the
+/// scope is missing or malformed or no caller is named.
+fn tunnel_control(headers: &hyper::HeaderMap) -> Result<TunnelControl, Box<HttpReply>> {
     let scope = headers
         .get(SCOPE_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string)
-        .filter(|scope| celld_logic::cell::valid_cell_scope(scope))?;
-    Some(TunnelControl {
+        .filter(|scope| celld_logic::cell::valid_cell_scope(scope))
+        .ok_or_else(|| Box::new(peer_response(malformed_scope())))?;
+    let caller = TunnelCaller::read(headers).ok_or_else(|| Box::new(missing_caller()))?;
+    Ok(TunnelControl {
         scope,
         name: headers
             .get(NAME_HEADER)
@@ -106,6 +204,7 @@ fn tunnel_control(headers: &hyper::HeaderMap) -> Option<TunnelControl> {
             .and_then(celld::js::parse_request_id),
         capacity_handoff: headers.get(HANDOFF_HEADER).is_some(),
         parent: trace_parent(headers),
+        caller,
     })
 }
 
@@ -140,6 +239,7 @@ impl TunnelControl {
             request_id: self.request_id,
             capacity_handoff: self.capacity_handoff,
             parent: self.parent,
+            caller: self.caller,
         };
         (self.scope, fetch)
     }
@@ -152,6 +252,7 @@ struct RpcHead {
     method: String,
     structured: bool,
     parent: Option<celld::telemetry::TraceContext>,
+    caller: TunnelCaller,
 }
 
 impl RpcHead {
@@ -174,6 +275,9 @@ impl RpcHead {
                 "RPC method header is missing",
             ))));
         };
+        let Some(caller) = TunnelCaller::read(headers) else {
+            return Err(Box::new(missing_caller()));
+        };
         Ok(RpcHead {
             scope,
             name: headers
@@ -185,6 +289,7 @@ impl RpcHead {
                 .get(hyper::header::CONTENT_TYPE)
                 .is_some_and(|value| value.as_bytes() == b"application/octet-stream"),
             parent: trace_parent(headers),
+            caller,
         })
     }
 
@@ -209,6 +314,7 @@ impl RpcHead {
             method: self.method,
             args,
             parent: self.parent,
+            caller: self.caller,
         })
     }
 }
@@ -315,8 +421,9 @@ async fn serve_do(upgraded: hyper::upgrade::Upgraded, app: AppHandle) {
     let service = service_fn(move |mut inner: Request<Incoming>| {
         let app = app.clone();
         async move {
-            let Some(control) = tunnel_control(inner.headers()) else {
-                return Ok::<_, Infallible>(peer_response(malformed_scope()));
+            let control = match tunnel_control(inner.headers()) {
+                Ok(control) => control,
+                Err(refusal) => return Ok::<_, Infallible>(*refusal),
             };
             // A tunneled upgrade is the client's own handshake, so the
             // owner answers it directly: fastwebsockets computes the 101
@@ -603,6 +710,7 @@ fn inner_request(
     if let Some(parent) = &control.parent {
         inner = inner.header(TRACE_HEADER, celld::telemetry::traceparent(parent));
     }
+    inner = control.caller.write(inner);
     Ok(inner.body(body)?)
 }
 
@@ -760,7 +868,9 @@ pub(crate) async fn rpc(
     method: &str,
     args: &celld::js::RpcData,
     parent: Option<&celld::telemetry::TraceContext>,
+    caller: &Caller,
 ) -> anyhow::Result<Response<PooledResponseBody>> {
+    let caller = TunnelCaller::of(caller);
     let (content_type, payload) = match args {
         celld::js::RpcData::Json(json) => ("application/json", Bytes::from(json.clone())),
         celld::js::RpcData::V8(bytes) => ("application/octet-stream", bytes.clone()),
@@ -768,7 +878,7 @@ pub(crate) async fn rpc(
     send_inner(
         peer,
         "rpc",
-        |body| rpc_inner_request(scope, name, method, content_type, parent, body),
+        |body| rpc_inner_request(scope, name, method, content_type, parent, &caller, body),
         celld::js::RequestBody::Bytes(payload),
     )
     .await
@@ -780,6 +890,7 @@ fn rpc_inner_request(
     method: &str,
     content_type: &str,
     parent: Option<&celld::telemetry::TraceContext>,
+    caller: &TunnelCaller,
     body: TunnelBody,
 ) -> anyhow::Result<Request<TunnelBody>> {
     let mut inner = Request::builder()
@@ -794,6 +905,7 @@ fn rpc_inner_request(
     if let Some(parent) = parent {
         inner = inner.header(TRACE_HEADER, celld::telemetry::traceparent(parent));
     }
+    inner = caller.write(inner);
     Ok(inner.body(body)?)
 }
 
@@ -955,6 +1067,7 @@ mod tests {
             request_id: None,
             capacity_handoff: false,
             parent,
+            caller: TunnelCaller::Host,
         }
     }
 
@@ -1000,6 +1113,7 @@ mod tests {
             "call",
             "application/octet-stream",
             Some(&unsampled),
+            &TunnelCaller::Host,
             full_body(Bytes::new()),
         )
         .unwrap();
@@ -1071,6 +1185,7 @@ mod tests {
             "call",
             "application/octet-stream",
             Some(&CALLER),
+            &TunnelCaller::Host,
             full_body(Bytes::new()),
         )
         .unwrap();
@@ -1092,6 +1207,108 @@ mod tests {
             fields(call.parent.expect("the parent reaches dispatch")),
             (CALLER.trace_id, CALLER.span_id, true, true)
         );
+    }
+
+    fn script_caller() -> TunnelCaller {
+        TunnelCaller::Script {
+            script: "app".to_string(),
+            event: Some(format!("Own:{}", "ab".repeat(32))),
+        }
+    }
+
+    /// A script's call names the script and its event to node B, on a fetch
+    /// and on an RPC, and an application header cannot name another caller.
+    #[test]
+    fn the_caller_crosses_the_tunnel() {
+        let forged = vec![
+            (CALLER_HEADER.to_string(), "host".to_string()),
+            (CALLER_EVENT_HEADER.to_string(), "Other:00".to_string()),
+        ];
+        let control = TunnelControl {
+            caller: script_caller(),
+            ..control(None)
+        };
+        let request = inner_request(
+            &control,
+            "http://object/",
+            "GET",
+            &forged,
+            full_body(Bytes::new()),
+        )
+        .unwrap();
+        assert_eq!(request.headers().get_all(CALLER_HEADER).iter().count(), 1);
+        assert!(application_headers(request.headers())
+            .iter()
+            .all(|(name, _)| name != CALLER_HEADER && name != CALLER_EVENT_HEADER));
+        let Ok(arrived) = tunnel_control(request.headers()) else {
+            panic!("a well-formed control");
+        };
+        assert_eq!(arrived.caller, script_caller());
+
+        for caller in [TunnelCaller::Host, script_caller()] {
+            let request = rpc_inner_request(
+                "Object:00",
+                None,
+                "call",
+                "application/octet-stream",
+                None,
+                &caller,
+                full_body(Bytes::new()),
+            )
+            .unwrap();
+            let Ok(head) = RpcHead::parse(request.headers()) else {
+                panic!("a well-formed RPC head");
+            };
+            assert_eq!(head.caller, caller);
+        }
+    }
+
+    /// An inner request that names no caller comes from a peer of another
+    /// version, and node B refuses it rather than guessing who sent it.
+    #[test]
+    fn a_call_that_names_no_caller_is_refused() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(SCOPE_HEADER, "Object:00".parse().unwrap());
+        headers.insert(METHOD_HEADER, "call".parse().unwrap());
+        assert!(tunnel_control(&headers).is_err());
+        assert!(RpcHead::parse(&headers).is_err());
+        headers.insert(CALLER_HEADER, "someone".parse().unwrap());
+        assert!(tunnel_control(&headers).is_err());
+        headers.insert(CALLER_HEADER, "host".parse().unwrap());
+        assert!(tunnel_control(&headers).is_ok());
+        assert!(RpcHead::parse(&headers).is_ok());
+    }
+
+    /// Node B checks a forwarded call against the grant its own deployment
+    /// gives the caller's script: a cell outside it, or any cell for a script
+    /// it does not deploy, is refused; the host reaches any cell.
+    #[test]
+    fn node_b_refuses_a_cell_outside_the_callers_grant() {
+        let do_classes = ["Own".to_string()];
+        let grant = Arc::new(celld::scope_grant::ScopeGrant::new(
+            celld::scope_grant::GrantSource {
+                script: "app",
+                do_classes: &do_classes,
+                kv_namespaces: Vec::new(),
+                queues: Vec::new(),
+                d1_databases: Vec::new(),
+                consumed_queues: Vec::new(),
+            },
+        ));
+        let own = format!("Own:{}", "cd".repeat(32));
+        let other = format!("Other:{}", "cd".repeat(32));
+        let known = |script: &str| (script == "app").then(|| grant.clone());
+        let caller = script_caller().resolve(known);
+        assert!(caller.admit(&own).is_ok());
+        let refusal = caller.admit(&other).unwrap_err().to_string();
+        assert_eq!(refusal, celld::scope_grant::refusal("app", &other));
+        let unknown = TunnelCaller::Script {
+            script: "__loader:7".to_string(),
+            event: None,
+        }
+        .resolve(known);
+        assert!(unknown.admit(&own).is_err());
+        assert!(TunnelCaller::Host.resolve(known).admit(&other).is_ok());
     }
 
     #[test]

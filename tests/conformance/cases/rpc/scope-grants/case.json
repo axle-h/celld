@@ -1,0 +1,17 @@
+{
+  "kind": "celld-only",
+  "reason": "names Durable Object scopes through celld's DurableObjectNamespace constructor, its runtime cells (which workerd lacks) and writable harness state, so each step expects celld's refusal; the storage and facet refusals workerd also gives are storage/cross-object-*",
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/own"},
+    {"path": "/back/dlq"},
+    {"path": "/do-fetch"},
+    {"path": "/do-rpc"},
+    {"path": "/runtime"},
+    {"path": "/storage"},
+    {"path": "/facet"},
+    {"path": "/gate"},
+    {"path": "/abort"},
+    {"path": "/own"}
+  ]
+}

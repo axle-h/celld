@@ -31,6 +31,7 @@ use celld::ownership_store::{now_ms, BucketOwnership};
 use celld::peer_auth::{self, PeerAuth};
 use celld::protocol::DeployPointer;
 use celld::runtime::{Replication, RuntimeFetch, RuntimeManager, RuntimeOptions, ServiceFetch};
+use celld::scope_grant::Caller;
 use celld_logic::{RequestError, Route, WebSocketKind};
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use http_body_util::combinators::UnsyncBoxBody;
@@ -780,6 +781,7 @@ async fn arm_cron_schedule(app: AppHandle, cell: String) -> anyhow::Result<()> {
             reply,
             order: None,
             parent: None,
+            caller: Caller::Host,
         },
     )
     .await;
@@ -1159,6 +1161,7 @@ async fn dispatch_do_call(app: AppHandle, call: DoCallReq) {
             let request_id = call.request_id;
             let parent = call.parent;
             let deliver_abort_to_handler = call.deliver_abort_to_handler;
+            let caller = &call.caller;
             let cancel = &mut call.cancel;
             let body_guard = &mut call.body_guard;
             let CallPayload {
@@ -1203,6 +1206,7 @@ async fn dispatch_do_call(app: AppHandle, call: DoCallReq) {
                         request_id,
                         capacity_handoff: epoch == 0,
                         parent,
+                        caller: peer_tunnel::TunnelCaller::of(caller),
                     };
                     let attempt_body = match body {
                         celld::js::RequestBody::Bytes(bytes) => {
@@ -1427,12 +1431,15 @@ async fn dispatch_rpc_call(app: AppHandle, call: RpcCallReq) {
         args,
         reply,
         parent,
+        caller,
     } = call;
     let result = async {
         anyhow::ensure!(
             celld_logic::cell::valid_cell_scope(&scope),
             "cell scope is malformed or exceeds the fleet storage limit"
         );
+        // As `dispatch_call_attempt` checks a fetch-style call.
+        caller.admit(&scope)?;
         let mut dispatcher = RemoteRouteRetry::new(app.operation_deadline_ms);
         loop {
             let Routed { request, route } = app
@@ -1491,6 +1498,7 @@ async fn dispatch_rpc_call(app: AppHandle, call: RpcCallReq) {
                     &method,
                     &args,
                     parent.as_ref(),
+                    &caller,
                 )
                 .await;
                 // Classify failures before response decoding. An explicit stale
@@ -1531,6 +1539,16 @@ async fn dispatch_rpc_call(app: AppHandle, call: RpcCallReq) {
                         .is_some_and(|value| value == "cell")
                 {
                     return Err(anyhow::Error::new(celld::js::CellOverloaded));
+                }
+                if response.status() == StatusCode::FORBIDDEN {
+                    // The owner refused the caller (`dispatch_forwarded_rpc`),
+                    // and its body says why.
+                    let body = Limited::new(response.into_body(), MAX_PEER_CONTROL_BODY_BYTES)
+                        .collect()
+                        .await
+                        .map(|body| body.to_bytes())
+                        .unwrap_or_default();
+                    anyhow::bail!("{}", String::from_utf8_lossy(&body));
                 }
                 anyhow::ensure!(
                     response.status().is_success(),
@@ -1966,6 +1984,8 @@ async fn dispatch_cell_fetch(
         // No handler made this call, so there is no context to carry: a
         // direct-DO ingress starts without a parent.
         parent: None,
+        // Ingress and the operator route authenticate the request themselves.
+        caller: Caller::Host,
     });
     if !accepted {
         return response(
@@ -2009,6 +2029,8 @@ pub(crate) struct ForwardedFetch {
     pub(crate) capacity_handoff: bool,
     /// The caller's trace context, from the tunnel's control header.
     pub(crate) parent: Option<celld::telemetry::TraceContext>,
+    /// Who made the call, as node A named it.
+    pub(crate) caller: peer_tunnel::TunnelCaller,
 }
 
 pub(crate) enum ForwardedFetchOutcome {
@@ -2042,8 +2064,14 @@ pub(crate) async fn dispatch_forwarded_fetch(
         request_id,
         capacity_handoff,
         parent,
+        caller,
     } = fetch;
     let _request_body_guard = celld::js::RequestBodyGuard::of(&request_body);
+    // Before routing, so a refused call activates nothing. Answered as a
+    // handler failure, which node A raises to its caller as an error.
+    if let Err(refusal) = forwarded_caller(&app, caller).admit(&scope) {
+        return ForwardedFetchOutcome::Reply(peer_response(internal_do_worker_error(refusal)));
+    }
     let preserve_representation_length = method.eq_ignore_ascii_case("HEAD");
     let routed = if capacity_handoff {
         app.capacity_request(scope.clone()).await
@@ -2290,6 +2318,18 @@ pub(crate) struct ForwardedRpc {
     pub(crate) args: celld::js::RpcData,
     /// The caller's trace context, from the tunnel's control header.
     pub(crate) parent: Option<celld::telemetry::TraceContext>,
+    /// Who made the call, as node A named it.
+    pub(crate) caller: peer_tunnel::TunnelCaller,
+}
+
+/// The caller a peer named for a call it forwarded, with the grant this
+/// node's deployment gives that script.
+fn forwarded_caller(app: &AppHandle, caller: peer_tunnel::TunnelCaller) -> Caller {
+    caller.resolve(|script| {
+        app.runtime
+            .as_ref()
+            .and_then(|runtime| runtime.generation().scope_grant(script))
+    })
 }
 
 pub(crate) async fn dispatch_forwarded_rpc(app: AppHandle, call: ForwardedRpc) -> HttpReply {
@@ -2299,7 +2339,11 @@ pub(crate) async fn dispatch_forwarded_rpc(app: AppHandle, call: ForwardedRpc) -
         method: rpc_method,
         args,
         parent,
+        caller,
     } = call;
+    if let Err(refusal) = forwarded_caller(&app, caller).admit(&scope) {
+        return peer_response(response(StatusCode::FORBIDDEN, format!("{refusal:#}")));
+    }
     let result = match app.request(scope.clone()).await {
         Ok(Routed {
             request,
@@ -2586,6 +2630,9 @@ async fn dispatch_queue_batch(app: AppHandle, call: QueueDispatchReq) {
             reply,
             order: None,
             parent: None,
+            // The host settles the lease it handed the consumer; the consumer
+            // never calls the Queue cell.
+            caller: Caller::Host,
         },
     )
     .await;

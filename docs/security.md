@@ -400,3 +400,50 @@ the handler answers still reaches the object's container.
 - **Egress.** The [egress policy](#what-the-policy-does-not-cover) lets a
   port's `fetch()` reach only the address of that port on the running object's
   own container.
+
+## Durable Object reach
+
+A Durable Object id is computable from public strings, so holding one
+authorizes nothing. The host checks every Durable Object call a script makes
+(a `fetch()`, an RPC method, a WebSocket upgrade) against what the script's
+own configuration binds, before routing it:
+
+- **The script's own classes.** Every object of the classes its Durable
+  Object bindings and migrations declare, which `env` and `ctx.exports`
+  hand out, and its workflow class.
+- **KV, Queues and D1.** Only the cell each of the script's own bindings
+  names: a KV namespace, a queue it produces to, a D1 database. Holding one
+  binding reaches no other namespace, queue or database, though their cells
+  share a class. A queue consumer needs no grant: celld delivers its batches
+  and settles them itself.
+- **Dynamic Workers.** None. A Dynamic Worker's facets are reached through
+  `ctx.facets`, which acts on the running object only.
+
+A call outside that grant throws, naming the Durable Object and the Worker:
+
+```text
+Durable Object Vault:942a…b2eb is not reachable from Worker "front": the Worker holds no binding to its namespace
+```
+
+The check runs again on the owner node for a call that crossed the peer
+tunnel, which names the calling script; the owner checks it against its own
+deployment. Calls celld makes itself (ingress, the operator routes, queue
+settlement, cron) are not a script's, and a Queue cell's own event may reach
+the queues the deployment's consumers name, for dead-letter transfers and
+redrives.
+
+A Durable Object's storage, alarm, SQL and `kv.list()` cursors,
+`blockConcurrencyWhile` and `ctx.facets` act on that object only. Used during
+another object's event they throw workerd's cross-object I/O error, with the
+I/O type of the object reached first -- `ActorCacheInterface` for storage,
+`State` for a SQL cursor, `ListCursor` for a `kv.list()` cursor,
+`FacetManager` for facets -- and outside any Durable Object event the
+cross-request one. A cursor is refused before it hands out even the row it
+prefetched, and closing one from another object is a no-op. Resetting or
+aborting an object (`ctx.abort()`, a failed critical section) discards its
+buffered writes, drops its instance and breaks it only for the object the
+caller actually is, decided by the instance registry rather than a writable
+scope. The host takes the object from the running event, never from a scope
+the script can write.
+
+A Worker Loader id answers only in the isolate that loaded the Worker.

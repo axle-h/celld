@@ -1,0 +1,13 @@
+// The caller. It holds its own Durable Object, KV, Queue and D1 bindings,
+// and a service binding to `back`, but none of `back`'s namespaces.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "BACK", "service": "back" }],
+  "durable_objects": { "bindings": [{ "name": "PROBE", "class_name": "Probe" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Probe"] }],
+  "kv_namespaces": [{ "binding": "KV", "id": "front-kv" }],
+  "queues": { "producers": [{ "binding": "QUEUE", "queue": "front-jobs" }] },
+  "d1_databases": [{ "binding": "DB", "database_name": "front-db", "database_id": "front-db" }]
+}

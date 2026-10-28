@@ -1,0 +1,93 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "object": {
+          "get": "v",
+          "sql": 1,
+          "alarm": "set",
+          "facet": "child"
+        },
+        "exports": "v",
+        "kv": "front",
+        "queue": "sent",
+        "d1": 1
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "deadLettered": "dead"
+      }
+    },
+    {
+      "status": 200,
+      "body": "Error: Durable Object Vault:942a096a1dbe251681ba8555194de1c494cf033496f3ee81b1e1639e3159b2eb is not reachable from Worker \"front\": the Worker holds no binding to its namespace"
+    },
+    {
+      "status": 200,
+      "body": "Error: Durable Object Vault:942a096a1dbe251681ba8555194de1c494cf033496f3ee81b1e1639e3159b2eb is not reachable from Worker \"front\": the Worker holds no binding to its namespace"
+    },
+    {
+      "status": 200,
+      "body": {
+        "kv": "Error: Durable Object __KvNamespace:c6273d9e2d5c8fcff7bacd9d2c252cef44720ee95efd09751e305ccc15ec7f33 is not reachable from Worker \"front\": the Worker holds no binding to its namespace",
+        "queue": "Error: Durable Object __Queue:ee6146e35b2a2827350afdcba63fe4ade027df1a62acbfce531970a758e0ae21 is not reachable from Worker \"front\": the Worker holds no binding to its namespace",
+        "dlq": "Error: Durable Object __Queue:d1e9efde52b0d6ab09a851f275bb2c5605336185e8bf687fe7cd4960e5756bd3 is not reachable from Worker \"front\": the Worker holds no binding to its namespace",
+        "d1": "Error: Durable Object __D1Database:1af88f380f7ed03cb0455973e2e060f754b9529ccc3968819dd1061ea84217d5 is not reachable from Worker \"front\": the Worker holds no binding to its namespace",
+        "workflow": "Error: Durable Object __Workflow.back:44de364897c42157d6bd63b43787638f3dcd5cca1d306e793dfa9e4c05562c2d is not reachable from Worker \"front\": the Worker holds no binding to its namespace",
+        "kvShard": "Error: Durable Object __KvNamespace:28929b90db85c0f7ca27bfd08191e0e2492e38bdff408d73a0c8d2a6b1fa0374 is not reachable from Worker \"front\": the Worker holds no binding to its namespace"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "get": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: ActorCacheInterface)",
+        "put": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: ActorCacheInterface)",
+        "list": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: ActorCacheInterface)",
+        "kvGet": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: ActorCacheInterface)",
+        "sql": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: ActorCacheInterface)",
+        "getAlarm": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: ActorCacheInterface)",
+        "setAlarm": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: ActorCacheInterface)",
+        "deleteAlarm": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: ActorCacheInterface)"
+      }
+    },
+    {
+      "status": 200,
+      "body": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: FacetManager)"
+    },
+    {
+      "status": 200,
+      "body": {
+        "crossScript": "Error: blockConcurrencyWhile() can act only on the running Durable Object",
+        "sameScript": "Error: blockConcurrencyWhile() can act only on the running Durable Object",
+        "own": {
+          "answered": "ran"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "attack": "Error: forged abort",
+        "victim": "victim-value"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "object": {
+          "get": "v",
+          "sql": 1,
+          "alarm": "set",
+          "facet": "child"
+        },
+        "exports": "v",
+        "kv": "front",
+        "queue": "sent",
+        "d1": 1
+      }
+    }
+  ]
+}

@@ -302,6 +302,9 @@ pub struct Generation {
     /// See `Manifest::fence_image`; the first script's, they are all the
     /// same image when one celld deployed them.
     pub(crate) fence_image: Option<String>,
+    /// The cells each script of the graph may call, by script, for a call
+    /// that a peer forwarded with its caller named.
+    pub(crate) grants: HashMap<String, Arc<crate::scope_grant::ScopeGrant>>,
 }
 
 impl Generation {
@@ -379,6 +382,12 @@ impl Generation {
 
     pub(crate) fn service(&self, script: &str) -> Option<crate::runtime::StatelessRuntime> {
         self.services.get(script).cloned()
+    }
+
+    /// The cells `script` may call under this deployment, or `None` for a
+    /// script it does not deploy.
+    pub fn scope_grant(&self, script: &str) -> Option<Arc<crate::scope_grant::ScopeGrant>> {
+        self.grants.get(script).cloned()
     }
 
     pub(crate) fn default_do_class(&self) -> Option<&str> {
@@ -561,6 +570,7 @@ impl Generation {
         // one ever did, it would be a real collision and must still be refused.
         let mut cell_configs: HashMap<String, Arc<WorkerConfig>> = HashMap::new();
         let mut service_pools = HashMap::new();
+        let mut grants = HashMap::new();
         let mut assets = HashMap::new();
         // Primary first: shared reserved classes retain the first script's
         // config. Only this script owns ingress and the node's cron schedule;
@@ -603,6 +613,7 @@ impl Generation {
             if service_pools.insert(script.clone(), pool).is_some() {
                 return Err(anyhow!("duplicate co-hosted Worker script {script}"));
             }
+            grants.insert(script.clone(), config.scope_grant());
             for class in classes {
                 register_cell_class(&mut cell_configs, class, config.clone(), &|class| {
                     if is_primary {
@@ -645,6 +656,7 @@ impl Generation {
             assets,
             containers: all_containers,
             fence_image,
+            grants,
         })
     }
 }

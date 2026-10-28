@@ -208,6 +208,9 @@ pub struct DoCallReq {
     /// The dispatching handler's trace context, read from CPED at the
     /// call site, so the cell's span joins the caller's trace.
     pub parent: Option<crate::telemetry::TraceContext>,
+    /// Who made the call, which decides the cells it may reach. The host
+    /// checks it before routing and the owner node checks it again.
+    pub caller: crate::scope_grant::Caller,
 }
 static DO_CALL_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<DoCallReq>> = OnceLock::new();
 
@@ -829,6 +832,56 @@ struct EgressFrame {
 /// The frame of the running event, if a cell event is running at all.
 fn current_cell_event(context: &IoContext) -> Option<EgressFrame> {
     context.egress.lock().unwrap().last().cloned()
+}
+
+/// workerd's I/O type for a Durable Object's storage, which its cross-object
+/// error names (`DurableObjectStorage` holds an `IoPtr<ActorCacheInterface>`).
+const STORAGE_IO_TYPE: &str = "ActorCacheInterface";
+
+/// The cell a storage or alarm op acts on, which the op takes as its first
+/// argument and which must be the running event's own. A storage object
+/// carries the scope it was made for, and JavaScript can name another
+/// object's: that would read and write the other object's database and
+/// alarm, including the shared KV, Queue and D1 cells resident in this
+/// isolate. Refused with workerd's error for an I/O object of another
+/// object or request, as workerd refuses another object's storage. `None`
+/// once it has thrown.
+fn owned_storage_cell(scope: &mut v8::PinScope, named: v8::Local<v8::Value>) -> Option<String> {
+    let named = named.to_rust_string_lossy(scope);
+    running_cell(scope, named, STORAGE_IO_TYPE)
+}
+
+/// `named` when it is the cell whose event runs, or `None` once the op has
+/// thrown workerd's error for an I/O object of type `io` that another object
+/// or request owns.
+fn running_cell(scope: &mut v8::PinScope, named: String, io: &str) -> Option<String> {
+    match current_cell_event(&event_context(scope)) {
+        Some(frame) if frame.storage == named => Some(named),
+        frame => {
+            let error = crate::ws_registry::foreign_io_error(frame.is_some(), io);
+            loader_throw(scope, &error);
+            None
+        }
+    }
+}
+
+/// workerd's I/O type for `ctx.facets`.
+const FACETS_IO_TYPE: &str = "FacetManager";
+
+/// The refusal for a `blockConcurrencyWhile` whose cell is not the running
+/// event's. celld-only: workerd gives the gate no name a script could forge.
+const FOREIGN_INPUT_GATE: &str =
+    "blockConcurrencyWhile() can act only on the running Durable Object";
+
+/// The cell a `blockConcurrencyWhile` acquisition names, which must be the
+/// running event's own, or `None` once it has thrown. Unlike the storage
+/// ops this reports its own celld message: a gate has no workerd I/O object.
+fn owned_gate_cell(scope: &mut v8::PinScope, named: v8::Local<v8::Value>) -> Option<String> {
+    let named = named.to_rust_string_lossy(scope);
+    match current_cell_event(&event_context(scope)) {
+        Some(frame) if frame.storage == named => Some(named),
+        _ => None,
+    }
 }
 
 /// A context running an event of the Durable Object `cell`, as
@@ -1988,6 +2041,10 @@ pub struct WorkerConfig {
     /// [`WorkerConfig::es_modules`], which hands a module and its scan out
     /// together so no caller can pair a module with another module's scan.
     module_imports: Vec<modules::ExternalImports>,
+    /// The cells this script may call, built on first use: the builder
+    /// methods set the consumer catalog after `new`. Read through
+    /// [`WorkerConfig::scope_grant`].
+    scope_grant: OnceLock<Arc<crate::scope_grant::ScopeGrant>>,
 }
 
 /// The `ModuleSource::EsModule` siblings of a worker, as (name, source).
@@ -2109,7 +2166,44 @@ impl WorkerConfig {
             generation: 0,
             main_imports,
             module_imports,
+            scope_grant: OnceLock::new(),
         }
+    }
+
+    /// The Durable Object cells this script's code may call. A Dynamic Worker
+    /// declares no binding, so it may call none; its facets are reached
+    /// through the facet ops, which act on the running object only.
+    pub(crate) fn scope_grant(&self) -> Arc<crate::scope_grant::ScopeGrant> {
+        self.scope_grant
+            .get_or_init(|| {
+                if self.origin == WorkerOrigin::Dynamic {
+                    return Arc::new(crate::scope_grant::ScopeGrant::none(&self.script_name));
+                }
+                Arc::new(crate::scope_grant::ScopeGrant::new(
+                    crate::scope_grant::GrantSource {
+                        script: &self.script_name,
+                        do_classes: &self.do_classes,
+                        kv_namespaces: self.kv_bindings.iter().map(|(_, id)| id.as_str()).collect(),
+                        queues: self
+                            .queue_bindings
+                            .iter()
+                            .map(|binding| binding.queue.as_str())
+                            .collect(),
+                        d1_databases: self.d1_bindings.iter().map(|(_, id)| id.as_str()).collect(),
+                        consumed_queues: self
+                            .queue_consumers
+                            .iter()
+                            .map(|consumer| {
+                                (
+                                    consumer.config.queue.as_str(),
+                                    consumer.config.dead_letter_queue.as_deref(),
+                                )
+                            })
+                            .collect(),
+                    },
+                ))
+            })
+            .clone()
     }
 
     pub fn with_containers(mut self, containers: Vec<crate::container::ContainerSpec>) -> Self {
@@ -3281,6 +3375,9 @@ struct ActorRuntimeState {
     resource_limits: Option<ResourceLimits>,
     tail_reporting: bool,
     script_name: String,
+    /// The Durable Object cells this isolate's script may call; see
+    /// [`crate::scope_grant`].
+    grant: Arc<crate::scope_grant::ScopeGrant>,
     event_hooks: OnceLock<EventHooks>,
     /// See [`internals`].
     internals: OnceLock<v8::Global<v8::Object>>,
@@ -7188,6 +7285,7 @@ impl Worker {
             resource_limits: config.resource_limits,
             tail_reporting: config.tail_reporting,
             script_name: script_name.to_string(),
+            grant: config.scope_grant(),
             ..Default::default()
         });
         let loader_owner = LoaderOwner::fresh(script_name, config.generation);
@@ -8203,6 +8301,7 @@ ops! { OP_NAMES, install_op_functions,
         "__sql_cursor_start" => storage_ops::op_sql_cursor_start,
         "__sql_cursor_next" => storage_ops::op_sql_cursor_next,
         "__sql_cursor_close" => storage_ops::op_sql_cursor_close,
+        "__sql_cursor_check" => storage_ops::op_sql_cursor_check,
         "__sql_database_size" => storage_ops::op_sql_database_size,
         "__d1_run" => storage_ops::op_d1_run,
         "__storage_transaction_control" => storage_ops::op_storage_transaction_control,
@@ -9061,6 +9160,32 @@ pub fn loader_registry() -> &'static std::sync::Mutex<LoaderRegistry> {
     LOADER_REGISTRY.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
+/// The isolate's loader owner: the identity its loaded Workers are
+/// registered under.
+fn loader_owner(scope: &mut v8::PinScope) -> LoaderOwner {
+    scope
+        .get_slot::<LoaderOwner>()
+        .expect("Worker isolate has a Loader owner")
+        .clone()
+}
+
+/// The Worker that `owner` loaded under `id`. A loader id is a counter, so
+/// one that another isolate loaded is unknown here, as a Worker another
+/// script loaded is.
+fn loaded_worker_of(owner: &LoaderOwner, id: u64) -> Option<LoadedWorker> {
+    loader_registry()
+        .lock()
+        .unwrap()
+        .get(&id)
+        .filter(|entry| &entry.owner == owner)
+        .map(|entry| entry.loaded.clone())
+}
+
+/// [`loaded_worker_of`] for the isolate `scope` runs in.
+fn loaded_worker(scope: &mut v8::PinScope, id: u64) -> Option<LoadedWorker> {
+    loaded_worker_of(&loader_owner(scope), id)
+}
+
 /// Remove the registry references for every child of `owner`. The caller
 /// chooses when to drop the returned states, because they can own V8 isolates
 /// and no other isolate can be entered on that thread at destruction time.
@@ -9393,10 +9518,7 @@ fn op_loader_load(
             entrypoint,
         })
     };
-    let owner = scope
-        .get_slot::<LoaderOwner>()
-        .expect("Worker isolate has a Loader owner")
-        .clone();
+    let owner = loader_owner(scope);
     // The WorkerCode's compatibility date and flags, which the harness made
     // strings as JSG does, refused as workerd's
     // WorkerLoader::extractCompatFlags refuses them: with the first error.
@@ -9567,11 +9689,7 @@ fn op_loader_fetch(
         },
         None => RequestBodyGuard::of(&body),
     };
-    let loaded = loader_registry()
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|entry| entry.loaded.clone());
+    let loaded = loaded_worker(scope, id);
     let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Service);
     let ws_issuer = Some(ws_caller(scope));
     let stream_owner = ws_issuer.as_ref().map(|caller| caller.owner.clone());
@@ -9672,11 +9790,7 @@ fn op_loader_rpc(
     // value is an unbounded per-call allocation in the host. The harness checks
     // nothing here: it runs in the calling worker's isolate beside the
     // application's code, so only this op can bound the value.
-    let loaded = loader_registry()
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|entry| entry.loaded.clone());
+    let loaded = loaded_worker(scope, id);
     let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::Service);
     let parent = current_trace_context(scope);
     let async_id = asyncrt::enqueue(async move {
@@ -9848,17 +9962,14 @@ enum FacetHost {
 
 impl FacetHost {
     /// Resolved in the op, while the root's turn names its slot.
-    fn of(loader: u64) -> Result<Self, String> {
+    fn of(owner: &LoaderOwner, loader: u64) -> Result<Self, String> {
         if loader == OWN_SCRIPT_LOADER {
             return crate::pool::current_slot()
                 .map(Self::Own)
                 .ok_or_else(|| "facet: no isolate runs this turn".to_string());
         }
-        loader_registry()
-            .lock()
-            .unwrap()
-            .get(&loader)
-            .map(|entry| Self::Loaded(entry.loaded.clone()))
+        loaded_worker_of(owner, loader)
+            .map(Self::Loaded)
             .ok_or_else(|| "worker loader: unknown worker".to_string())
     }
 
@@ -10187,7 +10298,12 @@ fn op_facet_rpc(
 ) {
     let loader = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
     let class_name = args.get(1).to_rust_string_lossy(scope);
+    // The manager acts on the object that made it, which must be running:
+    // another object's would reach that object's facets and their storage.
     let parent_scope = args.get(2).to_rust_string_lossy(scope);
+    let Some(parent_scope) = running_cell(scope, parent_scope, FACETS_IO_TYPE) else {
+        return;
+    };
     let owner = args.get(3).to_rust_string_lossy(scope);
     let name = args.get(4).to_rust_string_lossy(scope);
     let Some(id_sc) = view_bytes(args.get(5)) else {
@@ -10209,7 +10325,7 @@ fn op_facet_rpc(
         }
         Err(error) => return loader_throw(scope, &error.to_string()),
     };
-    let host = FacetHost::of(loader);
+    let host = FacetHost::of(&loader_owner(scope), loader);
     let trace = current_trace_context(scope);
     let async_id = asyncrt::enqueue(async move {
         let facet = prepare_facet(
@@ -10269,7 +10385,12 @@ fn op_facet_fetch(
 ) {
     let loader = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
     let class_name = args.get(1).to_rust_string_lossy(scope);
+    // The manager acts on the object that made it, which must be running:
+    // another object's would reach that object's facets and their storage.
     let parent_scope = args.get(2).to_rust_string_lossy(scope);
+    let Some(parent_scope) = running_cell(scope, parent_scope, FACETS_IO_TYPE) else {
+        return;
+    };
     let owner = args.get(3).to_rust_string_lossy(scope);
     let name = args.get(4).to_rust_string_lossy(scope);
     let Some(id_sc) = view_bytes(args.get(5)) else {
@@ -10315,7 +10436,7 @@ fn op_facet_fetch(
         }
         Err(error) => return loader_throw(scope, &error.to_string()),
     };
-    let host = FacetHost::of(loader);
+    let host = FacetHost::of(&loader_owner(scope), loader);
     let trace = current_trace_context(scope);
     let ws_issuer = Some(ws_caller(scope));
     let stream_owner = ws_issuer.as_ref().map(|caller| caller.owner.clone());
@@ -10384,10 +10505,15 @@ fn op_facet_abort(
 ) {
     let loader = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
     let class_name = args.get(1).to_rust_string_lossy(scope);
+    // The manager acts on the object that made it, which must be running:
+    // another object's would reach that object's facets and their storage.
     let parent_scope = args.get(2).to_rust_string_lossy(scope);
+    let Some(parent_scope) = running_cell(scope, parent_scope, FACETS_IO_TYPE) else {
+        return;
+    };
     let owner = args.get(3).to_rust_string_lossy(scope);
     let name = args.get(4).to_rust_string_lossy(scope);
-    let host = FacetHost::of(loader);
+    let host = FacetHost::of(&loader_owner(scope), loader);
     let facet_scope = facet_scope(&class_name, &parent_scope, &owner, &name);
     // The root that recorded the facet, and the facet's place below it. A
     // parent without storage has no record to drop and no facet below.
@@ -10449,6 +10575,9 @@ fn op_facet_delete(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let parent_scope = args.get(0).to_rust_string_lossy(scope);
+    let Some(parent_scope) = running_cell(scope, parent_scope, FACETS_IO_TYPE) else {
+        return;
+    };
     let name = args.get(1).to_rust_string_lossy(scope);
     let parent = match storage::storage_identity(&parent_scope) {
         Ok(Some(parent)) => parent,
@@ -10503,7 +10632,15 @@ fn op_loader_drop(
     _rv: v8::ReturnValue<v8::Value>,
 ) {
     let id = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
-    if let Some(entry) = loader_registry().lock().unwrap().remove(&id) {
+    let owner = loader_owner(scope);
+    let entry = {
+        let mut registry = loader_registry().lock().unwrap();
+        match registry.get(&id) {
+            Some(entry) if entry.owner == owner => registry.remove(&id),
+            _ => None,
+        }
+    };
+    if let Some(entry) = entry {
         // This op runs while the parent isolate is entered. The load state can
         // own the loaded isolate, and V8 forbids dropping one isolate while a
         // different isolate is entered on the same thread. Hand the final
@@ -10511,6 +10648,33 @@ fn op_loader_drop(
         // turn has left V8.
         asyncrt::op_handle().spawn(async move { drop(entry.loaded) });
     }
+}
+
+/// The caller of a Durable Object call that the running JavaScript makes to
+/// `target`, or the refusal when its script holds no grant for that cell.
+/// The host checks the caller again before routing, and the owner node once
+/// more, but a refusal here throws at the call that made it.
+fn admitted_caller(
+    scope: &mut v8::PinScope,
+    target: &str,
+) -> Result<crate::scope_grant::Caller, String> {
+    // The grant consults the running event only for the Queue relay (a Queue
+    // cell reaching the catalog's other Queue cells), so the egress lock is
+    // read only when the target is a Queue cell -- never on the hot path of a
+    // call to the script's own class.
+    let event = target
+        .split_once(':')
+        .is_some_and(|(class, _)| class == crate::deploy::QUEUE_CLASS)
+        .then(|| current_cell_event(&event_context(scope)).map(|frame| frame.storage))
+        .flatten();
+    let caller = crate::scope_grant::Caller::Script(crate::scope_grant::ScriptCaller {
+        grant: actor_runtime_state(scope).grant.clone(),
+        event,
+    });
+    caller
+        .admit(target)
+        .map_err(|refusal| refusal.to_string())?;
+    Ok(caller)
 }
 
 fn op_do_call(
@@ -10536,6 +10700,10 @@ fn op_do_call_impl(
     cancellable: bool,
 ) {
     let cell = args.get(0).to_rust_string_lossy(scope);
+    let caller = match admitted_caller(scope, &cell) {
+        Ok(caller) => caller,
+        Err(refusal) => return loader_throw(scope, &refusal),
+    };
     let name_value = args.get(1);
     let name = (!name_value.is_null_or_undefined()).then(|| name_value.to_rust_string_lossy(scope));
     let url = args.get(2).to_rust_string_lossy(scope);
@@ -10608,6 +10776,7 @@ fn op_do_call_impl(
         reply: tx,
         order,
         parent: current_trace_context(scope),
+        caller,
     };
     let ws_issuer = Some(ws_caller(scope));
     let stream_owner = ws_issuer.as_ref().map(|caller| caller.owner.clone());
@@ -10794,6 +10963,10 @@ fn op_rpc_call(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let cell = args.get(0).to_rust_string_lossy(scope);
+    let caller = match admitted_caller(scope, &cell) {
+        Ok(caller) => caller,
+        Err(refusal) => return loader_throw(scope, &refusal),
+    };
     let name_value = args.get(1);
     let name = (!name_value.is_null_or_undefined()).then(|| name_value.to_rust_string_lossy(scope));
     let method = args.get(2).to_rust_string_lossy(scope);
@@ -10807,6 +10980,7 @@ fn op_rpc_call(
         args,
         reply: tx,
         parent: current_trace_context(scope),
+        caller,
     };
     let id = asyncrt::enqueue(async move {
         gated_channel_send(gate, &RPC_CALL_TX, request, "no RPC channel").await?;
@@ -11643,6 +11817,246 @@ mod http_stream_owner_tests {
     }
 }
 
+#[cfg(test)]
+mod scope_grant_op_tests {
+    use super::*;
+
+    /// Call `op` through V8 with string arguments, as a script that bypassed
+    /// the harness would. Answers whether it returned, or what it threw.
+    fn call_op(
+        scope: &mut v8::PinScope,
+        op: impl v8::MapFnTo<v8::FunctionCallback>,
+        args: &[&str],
+    ) -> Result<(), String> {
+        let tc = std::pin::pin!(v8::TryCatch::new(scope));
+        let tc = &mut tc.init();
+        let function = v8::Function::new(tc, op).unwrap();
+        let args: Vec<v8::Local<v8::Value>> = args
+            .iter()
+            .map(|arg| v8::String::new(tc, arg).unwrap().into())
+            .collect();
+        let recv = v8::undefined(tc).into();
+        match function.call(tc, recv, &args) {
+            Some(_) => Ok(()),
+            None => Err(tc
+                .exception()
+                .map(|error| error.to_rust_string_lossy(tc))
+                .unwrap_or_default()),
+        }
+    }
+
+    fn scope_of(class: &str, byte: &str) -> String {
+        format!("{class}:{}", byte.repeat(32))
+    }
+
+    /// Run `f` in an isolate of the script `app`, which binds the class
+    /// `Own` and one KV namespace, on a thread started after V8.
+    fn in_isolate(f: impl FnOnce(&mut Worker) + Send + 'static) {
+        let _ = crate::asyncrt::test_host_runtime();
+        Engine::init();
+        std::thread::spawn(|| {
+            let config = Arc::new(WorkerConfig::new(WorkerConfigOptions {
+                src:
+                    "export class Own {}\nexport default { fetch() { return new Response(); } };\n"
+                        .into(),
+                script_name: "app".into(),
+                do_classes: vec!["Own".into(), crate::deploy::KV_CLASS.into()],
+                bindings: vec![("OWN".into(), "Own".into())],
+                r2_bindings: Vec::new(),
+                d1_bindings: Vec::new(),
+                kv_bindings: vec![("KV".into(), "app-kv".into())],
+                queue_bindings: Vec::new(),
+                queue_consumers: Vec::new(),
+                workflow_bindings: Vec::new(),
+                vars: Vec::new(),
+                node: String::new(),
+                modules: Vec::new(),
+                compat: Compat::default(),
+            }));
+            let mut worker = Worker::load_config(config).unwrap();
+            let _runtime = crate::asyncrt::test_host_runtime().enter();
+            f(&mut worker);
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// A Durable Object call or RPC to a cell outside the script's grant
+    /// throws at the call; one inside it is sent.
+    #[test]
+    fn a_call_outside_the_grant_is_refused_at_the_call() {
+        in_isolate(|worker| {
+            let _current = CurrentGuard::enter(IoContext::new());
+            worker.with_scope_for_test(|scope| {
+                let foreign = [
+                    scope_of("Other", "ab"),
+                    crate::engine_api::kv_cell_scope("other-kv", 0),
+                    crate::engine_api::queue_cell_scope("jobs"),
+                ];
+                for target in &foreign {
+                    let refusal = crate::scope_grant::refusal("app", target);
+                    let args = [target.as_str(), "", "m"];
+                    for result in [
+                        call_op(scope, op_rpc_call, &args),
+                        call_op(scope, op_do_call, &args),
+                        call_op(scope, op_do_call_cancellable, &args),
+                    ] {
+                        assert_eq!(result, Err(format!("Error: {refusal}")));
+                    }
+                }
+                for target in [
+                    scope_of("Own", "ab"),
+                    crate::engine_api::kv_cell_scope("app-kv", 0),
+                ] {
+                    assert_eq!(call_op(scope, op_rpc_call, &[&target, "", "m"]), Ok(()));
+                }
+            });
+        });
+    }
+
+    /// Every op that takes a storage scope acts on the running object only:
+    /// another object's scope gets workerd's cross-object error, and outside
+    /// any object event its cross-request error.
+    #[test]
+    fn a_storage_op_naming_another_object_is_refused() {
+        in_isolate(|worker| {
+            let own = scope_of("Own", "aa");
+            let other = scope_of("Own", "bb");
+            // Each op named `other` as a forged storage object would.
+            let uses = |scope: &mut v8::PinScope, other: &str| {
+                let args = [other, "k"];
+                [
+                    ("get", call_op(scope, storage_ops::op_storage_get, &args)),
+                    ("put", call_op(scope, storage_ops::op_storage_put, &args)),
+                    (
+                        "delete",
+                        call_op(scope, storage_ops::op_storage_delete, &args),
+                    ),
+                    ("sql", call_op(scope, storage_ops::op_sql_ingest, &args)),
+                    ("d1", call_op(scope, storage_ops::op_d1_run, &args)),
+                    ("setAlarm", call_op(scope, op_alarm_set, &args)),
+                    ("getAlarm", call_op(scope, op_alarm_get, &args)),
+                    ("deleteAlarm", call_op(scope, op_alarm_delete, &args)),
+                ]
+            };
+            for (in_cell, context) in [
+                (true, cell_event_context_for_test(&own)),
+                (false, IoContext::new()),
+            ] {
+                let _current = CurrentGuard::enter(context);
+                let expected = crate::ws_registry::foreign_io_error(in_cell, STORAGE_IO_TYPE);
+                worker.with_scope_for_test(|scope| {
+                    for (name, result) in uses(scope, &other) {
+                        assert_eq!(result, Err(format!("Error: {expected}")), "{name}");
+                    }
+                    let facets = crate::ws_registry::foreign_io_error(in_cell, FACETS_IO_TYPE);
+                    let error = call_op(scope, op_facet_delete, &[&other, "child"]).unwrap_err();
+                    assert_eq!(error, format!("Error: {facets}"));
+                });
+            }
+            // The running object's own scope passes the check, and fails only
+            // because no database is open in this test.
+            let _current = CurrentGuard::enter(cell_event_context_for_test(&own));
+            worker.with_scope_for_test(|scope| {
+                let error = call_op(scope, storage_ops::op_storage_get, &[&own, "k"]).unwrap_err();
+                assert!(!error.contains("Cannot perform I/O"), "{error}");
+            });
+        });
+    }
+
+    /// `blockConcurrencyWhile` acquires the running object's gate only: a
+    /// scope naming another object (even of the same class) is refused.
+    /// `__gate_wait` reaches a cell the script may call, so it is refused for
+    /// a class the grant does not hold but allowed for one it does.
+    #[test]
+    fn the_gate_ops_are_owner_bound() {
+        in_isolate(|worker| {
+            let own = scope_of("Own", "aa");
+            let sibling = scope_of("Own", "bb");
+            let foreign = scope_of("Other", "aa");
+            let _current = CurrentGuard::enter(cell_event_context_for_test(&own));
+            worker.with_scope_for_test(|scope| {
+                // Acquire is bound to the running event: a sibling object of
+                // the same class is refused with the foreign-gate message,
+                // while the running cell gets past that check (and then the
+                // retired-gate message, because this bare test drives no op).
+                assert!(gate_rejection(scope, &sibling).contains(FOREIGN_INPUT_GATE));
+                assert!(gate_rejection(scope, &own).contains(RETIRED_INPUT_GATE));
+                // Wait is bound to the grant: a class the script holds is
+                // admitted, one it does not is refused.
+                assert_eq!(call_op(scope, op_gate_wait, &[&sibling]), Ok(()));
+                let refusal = crate::scope_grant::refusal("app", &foreign);
+                assert_eq!(
+                    call_op(scope, op_gate_wait, &[&foreign]),
+                    Err(format!("Error: {refusal}"))
+                );
+            });
+        });
+    }
+
+    /// The reason the promise from `op_gate_acquire(cell)` rejected with.
+    fn gate_rejection(scope: &mut v8::PinScope, cell: &str) -> String {
+        let tc = std::pin::pin!(v8::TryCatch::new(scope));
+        let tc = &mut tc.init();
+        let function = v8::Function::new(tc, op_gate_acquire).unwrap();
+        let arg = v8::String::new(tc, cell).unwrap().into();
+        let recv = v8::undefined(tc).into();
+        let result = function
+            .call(tc, recv, &[arg])
+            .expect("acquire returns an array");
+        let array = v8::Local::<v8::Array>::try_from(result).expect("a [event, owner, promise]");
+        let promise = v8::Local::<v8::Promise>::try_from(array.get_index(tc, 2).unwrap())
+            .expect("the third element is the acquisition promise");
+        assert!(
+            matches!(promise.state(), v8::PromiseState::Rejected),
+            "{cell} was not refused"
+        );
+        promise.result(tc).to_rust_string_lossy(tc)
+    }
+
+    /// A loader id is a counter, so one that another isolate loaded is not a
+    /// Worker this isolate can call, start a facet in or drop.
+    #[test]
+    fn a_loaded_worker_answers_only_the_isolate_that_loaded_it() {
+        let config = Arc::new(WorkerConfig::new(WorkerConfigOptions {
+            src: String::new(),
+            script_name: "loaded".into(),
+            do_classes: Vec::new(),
+            bindings: Vec::new(),
+            r2_bindings: Vec::new(),
+            d1_bindings: Vec::new(),
+            kv_bindings: Vec::new(),
+            queue_bindings: Vec::new(),
+            queue_consumers: Vec::new(),
+            workflow_bindings: Vec::new(),
+            vars: Vec::new(),
+            node: String::new(),
+            modules: Vec::new(),
+            compat: Compat::default(),
+        }));
+        let (state, receiver) = tokio::sync::watch::channel(LoaderState::Loading);
+        let loaded = LoadedWorker {
+            state: receiver,
+            reload: Arc::new(LoaderReload {
+                state,
+                config,
+                pacing: Mutex::new(LoaderPacing::default()),
+            }),
+        };
+        let owner = LoaderOwner::fresh("parent", 0);
+        let stranger = LoaderOwner::fresh("parent", 0);
+        let id = LOADER_NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        admit_loaded_worker(owner.clone(), id, loaded).unwrap();
+        assert!(loaded_worker_of(&owner, id).is_some());
+        assert!(loaded_worker_of(&stranger, id).is_none());
+        assert!(
+            matches!(FacetHost::of(&stranger, id), Err(error) if error == "worker loader: unknown worker")
+        );
+        drop(take_loader_owner(&owner));
+        assert!(loaded_worker_of(&owner, id).is_none());
+    }
+}
+
 /// Timer op behind `setTimeout`: a promise resolving after `ms`.
 fn op_timer(
     scope: &mut v8::PinScope,
@@ -11717,8 +12131,18 @@ fn op_gate_acquire(
     args: v8::FunctionCallbackArguments,
     rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
     let event = NEXT_GATE_EVENT.fetch_add(1, Ordering::Relaxed);
+    // `blockConcurrencyWhile` runs in the object's own event, so the gate it
+    // takes is the running event's cell, never a scope from a writable
+    // `this._scope`: naming another object's cell would shut that object's
+    // input gate and stall its events. Bound here, the per-context held map
+    // below (`release_input_gate`) then names only cells this context took,
+    // so release and the host-driven retire stay correct without trusting a
+    // scope from JS.
+    let Some(cell) = owned_gate_cell(scope, args.get(0)) else {
+        let promise = rejected_promise(scope, FOREIGN_INPUT_GATE);
+        return return_gate_acquisition(scope, rv, event, None, promise);
+    };
     let contexts = current_reaction_io_context(scope).zip(
         operation_continuation_id(scope).and_then(|id| actor_runtime_state(scope).io_context(id)),
     );
@@ -11869,6 +12293,15 @@ fn op_gate_wait(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let cell = args.get(0).to_rust_string_lossy(scope);
+    // Waiting on a cell's gate reaches that cell, so it is checked against
+    // the script's grant exactly as a Durable Object call is: a stub into
+    // another object of the script (or the Queue relay) is admitted, a
+    // forged scope naming another script's cell is refused. The running
+    // event can be a different cell than `cell` (object A's stub into B),
+    // so this cannot bind to the running event the way acquire does.
+    if let Err(refusal) = admitted_caller(scope, &cell) {
+        return loader_throw(scope, &refusal);
+    }
     let id = asyncrt::enqueue(async move {
         loop {
             match cell_gate_wait(&cell) {
@@ -14363,7 +14796,9 @@ fn op_alarm_set(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let s = args.get(0).to_rust_string_lossy(scope);
+    let Some(s) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let at = args.get(1).number_value(scope).unwrap_or(0.0) as i64;
     let timing_started = (tracing::enabled!(target: "queue_timing", tracing::Level::DEBUG)
         && s.split_once(':')
@@ -14402,7 +14837,9 @@ fn op_queue_alarm_set_wait(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let at_ms = args.get(1).number_value(scope).unwrap_or(0.0) as i64;
     let committed = match storage::set_alarm(&cell, at_ms) {
         Ok(committed) => committed,
@@ -14431,7 +14868,9 @@ fn op_alarm_get(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let s = args.get(0).to_rust_string_lossy(scope);
+    let Some(s) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     match storage::get_alarm(&s) {
         Some(at) => rv.set(v8::Number::new(scope, at as f64).into()),
         None => rv.set(v8::null(scope).into()),
@@ -14442,7 +14881,9 @@ fn op_alarm_delete(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let s = args.get(0).to_rust_string_lossy(scope);
+    let Some(s) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     if let Err(error) = storage::delete_alarm(&s) {
         throw_storage_error(scope, "deleteAlarm", error);
     }

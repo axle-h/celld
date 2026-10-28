@@ -193,6 +193,8 @@ pub struct RpcCallReq {
     pub reply: tokio::sync::oneshot::Sender<Result<RpcData>>,
     /// The calling handler's trace context, as on `DoCallReq`.
     pub parent: Option<crate::telemetry::TraceContext>,
+    /// Who made the call, as on `DoCallReq`.
+    pub caller: crate::scope_grant::Caller,
 }
 pub(crate) static RPC_CALL_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<RpcCallReq>> =
     OnceLock::new();

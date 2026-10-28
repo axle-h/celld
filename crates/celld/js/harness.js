@@ -1843,6 +1843,13 @@ class SqlCursor {
       throw error;
     }
     if (this._prefetched === null) return { done: true };
+    // Each row is prefetched one step ahead -- the row returned here was read
+    // by the op during the previous step, in whichever event ran then. A
+    // cursor used from another object must throw before that buffered row is
+    // handed out, so ownership is checked here against the running object, for
+    // every row and not only the first. A stale cursor (its final row read,
+    // id now 0) owns nothing and needs no check.
+    if (this._cursorId) __sql_cursor_check(this._cursorId);
     const value = this._prefetched;
     this._advanceNative();
     return { done: false, value };
@@ -3484,19 +3491,32 @@ class DurableObjectState {
     );
     return event.promise;
   }
+  // The cell this reset acts on. `_scope` is writable, so one object could
+  // set it to another's and drop that object's buffered writes, delete its
+  // instance and break it. The authority is the instance registry, which
+  // user code cannot reach: this returns the scope only when `this` is the
+  // object registered under it, so a forged `_scope` names a cell this is
+  // not and clears, deletes and breaks nothing. `__cellBlocks` is keyed by
+  // the same authentic scope (`op_gate_acquire` binds acquisition to the
+  // running event), so the host-driven retire path below passes an
+  // authentic scope too.
+  _ownScope() {
+    const scope = this._scope;
+    return __cell.instances[scope]?.__celldState === this ? scope : undefined;
+  }
   _resetAfterConcurrencyFailure(error) {
     if (this._aborted) return;
     this._markReset(error);
-    __storage_cancel_pending_puts(this._scope);
-    const instance = __cell.instances[this._scope];
-    if (instance && instance.__celldState === this)
-      delete __cell.instances[this._scope];
+    const scope = this._ownScope();
+    if (scope === undefined) return;
+    __storage_cancel_pending_puts(scope);
+    delete __cell.instances[scope];
     // Under a stub-mediated caller (this scope is not the current
     // event) the failure breaks the actor, as Workerd joins it
     // into the on-abort promise; a direct event keeps reset-only
     // semantics -- its caller sees the rejection itself.
-    if (__currentActorScope() !== this._scope)
-      __actorBreak(this._scope, error);
+    if (__currentActorScope() !== scope)
+      __actorBreak(scope, error);
   }
   abort(reason) {
     // workerd takes the reason as a string (DurableObjectState::abort()).
@@ -3506,20 +3526,25 @@ class DurableObjectState {
   }
   _abort(error) {
     if (this._aborted) return;
-    const terminating = __currentActorScope() === this._scope;
+    // See `_ownScope`: a forged `_scope` must not abort another object. An
+    // object this is not registered under aborts nothing, only itself.
+    const scope = this._ownScope();
+    if (scope === undefined) {
+      this._markReset(error);
+      return;
+    }
+    const terminating = __currentActorScope() === scope;
     this._markReset(error, terminating);
-    __storage_cancel_pending_puts(this._scope);
-    const instance = __cell.instances[this._scope];
-    if (instance && instance.__celldState === this)
-      delete __cell.instances[this._scope];
+    __storage_cancel_pending_puts(scope);
+    delete __cell.instances[scope];
     // Direct host-dispatched event on this actor: the uncatchable
     // terminate_execution path. Under a same-isolate stub caller,
     // termination would unwind the caller too, so break in JS.
     if (terminating) {
-      __actor_abort(this._scope, error.message);
+      __actor_abort(scope, error.message);
       return;
     }
-    __actorBreak(this._scope, error);
+    __actorBreak(scope, error);
   }
   _ready() { return this._gate; }
   // The WebSocket methods act on the running Durable Object, whichever

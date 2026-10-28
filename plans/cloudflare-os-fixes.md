@@ -341,9 +341,9 @@ reference, loud gaps, fresh deployments only, the production-quality bar).
 The general method is the `orchestrate-subagents` skill
 (`~/.claude/skills/orchestrate-subagents/SKILL.md`).
 
-**Where to start.** The Progress table below: the row marked `next` (1.49),
-then the `queued` row in order. 1.49 has a "Progress (paused)" note with
-what the last agent found. Nothing is half-implemented in the tree.
+**Where to start.** The Progress table below: the row marked `next`,
+then the `queued` rows in order. Each item's section has its design, and
+an "As built" once done. Nothing is half-implemented in the tree.
 
 **The loop for each item.**
 1. One implementer subagent (`general-purpose`), with a self-contained prompt:
@@ -468,7 +468,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 36 | 1.26 stream ownership on the host, readers and IdentityTransformStream | done | `e449d4d` |
 | 37 | 1.45 esbuild service protocol; Wrangler `alias` exactly | done | `60f09d3`, starter `ec3cf7f` |
 | 38 | 1.28 RPC method lookup on every receiver (security) | done | `8e1f06e` |
-| 39 | 1.49 Durable Object scope authorisation (security) | next | |
+| 39 | 1.49 part A: Durable Object scope grants on the host (security) | done | |
+| 39b | 1.50 TCP socket and RPC-signal ownership (security) | next | |
+| 39c | 1.49 part B: internals out of user reach, cell re-validation (security) | queued | |
 | 40+ | Phase 1 in plan order (1.29, 1.30, 1.34, 1.36-1.44, 1.46-1.48), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
@@ -3643,7 +3645,7 @@ entrypoints, Durable Objects and call results. `__stubResolve`,
 - **Facet and Worker Loader stubs** still send array indices as names.
   They refuse property reads and paths, as before.
 
-### 1.49 Durable Object scope authorisation (found by the 1.28 review) — security, next
+### 1.49 Durable Object scope authorisation (found by the 1.28 review) — security
 
 **Problem.** Nothing on the host ties a caller to the Durable Object scopes
 it may reach. Verified in `celld dev` with two scripts, where `attacker`
@@ -3694,58 +3696,199 @@ check.
 arguments are `null` now fails "Malformed Durable Object RPC request"; it
 used to call with no arguments. Only authenticated peers send it.
 
-**Progress (paused, 2026-10-23).** Nothing is implemented yet. No code is
-changed, and no tests or cases have been added. Only the survey below is
-done.
+**As built (part A: host-side ownership tracking).**
+- **Grants.** `scope_grant::ScopeGrant`, built once per `WorkerConfig`
+  (`WorkerConfig::scope_grant`, lazily, after the builder sets the consumer
+  catalog) and held on `ActorRuntimeState` next to `script_name`, and per
+  script on `Generation` (`scope_grant(script)`) for the owner-side check.
+  It admits every object of the script's `do_classes` except the shared
+  runtime classes (so its bindings' and migrated classes, `ctx.exports`,
+  and its own `__Workflow.<script>`), and of `__KvNamespace`, `__Queue`
+  and `__D1Database` only the exact cells its bindings name:
+  `kv_cell_scope(id, 0)` per KV binding, `queue_cell_scope` per producer,
+  `d1_cell_scope` per D1 binding. Another shard of an own KV namespace is
+  not admitted. A scope without a `:` names no cell. Dynamic Workers
+  (`WorkerOrigin::Dynamic`) get `ScopeGrant::none`.
+- **Queue consumers** need nothing: they never call the Queue cell.
+  `dispatch_queue_batch` delivers the batch and settles the lease
+  (`/__qSettle`) from the host.
+- **Shared runtime cells.** Calls celld makes itself (ingress and `/do/`,
+  `/runtime/`, queue settlement, cron arming) carry `Caller::Host`. The one
+  cell-to-cell call from JavaScript is the Queue cell's dead-letter transfer
+  and redrive, which runs in the first script's isolates and so under that
+  script's grant. It is admitted by a relay, not a wider user grant: while
+  the running event is a `__Queue` cell's, the grant also admits the Queue
+  cells of the deployment's consumer catalog (each consumed queue and its
+  dead-letter queue, which every isolate carries). Other code never runs
+  in a Queue cell's event, short of patched builtins reaching harness code,
+  which part B's primordials work covers. A redrive back to a queue that
+  the current catalog no longer consumes is refused, loudly.
+- **Caller-side checks.** `op_do_call_impl` (fetch, cancellable fetch,
+  WebSocket upgrade) and `op_rpc_call` call `admitted_caller` first: the
+  caller is `Caller::Script { grant, event }`, event being the running
+  cell event's scope, and a scope outside the grant throws
+  `Durable Object <scope> is not reachable from Worker "<script>": the
+  Worker holds no binding to its namespace` before anything is sent.
+  `DoCallReq`/`RpcCallReq` and `cell_dispatch::CallContext` carry the
+  `caller`; `dispatch_call_attempt` (both dispatchers) and `main.rs`
+  `dispatch_rpc_call` check it again before routing, so a producer of a
+  call that skipped the op check is still refused.
+- **Peer tunnel, version 7.** Node A writes `x-cells-caller` (`host` or
+  `script:<name>`) and, for a script's call from a cell event,
+  `x-cells-caller-event`; both are control headers, so an application's
+  copies are dropped. Node B (`tunnel_control`, `RpcHead::parse`) refuses
+  an inner request that names no caller (400), and
+  `dispatch_forwarded_fetch`/`dispatch_forwarded_rpc` resolve the script's
+  grant from B's own current generation (`TunnelCaller::resolve`; an
+  unknown script, such as a Dynamic Worker, gets none) and refuse before
+  routing: a fetch as a handler failure, which A raises to the caller, and
+  an RPC as 403. `TUNNEL_VERSION` is 7; `docs/README.md` "Upgrade notes"
+  now says 5 to 7 for the next release (stop all; fresh deployments only,
+  no compatibility path), as 1.19 set up.
+- **Storage, cursors, alarms and gates bound to the running event.** Every
+  op that takes a storage scope from JavaScript goes through
+  `owned_storage_cell`: the `__storage_*` data ops (get, put, delete, list,
+  queued puts, flush, sync, transaction control, delete-all), every `__sql_*`
+  op that takes a scope (and the test-only ones), `__d1_run`,
+  `__alarm_set/get/delete` and `__queue_alarm_set_wait`. The scope must equal
+  the running event's (`current_cell_event`), as 1.27 did for containers, or
+  the op throws workerd's cross-object error `(I/O type: ActorCacheInterface)`
+  (outside any object event, the cross-request one). `storage.sync()`'s old
+  private check is folded into this one.
+  - **SQL and kv.list() cursors** carry their cell (`sql_cursor_scope`,
+    `sync_list_cursor_scope`). `__sql_cursor_next`/`__storage_sync_list_next`
+    refuse a cursor whose cell is not the running object's, with workerd's I/O
+    types `State` and `ListCursor`. A cursor prefetches one row ahead, so the
+    harness also calls `__sql_cursor_check` before it hands out each buffered
+    row: a cursor leaked to another object throws on the first read, before
+    any of a's rows reach it. `__sql_cursor_close` (finalizer-driven) closes a
+    cursor only for the object that owns it, so one object cannot close
+    another's; the cell's connection teardown sweeps the rest.
+  - **`blockConcurrencyWhile`** (`op_gate_acquire`) takes the running event's
+    cell, never `this._scope`: a forged scope cannot shut another object's
+    input gate (celld-only refusal, there is no name to forge in workerd).
+    Its per-context held map (`release_input_gate`) then names only cells this
+    context took, so `op_gate_release` and the host-driven
+    `__retireInputGateContext` stay correct -- a forged release finds no claim
+    and is a no-op, with no scope trusted. `op_gate_wait` (the same-isolate
+    RPC-stub delivery point) reaches a cell its running event need not be, so
+    it is checked against the script's grant exactly as a Durable Object call
+    is: a stub into another object of the script, or the Queue relay, is
+    admitted; a forged cross-script scope is refused.
+  - **Reset and abort** (`_abort`, `_resetAfterConcurrencyFailure`) discard a
+    cell's buffered writes, delete its instance and break it. `_scope` is
+    writable, so these now act only on the cell `this` is the registered
+    instance of (`__cell.instances`, which user code cannot reach): a forged
+    `_scope` names a cell `this` is not and clears, deletes and breaks
+    nothing. The host-driven retire path reads the scope from `__cellBlocks`,
+    which `op_gate_acquire` now keys by the running event, so it is authentic
+    too. `__storage_cancel_pending_puts` keeps a grant check as a second
+    guard and never throws, so a reset cannot fail on it.
+- **Facets and loaders.** `__facet_rpc/fetch/abort/delete` take the parent
+  scope from JavaScript; it must be the running event's, or they throw the
+  cross-object error `(I/O type: FacetManager)`, workerd's text for another
+  object's `ctx.facets`. Loader ids are a process-wide counter, so
+  `__loader_fetch/rpc/drop` and `FacetHost::of` now answer only for the
+  isolate that loaded the Worker (`LoaderOwner`); another isolate's id is
+  "worker loader: unknown worker". `__ws_connect` takes no scope (1.21
+  routes it by the running event), so it needed nothing.
+- **No fleet secret for ids** (decided): the grant makes a computable id
+  non-authorising, so `durable_object_id_key` stays a hash of public
+  strings and the `celld kv`/`d1`/`queue` CLIs keep deriving scopes.
+- **Op sweep.** Every op that takes a cell scope, cursor id, gate, facet id,
+  loader id or stream/socket id from JS is bound to its owner: the Durable
+  Object call and RPC ops and the peer tunnel (the grant); storage, SQL and
+  list cursors, alarms, `blockConcurrencyWhile` and facets (the running
+  event); `cancel_pending_puts` and `gate_wait` (the grant); WebSocket and
+  body/http streams (1.21/1.26 owner maps); containers (1.27); loaders and
+  loaded-worker facets (`LoaderOwner`). `__do_id` only derives an id, which
+  the grant makes non-authorising; `__kv_blob` and `__queue_dispatch` take
+  their cell from the running event's gate, not from JS. The TCP
+  socket ops (`__tcp_*`) and the RPC-signal ops (`__rpc_signal_*`) are *not*
+  bound: their ids are reachable (a writable `socket._id`) and process-wide,
+  so a forged id reaches another script's socket or signal. That is its own
+  security item, **1.50**, queued straight after part A. The remaining
+  counter-keyed compute handles -- `__zlib_stream_*`, `__timer_cancel`,
+  `__hr_*`, `__r2_mp_*` -- hold opaque per-request ids a script does not
+  expose; hardening them against a forged integer is the 1.21/1.26
+  cross-request class, if it proves reachable.
+- **Docs.** `docs/security.md` "Durable Object reach"; the upgrade note.
+- **Tests.** `rpc/scope-grants` (celld-only, `front` and `back`): own DO,
+  `ctx.exports`, KV, Queue and D1 still work, a message whose consumer
+  fails reaches `back`'s dead-letter queue (the relay), and each of these
+  expects the refusal: a DO fetch and an RPC to `back`'s class through the
+  `DurableObjectNamespace` constructor, `back`'s KV, Queue, dead-letter
+  queue, D1 and workflow cells, another shard of `front`'s own KV, storage
+  and alarm ops with a forged `_scope`, and a facet with a forged manager
+  state, and `blockConcurrencyWhile` with the gate's cell forged (cross- and
+  same-script, with the running object's own gate still working).
+  Differential: `storage/cross-object-storage` (another object's leaked
+  `ctx.storage`, and a leaked SQL cursor `(I/O type: State)` and kv.list()
+  cursor `(I/O type: ListCursor)`, which at HEAD still yielded a's buffered
+  rows) and `storage/cross-object-facets` (leaked `ctx.facets`). Unit tests:
+  `scope_grant::tests`, `js::scope_grant_op_tests` (op refusals through V8:
+  calls, storage, facets, the gate ops, the loader owner) and the peer
+  tunnel's caller tests.
+- **Internal signatures changed** (for `celld_internal_tests`): `DoCallReq`,
+  `RpcCallReq` and `CallContext` gained `caller`; `peer_tunnel::rpc` takes
+  a `&Caller`; `FacetHost::of` takes the owner.
+- `rpc/rpc-refusals-internal` still passes: its `env.KV._stub` reaches its
+  own KV cell, which the grant admits.
 
-What the next agent needs to know:
-- **Cross-script `script_name` DO bindings are refused at deploy**
-  (`deploy.rs` ~1607, test ~5113). So the only user classes a script may
-  reach are its own `do_classes`: the bindings' classes plus migrated
-  classes. `ctx.exports` namespaces come from the same list
-  (`bootstrap.rs` `inject_namespace_keys`).
-- **A cell scope is `Class:hex`, with no script in it.** User classes are
-  unique across co-hosted scripts until 2.4, so for them a check on the
-  class is a check on the (script, class) pair. The workflow class carries
-  its script (`__Workflow.<script>`).
-- **A class check is not enough for KV, Queue and D1.** These classes are
-  shared fleet-wide (`engine_api.rs` `shared_namespace_key`), so holding
-  any KV binding authorises the class. The grant has to list the exact
-  scopes instead: `kv_cell_scope(id, 0)` per KV binding, `queue_cell_scope`
-  per producer (check whether consumers call the cell too), and
-  `d1_cell_scope` per D1 binding. Build it from `WorkerConfig` at load and
-  keep it on `ActorRuntimeState` (`js.rs` ~3271) next to `script_name`.
-- **Where to put the checks.** The caller-side ops `op_do_call_impl` and
-  `op_rpc_call` (`js.rs` ~10532 and ~10791) take the scope from JS with no
-  check. To cover the peer tunnel, put a caller identity on
-  `DoCallReq`/`RpcCallReq`, check it in `main.rs` `dispatch_rpc_call`
-  (~1422) and in the DO-call dispatch, and carry it in the
-  `peer_tunnel::rpc` frame. Also check `__facet_*`, `__ws_connect` and
-  `__loader_*`.
-- **Dynamic Workers** have `script_name = "__loader:<id>"` (`js.rs` ~9433)
-  and an empty `do_classes`. Their env carries only service routes
-  (`__installLoaderEnv`, `harness.js` ~4435), so their grant should be
-  empty apart from their own facets.
-- **Shared runtime cells run in the first script's isolates**
-  (`generation.rs` `register_cell_class`).
-- **Additional gap (not in the design above).** Storage and alarm ops take
-  the scope from a writable `this._scope` (`harness.js` ~1885, ~2059,
-  ~2206; `ctx.storage.constructor` is reachable), and `op_alarm_set`,
-  `op_alarm_get`, `op_alarm_delete` and the `__storage_*` ops trust it.
-  Storage is looked up per thread (`storage.rs` `dbs`), so this reaches only
-  cells resident in the same isolate. That includes the shared KV, Queue
-  and D1 cells when the attacker's script hosts them. Bind these ops to the
-  running event (`current_cell_event`), as 1.27 did for containers.
-- **Not started:** removing `_stub`/`_namespace`/`_namespaceKey` and the
-  constructor (`harness.js` ~6168, ~8640, ~8987, ~10482; `kv.js`), the
-  `/runtime/`-only `fetch`, re-validation inside the cell methods, the
-  internal path for `__queueDlqAcceptBatch` (`harness.js` ~8113, ~8189,
-  ~8628), the JSON-null peer RPC (`__doRpcRequest`, `harness.js` ~6483),
-  and the fleet-secret id decision (`engine_api.rs`
-  `durable_object_id_key`; the `celld kv`/`d1`/`queue` CLIs derive scopes
-  outside any isolate and would need the secret).
-- **`rpc/rpc-refusals-internal` uses `env.KV._stub`** and similar, so its
-  `/runtime` step has to be rewritten once `_stub` is gone.
+**Part B (to do).**
+- Take `_stub`, `_namespace`, `_namespaceKey` and the
+  `DurableObjectNamespace` constructor out of user reach (`harness.js`
+  ~6168, ~8640, ~8987, ~10482; `kv.js`); make `DurableObjectStorage`,
+  `SqlStorage`, `DurableObjectState` and `DurableObjectFacets` state private,
+  so no scope is writable (this also covers `__storage_cancel_pending_puts`
+  and the gate ops above, and `SqlCursor._cursorId`/`_prefetched` -- the
+  prefetched row is readable as a plain property, and `__sql_cursor_close`'s
+  id is writable).
+- Refuse `fetch` on runtime classes except on the authenticated `/runtime/`
+  route (the Queue and D1 operator handlers, `kv.js` ~674-770).
+- Re-validate every limit inside the cell methods (keys, sizes, ids, content
+  types, metadata), and give `__queueDlqAcceptBatch` an internal
+  cell-to-cell path that no binding's allowlist includes (`harness.js`
+  ~8113, ~8189, ~8628).
+- Shared runtime cells run in the first script's isolates beside its code:
+  that script's patched builtins can run inside their events. Capture
+  primordials on the runtime cells' paths, or run them in an isolate with
+  no user code.
+- The JSON-null peer RPC (`__doRpcRequest`, `harness.js` ~6483).
+- Rewrite `rpc/rpc-refusals-internal`'s `/runtime` step once `_stub` is
+  gone.
+- TCP socket ids and RPC-signal ids are reachable and process-wide
+  (`__tcp_*`, `__rpc_signal_*`); a forged id crosses scripts. Their own
+  security item **1.50**, after part A. The other counter-keyed compute
+  handles (`__zlib_stream_*`, `__timer_cancel`, `__hr_*`, `__r2_mp_*`) hold
+  opaque per-request ids; harden them as 1.21/1.26 did if reachable.
+- An end-to-end two-node test of the forwarded-caller refusal (node B 403 /
+  handler failure, node A surfaces it): part A unit-tests the frame and the
+  check, but the repo has no cheap two-node harness (the conformance runner
+  refuses `nodes > 1`), so the cross-node path is covered only by unit tests.
+
+### 1.50 TCP socket and RPC-signal ownership (found by the 1.49 review) — security, next
+
+**Problem.** The TCP socket registry (`js/tcp.rs` ~39-57) is process-wide
+and keyed by a global counter, and `op_tcp_read`, `write`, `shutdown`,
+`close` and `starttls` (~196-290) check no owner. `sockets.js` (~64-200)
+keeps the id in a writable `socket._id` and reads it again on every pull
+and write. So a Worker that sets its own `Socket`'s `_id` to another
+script's open connection (a database session, say) can read, write, close
+or upgrade it. Dynamic Workers included. Found by reading the code; not
+reproduced (it needs an external TCP peer). The RPC-signal ops
+(`__rpc_signal_*`) hold process-wide ids too and were not traced.
+
+**Design.** As 1.21 did for WebSockets: record the owner (the opening
+request or cell context) when a socket is opened, check it in every
+`__tcp_*` op, and refuse loudly otherwise. Keep the id private (closure or
+private field). Trace `__rpc_signal_*` and apply the same model if its ids
+are reachable across scripts or requests.
+
+**Tests.** Celld-only cases that expect the refusal: a socket whose id names
+another request's or script's connection (using a local TCP echo upstream
+from the corpus libs), and the same for RPC signals if they prove reachable.
+Unit tests on the owner check.
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 

@@ -1,0 +1,19 @@
+// The namespaces `front` must not reach: a Durable Object, KV, a queue with
+// a consumer and a dead-letter queue, D1 and a workflow.
+{
+  "name": "back",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": { "bindings": [{ "name": "VAULT", "class_name": "Vault" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Vault"] }],
+  "kv_namespaces": [{ "binding": "KV", "id": "back-kv" }],
+  "queues": {
+    "producers": [{ "binding": "JOBS", "queue": "back-jobs" }],
+    "consumers": [
+      { "queue": "back-jobs", "max_batch_timeout": 0, "max_retries": 0, "dead_letter_queue": "back-dlq" },
+      { "queue": "back-dlq", "max_batch_timeout": 0 }
+    ]
+  },
+  "d1_databases": [{ "binding": "DB", "database_name": "back-db", "database_id": "back-db" }],
+  "workflows": [{ "name": "back-flow", "binding": "FLOW", "class_name": "Flow" }]
+}

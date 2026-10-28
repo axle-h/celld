@@ -108,6 +108,9 @@ pub struct CallContext {
     /// Reclaims a streamed body abandoned by an early error. A local target or
     /// the peer HTTP body takes ownership before this guard is disarmed.
     pub body_guard: RequestBodyGuard,
+    /// Who made the call. Checked before routing, and carried to the owner
+    /// node, which checks it again.
+    pub caller: crate::scope_grant::Caller,
 }
 
 /// Split a proxied call into its cross-attempt context, its consumable
@@ -136,6 +139,7 @@ pub fn split_do_call(
         reply,
         order,
         parent,
+        caller,
     } = call;
     (
         CallContext {
@@ -146,6 +150,7 @@ pub fn split_do_call(
             cancel,
             order,
             body_guard,
+            caller,
         },
         CallPayload {
             name,
@@ -228,6 +233,11 @@ pub async fn dispatch_call_attempt(
         return CallAttempt::Unstarted(anyhow::anyhow!(
             "cell scope is malformed or exceeds the fleet storage limit"
         ));
+    }
+    // The call site refused a script's call already; this covers every other
+    // producer of a call, and a retry, which routes the same scope again.
+    if let Err(refusal) = call.caller.admit(&call.scope) {
+        return CallAttempt::Unstarted(refusal);
     }
     // A disconnect before routing completes has executed no handler, so
     // cancel the core request and release its activation admission. Once

@@ -606,7 +606,8 @@ release, so keep operator tooling and celld releases together.
   caller as a 500 response. A v0.6.2 pair rejects the caller's `stub.fetch()`
   instead, as a local owner does. A rollback to v0.6.1 can also roll.
 - **v0.6.2 to the next release: stop all.** The peer tunnel moves from
-  version 5 to 6, and nodes on different versions cannot reach each other,
+  version 5 to 7 (each call now names its calling script, which the owner
+  checks), and nodes on different versions cannot reach each other,
   so a rolling update is not possible. Stop every node, then start the new
   version. A node that dials a peer on the other version fails the call at
   once and logs `peer_tunnel_version_mismatch` once for that peer.

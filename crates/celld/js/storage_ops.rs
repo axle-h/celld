@@ -14,7 +14,9 @@ pub(super) fn op_storage_get(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let scope_s = args.get(0).to_rust_string_lossy(scope);
+    let Some(scope_s) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let key = args.get(1).to_rust_string_lossy(scope);
     match storage::get_stored(&scope_s, &key) {
         Ok(Some(value)) => {
@@ -31,7 +33,9 @@ pub(super) fn op_storage_get_many(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let keys = match storage_string_array(scope, args.get(1)) {
         Ok(keys) => keys,
         Err(error) => {
@@ -58,7 +62,9 @@ pub(super) fn op_storage_put(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let s = args.get(0).to_rust_string_lossy(scope);
+    let Some(s) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let k = args.get(1).to_rust_string_lossy(scope);
     let Some(value) = serialize_storage_value(scope, args.get(2)) else {
         return;
@@ -72,7 +78,9 @@ pub(super) fn op_storage_put_many(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let Ok(entries) = v8::Local::<v8::Array>::try_from(args.get(1)) else {
         throw_storage_error(scope, "put", "entries must be an array");
         return;
@@ -111,7 +119,9 @@ pub(super) fn op_storage_put_serialized(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let key = args.get(1).to_rust_string_lossy(scope);
     let Some(bytes) = view_bytes(args.get(2)) else {
         throw_storage_error(scope, "put", "serialized row must be bytes");
@@ -129,7 +139,9 @@ pub(super) fn op_storage_queue_put_serialized(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let key = args.get(1).to_rust_string_lossy(scope);
     let Some(bytes) = view_bytes(args.get(2)) else {
         throw_storage_error(scope, "put", "serialized row must be bytes");
@@ -160,7 +172,9 @@ pub(super) fn op_storage_queue_put(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let key = args.get(1).to_rust_string_lossy(scope);
     let Some(value) = serialize_storage_value(scope, args.get(2)) else {
         return;
@@ -173,7 +187,9 @@ pub(super) fn op_storage_queue_put_many(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let Ok(entries) = v8::Local::<v8::Array>::try_from(args.get(1)) else {
         throw_storage_error(scope, "put", "entries must be an array");
         return;
@@ -206,7 +222,9 @@ pub(super) fn op_storage_flush_pending_puts(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     if let Err(error) = flush_pending_puts(scope, &cell) {
         throw_storage_error(scope, "put", error);
     }
@@ -252,7 +270,9 @@ pub(super) fn op_storage_sync(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     // A promise about durability fails closed. Without a gate channel no
     // ticket can be answered, and without a running cell event nothing says
     // which cell's writes this turn made. An egress in either state leaves
@@ -265,25 +285,11 @@ pub(super) fn op_storage_sync(
         throw_storage_error(scope, "sync", "this process has no output-gate channel");
         return;
     }
-    let context = event_context(scope);
-    let Some(frame) = current_cell_event(&context) else {
-        throw_storage_error(scope, "sync", format!("{cell} has no running cell event"));
+    // `owned_storage_cell` made `cell` the running event's, so the ticket
+    // names the cell whose writes this turn made.
+    let Some(frame) = current_cell_event(&event_context(scope)) else {
         return;
     };
-    let event_cell = frame.storage;
-    // The ticket names the cell of the running event, never the scope the
-    // caller passed. They can only differ when JavaScript holds another
-    // cell's storage handle, and then the proof would be for the wrong cell.
-    // Checked before the sample below, so the op never reads another cell's
-    // connection state and never reports that state under this scope's name.
-    if event_cell != cell {
-        throw_storage_error(
-            scope,
-            "sync",
-            format!("{cell} is not the running event's cell"),
-        );
-        return;
-    }
     let sample = match storage::sync_sample(&cell) {
         Ok(Some(sample)) => sample,
         Ok(None) => return throw_storage_error(scope, "sync", format!("{cell} is not resident")),
@@ -348,6 +354,17 @@ pub(super) fn op_storage_cancel_pending_puts(
     _rv: v8::ReturnValue<v8::Value>,
 ) {
     let cell = args.get(0).to_rust_string_lossy(scope);
+    // Only ever called while resetting or retiring a cell (a concurrency
+    // failure, `ctx.abort()`, a dropped critical section), which can be the
+    // running event's own cell or, under a stub-mediated caller, another cell
+    // of the same script. It discards buffered writes, so a forged `_scope`
+    // could drop another object's. It clears only a cell the running script
+    // may reach -- its own classes, its own KV/Queue/D1 cells, the Queue relay
+    // -- so a cross-script scope clears nothing. No throw: a reset must not
+    // fail because the scope was not the caller's to clear.
+    if admitted_caller(scope, &cell).is_err() {
+        return;
+    }
     actor_runtime_state(scope)
         .pending_puts
         .lock()
@@ -360,7 +377,9 @@ pub(super) fn op_sql_ingest(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let input = args.get(1).to_rust_string_lossy(scope);
     let out = match storage::sql_ingest(&cell, &input) {
         Ok((remainder, rows_written, statement_count)) => serde_json::json!({
@@ -393,7 +412,9 @@ pub(super) fn op_sql_cursor_start(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let query = args.get(1).to_rust_string_lossy(scope);
     let timing_started = (tracing::enabled!(target: "queue_timing", tracing::Level::DEBUG)
         && cell
@@ -548,6 +569,9 @@ pub(super) fn op_sql_cursor_next(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let cursor = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
+    if !owned_sql_cursor(scope, cursor) {
+        return;
+    }
     match storage::sql_cursor_next(cursor) {
         Ok((Some(row), _)) => rv.set(sql_row_to_v8(scope, row).into()),
         Ok((None, rows_written)) => rv.set(v8::Number::new(scope, rows_written as f64).into()),
@@ -610,20 +634,64 @@ fn sql_value_to_v8<'s>(
         storage::SqlValue::Blob(bytes) => super::host_array_buffer(scope, bytes).into(),
     }
 }
+/// workerd's I/O type for a `SqlStorageCursor`: the cursor is an I/O object
+/// owned by the Durable Object that created it, so a next() or a buffered-row
+/// read from another object throws the cross-object error with this type.
+const SQL_CURSOR_IO_TYPE: &str = "State";
+
+/// Whether the running event owns the cell `cursor` reads. A stale cursor id
+/// (already exhausted or closed) owns nothing, so it passes: the subsequent
+/// storage call answers "no longer active", as before. Throws the cross-object
+/// error otherwise.
+fn owned_sql_cursor(scope: &mut v8::PinScope, cursor: u64) -> bool {
+    match storage::sql_cursor_scope(cursor) {
+        Some(cell) => running_cell(scope, cell, SQL_CURSOR_IO_TYPE).is_some(),
+        None => true,
+    }
+}
+
+/// `__sql_cursor_check(id)` — refuse a cursor whose cell is not the running
+/// object's, before the harness hands out the row prefetched when the cursor
+/// was opened. Every later row comes through `op_sql_cursor_next`, which runs
+/// the same check, so the harness calls this once, for the prefetched row.
+pub(super) fn op_sql_cursor_check(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let cursor = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
+    let _ = owned_sql_cursor(scope, cursor);
+}
+
 pub(super) fn op_sql_cursor_close(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
     let cursor = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
-    storage::sql_cursor_close(cursor);
+    // The finalizer drives close at an arbitrary GC time, with no running
+    // event or another object's. Close the cursor only for the object that
+    // owns it; otherwise leave it (the cell's connection teardown sweeps it),
+    // so one object cannot close another's cursor. A stale id owns nothing and
+    // is a harmless no-op either way.
+    let owned = match storage::sql_cursor_scope(cursor) {
+        Some(cell) => {
+            current_cell_event(&event_context(scope)).is_some_and(|frame| frame.storage == cell)
+        }
+        None => true,
+    };
+    if owned {
+        storage::sql_cursor_close(cursor);
+    }
 }
 pub(super) fn op_sql_database_size(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     match storage::sql_database_size(&cell) {
         Ok(bytes) => rv.set(v8::Number::new(scope, bytes as f64).into()),
         Err(error) => throw_storage_error(scope, "sql.databaseSize", error),
@@ -638,7 +706,9 @@ pub(super) fn op_d1_run(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let request = args.get(1).to_rust_string_lossy(scope);
     let out = storage::d1_run_json(&cell, &request);
     rv.set(v8::String::new(scope, &out).unwrap().into());
@@ -649,7 +719,9 @@ pub(super) fn op_sql_set_max_page_count_for_test(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let pages = args.get(1).uint32_value(scope).unwrap_or(0);
     if let Err(error) = storage::set_max_page_count_for_test(&cell, pages) {
         throw_storage_error(scope, "sql.setMaxPageCountForTest", error);
@@ -669,7 +741,9 @@ pub(super) fn op_sql_set_cache_size_for_test(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let pages = args.get(1).int32_value(scope).unwrap_or(0);
     if let Err(error) = storage::set_cache_size_for_test(&cell, pages) {
         throw_storage_error(scope, "sql.setCacheSizeForTest", error);
@@ -681,7 +755,9 @@ pub(super) fn op_sql_set_interrupt_fault_for_test(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let enabled = args.get(1).boolean_value(scope);
     if let Err(error) = storage::set_interrupt_fault_for_test(&cell, enabled) {
         throw_storage_error(scope, "sql.setInterruptFaultForTest", error);
@@ -693,7 +769,9 @@ pub(super) fn op_sql_register_nomem_function_for_test(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     if let Err(error) = storage::register_nomem_function_for_test(&cell) {
         throw_storage_error(scope, "sql.registerNomemFunctionForTest", error);
     }
@@ -703,7 +781,9 @@ pub(super) fn op_storage_transaction_control(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let action = args.get(1).to_rust_string_lossy(scope);
     let nested = args.get(2).boolean_value(scope);
     let savepoint = args.get(3).to_rust_string_lossy(scope);
@@ -743,7 +823,9 @@ pub(super) fn op_storage_delete(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let s = args.get(0).to_rust_string_lossy(scope);
+    let Some(s) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let k = args.get(1).to_rust_string_lossy(scope);
     match storage::delete(&s, &k) {
         Ok(deleted) => rv.set(v8::Boolean::new(scope, deleted).into()),
@@ -755,7 +837,9 @@ pub(super) fn op_storage_delete_many(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let keys = match storage_string_array(scope, args.get(1)) {
         Ok(keys) => keys,
         Err(error) => {
@@ -785,7 +869,9 @@ pub(super) fn op_storage_list(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let options = match serde_json::from_str::<StorageListOptions>(
         &args.get(1).to_rust_string_lossy(scope),
     ) {
@@ -823,7 +909,9 @@ pub(super) fn op_storage_sync_list_start(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let options = match serde_json::from_str::<StorageListOptions>(
         &args.get(1).to_rust_string_lossy(scope),
     ) {
@@ -853,6 +941,14 @@ pub(super) fn op_storage_sync_list_next(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let cursor = args.get(0).integer_value(scope).unwrap_or(0).max(0) as u64;
+    // A cursor id is a number JavaScript holds. One of another object's
+    // list cursors on this thread is refused as its storage is, before any
+    // buffered row is handed back. workerd's I/O type for the list cursor.
+    if let Some(cell) = storage::sync_list_cursor_scope(cursor) {
+        if running_cell(scope, cell, "ListCursor").is_none() {
+            return;
+        }
+    }
     match storage::sync_list_next(cursor) {
         Ok(Some((key, value))) => {
             let Some((decoded, _)) = deserialize_stored(scope, value, args.get(1)) else {
@@ -1229,7 +1325,9 @@ pub(super) fn op_storage_delete_all(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let cell = args.get(0).to_rust_string_lossy(scope);
+    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+        return;
+    };
     let delete_alarm = args.get(1).boolean_value(scope);
     if let Err(error) = storage::delete_all_with_alarm(&cell, delete_alarm) {
         let message = v8::String::new(scope, &format!("deleteAll: {error}")).unwrap();
