@@ -1,0 +1,18 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/stateless/abort/forever"},
+    {"path": "/stateless/abort/timer"},
+    {"path": "/stateless/abort/subrequest"},
+    {"path": "/stateless/block-throws/forever"},
+    {"path": "/stateless/block-throws/timer"},
+    {"path": "/stateless/block-throws/subrequest"},
+    {"path": "/object/abort/forever"},
+    {"path": "/object/abort/timer"},
+    {"path": "/object/abort/subrequest"},
+    {"path": "/object/block-throws/forever"},
+    {"path": "/object/block-throws/timer"},
+    {"path": "/object/block-throws/subrequest"},
+    {"path": "/after"}
+  ]
+}

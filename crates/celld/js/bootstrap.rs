@@ -1227,6 +1227,13 @@ fn finish_cell_adoption(tc: &mut v8::PinScope, cell: &str, owned: bool) -> Resul
     crate::ws_registry::ws_release_grants(&crate::ws_registry::WsOwner::Cell(cell.to_string()));
     super::tcp::release_cell(cell);
     super::html_rewriter::release_cell(cell);
+    // The instance the residency held ends with the give-back; a condemned
+    // isolate broke it, and stubs bound to it stay broken (`do_instances`).
+    // A take-in has no instance yet, and leaves another isolate's alone.
+    if !owned {
+        let script = super::actor_runtime_state(tc).script_name.clone();
+        super::do_instances::release(&script, cell, condemned);
+    }
     let released = if condemned {
         Ok(())
     } else {

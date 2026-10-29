@@ -1,0 +1,10 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/block/getter"},
+    {"path": "/block/deep"},
+    {"path": "/abort/deep"},
+    {"path": "/abort/hostile-reason"},
+    {"path": "/abort/patched"}
+  ]
+}

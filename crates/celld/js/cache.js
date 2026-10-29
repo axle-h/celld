@@ -95,6 +95,7 @@
 
   const storage = new CacheStorage(kCreate);
   Object.defineProperty(storage, "default", {
+    __proto__: null,
     value: new Cache(kCreate),
     enumerable: true,
   });

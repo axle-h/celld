@@ -72,6 +72,8 @@ pub struct Cells {
     sql_critical_errors: RefCell<HashMap<String, String>>,
     /// The schema cookie last read for a cell, and what it was read against.
     schema_cookies: RefCell<HashMap<String, SchemaCookie>>,
+    /// The cells whose implicit transaction is open (`begin_implicit`).
+    implicit: RefCell<HashSet<String>>,
 }
 
 /// The database and the ownership epoch that authorized its activation.
@@ -234,6 +236,11 @@ pub struct Installed(*const Cells);
 
 impl Drop for Installed {
     fn drop(&mut self) {
+        // The outermost install of these cells is the turn: its end is where
+        // workerd commits the implicit transaction.
+        if self.0 != CURRENT_CELLS.get() && !std::thread::panicking() {
+            end_turn_implicit();
+        }
         CURRENT_CELLS.set(self.0);
     }
 }
@@ -287,6 +294,10 @@ fn sql_cursors<T>(f: impl FnOnce(&RefCell<HashMap<u64, SqlCursor>>) -> T) -> T {
 
 fn sql_statement_caches<T>(f: impl FnOnce(&RefCell<HashMap<String, SqlStatementCache>>) -> T) -> T {
     cells(|c| f(&c.sql_statement_caches))
+}
+
+fn implicit_scopes<T>(f: impl FnOnce(&RefCell<HashSet<String>>) -> T) -> T {
+    cells(|c| f(&c.implicit))
 }
 
 fn sql_critical_errors<T>(f: impl FnOnce(&RefCell<HashMap<String, String>>) -> T) -> T {
@@ -464,6 +475,10 @@ thread_local! {
     /// judged by it. Everything else the authorizer denies -- pragmas,
     /// ATTACH, load_extension -- stays denied for both.
     static USER_SQL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// True only while celld's own implicit-transaction statement is prepared
+    /// or runs (`implicit_control`), the one time the authorizer admits a
+    /// transaction statement.
+    static IMPLICIT_CONTROL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Run `callback` with application-SQL restrictions in force.
@@ -554,6 +569,7 @@ fn authorize_sql(context: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::
     SQL_PREPARES.fetch_add(1, Ordering::Relaxed);
 
     let prohibited = match context.action {
+        AuthAction::Transaction { .. } if IMPLICIT_CONTROL.with(std::cell::Cell::get) => false,
         // The Attach deny is also the only thing blocking VACUUM and VACUUM
         // INTO: SQLite emits no distinct authorizer action for VACUUM and
         // implements it via an internal ATTACH, which lands here. Relaxing
@@ -902,6 +918,9 @@ pub(crate) fn embedded_facets(root: &str) -> Vec<String> {
 /// Drop `scope`'s connection (evict) so the replicator can release the
 /// file.
 pub fn close(scope: &str) {
+    // Closing the connection rolls an open implicit transaction back: a cell
+    // given back from a condemned isolate keeps none of the turn it died in.
+    implicit_scopes(|scopes| scopes.borrow_mut().remove(scope));
     close_sync_list_cursors(scope);
     close_sql_cursors(scope);
     close_sql_statement_cache(scope);
@@ -1290,6 +1309,10 @@ fn schema_version(connection: &Connection) -> u64 {
 /// into a "writer" whose held frames were silently lost. `None` when the scope
 /// has no open connection (a Worker with no Durable Object storage).
 pub fn write_position(scope: &str) -> anyhow::Result<Option<u64>> {
+    // An output is sampled at a commit, as workerd's waits for one, and none
+    // leaves a cell whose writes failed to commit.
+    require_sql_healthy(scope).map_err(anyhow::Error::msg)?;
+    commit_implicit(scope).map_err(anyhow::Error::msg)?;
     with(scope, |c| {
         ensure_no_unfinished_write_cursor(c)?;
         Ok(fingerprint(scope, c))
@@ -1312,11 +1335,15 @@ fn fingerprint(scope: &str, connection: &Connection) -> u64 {
 fn ensure_no_unfinished_write_cursor(connection: &Connection) -> anyhow::Result<()> {
     anyhow::ensure!(
         !connection.is_autocommit() || !has_uncommitted_write(connection),
-        "cannot publish storage with an unfinished SQL write cursor; \
-         consume its rows before output or storage.sync()"
+        UNFINISHED_WRITE_CURSOR
     );
     Ok(())
 }
+
+/// The refusal of an output, `storage.sync()` or an alarm write while a SQL
+/// write cursor has not finished.
+const UNFINISHED_WRITE_CURSOR: &str = "cannot publish storage with an unfinished SQL write \
+     cursor; consume its rows before output or storage.sync()";
 
 /// The committed-write position an event starts at. The first sample of an
 /// activation is also the cell's published baseline: `observed_position`
@@ -1379,6 +1406,8 @@ pub struct SyncSample {
 /// The `storage.sync()` sample, or `None` when the scope has no open
 /// connection.
 pub fn sync_sample(scope: &str) -> anyhow::Result<Option<SyncSample>> {
+    require_sql_healthy(scope).map_err(anyhow::Error::msg)?;
+    commit_implicit(scope).map_err(anyhow::Error::msg)?;
     dbs(|d| {
         d.borrow()
             .get(scope)
@@ -1938,7 +1967,19 @@ pub(crate) fn sql_cursor_start_values(
             // SQL cursors first. SQLite receives transient copies of every bind.
             unsafe {
                 let database = connection.handle();
-                let started_in_transaction = rusqlite::ffi::sqlite3_get_autocommit(database) == 0;
+                let mut started_in_transaction =
+                    rusqlite::ffi::sqlite3_get_autocommit(database) == 0;
+                // A statement that can write runs in the implicit transaction;
+                // a reader opens none.
+                let mut join_implicit =
+                    |statement: *mut rusqlite::ffi::sqlite3_stmt| -> anyhow::Result<()> {
+                        if rusqlite::ffi::sqlite3_stmt_readonly(statement) == 0 {
+                            begin_implicit(scope).map_err(anyhow::Error::msg)?;
+                            started_in_transaction =
+                                rusqlite::ffi::sqlite3_get_autocommit(database) == 0;
+                        }
+                        Ok(())
+                    };
                 let changes_before = total_changes_for_handle(database);
                 let start = sql.as_ptr();
                 let mut source = start;
@@ -1989,6 +2030,10 @@ pub(crate) fn sql_cursor_start_values(
                                 "Wrong number of parameter bindings for SQL query."
                             ));
                         }
+                        if let Err(error) = join_implicit(statement) {
+                            discard_in_use_sql_statement(scope, None, statement);
+                            return Err(error);
+                        }
                         loop {
                             let step = rusqlite::ffi::sqlite3_step(statement);
                             match step {
@@ -2029,6 +2074,10 @@ pub(crate) fn sql_cursor_start_values(
                     }
                     if cache_query.is_none() && !cache_busy && !saw_prefix {
                         cache_query = register_cached_sql_statement(scope, query, statement);
+                    }
+                    if let Err(error) = join_implicit(statement) {
+                        discard_in_use_sql_statement(scope, cache_query.as_deref(), statement);
+                        return Err(error);
                     }
                     let step = rusqlite::ffi::sqlite3_step(statement);
                     return match step {
@@ -2865,12 +2914,7 @@ impl D1TransactionOperation {
 }
 
 fn d1_poison_transaction(scope: &str, error: String) {
-    sql_critical_errors(|errors| {
-        errors
-            .borrow_mut()
-            .entry(scope.to_string())
-            .or_insert(error);
-    });
+    record_critical_error(scope, || error);
 }
 
 fn d1_rollback_after_commit_failure(scope: &str, connection: &Connection) -> Result<(), String> {
@@ -2970,12 +3014,7 @@ fn d1_critical_transaction_failure(
         // A D1 call owns its transaction bracket and cannot hand an open or
         // ambiguous one back to application code. Fail closed even when
         // SQLite did not re-enable autocommit after the control failure.
-        sql_critical_errors(|errors| {
-            errors
-                .borrow_mut()
-                .entry(scope.to_string())
-                .or_insert_with(|| error.clone());
-        });
+        record_critical_error(scope, || error.clone());
     }
     error
 }
@@ -3248,6 +3287,233 @@ pub fn d1_run_json(scope: &str, request: &str) -> String {
     }
 }
 
+// ---- the implicit transaction ----------------------------------------
+//
+// workerd runs an object's writes in an implicit transaction that commits
+// when the turn ends, and a reset (`ctx.abort()`, a failed
+// `blockConcurrencyWhile()`) rolls back what the turn wrote before it
+// (probed in `storage/reset-discards-writes`). An application write outside a
+// `transaction()` or `transactionSync()` therefore opens one here
+// (`begin_implicit`), which commits when the isolate turn ends
+// (`end_turn_implicit`), and before anything that must see its writes
+// committed: an output's sample (`write_position`), `storage.sync()`, a
+// `blockConcurrencyWhile()` (as in workerd), a transaction of its own, and an
+// alarm's write, whose wake entry is published with the commit. A reset
+// rolls it back (`discard_uncommitted`). The cells of celld's own classes
+// (KV, Queue, D1, workflows, the cron schedule) keep autocommit.
+
+/// Open the implicit transaction for an application write to `scope`, unless
+/// one, or a transaction of the application's, is open already.
+pub fn begin_implicit(scope: &str) -> Result<(), String> {
+    if !application_cell(scope)
+        || sql_critical_error(scope).is_some()
+        || implicit_scopes(|scopes| scopes.borrow().contains(scope))
+    {
+        return Ok(());
+    }
+    let began = with(scope, |connection| {
+        if !connection.is_autocommit() {
+            return Ok(false);
+        }
+        implicit_control(connection, "BEGIN IMMEDIATE").map(|()| true)
+    });
+    match began {
+        Some(Ok(true)) => {
+            implicit_scopes(|scopes| scopes.borrow_mut().insert(scope.to_string()));
+            Ok(())
+        }
+        Some(Ok(false)) | None => Ok(()),
+        Some(Err(error)) => Err(error.to_string()),
+    }
+}
+
+/// Whether `scope` is an application's object, not a cell of celld's own
+/// runtime classes or its cron schedule.
+fn application_cell(scope: &str) -> bool {
+    crate::deploy::reserved_class_of(scope).is_none()
+        && scope
+            .split_once(':')
+            .is_none_or(|(class, _)| class != celld_logic::cron::RESERVED_CLASS)
+}
+
+/// Commit `scope`'s implicit transaction, if one is open.
+///
+/// A write cursor that has not finished (`INSERT … RETURNING` read in part)
+/// holds the transaction open: it stays open until the turn ends (which
+/// then resets the object, `end_turn_implicit`), and the error is the refusal an
+/// output gets in that state. Any other failure rolls the transaction back,
+/// and the cell fails from then on, because writes it acknowledged to its own
+/// code are gone.
+pub fn commit_implicit(scope: &str) -> Result<(), String> {
+    if !implicit_scopes(|scopes| scopes.borrow().contains(scope)) {
+        return Ok(());
+    }
+    // An isolate condemned under the turn resets its objects: the turn's
+    // writes never commit, as workerd's turn never ends.
+    if crate::pool::current_slot().is_some_and(|slot| slot.is_condemned()) {
+        rollback_implicit(scope);
+        return Err(crate::js::MEMORY_EXCEEDED.to_string());
+    }
+    let committed = with(scope, |connection| {
+        // A critical failure already ended the transaction, and was recorded.
+        if connection.is_autocommit() {
+            return Ok(());
+        }
+        if write_statement_running(connection) {
+            return Err(ImplicitCommit::Held);
+        }
+        implicit_control(connection, "COMMIT").map_err(|error| {
+            let _ = implicit_control(connection, "ROLLBACK");
+            ImplicitCommit::Failed(failed_commit_error(&error))
+        })
+    });
+    match committed {
+        Some(Err(ImplicitCommit::Held)) => Err(UNFINISHED_WRITE_CURSOR.to_string()),
+        Some(Err(ImplicitCommit::Failed(error))) => {
+            implicit_scopes(|scopes| scopes.borrow_mut().remove(scope));
+            record_critical_error(scope, || error.clone());
+            Err(error)
+        }
+        Some(Ok(())) | None => {
+            implicit_scopes(|scopes| scopes.borrow_mut().remove(scope));
+            // An alarm move the host's bookkeeping made while a write cursor
+            // held the transaction is published with this commit.
+            publish_alarm_if_transaction_dirty(scope);
+            Ok(())
+        }
+    }
+}
+
+/// Run one of the implicit transaction's own statements. A cached statement
+/// under the connection's authorizer, which admits it while it runs: turning
+/// the authorizer off and on again, as the other transaction statements do,
+/// expires every prepared statement, and the implicit transaction runs one
+/// pair per turn that writes.
+fn implicit_control(connection: &Connection, sql: &str) -> rusqlite::Result<()> {
+    IMPLICIT_CONTROL.with(|flag| flag.set(true));
+    let result = connection
+        .prepare_cached(sql)
+        .and_then(|mut statement| statement.execute([]))
+        .map(drop);
+    IMPLICIT_CONTROL.with(|flag| flag.set(false));
+    result
+}
+
+/// The error an object reset by a failed commit fails with: workerd's text
+/// for a deferred constraint the turn left violated, and its internal error
+/// for anything else.
+fn failed_commit_error(error: &rusqlite::Error) -> String {
+    let rusqlite::Error::SqliteFailure(failure, message) = error else {
+        return "internal error".to_string();
+    };
+    let extended = match failure.extended_code {
+        rusqlite::ffi::SQLITE_CONSTRAINT_CHECK => "SQLITE_CONSTRAINT_CHECK",
+        rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY => "SQLITE_CONSTRAINT_FOREIGNKEY",
+        rusqlite::ffi::SQLITE_CONSTRAINT_NOTNULL => "SQLITE_CONSTRAINT_NOTNULL",
+        rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY => "SQLITE_CONSTRAINT_PRIMARYKEY",
+        rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE => "SQLITE_CONSTRAINT_UNIQUE",
+        rusqlite::ffi::SQLITE_CONSTRAINT_TRIGGER => "SQLITE_CONSTRAINT_TRIGGER",
+        code if code & 0xff == rusqlite::ffi::SQLITE_CONSTRAINT => "SQLITE_CONSTRAINT",
+        _ => return "internal error".to_string(),
+    };
+    let detail = message.as_deref().unwrap_or("constraint failed");
+    format!(
+        "Durable Object was reset and rolled back to its last known good state because the \
+         application left the database in a state where constraints were violated: {detail}: \
+         SQLITE_CONSTRAINT (extended: {extended})"
+    )
+}
+
+enum ImplicitCommit {
+    /// An unfinished write cursor holds the transaction open.
+    Held,
+    Failed(String),
+}
+
+/// Whether a statement that wrote is still being stepped: SQLite refuses a
+/// commit under one ("SQL statements in progress"), but not under a reader.
+fn write_statement_running(connection: &Connection) -> bool {
+    // SAFETY: the handle belongs to this live connection; SQLite walks its
+    // own statement list, and nothing here outlives the call.
+    unsafe {
+        let database = connection.handle();
+        let mut statement = rusqlite::ffi::sqlite3_next_stmt(database, std::ptr::null_mut());
+        while !statement.is_null() {
+            if rusqlite::ffi::sqlite3_stmt_busy(statement) != 0
+                && rusqlite::ffi::sqlite3_stmt_readonly(statement) == 0
+            {
+                return true;
+            }
+            statement = rusqlite::ffi::sqlite3_next_stmt(database, statement);
+        }
+        false
+    }
+}
+
+/// The object `scope` was reset: its cursors end, and what its implicit
+/// transaction wrote is rolled back.
+pub fn discard_uncommitted(scope: &str) {
+    // A write cursor still being stepped would otherwise keep the rolled-back
+    // write's transaction open on the connection the replacement uses.
+    close_sql_cursors(scope);
+    close_sync_list_cursors(scope);
+    rollback_implicit(scope);
+}
+
+/// Roll back `scope`'s implicit transaction.
+fn rollback_implicit(scope: &str) {
+    if !implicit_scopes(|scopes| scopes.borrow_mut().remove(scope)) {
+        return;
+    }
+    with(scope, |connection| {
+        if !connection.is_autocommit() {
+            if let Err(error) = implicit_control(connection, "ROLLBACK") {
+                // The writes cannot be discarded, so the cell must not serve
+                // them.
+                record_critical_error(scope, || {
+                    format!("roll back the implicit transaction: {error}")
+                });
+            }
+        }
+    });
+    // An alarm move the rollback undid publishes the committed alarm again.
+    publish_alarm_if_transaction_dirty(scope);
+}
+
+/// The turn ends: commit every implicit transaction it opened (or, in an
+/// isolate condemned under it, roll them back: `commit_implicit`).
+///
+/// A write cursor still being stepped holds the commit, which workerd's
+/// turn-end commit fails with an internal error that resets the object: the
+/// cursor ends, the writes roll back, and the object resets the same way
+/// (`record_critical_error`).
+fn end_turn_implicit() {
+    let scopes: Vec<String> = implicit_scopes(|scopes| scopes.borrow().iter().cloned().collect());
+    for scope in scopes {
+        if let Err(error) = commit_or_reset(&scope) {
+            tracing::warn!(%scope, %error, "the implicit transaction failed to commit with its turn");
+        }
+    }
+}
+
+/// Commit `scope`'s implicit transaction as the turn ends, which a write
+/// cursor still being stepped cannot hold off: it ends, the writes roll back,
+/// and the object resets, as with any failed commit.
+pub fn commit_or_reset(scope: &str) -> Result<(), String> {
+    let error = match commit_implicit(scope) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    if implicit_scopes(|scopes| scopes.borrow().contains(scope)) {
+        discard_uncommitted(scope);
+        record_critical_error(scope, || TURN_COMMIT_HELD.to_string());
+    }
+    Err(error)
+}
+
+/// workerd's error for a turn whose commit a running statement held.
+const TURN_COMMIT_HELD: &str = "internal error";
+
 /// `Ok(Some(at_ms))` when an outermost commit published a dirty committed
 /// alarm: the caller performs the arm-time wake-entry gate before acking the
 /// transaction. Rollbacks restore previously committed (already covered)
@@ -3278,6 +3544,11 @@ pub fn transaction_control(
             .is_none_or(|suffix| suffix.parse::<u64>().is_err())
     {
         return Err("invalid storage transaction savepoint".to_string());
+    }
+    // A transaction is a layer of its own, never one inside the implicit
+    // transaction, which therefore commits before it begins.
+    if action == "start" && !nested {
+        commit_implicit(scope)?;
     }
     let result = with(scope, |connection| {
         without_sql_authorizer(connection, || {
@@ -3790,12 +4061,29 @@ fn record_sqlite_operation_failure(
     );
     let now_autocommit = unsafe { rusqlite::ffi::sqlite3_get_autocommit(database) != 0 };
     if celld_logic::sqlite::poisons_actor(result_code, started_in_transaction, now_autocommit) {
-        sql_critical_errors(|errors| {
-            errors
-                .borrow_mut()
-                .entry(scope.to_string())
-                .or_insert_with(|| error.to_string());
-        });
+        record_critical_error(scope, || error.to_string());
+    }
+}
+
+/// Record `scope`'s critical SQL error, its first one: the cell's storage
+/// refuses every operation and no output leaves it. An application's object
+/// also resets (`do_instances::cell_broken`): writes its code saw are gone,
+/// so it moves to a new instance rather than stay down while traffic
+/// arrives. celld's own cells keep failing closed, as before.
+fn record_critical_error(scope: &str, error: impl FnOnce() -> String) {
+    let recorded = sql_critical_errors(|errors| {
+        let mut errors = errors.borrow_mut();
+        if errors.contains_key(scope) {
+            return None;
+        }
+        let error = error();
+        errors.insert(scope.to_string(), error.clone());
+        Some(error)
+    });
+    if let Some(error) = recorded {
+        if application_cell(scope) {
+            crate::js::do_instances::cell_broken(scope, &error);
+        }
     }
 }
 
@@ -4168,6 +4456,8 @@ pub fn get_actor_name(scope: &str) -> anyhow::Result<Option<String>> {
 /// ActorCache exposes this distinction internally; compatibility flags decide
 /// which form the public JS deleteAll() operation selects.
 pub fn delete_all_with_alarm(scope: &str, delete_alarm: bool) -> anyhow::Result<()> {
+    // Its sweep is a transaction of its own (see `transaction_control`).
+    commit_implicit(scope).map_err(anyhow::Error::msg)?;
     let result = with_application_storage_write(scope, |c| -> anyhow::Result<()> {
         let mut statement = c.prepare(
             "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'",
@@ -4223,6 +4513,7 @@ pub fn delete_all_with_alarm(scope: &str, delete_alarm: bool) -> anyhow::Result<
 // acking. `None` means the write is deferred inside an explicit transaction;
 // the gate runs at that transaction's commit instead.
 pub fn set_alarm(scope: &str, at_ms: i64) -> anyhow::Result<Option<i64>> {
+    refuse_alarm_under_write_cursor(scope)?;
     with_application_storage_write(scope, |c| {
         c.execute(
             "INSERT INTO _cf_ALARM(scope,at_ms,retry,counted_retry,generation) \
@@ -4234,7 +4525,18 @@ pub fn set_alarm(scope: &str, at_ms: i64) -> anyhow::Result<Option<i64>> {
         .map(|_| ())
         .map_err(Into::into)
     })?;
+    commit_implicit(scope).map_err(anyhow::Error::msg)?;
     Ok(publish_alarm(scope))
+}
+
+/// An alarm write is acknowledged with its commit, and an unfinished write
+/// cursor holds the implicit transaction, so it is refused before it writes,
+/// with the refusal an output gets in that state.
+fn refuse_alarm_under_write_cursor(scope: &str) -> anyhow::Result<()> {
+    let held = implicit_scopes(|scopes| scopes.borrow().contains(scope))
+        && with(scope, write_statement_running).unwrap_or(false);
+    anyhow::ensure!(!held, UNFINISHED_WRITE_CURSOR);
+    Ok(())
 }
 
 pub fn get_alarm(scope: &str) -> Option<i64> {
@@ -4253,11 +4555,13 @@ pub fn get_alarm(scope: &str) -> Option<i64> {
 }
 
 pub fn delete_alarm(scope: &str) -> anyhow::Result<()> {
+    refuse_alarm_under_write_cursor(scope)?;
     with_application_storage_write(scope, |c| {
         c.execute("DELETE FROM _cf_ALARM WHERE scope=?1", [scope])
             .map(|_| ())
             .map_err(Into::into)
     })?;
+    commit_implicit(scope).map_err(anyhow::Error::msg)?;
     let _ = publish_alarm(scope); // a delete loosens: never gated
     Ok(())
 }
@@ -4276,6 +4580,18 @@ pub fn take_alarm_moves() -> Vec<(String, celld_logic::wake::AlarmSnapshot)> {
 /// still inside an explicit transaction (published at its boundary) or the
 /// db is gone. The returned value drives the arm-time wake-entry gate.
 fn publish_alarm(scope: &str) -> Option<i64> {
+    // The alarm is published with the commit of its write, so the host's own
+    // alarm bookkeeping does not wait in an application's implicit
+    // transaction. A failure is recorded against the cell.
+    if let Err(error) = commit_implicit(scope) {
+        // A write cursor holds the transaction (a critical failure is the
+        // cell's own error): the move waits for the commit that releases it.
+        alarm_dirty(|dirty| {
+            dirty.borrow_mut().insert(scope.to_string());
+        });
+        tracing::debug!(%scope, %error, "the alarm publishes with a later commit");
+        return None;
+    }
     // A storage transaction may call setAlarm()/deleteAlarm() several times
     // before committing or may roll them back. Publish only committed state;
     // the outer transaction boundary reconciles the watcher after either
@@ -4488,3 +4804,277 @@ pub fn bump_alarm_with_policy(scope: &str, now_ms: i64, counts_against_limit: bo
 
 #[cfg(celld_internal_tests)]
 include!(env!("CELLD_INTERNAL_STORAGE_OBSERVERS"));
+
+#[cfg(test)]
+mod implicit_transaction_tests {
+    //! The implicit transaction an application's writes run in: it commits
+    //! when the turn ends or before an output, holds for an unfinished write
+    //! cursor, and a reset rolls it back.
+    use super::*;
+
+    const SCOPE: &str = "Obj:one";
+
+    /// Run `f` in a turn of a fresh isolate's cells holding one open cell,
+    /// then answer what the cell holds once that turn has ended.
+    fn turn(f: impl FnOnce()) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cell.db");
+        let cells = Cells::default();
+        {
+            let _turn = cells.install();
+            open(SCOPE, path.to_str().unwrap()).unwrap();
+            f();
+        }
+        let _turn = cells.install();
+        let keys = key_names();
+        close(SCOPE);
+        keys
+    }
+
+    fn key_names() -> Vec<String> {
+        with(SCOPE, |c| {
+            c.prepare("SELECT k FROM _cf_KV ORDER BY k")
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<String>>>()
+                .unwrap()
+        })
+        .unwrap()
+    }
+
+    fn write(key: &str) {
+        begin_implicit(SCOPE).unwrap();
+        put_serialized(SCOPE, key, b"v").unwrap();
+    }
+
+    fn open_implicit() -> bool {
+        implicit_scopes(|scopes| scopes.borrow().contains(SCOPE))
+    }
+
+    #[test]
+    fn the_turn_end_commits_and_a_reset_discards() {
+        assert_eq!(turn(|| write("a")), ["a"]);
+        assert_eq!(
+            turn(|| {
+                write("a");
+                assert!(open_implicit());
+                discard_uncommitted(SCOPE);
+                assert!(!open_implicit());
+                // A write after the reset opens a transaction of its own.
+                write("b");
+            }),
+            ["b"]
+        );
+    }
+
+    #[test]
+    fn an_output_sample_and_an_alarm_commit_first() {
+        assert_eq!(
+            turn(|| {
+                write("a");
+                write_position(SCOPE).unwrap();
+                assert!(!open_implicit());
+                write("b");
+                set_alarm(SCOPE, 1).unwrap();
+                assert!(!open_implicit());
+                write("c");
+                discard_uncommitted(SCOPE);
+            }),
+            ["a", "b"]
+        );
+    }
+
+    #[test]
+    fn a_transaction_commits_the_implicit_one_before_it_begins() {
+        assert_eq!(
+            turn(|| {
+                write("a");
+                transaction_control(SCOPE, "start", false, "cells_tx_1").unwrap();
+                assert!(!open_implicit());
+                // Writes inside an application transaction open nothing.
+                write("b");
+                assert!(!open_implicit());
+                transaction_control(SCOPE, "rollback", false, "cells_tx_1").unwrap();
+                discard_uncommitted(SCOPE);
+            }),
+            ["a"]
+        );
+    }
+
+    #[test]
+    fn an_unfinished_write_cursor_holds_the_transaction_and_a_reader_does_not() {
+        turn(|| {
+            with(SCOPE, |c| {
+                c.execute_batch("CREATE TABLE t (v); INSERT INTO t VALUES (0), (0)")
+            })
+            .unwrap()
+            .unwrap();
+            write("a");
+            let (reader, ..) = sql_cursor_start_values(SCOPE, "SELECT v FROM t", &[]).unwrap();
+            assert_ne!(reader, 0, "the reader has a row left");
+            commit_implicit(SCOPE).unwrap();
+            sql_cursor_close(reader);
+            begin_implicit(SCOPE).unwrap();
+            let (writer, ..) =
+                sql_cursor_start_values(SCOPE, "INSERT INTO t VALUES (1), (2) RETURNING v", &[])
+                    .unwrap();
+            let held = commit_implicit(SCOPE).unwrap_err();
+            assert!(held.contains("unfinished SQL write cursor"), "{held}");
+            assert!(open_implicit());
+            sql_cursor_close(writer);
+            commit_implicit(SCOPE).unwrap();
+            assert!(!open_implicit());
+        });
+    }
+
+    #[test]
+    fn a_commit_the_turn_end_cannot_make_fails_the_cell() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cell.db");
+        let cells = Cells::default();
+        {
+            let _turn = cells.install();
+            open(SCOPE, path.to_str().unwrap()).unwrap();
+            with(SCOPE, |c| {
+                without_sql_authorizer(c, || {
+                    c.execute_batch(
+                        "PRAGMA foreign_keys=ON; CREATE TABLE p (id INTEGER PRIMARY KEY); \
+                         CREATE TABLE ch (pid REFERENCES p(id) DEFERRABLE INITIALLY DEFERRED)",
+                    )
+                })
+            })
+            .unwrap()
+            .unwrap();
+            begin_implicit(SCOPE).unwrap();
+            // Checked only at the commit, which the turn's end makes.
+            with(SCOPE, |c| c.execute_batch("INSERT INTO ch VALUES (99)"))
+                .unwrap()
+                .unwrap();
+        }
+        let _turn = cells.install();
+        assert!(!open_implicit());
+        let error = write_position(SCOPE).unwrap_err().to_string();
+        assert!(
+            error.contains("constraints were violated: FOREIGN KEY constraint failed"),
+            "{error}"
+        );
+        assert!(sync_sample(SCOPE).is_err());
+        let rows: i64 = with(SCOPE, |c| {
+            c.query_row("SELECT count(*) FROM ch", [], |r| r.get(0))
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(rows, 0, "the write was rolled back");
+        close(SCOPE);
+    }
+
+    #[test]
+    fn a_critical_sql_error_resets_the_object() {
+        // A scope of its own: the instance registry is the process's.
+        const FULL: &str = "Obj:full";
+        let dir = tempfile::tempdir().unwrap();
+        let cells = Cells::default();
+        let _turn = cells.install();
+        open(FULL, dir.path().join("cell.db").to_str().unwrap()).unwrap();
+        {
+            let token = crate::js::do_instances::begin_for_test(FULL);
+            with(FULL, |c| {
+                without_sql_authorizer(c, || {
+                    let pages: i64 = c.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+                    c.query_row(
+                        &format!("PRAGMA max_page_count = {}", pages + 2),
+                        [],
+                        |_| Ok(()),
+                    )
+                })
+            })
+            .unwrap()
+            .unwrap();
+            let big = vec![7_u8; 64 * 1024];
+            let mut failed = None;
+            for index in 0..8 {
+                begin_implicit(FULL).unwrap();
+                if let Err(error) = put_serialized(FULL, &format!("k{index}"), &big) {
+                    failed = Some(error.to_string());
+                    break;
+                }
+            }
+            let failed = failed.expect("the database fills");
+            assert!(failed.contains("full"), "{failed}");
+            // SQLite ends the implicit transaction at a full disk, which
+            // loses the turn's writes: the object resets.
+            assert!(sql_critical_error(FULL).is_some());
+            assert!(crate::js::do_instances::stale_for_test(FULL, token));
+            assert!(write_position(FULL).is_err());
+        }
+        close(FULL);
+    }
+
+    #[test]
+    fn a_turn_that_ends_under_a_write_cursor_resets_the_object() {
+        // A scope of its own: the instance registry is the process's.
+        const HELD: &str = "Obj:held";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cell.db");
+        let cells = Cells::default();
+        let token;
+        {
+            let _turn = cells.install();
+            open(HELD, path.to_str().unwrap()).unwrap();
+            token = crate::js::do_instances::begin_for_test(HELD);
+            with(HELD, |c| c.execute_batch("CREATE TABLE t (v)"))
+                .unwrap()
+                .unwrap();
+            begin_implicit(HELD).unwrap();
+            sql_cursor_start_values(HELD, "INSERT INTO t VALUES (1), (2) RETURNING v", &[])
+                .unwrap();
+        }
+        let _turn = cells.install();
+        assert_eq!(sql_critical_error(HELD).as_deref(), Some("internal error"));
+        assert!(crate::js::do_instances::stale_for_test(HELD, token));
+        let rows: i64 = with(HELD, |c| {
+            c.query_row("SELECT count(*) FROM t", [], |r| r.get(0))
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(rows, 0, "the cursor's write was rolled back");
+        close(HELD);
+    }
+
+    #[test]
+    fn an_alarm_write_under_an_unfinished_write_cursor_is_refused() {
+        turn(|| {
+            with(SCOPE, |c| c.execute_batch("CREATE TABLE t (v)"))
+                .unwrap()
+                .unwrap();
+            begin_implicit(SCOPE).unwrap();
+            let (writer, ..) =
+                sql_cursor_start_values(SCOPE, "INSERT INTO t VALUES (1), (2) RETURNING v", &[])
+                    .unwrap();
+            let refused = set_alarm(SCOPE, 1).unwrap_err().to_string();
+            assert!(refused.contains("unfinished SQL write cursor"), "{refused}");
+            assert!(delete_alarm(SCOPE).is_err());
+            assert_eq!(get_alarm(SCOPE), None, "nothing was written");
+            sql_cursor_close(writer);
+            assert_eq!(set_alarm(SCOPE, 1).unwrap(), Some(1));
+        });
+    }
+
+    #[test]
+    fn celld_s_own_cells_keep_autocommit() {
+        let dir = tempfile::tempdir().unwrap();
+        let cells = Cells::default();
+        let _turn = cells.install();
+        for scope in [
+            format!("{}:kv", crate::deploy::KV_CLASS),
+            format!("{}:app", celld_logic::cron::RESERVED_CLASS),
+        ] {
+            let path = dir.path().join(format!("{}.db", scope.len()));
+            open(&scope, path.to_str().unwrap()).unwrap();
+            begin_implicit(&scope).unwrap();
+            assert!(!implicit_scopes(|scopes| scopes.borrow().contains(&scope)));
+            close(&scope);
+        }
+    }
+}

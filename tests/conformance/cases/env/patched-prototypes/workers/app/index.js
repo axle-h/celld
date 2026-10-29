@@ -110,10 +110,9 @@ export class Obj extends DurableObject {
     mine.add(storage.kv);
     mine.add(this.ctx);
     const isOwn = (value) => mine.has(value);
-    patch(Object.getPrototypeOf(Object.getPrototypeOf(storage)),
-      ["get", "put", "getAlarm", "setAlarm", "deleteAlarm", "transactionSync"],
+    patch(Object.getPrototypeOf(storage),
+      ["get", "put", "getAlarm", "setAlarm", "deleteAlarm", "transactionSync", "transaction"],
       "storage", isOwn, "storage");
-    patch(Object.getPrototypeOf(storage), ["transaction"], "storage", isOwn, "storage");
     patch(Object.getPrototypeOf(storage.kv), ["get", "put", "delete", "list"],
       "kv", isOwn, "storage");
     patch(Object.getPrototypeOf(this.ctx), ["blockConcurrencyWhile"], "ctx", isOwn, "storage");

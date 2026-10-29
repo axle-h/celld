@@ -1930,6 +1930,8 @@ pub struct Actor {
     /// How many isolate condemnations this Actor has looked at
     /// (`observe_condemned_isolates`).
     seen_condemnations: u64,
+    /// How many broken cells it has taken (`observe_broken_cells`).
+    seen_broken_cells: u64,
     drain_pins: DrainPinRegistry,
     /// Per-cell handoff pipeline timings, one entry per quiesce nomination.
     /// Each phase is measured from effect dispatch to its answering event,
@@ -2523,6 +2525,7 @@ impl Actor {
             handoff_directory: Arc::new(Mutex::new(HandoffDirectory::default())),
             host,
             seen_condemnations: 0,
+            seen_broken_cells: 0,
             drain_pins,
             handoff_timings: HashMap::new(),
             handoff_phase_ops: HashMap::new(),
@@ -2669,6 +2672,24 @@ impl Actor {
         assert!(self.started, "Actor::step was called before Actor::start");
         self.step_input(input, out);
         self.observe_condemned_isolates(out);
+        self.observe_broken_cells(out);
+    }
+
+    /// Move the cells whose storage failed a commit
+    /// (`js::do_instances::cell_broken`), as a condemned isolate's: the turn
+    /// that broke one ends in a step of its own.
+    fn observe_broken_cells(&mut self, out: &mut StepOutput) {
+        let broken = crate::pool::breaks();
+        if broken == self.seen_broken_cells || self.preserving {
+            return;
+        }
+        self.seen_broken_cells = broken;
+        let Some(host) = &self.host else {
+            return;
+        };
+        for cell in host.take_broken_cells() {
+            self.drive(Event::CellBroken { cell }, out);
+        }
     }
 
     /// Move the cells out of isolates that reached their heap limit. The

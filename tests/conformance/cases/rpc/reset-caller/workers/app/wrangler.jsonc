@@ -1,0 +1,12 @@
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-01",
+  "durable_objects": {
+    "bindings": [
+      { "name": "TARGET", "class_name": "Target" },
+      { "name": "CALLER", "class_name": "Caller" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Target", "Caller"] }]
+}

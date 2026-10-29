@@ -1,0 +1,11 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/gate/after"},
+    {"path": "/gate/queued"},
+    {"path": "/facet/abort"},
+    {"path": "/facet/block-throws"},
+    {"path": "/alarm/abort"},
+    {"path": "/alarm/block-throws"}
+  ]
+}

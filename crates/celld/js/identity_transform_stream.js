@@ -49,6 +49,7 @@ function toError(reason) {
 function _readResult(value, done) {
   const r = { value, done };
   Object.defineProperty(r, 'then', {
+    __proto__: null,
     value: undefined,
     enumerable: false,
     writable: true,
@@ -339,11 +340,11 @@ class IdentityTransformStream {
       error: (e) => ctl._errorRd(e),
     });
     Object.defineProperties(readable, {
-      getReader: { value: internalGetReader, writable: true,
+      getReader: { __proto__: null, value: internalGetReader, writable: true,
                    configurable: true },
-      _cancel: { value: internalCancel, writable: true,
+      _cancel: { __proto__: null, value: internalCancel, writable: true,
                  configurable: true },
-      tee: { value: internalTee, writable: true, configurable: true },
+      tee: { __proto__: null, value: internalTee, writable: true, configurable: true },
     });
     // FixedLengthStream implies Content-Length when its readable is a
     // fetch body.

@@ -1,0 +1,7 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/rpc"},
+    {"path": "/fetch"}
+  ]
+}

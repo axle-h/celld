@@ -9,6 +9,7 @@
 function _readResult(value, done) {
   const r = { value, done };
   Object.defineProperty(r, 'then', {
+    __proto__: null,
     value: undefined,
     enumerable: false,
     writable: true,

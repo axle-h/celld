@@ -169,6 +169,7 @@
           "isolatePoisoned": false,
           "instancePoisoned": false,
           "before": null,
+          "doomed": null,
           "late": null
         }
       }
@@ -181,6 +182,10 @@
           "message": "Worker has exceeded memory limit."
         },
         "wait": {
+          "error": "Error",
+          "message": "Worker has exceeded memory limit."
+        },
+        "stale": {
           "error": "Error",
           "message": "Worker has exceeded memory limit."
         }
@@ -200,6 +205,7 @@
           "isolatePoisoned": false,
           "instancePoisoned": false,
           "before": "kept",
+          "doomed": null,
           "late": null
         }
       }
@@ -214,6 +220,10 @@
         "wait": {
           "error": "Error",
           "message": "Worker has exceeded memory limit."
+        },
+        "stale": {
+          "error": "Error",
+          "message": "Worker has exceeded memory limit."
         }
       }
     },
@@ -224,6 +234,7 @@
           "isolatePoisoned": false,
           "instancePoisoned": false,
           "before": "kept",
+          "doomed": null,
           "late": null
         }
       }

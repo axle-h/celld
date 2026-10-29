@@ -1,0 +1,109 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "reset": "Error: block failed",
+        "used": "Error: block failed",
+        "unused": 1,
+        "resetter": "Error: block failed",
+        "fresh": 2,
+        "usedFetch": "Error: block failed",
+        "resetterProperty": "Error: block failed",
+        "usedAgain": "Error: block failed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "reset": "Error: aborted here",
+        "used": "Error: aborted here",
+        "unused": 1,
+        "resetter": "Error: aborted here",
+        "fresh": 2,
+        "usedFetch": "Error: aborted here",
+        "resetterProperty": "Error: aborted here",
+        "usedAgain": "Error: aborted here"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "reset": "Error: Application called abort() to reset Durable Object.",
+        "used": "Error: Application called abort() to reset Durable Object.",
+        "unused": 1,
+        "resetter": 2,
+        "fresh": 3,
+        "usedFetch": "Error: Application called abort() to reset Durable Object.",
+        "resetterProperty": "property",
+        "usedAgain": "Error: Application called abort() to reset Durable Object."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "reset": "Error: block failed",
+        "used": "Error: block failed",
+        "unused": 1,
+        "resetter": "Error: block failed",
+        "fresh": 2,
+        "usedFetch": "Error: block failed",
+        "resetterProperty": "Error: block failed",
+        "usedAgain": "Error: block failed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "reset": "Error: aborted here",
+        "used": "Error: aborted here",
+        "unused": 1,
+        "resetter": "Error: aborted here",
+        "fresh": 2,
+        "usedFetch": "Error: aborted here",
+        "resetterProperty": "Error: aborted here",
+        "usedAgain": "Error: aborted here"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "queued": "Error: block failed",
+        "failing": "Error: block failed",
+        "queuedAgain": "Error: block failed",
+        "fresh": 1
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "reset": "TypeError: typed failure",
+        "after": "TypeError: typed failure",
+        "kept": [
+          true,
+          42
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "reset": "Error: block failed",
+        "stale": [
+          "Error: block failed",
+          "Error: block failed"
+        ],
+        "fresh": 2
+      }
+    }
+  ]
+}

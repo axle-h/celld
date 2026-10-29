@@ -823,6 +823,10 @@ pub struct State {
     /// The swap pump moves their cells at once, and forgets an isolate when
     /// no cell is in it or can still start in it.
     condemned_isolates: BTreeSet<isolate::HeapId>,
+    /// Cells whose storage failed a commit (`Event::CellBroken`), which the
+    /// swap pump moves at once, as a condemned isolate's, and forgets once
+    /// the move has published them again, or they are gone.
+    broken_cells: BTreeSet<CellId>,
     /// The shedding latch. celld kept this in the executor, which meant the
     /// hysteresis -- the part with actual behaviour -- was the one piece the
     /// simulation could not reach. It is carried here so a sample
@@ -858,6 +862,7 @@ impl State {
             swap_max_age_ms: 0,
             swap_eager_classes: BTreeSet::new(),
             condemned_isolates: BTreeSet::new(),
+            broken_cells: BTreeSet::new(),
             resuming: false,
             resuming_cells: BTreeSet::new(),
             confirming: false,
@@ -4905,9 +4910,11 @@ impl State {
             Ok(()) => {
                 set_phase(&mut self.occupied, &mut cell, Phase::Resident { epoch });
                 // A swap ends here: the cell is resident again, on the
-                // generation `runtime_started` recorded.
+                // generation `runtime_started` recorded, and a broken cell
+                // with a new instance.
                 cell.swapping = false;
                 cell.swap_cancelled = false;
+                self.broken_cells.remove(&id);
                 self.finish_requests(&id, &mut cell, Ok(Route::Local), effects);
             }
             Err(_) => {
@@ -5265,6 +5272,12 @@ impl State {
         isolate.is_some_and(|isolate| self.condemned_isolates.contains(&isolate))
     }
 
+    /// Whether `id` must leave its isolate at once: the isolate is condemned,
+    /// or the cell's storage failed a commit.
+    fn must_move(&self, id: &str, cell: &Cell) -> bool {
+        self.isolate_condemned(cell.isolate) || self.broken_cells.contains(id)
+    }
+
     /// Whether a swap can stop this cell's runtime now without cutting work
     /// short: no request running, no output withheld by the gate, no alarm
     /// handler in flight, and no regular or outbound socket, which cannot
@@ -5315,7 +5328,17 @@ impl State {
         // Without authority, or fenced or draining, the node moves no cell
         // between isolates. A condemned isolate's cells then stay, failing
         // their events without running, until the drain or fence stops them.
-        if (self.current_generation == 0 && self.condemned_isolates.is_empty())
+        // A broken cell that stopped some other way (an eviction, a move to
+        // another node) has nothing left to move.
+        let cells = &self.cells;
+        self.broken_cells.retain(|id| {
+            cells
+                .get(id)
+                .is_some_and(|cell| cell.swapping || matches!(cell.phase, Phase::Resident { .. }))
+        });
+        if (self.current_generation == 0
+            && self.condemned_isolates.is_empty()
+            && self.broken_cells.is_empty())
             || self.draining
             || self.fenced
             || !self.node_authoritative()
@@ -5327,7 +5350,14 @@ impl State {
             .now_mono_ms
             .saturating_sub(self.generation_changed_mono_ms)
             >= self.swap_max_age_ms;
-        let in_flight = self.cells.values().filter(|cell| cell.swapping).count();
+        // Moves a condemned isolate or a broken cell forces take none of a
+        // generation swap's room: otherwise one script breaking its objects
+        // could hold every other script's swap off.
+        let in_flight = self
+            .cells
+            .iter()
+            .filter(|(id, cell)| cell.swapping && !self.must_move(id, cell))
+            .count();
         let room = self.config.max_releases.saturating_sub(in_flight);
         let nominable = |cell: &&Cell| {
             matches!(cell.phase, Phase::Resident { .. })
@@ -5342,20 +5372,20 @@ impl State {
         let condemned: Vec<CellId> = self
             .cells
             .iter()
-            .filter(|(_, cell)| nominable(cell) && self.isolate_condemned(cell.isolate))
+            .filter(|(id, cell)| nominable(cell) && self.must_move(id, cell))
             .map(|(id, _)| id.clone())
             .collect();
         let stale: Vec<CellId> = self
             .cells
             .iter()
-            .filter(|(_, cell)| {
+            .filter(|(id, cell)| {
                 nominable(cell)
                     && current != 0
                     && cell.generation != current
-                    && !self.isolate_condemned(cell.isolate)
+                    && !self.must_move(id, cell)
             })
             .map(|(id, _)| id.clone())
-            .take(room.saturating_sub(condemned.len()))
+            .take(room)
             .collect();
         for id in condemned.into_iter().chain(stale) {
             let cell = self.cells.get_mut(&id).expect("stale cell listed above");
@@ -5374,7 +5404,7 @@ impl State {
         for id in nominated {
             if !self.swap_safe_point(&id) {
                 let cell = self.cells.get(&id).expect("nominated cell listed above");
-                let eager = self.swap_is_eager(&id) || self.isolate_condemned(cell.isolate);
+                let eager = self.swap_is_eager(&id) || self.must_move(&id, cell);
                 let alarm = match cell.alarm {
                     Some(AlarmState::Firing { op, .. }) => Some(op),
                     _ => None,
@@ -6939,6 +6969,11 @@ pub fn on_event(state: &mut State, event: Event) -> Vec<Effect> {
         Event::IsolateCondemned { isolate } => {
             state.condemned_isolates.insert(isolate);
         }
+        Event::CellBroken { cell } => {
+            if state.cells.contains_key(&cell) {
+                state.broken_cells.insert(cell);
+            }
+        }
         Event::Published { op, result } => state.published(op, result, &mut effects),
         Event::DurabilityChecked { op, result } => state.durability_checked(
             op,
@@ -7247,6 +7282,107 @@ mod tests {
             Effect::StartRuntime { cell: started, epoch: 7, .. } if *started == cell
         )));
         state.validate().expect("valid after the stop");
+    }
+
+    /// A cell whose storage failed a commit moves alone, at once and at the
+    /// same epoch, as a condemned isolate's cells do; a running request is
+    /// cancelled rather than waited for. It moves without a generation
+    /// change, and once, so the restarted cell is not moved again.
+    #[test]
+    fn a_broken_cell_moves_alone_at_the_same_epoch() {
+        let mut state = state(4);
+        resident(&mut state, "Room:a", 1);
+        resident(&mut state, "Room:b", 1);
+        state.active_requests.insert(42, "Room:a".to_string());
+        state.active_cells.insert("Room:a".to_string(), 1);
+        state.validate().expect("valid before");
+        let effects = on_event(
+            &mut state,
+            Event::CellBroken {
+                cell: "Room:a".into(),
+            },
+        );
+        assert!(stops(&effects).is_empty());
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::CancelCellActivity { cell, requests, .. }
+                if cell == "Room:a" && requests == &[42]
+        )));
+        state.active_requests.clear();
+        state.active_cells.clear();
+        let effects = on_event(
+            &mut state,
+            Event::CellBroken {
+                cell: "Room:gone".into(),
+            },
+        );
+        let stopped = stops(&effects);
+        let cells: Vec<&str> = stopped.iter().map(|(_, cell, _)| cell.as_str()).collect();
+        assert_eq!(cells, ["Room:a"], "only the broken cell moves");
+        let (op, cell, epoch) = stopped[0].clone();
+        let effects = on_event(&mut state, Event::RuntimeStopped { op });
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::StartRuntime { cell: started, epoch: e, .. } if *started == cell && *e == epoch
+        )));
+        state.validate().expect("valid after the stop");
+        assert!(
+            state.broken_cells.contains("Room:a"),
+            "kept until it publishes again"
+        );
+        assert!(!state.broken_cells.contains("Room:gone"));
+    }
+
+    /// Moves that broken cells force take none of a generation swap's room,
+    /// so one script that keeps breaking its objects does not hold off
+    /// another script's swap.
+    #[test]
+    fn broken_cells_leave_a_generation_swap_its_room() {
+        let mut state = state(1);
+        for index in 0..4 {
+            let id = format!("Bad:{index}");
+            resident(&mut state, &id, 1);
+            state.active_requests.insert(index, id.clone());
+            state.active_cells.insert(id.clone(), 1);
+            on_event(&mut state, Event::CellBroken { cell: id });
+        }
+        assert_eq!(state.cells.values().filter(|cell| cell.swapping).count(), 4);
+        resident(&mut state, "Other:x", 2);
+        state.cells.get_mut("Other:x").unwrap().generation = 0;
+        state.validate().expect("valid before");
+        let effects = on_event(
+            &mut state,
+            Event::GenerationChanged {
+                generation: 1,
+                now_mono_ms: 0,
+                max_age_ms: 60_000,
+                eager_classes: Vec::new(),
+            },
+        );
+        let stopped = stops(&effects);
+        assert!(
+            stopped.iter().any(|(_, cell, _)| cell == "Other:x"),
+            "the other script's stale cell moves: {stopped:?}"
+        );
+        state.validate().expect("valid after");
+    }
+
+    /// A broken cell that stops some other way leaves the set, so the swap
+    /// pump does not walk the cells for it on every event.
+    #[test]
+    fn a_broken_cell_that_stops_leaves_the_set() {
+        let mut state = state(4);
+        resident(&mut state, "Room:a", 1);
+        state.broken_cells.insert("Room:a".to_string());
+        state.cells.get_mut("Room:a").unwrap().phase = Phase::Dormant { epoch: 7 };
+        state.occupied -= 1;
+        on_event(
+            &mut state,
+            Event::CellBroken {
+                cell: "Room:gone".into(),
+            },
+        );
+        assert!(state.broken_cells.is_empty());
     }
 
     /// A condemned cell still running a request cannot wait for a safe

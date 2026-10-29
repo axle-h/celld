@@ -162,7 +162,7 @@ class Headers {
     // Fixed, so a script cannot delete it and have the clone write the
     // Headers as a plain object.
     _defineProperty(this, "__celldHost",
-      { value: _noClone, enumerable: true });
+      { __proto__: null, value: _noClone, enumerable: true });
     if (init === undefined) return;
     if (init === null || typeof init !== "object")
       throw new TypeError("Invalid Headers init");

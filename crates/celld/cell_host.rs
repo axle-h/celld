@@ -92,6 +92,16 @@ impl CellHost {
         }
     }
 
+    /// The cells whose storage failed a commit, which must move to a new
+    /// instance. The scripted host runs no storage.
+    pub(crate) fn take_broken_cells(&self) -> Vec<String> {
+        match self {
+            Self::Engine(runtime) => runtime.take_broken_cells(),
+            #[cfg(all(test, celld_internal_tests))]
+            Self::Scripted(_) => Vec::new(),
+        }
+    }
+
     /// The isolates whose cells must move because the isolate reached its
     /// heap limit. The scripted host's isolates have no heap limit.
     pub(crate) fn condemned_cell_isolates(

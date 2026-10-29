@@ -1,8 +1,9 @@
 // A stateless Worker (hog), a Dynamic Worker and a Durable Object each exceed
 // the heap limit in a request. Each request fails with workerd's error, the
 // node keeps serving another Worker, and the next request runs in a new
-// isolate. The object resets: what it stored before stays, an event still
-// running on it fails, and its write after the reset is refused.
+// isolate. The object resets: what it stored before stays, a write in the
+// turn that reached the limit never commits, an event still running on it
+// fails, and its write after the reset is refused.
 import { DurableObject } from "cloudflare:workers";
 import { hog } from "../hog/hog.js";
 
@@ -24,6 +25,10 @@ export class Room extends DurableObject {
     // Start only once wait() runs, so the reset finds it in flight.
     while (!this.waiting) await new Promise((resolve) => setTimeout(resolve, 5));
     await this.ctx.storage.put("before", "kept");
+    // A turn ends after the first write and commits it; the second is in the
+    // turn the limit ends.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await this.ctx.storage.put("doomed", "written");
     poisoned = true;
     this.poisoned = true;
     return hog(mode);
@@ -33,6 +38,7 @@ export class Room extends DurableObject {
       isolatePoisoned: poisoned,
       instancePoisoned: this.poisoned,
       before: (await this.ctx.storage.get("before")) ?? null,
+      doomed: (await this.ctx.storage.get("doomed")) ?? null,
       late: (await this.ctx.storage.get("late")) ?? null,
     };
   }
@@ -170,9 +176,15 @@ export default {
       case "/do": {
         const room = env.ROOM.getByName("room");
         if (mode === "check") return Response.json(await outcome(() => room.check()));
+        // The stub binds to the instance the limit resets, and stays broken.
+        await room.check();
         const waiting = outcome(() => room.wait());
         const hogging = outcome(() => room.hog(mode));
-        return Response.json({ hog: await hogging, wait: await waiting });
+        return Response.json({
+          hog: await hogging,
+          wait: await waiting,
+          stale: await outcome(() => room.check()),
+        });
       }
     }
     return new Response("not found", { status: 404 });

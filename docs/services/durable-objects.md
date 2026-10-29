@@ -129,16 +129,33 @@ stopped.
 ### Resets
 
 A `blockConcurrencyWhile()` callback that throws or exceeds its limit,
-`ctx.abort(reason)`, and a transaction that cannot commit reset the object, as
-in workerd:
+`ctx.abort(reason)`, a transaction that cannot commit, and a turn whose
+writes cannot commit reset the object, as in workerd. A turn's commit fails
+on a deferred constraint its writes violated ("Durable Object was reset and
+rolled back to its last known good state because the application left the
+database in a state where constraints were violated: …"), on a full disk or
+an I/O error, and on an `INSERT … RETURNING` cursor still read in part when
+the turn ends ("internal error"); an alarm handler whose turn fails this way
+counts as a failed run and retries. A facet whose commit fails stays failed
+until its parent object moves, where workerd resets the facet.
 
 - Every event still running on the object fails with the reset's error, even
-  one that caught it. `ctx.abort(reason)` fails them with `String(reason)` as
-  the message, or "Application called abort() to reset Durable Object."
-  without a reason.
-- An open transaction rolls back.
+  one that caught it, and at once, whatever it awaits. `ctx.abort(reason)`
+  fails them with `String(reason)` as the message, or "Application called
+  abort() to reset Durable Object." without a reason.
+- An open transaction rolls back, and so do the writes not yet committed.
+  Writes outside a transaction commit when the turn of JavaScript that made
+  them ends, and before a `blockConcurrencyWhile()` callback runs, so a reset
+  discards the writes of the turn it happens in: an awaited `put()` and a
+  finished `INSERT` too.
+- A critical section the old instance held ends: the next event gets the
+  new instance at once, and an event queued behind the section fails with
+  the reset's error.
 - The old instance's storage refuses every later operation with the reset's
   error. The next event gets a new instance.
+- A stub that called the old instance stays broken: each later call throws
+  the reset's error, and reaches no instance. A stub that had not called it,
+  and a new one from `get()` or `getByName()`, reach the new instance.
 
 ## Differences from Cloudflare
 
@@ -190,10 +207,18 @@ in workerd:
 - A failed handler still waits for the durability of any value or write that it
   can expose. A celld-generated failure that exposes no object value returns
   immediately.
+- A response, an outbound effect, `storage.sync()` and an alarm write commit
+  the turn's writes when they happen, so a reset later in the same turn keeps
+  those writes; workerd holds the output until the turn's commit instead. A
+  `transactionSync()` commits the turn's earlier writes as well, where
+  workerd nests it in them.
+- A stub whose first call was `fetch()` does not bind to the instance it
+  reached, so after a reset it reaches the new instance.
 - Outside an explicit transaction, a SQL write cursor must finish before a
-  response, an outbound effect, or `storage.sync()`. An unfinished `RETURNING`
-  cursor holds uncommitted writes, so celld rejects that output with an error.
-  A read cursor can remain open.
+  response, an outbound effect, `storage.sync()` or an alarm write. An
+  unfinished `RETURNING` cursor holds uncommitted writes, so celld rejects that
+  output with an error, and a turn that ends with one resets the object. A
+  read cursor can remain open.
 
 The [Cloudflare compatibility](../cloudflare-compat.md#services) page
 lists the runtime APIs and the unsupported services.

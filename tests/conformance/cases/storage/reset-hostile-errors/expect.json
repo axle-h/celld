@@ -1,0 +1,61 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "before": 0,
+        "reset": "threw getter",
+        "stale": "threw getter",
+        "rows": 1,
+        "write": "written",
+        "after": 2
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 0,
+        "reset": "threw deep",
+        "stale": "threw deep",
+        "rows": 1,
+        "write": "written",
+        "after": 2
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 0,
+        "reset": "threw deep",
+        "stale": "threw deep",
+        "rows": 0,
+        "write": "written",
+        "after": 1
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 0,
+        "reset": "abort threw no text",
+        "stale": 1,
+        "rows": 1,
+        "write": "written",
+        "after": 2
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 0,
+        "reset": "threw patched",
+        "stale": "threw patched",
+        "rows": 0,
+        "write": "written",
+        "after": 1
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "xfail": "1.59",
+  "workers": ["app"],
+  "steps": [
+    {"path": "/websocket/abort"},
+    {"path": "/websocket/block-throws"}
+  ]
+}

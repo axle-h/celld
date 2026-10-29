@@ -1,0 +1,17 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "setup": "set up",
+        "violate": "threw Durable Object was reset and rolled back to its last known g",
+        "after": {
+          "state": "new",
+          "rows": 0
+        }
+      }
+    }
+  ]
+}

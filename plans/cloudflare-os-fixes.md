@@ -472,7 +472,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 39b | 1.50 TCP socket and HTMLRewriter ownership, socket cap, continuations (1.52) (security) | done | `fe784d8` |
 | 39c | 1.49 part B: internals out of user reach, cell re-validation (security) | done | `1e8ac01` |
 | 39d | 1.53 marker-shaped RPC data, with 1.29's forgeable-marker item (security) | done | `278cb9d` |
-| 40+ | Phase 1 in plan order (1.29, 1.30, 1.34, 1.36-1.44, 1.46-1.48, 1.51, 1.54, 1.55, 1.56), and the 1.4 props key-order follow-up | queued | |
+| 40 | 1.29 RPC serialisation follow-ups (leaks, Proxies, signals, flags) | done | `6b09eee` |
+| 41 | 1.30 Durable Object reset follow-ups (hang, stale stubs, discarded writes, storage surface) | done | (this commit) |
+| 42+ | Phase 1 in plan order (1.34, 1.36-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.59), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -4754,6 +4756,60 @@ Durable Object pass on, in a later event, a param one event kept with
   incorrect `this` reference ..." (`rpc/proxied-stub-param`, xfail). Called
   directly, the Proxy works on both.
 
+### 1.59 Durable Object gaps found by 1.30
+
+- **A stub binds to an instance only through RPC.** A stub whose first call
+  was `fetch()` reaches the instance a later reset replaced: celld's fetch
+  carries no instance token (the RPC payload does), so the stub stays
+  unbound. In workerd it binds at its first call of either kind and stays
+  broken (`rpc/reset-stale-stub-fetch`, xfail). Carrying the token needs a
+  field on the cell fetch request and response, and on the peer tunnel.
+- **A Durable Object fetch handler's error.** A `fetch()` handler that throws
+  rejects the caller's `stub.fetch()` with `Error: rejected: <name>: <message>
+  [<stack>]`; workerd delivers the thrown error, type and message intact
+  (`rpc/do-fetch-throws`, xfail).
+- **Writes a reset keeps.** A `transactionSync()` inside the turn's implicit
+  transaction is a savepoint in it in workerd, and an abort later in the turn
+  discards it; celld commits the implicit transaction first, because an
+  alarm written inside the transaction is published, with its wake-entry
+  gate, at a commit. An `INSERT … RETURNING` cursor read in part when a
+  `blockConcurrencyWhile()` starts fails workerd's commit there with an
+  internal error, carrying a reference; celld's block refuses the commit,
+  and the object resets when the turn ends, so the call fails with a bare
+  "internal error" (`storage/reset-discards-writes-xfail`). An output (a reply, a
+  subrequest, `storage.sync()`) and an alarm write commit the implicit
+  transaction early, so a reset later in the same turn keeps what they
+  committed; workerd holds the output for the turn's commit instead.
+- **A reset object's WebSocket closes with 1011.** A `webSocketMessage()`
+  handler still running when its object resets fails, and celld closes the
+  socket at once with 1011 ("WebSocket message delivery failed"); workerd
+  drops the connection, and the client reads 1006 (`rpc/reset-websocket`,
+  xfail).
+- **A bound class as a facet's class.** `ctx.exports.Obj`, for a class that
+  also has a namespace binding, is a facet class in workerd; celld's is the
+  namespace only, and `ctx.facets.get()` refuses it
+  (`rpc/facet-bound-class`, xfail).
+- **A reset with an error workerd cannot carry.** A revoked Proxy, or any
+  error while the script has made `Error.prototype.name` throw and replaced
+  `Uint8Array` and `%TypedArray%.prototype.set`: workerd fails the call and
+  the stale stub with "Promise will never complete."; celld's carry what it
+  could read ("critical section failed" for the Proxy)
+  (`storage/reset-revoked-error`, xfail).
+- **A facet whose commit fails stays failed** until its root moves; workerd
+  resets the facet, and a fresh facet stub reaches a new instance
+  (`storage/facet-failed-commit`, xfail). Resetting it from the host needs
+  the facet's stream and its stubs' state handled as `ctx.facets.abort()`
+  does, which runs in the root's event.
+- **An alarm write under an unfinished write cursor.** workerd fails the call
+  with an internal error at the turn's commit, resets the object and
+  discards the write; celld refuses the `setAlarm()` and the output, and
+  resets the object as the turn ends, so only the texts differ
+  (`storage/alarm-under-write-cursor`, xfail).
+- **`ctx.storage`'s surface.** It lacks workerd's point-in-time recovery
+  methods (`getBookmarkForTime`, `getCurrentBookmark`,
+  `onNextSessionRestoreBookmark`), and neither storage class carries
+  `Symbol.toStringTag` (`storage/storage-surface`, xfail).
+
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 
 - **Security: forgeable markers (done, 1.53).** The lift copies user keys
@@ -4950,6 +5006,202 @@ Durable Object pass on, in a later event, a param one event kept with
   as well) throwing the block's error. celld's old stub silently reaches the
   new instance. From a stateless Worker and from another Durable Object
   alike: `rpc/reset-stale-stub` (xfail).
+
+**As built (done).**
+- **The hang (root cause).** Each event has a driver task of its own, which
+  enters the isolate only when one of the event's own ops completes (or, with
+  none pending, on a poll tick). A reset rejects the other events of the
+  object (`#untilReset`) in the resetting event's turn, so their promises
+  settled in a foreign turn, and a driver waiting on a pending op of its own
+  was never told: an event awaiting a timer answered when it fired, and one
+  awaiting a call that never answers (another object's, the DO-to-DO shape
+  of the report) never did, so its caller hung. A stateless caller hung the
+  same way; only an event with nothing pending answered, on its tick. Now a
+  reset asks every event driver of the isolate to look
+  (`__io_context_poll()`, `IoContext::request_poll`): `runtime::wake`
+  returns `Wake::Poll`, and `turn_poll` answers the settled event. Resets
+  are rare and a poll of an unsettled event finds it pending, so no event
+  records its driver. This covers every event `#untilReset` wraps: fetch,
+  RPC, alarms, WebSocket handlers, and an object's call into its facet.
+- **A dead critical section.** `ctx.abort()` while another event's
+  `blockConcurrencyWhile()` callback still ran left the gate shut until the
+  callback ended (up to its 30 s limit), so even fresh stubs waited. workerd
+  (probed): a call after the abort reaches a new instance at once, one queued
+  behind the block before it fails with the abort's error. An abort now
+  releases the reset instance's hold with the abort's error
+  (`__releaseResetGate`); the block's own release later finds it gone.
+- **Stale stubs** (`js/do_instances.rs`). workerd (probed): a stub binds to
+  the instance its first call reaches, by RPC or fetch; once that instance
+  resets, by `abort()` or a failed block, every later call and `fetch()` of
+  that stub throws the reset's error (type kept), whoever reset it, and no
+  instance (no constructor) runs for it; a stub that never called, and a
+  fresh one, reach a new instance; a call queued behind a failed block binds
+  its stub too. celld: `__do_instance_begin` gives each instance a 16-byte
+  token (a per-process nonce and a counter) in a node-wide registry; a stub
+  frames each call with the token it is bound to (tag 6, or unbound; a head
+  the stub keeps, which `__rpc_call` joins to the payload in the copy it
+  makes anyway), the
+  object answers with the serving instance's token when they differ (tag 4),
+  and a stub bound to a reset instance gets the reset's error envelope (tag
+  5), which it keeps and throws from then on, fetch() included, without
+  sending. `#markReset` records the reset; a cell given back from a
+  condemned isolate records its instance as reset with "Worker has exceeded
+  memory limit." (`finish_cell_adoption`), a clean give-back forgets it. A
+  call refused behind a failed block carries `__CELLD_ACTOR_RESET__`, which
+  breaks its stub as the abort marker does. A stub reads the markers only in
+  a host op's rejection, and only at the start of its message; an error
+  decoded from the callee's answer never reaches them, so a message a script
+  throws cannot break its caller's stub (`rpc/reset-marker-text`, which
+  broke the stub through `fetch()` before the review's fix; the abort and
+  exit markers had the same gap). The token is no authority: it can only
+  fail its own stub's calls. A call bound to the live instance compares
+  tokens in the isolate and takes no lock. Bounds: the node keeps the last
+  1024 resets of each script, so one script never pushes out another's,
+  each error envelope within 8 KiB (`__resetEnvelope` builds it from the
+  error's name, as one of V8's error classes, the first 1024 characters of
+  its message, with that text as its stack, and its own properties when they
+  can be read and cloned within the bound, as workerd keeps them; every read
+  of the value is in a `try`, and the host keeps a larger envelope as a reset
+  with a plain message), so at
+  most 8 MiB a script; a reset that falls out lets its stubs reach the
+  current instance, as after a move to another node. A script that leaves
+  the node (a generation without it) leaves no resets behind. Entries do
+  not expire otherwise: workerd keeps a broken stub broken for as long as
+  the stub lives. A registry entry is
+  bound to the isolate that made it, and only that isolate's give-back ends
+  or condemns it: no path was found where two isolates hold one cell (a
+  generation swap gives the cell back before the new isolate takes it in,
+  and a condemned cell is stopped before it starts again), but the take-in
+  no longer touches the registry. The JS-flavored
+  abort (from another object's event, through a handle) no longer refuses
+  every later call to the object: workerd reaches a new instance for a fresh
+  stub (`rpc/reset-through-handle`). Condemnation is not observable on
+  workerd locally; celld treats it as the reset it is.
+- **Discarded writes** (`storage.rs`, the implicit transaction). workerd
+  (probed, both resets): an object's writes run in an implicit transaction
+  that commits when the turn ends; `blockConcurrencyWhile()` commits it
+  before its callback runs; `transaction()` commits on its own; a reset
+  rolls back the rest. So a write in the reset's turn is gone, even an
+  awaited `put()`, a consumed `INSERT … RETURNING` and `kv.put()`, and one
+  before a timer, before a block or in a committed `transaction()` stays.
+  celld now opens the implicit transaction (`BEGIN IMMEDIATE`) at an
+  application write outside a transaction (KV ops, a flushed put, a SQL
+  statement that is not read-only), commits it when the isolate turn ends
+  (`Installed` drop) and before an output's sample, `storage.sync()`, a
+  block, a transaction and an alarm write (its wake-entry gate needs the
+  commit), and rolls it back on a reset (`__storage_discard_uncommitted`,
+  which also ends the object's cursors) and in a condemned isolate. An
+  unfinished write cursor holds it open within the turn, with the old output
+  refusal, and refuses an alarm write the same way (its acknowledgement
+  waits for a commit); a turn that ends with it still held resets the object
+  (below).
+- **A commit that fails resets the object**, as workerd's broken output gate
+  does (probed with a deferred foreign key the turn violated,
+  `storage/reset-failed-commit`): the call that wrote fails, the stub that
+  made it stays broken, and a fresh stub reaches a new instance on storage
+  that never held the write. The error is workerd's, "Durable Object was
+  reset and rolled back to its last known good state because the
+  application left the database in a state where constraints were
+  violated: …", or "internal error" for a failure that is not a constraint.
+  All of it runs on the host, since the turn has ended: the commit rolls
+  back and records the error as the cell's critical SQL error (no output,
+  sample or `storage.sync()` leaves the cell, and its storage refuses every
+  operation); `do_instances::cell_broken` records the instance as reset
+  with that error and queues the cell; the actor drains the queue after
+  each step (`Event::CellBroken`, beside the condemnation counter), and the
+  core moves the cell out of its isolate as it moves a condemned isolate's
+  (quiesce, cancel what still runs, stop, start again at the same epoch),
+  so the give-back drops the instance and the error, and the next event
+  builds a new instance. Every critical SQL error of an application's object
+  takes this path (`storage::record_critical_error`): a full disk or an I/O
+  error that ends the implicit transaction, a failed rollback, and a turn
+  that ends while an `INSERT … RETURNING` cursor still holds its commit,
+  which workerd fails with an internal error (`commit_or_reset`). An alarm
+  handler's writes commit before its alarm is consumed, so a failed commit
+  counts as a failed run and retries with backoff, as on workerd
+  (`storage/reset-alarm-write-cursor`; before, the reset rolled back the
+  host's deletion of the alarm and it fired again at once, without end); a
+  rollback republishes a dirty alarm. The broken cells are queued on the
+  isolate (`Slot::mark_broken`), so each host takes only its own, and the
+  actor sees them after its next step, as it sees a condemnation. Moves that
+  a broken cell or a condemned isolate forces take none of a generation
+  swap's room, so one script breaking its objects does not hold off another
+  script's swap, and a broken cell that stops some other way leaves the set.
+  A facet has no cell of its own to move and stays failed closed until its
+  root moves (1.59). Its
+  statements run cached under the authorizer (`IMPLICIT_CONTROL`), since
+  toggling the authorizer expires every prepared statement. celld's own
+  cells (KV, Queue, D1, workflows, cron) keep autocommit. Differences left
+  are 1.59's.
+- **Transaction view surface.** workerd (probed): DurableObjectStorage and
+  DurableObjectTransaction each have their own prototype below
+  Object.prototype; the transaction's has get, put, delete, list,
+  deleteAll, the alarm methods and rollback, and no transactionSync, sync,
+  kv or sql; the storage's has no rollback. celld's classes now expose
+  exactly those (a shared base keeps the implementation out of sight), and a
+  view no longer builds its own `kv` and `sql`. The storage's missing
+  bookmark methods are 1.59's. A script that replaces "the prototype below
+  the storage's" now replaces Object.prototype's members, as on workerd, so
+  the harness's property descriptors made at request time (and those of
+  Headers, the internal streams' read results and readers, CryptoKey and
+  DigestStream) are null-prototype: an inherited `get` made them invalid.
+  `env/patched-prototypes` patches the storage's own prototype instead.
+- **A reset is recorded whatever the script patched.** The envelope is
+  built from an Error whose name, message and stack are its own, with the
+  captured TypedArray `set` and `length` (`__tagged` uses them too); if even
+  that fails, the host keeps a plain reset (no envelope).
+- **A reset runs to its end whatever was thrown.** `#markReset` rolls back
+  transactions and fails events before it records the reset, and the
+  record runs in a `try`: a reset error with a throwing getter, a revoked
+  Proxy, or a megabyte stack (`Error.stackTraceLimit` raised) made the
+  record throw first and skip the rest. `__rpcErrOut` reads such an error
+  inside a `try` too, and sends its message only
+  (`storage/reset-hostile-errors`).
+- **Frames are checked**: a flag other than 0 or 1, or a frame shorter than
+  its header, is refused as malformed.
+- **Tests.**
+  - Differential: `rpc/reset-caller` (stateless and DO callers, abort and
+    failed block, the target waiting on nothing, a timer or a silent call;
+    every wait bounded, so a hang reads "hung"), `rpc/reset-waiters` (an
+    abort under another event's block, before and after a queued call; a
+    call into a facet; an alarm handler), `rpc/reset-stale-stubs`,
+    `rpc/reset-through-handle`, `rpc/reset-marker-text`,
+    `storage/reset-hostile-errors` (with the builtins patched in an abort),
+    `storage/reset-failed-commit`, `storage/reset-alarm-write-cursor`,
+    `storage/reset-discards-writes` (28 rows),
+    `storage/transaction-surface`; `rpc/reset-stale-stub` is no longer
+    xfail. celld-only: `limits/request-memory` gained a write in the turn
+    the limit stops (discarded) and a stub bound before it (stale).
+  - xfail (1.59): `rpc/reset-stale-stub-fetch`, `rpc/reset-websocket`,
+    `rpc/do-fetch-throws`, `rpc/facet-bound-class`,
+    `storage/reset-discards-writes-xfail`, `storage/storage-surface`,
+    `storage/reset-revoked-error` (with the builtins patched in a block),
+    `storage/alarm-under-write-cursor`, `storage/facet-failed-commit`.
+  - Unit: `js::do_instances::tests` (5, with per-script quotas, a
+    give-back of another isolate and a commit failure),
+    `celld_logic::tests` (a broken cell moves alone at the same epoch; broken
+    cells leave a generation swap its room; a broken cell that stops leaves
+    the set), a script leaving the node, a full disk and a turn ending under
+    a write cursor (both reset the object), `storage::implicit_transaction_tests` (7,
+    with a turn-end commit failed by a deferred foreign key, and an alarm
+    write under a write cursor), `js::io_context_poll_tests` (1).
+  - At HEAD: `rpc/reset-caller` hangs on the 8 timer and silent-call rows,
+    `rpc/reset-waiters` on its gate and facet rows (and
+    `rpc/reset-websocket` on both), `rpc/reset-stale-stub(s)` reach the new
+    instance, `rpc/reset-through-handle` refuses the fresh stub, 11 rows of
+    `storage/reset-discards-writes` keep their writes, and
+    `storage/transaction-surface` and `limits/request-memory` fail.
+- **Cost** (lab build, `celld dev`, 20,000 sequential calls to one object
+  per request; medians of interleaved process starts against HEAD built
+  from `git archive`): a call that touches no storage 1.35 -> 1.40 s
+  (+3.5%: the head and the bind check), one `kv.put()` per call 11.18 ->
+  11.29 s (+1.0%: the implicit transaction's cached BEGIN and COMMIT), one
+  `SELECT` per call 1.58 -> 1.66 s (+4.8%, a read opens no transaction). A
+  first version that toggled the authorizer for the implicit statements and
+  opened one for reads cost the `SELECT` case 32%; one that framed each call
+  in JavaScript, with a copy of the payload, cost the plain call 4.7%.
+- **Wire.** Durable Object RPC payloads carry the new frames; the stop-all
+  upgrade note says so.
 
 ### 1.31 Isolate heap limit during module load (found by 1.15) — security
 

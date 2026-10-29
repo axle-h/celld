@@ -9,6 +9,21 @@
 //! because it is what JS can see.
 use super::*;
 
+/// The running object's cell, for an op that may write it: the write joins
+/// the cell's implicit transaction (`storage::begin_implicit`).
+fn written_storage_cell(
+    scope: &mut v8::PinScope,
+    named: v8::Local<v8::Value>,
+    operation: &str,
+) -> Option<String> {
+    let cell = owned_storage_cell(scope, named)?;
+    if let Err(error) = storage::begin_implicit(&cell) {
+        throw_storage_error(scope, operation, error);
+        return None;
+    }
+    Some(cell)
+}
+
 pub(super) fn op_storage_get(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -62,7 +77,7 @@ pub(super) fn op_storage_put(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let Some(s) = owned_storage_cell(scope, args.get(0)) else {
+    let Some(s) = written_storage_cell(scope, args.get(0), "put") else {
         return;
     };
     let k = args.get(1).to_rust_string_lossy(scope);
@@ -78,7 +93,7 @@ pub(super) fn op_storage_put_many(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+    let Some(cell) = written_storage_cell(scope, args.get(0), "put") else {
         return;
     };
     let Ok(entries) = v8::Local::<v8::Array>::try_from(args.get(1)) else {
@@ -119,7 +134,7 @@ pub(super) fn op_storage_put_serialized(
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
-    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+    let Some(cell) = written_storage_cell(scope, args.get(0), "put") else {
         return;
     };
     let key = args.get(1).to_rust_string_lossy(scope);
@@ -240,6 +255,7 @@ fn flush_pending_puts(scope: &mut v8::PinScope, cell: &str) -> Result<(), String
     if entries.is_empty() {
         return Ok(());
     }
+    storage::begin_implicit(cell)?;
     storage::put_many_serialized(cell, &entries).map_err(|error| error.to_string())
 }
 
@@ -348,7 +364,10 @@ pub(super) fn op_storage_sync(
     rv.set(promise_for(scope, id));
 }
 
-pub(super) fn op_storage_cancel_pending_puts(
+/// `__storage_discard_uncommitted(cell)` — the object was reset: drop the
+/// writes it buffered, end its cursors and roll back its implicit
+/// transaction, as workerd rolls back the turn's uncommitted writes.
+pub(super) fn op_storage_discard_uncommitted(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
@@ -357,11 +376,11 @@ pub(super) fn op_storage_cancel_pending_puts(
     // Only ever called while resetting or retiring a cell (a concurrency
     // failure, `ctx.abort()`, a dropped critical section), which can be the
     // running event's own cell or, under a stub-mediated caller, another cell
-    // of the same script. It discards buffered writes, so a scope naming
-    // another object would drop that object's. The harness passes only the
-    // scope a reset authenticated, and this clears only a cell the running
-    // script may reach -- its own classes, its own KV/Queue/D1 cells, and for
-    // the runtime cells the Queue relay -- so a cross-script scope clears
+    // of the same script. It discards writes, so a scope naming another
+    // object would drop that object's. The harness passes only the scope a
+    // reset authenticated, and this clears only a cell the running script may
+    // reach -- its own classes, its own KV/Queue/D1 cells, and for the
+    // runtime cells the Queue relay -- so a cross-script scope clears
     // nothing. No throw: a reset must not fail because the scope was not the
     // caller's to clear.
     if admitted_caller(scope, &cell, false).is_err() {
@@ -372,6 +391,26 @@ pub(super) fn op_storage_cancel_pending_puts(
         .lock()
         .expect("pending puts lock poisoned")
         .remove(&cell);
+    storage::discard_uncommitted(&cell);
+}
+
+/// `__storage_commit_implicit(cell)` — commit the running object's implicit
+/// transaction, as a `blockConcurrencyWhile()` does in workerd before its
+/// callback runs. Another object's cell commits nothing.
+pub(super) fn op_storage_commit_implicit(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let cell = args.get(0).to_rust_string_lossy(scope);
+    if current_cell_event(&event_context(scope)).is_none_or(|frame| frame.storage != cell) {
+        return;
+    }
+    if let Err(error) =
+        flush_pending_puts(scope, &cell).and_then(|()| storage::commit_implicit(&cell))
+    {
+        throw_storage_error(scope, "blockConcurrencyWhile", error);
+    }
 }
 
 pub(super) fn op_sql_ingest(
@@ -379,7 +418,7 @@ pub(super) fn op_sql_ingest(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+    let Some(cell) = written_storage_cell(scope, args.get(0), "sql") else {
         return;
     };
     let input = args.get(1).to_rust_string_lossy(scope);
@@ -825,7 +864,7 @@ pub(super) fn op_storage_delete(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let Some(s) = owned_storage_cell(scope, args.get(0)) else {
+    let Some(s) = written_storage_cell(scope, args.get(0), "delete") else {
         return;
     };
     let k = args.get(1).to_rust_string_lossy(scope);
@@ -839,7 +878,7 @@ pub(super) fn op_storage_delete_many(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let Some(cell) = owned_storage_cell(scope, args.get(0)) else {
+    let Some(cell) = written_storage_cell(scope, args.get(0), "delete") else {
         return;
     };
     let keys = match storage_string_array(scope, args.get(1)) {

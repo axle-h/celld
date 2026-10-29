@@ -1,0 +1,325 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a"
+          ],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a"
+          ],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a"
+          ],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a"
+          ],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a"
+          ],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a"
+          ],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a"
+          ],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a"
+          ],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [],
+          "kv": [
+            "a"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [],
+          "kv": [
+            "a"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [],
+          "kv": [
+            "a"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a",
+            "b"
+          ],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a"
+          ],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a"
+          ],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a"
+          ],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a"
+          ],
+          "kv": [
+            "b"
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a"
+          ],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [
+            "a"
+          ],
+          "kv": []
+        }
+      }
+    }
+  ]
+}

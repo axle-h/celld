@@ -1,9 +1,10 @@
 // A failed blockConcurrencyWhile() resets its Durable Object. A stub that
-// saw the reset stays broken in workerd: its later calls, even well after,
-// throw the block's error. A fresh stub from getByName() reaches a new
-// instance. In celld the old stub reaches the new instance too (plan 1.30).
-// From a stateless Worker (`/stateless`) and from another Durable Object of
-// the class (`/object`).
+// saw the reset stays broken, as in workerd: its later calls, even well
+// after, throw the block's error. A fresh stub from getByName() reaches a new
+// instance. celld's old stub used to reach the new instance too (plan 1.30;
+// the other kinds of stub are `rpc/reset-stale-stubs`). From a stateless
+// Worker (`/stateless`) and from another Durable Object of the class
+// (`/object`).
 import { DurableObject } from "cloudflare:workers";
 
 async function attempt(fn) {

@@ -1,0 +1,15 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "abort": "Error: aborted through a handle",
+        "again": "Error: The execution context which hosts this callback is no longer running.",
+        "stub": "Error: aborted through a handle",
+        "fresh": 1
+      }
+    }
+  ]
+}

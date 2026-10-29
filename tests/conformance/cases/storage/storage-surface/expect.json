@@ -1,0 +1,32 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "chain": [
+          [
+            "constructor",
+            "delete",
+            "deleteAlarm",
+            "deleteAll",
+            "get",
+            "getAlarm",
+            "getBookmarkForTime",
+            "getCurrentBookmark",
+            "list",
+            "onNextSessionRestoreBookmark",
+            "put",
+            "setAlarm",
+            "sync",
+            "transaction",
+            "transactionSync"
+          ]
+        ],
+        "tag": "[object DurableObjectStorage]",
+        "transactionTag": "[object DurableObjectTransaction]"
+      }
+    }
+  ]
+}

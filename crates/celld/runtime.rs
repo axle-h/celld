@@ -864,6 +864,8 @@ impl RuntimeManager {
         // previous generation and this must not hold the generation lock,
         // which every request reads.
         previous.retire();
+        // A script no longer deployed leaves no stale-stub record behind.
+        js::do_instances::retain_scripts(&next.cell_isolates);
         next
     }
 
@@ -1207,6 +1209,38 @@ impl RuntimeManager {
             .map(|handle| handle.residency.slot())
             .filter(|slot| slot.is_condemned())
             .map(|slot| slot.heap_id())
+            .collect()
+    }
+
+    /// The cells whose storage failed a commit (`Slot::mark_broken`), for
+    /// the Actor to move to a new instance. Taken from this host's isolates
+    /// only.
+    pub fn take_broken_cells(&self) -> Vec<String> {
+        let cells = self.cells.lock().expect("cell registry poisoned");
+        let mut slots: Vec<Arc<crate::pool::Slot>> = Vec::new();
+        for handle in [&cells.starting, &cells.published]
+            .into_iter()
+            .flat_map(|residents| residents.values())
+        {
+            let slot = handle.residency.slot();
+            if !slots.iter().any(|seen| Arc::ptr_eq(seen, slot)) {
+                slots.push(slot.clone());
+            }
+        }
+        // An entry for a cell that has since left the heap it broke in names
+        // a residency that is gone, and must not move the healthy one.
+        let resident_in = |scope: &str| {
+            cells
+                .published
+                .get(scope)
+                .or_else(|| cells.starting.get(scope))
+                .map(|handle| handle.residency.slot().heap_id())
+        };
+        slots
+            .iter()
+            .flat_map(|slot| slot.take_broken_cells())
+            .filter(|(scope, heap)| resident_in(scope) == Some(*heap))
+            .map(|(scope, _)| scope)
             .collect()
     }
 
@@ -2481,6 +2515,11 @@ async fn wake(ops: &mut Ops, entry: &mut js::InFlight, budget: Duration) -> Wake
         // this driver here rather than through `adopt`, because the turn that
         // took it belongs to another entry. See `js::adopt`.
         adopt(ops, entry.take_handed_ops());
+        // Another turn settled this event (a reset of its object failed it),
+        // and none of its own ops would bring the driver back to see that.
+        if entry.io_context().take_poll_request() {
+            return Wake::Poll;
+        }
         // A WorkerEntrypoint call is its own PendingEvent. When no referenced
         // native operation can move it, reject that call inside JavaScript.
         // An unreferenced signal listener cannot make progress and must not
@@ -3528,7 +3567,7 @@ async fn drive_cell_inner(
                     // why the caller is being refused.
                     Ok(Err(failure)) => {
                         if let Some(job) = pending.take() {
-                            job.fail(anyhow!(failure));
+                            job.fail_reset(failure);
                         }
                         return Ok(None);
                     }

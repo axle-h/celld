@@ -1,0 +1,42 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "__CELLD_ACTOR_ABORT__:x": "Error: __CELLD_ACTOR_ABORT__:x",
+        "__CELLD_ACTOR_ABORT__:x then": 2,
+        "bad __CELLD_ACTOR_ABORT__:x": "Error: bad __CELLD_ACTOR_ABORT__:x",
+        "bad __CELLD_ACTOR_ABORT__:x then": 3,
+        "__CELLD_PROCESS_EXIT__:x": "Error: __CELLD_PROCESS_EXIT__:x",
+        "__CELLD_PROCESS_EXIT__:x then": 4,
+        "bad __CELLD_PROCESS_EXIT__:x": "Error: bad __CELLD_PROCESS_EXIT__:x",
+        "bad __CELLD_PROCESS_EXIT__:x then": 5,
+        "__CELLD_ACTOR_RESET__:x": "Error: __CELLD_ACTOR_RESET__:x",
+        "__CELLD_ACTOR_RESET__:x then": 6,
+        "bad __CELLD_ACTOR_RESET__:x": "Error: bad __CELLD_ACTOR_RESET__:x",
+        "bad __CELLD_ACTOR_RESET__:x then": 7
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "__CELLD_ACTOR_ABORT__:x": "threw",
+        "__CELLD_ACTOR_ABORT__:x then": 2,
+        "bad __CELLD_ACTOR_ABORT__:x": "threw",
+        "bad __CELLD_ACTOR_ABORT__:x then": 3,
+        "__CELLD_PROCESS_EXIT__:x": "threw",
+        "__CELLD_PROCESS_EXIT__:x then": 4,
+        "bad __CELLD_PROCESS_EXIT__:x": "threw",
+        "bad __CELLD_PROCESS_EXIT__:x then": 5,
+        "__CELLD_ACTOR_RESET__:x": "threw",
+        "__CELLD_ACTOR_RESET__:x then": 6,
+        "bad __CELLD_ACTOR_RESET__:x": "threw",
+        "bad __CELLD_ACTOR_RESET__:x then": 7
+      }
+    }
+  ]
+}

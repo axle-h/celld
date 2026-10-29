@@ -1,0 +1,26 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: reset",
+        "final": {
+          "rows": [],
+          "kv": []
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "run": "threw Error: internal error; reference = <ref>",
+        "final": {
+          "rows": [],
+          "kv": []
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/abort/sql-sync"},
+    {"path": "/abort/sql-microtask"},
+    {"path": "/abort/sql-timer"},
+    {"path": "/abort/put-noawait"},
+    {"path": "/abort/put-await"},
+    {"path": "/abort/kv-sync"},
+    {"path": "/abort/cursor-unconsumed"},
+    {"path": "/abort/cursor-consumed"},
+    {"path": "/abort/block-before"},
+    {"path": "/abort/block-inside"},
+    {"path": "/abort/block-inside-timer"},
+    {"path": "/abort/block-before-timer"},
+    {"path": "/abort/sql-then-put-await"},
+    {"path": "/abort/tx-async"},
+    {"path": "/block/sql-sync"},
+    {"path": "/block/sql-microtask"},
+    {"path": "/block/sql-timer"},
+    {"path": "/block/put-noawait"},
+    {"path": "/block/put-await"},
+    {"path": "/block/kv-sync"},
+    {"path": "/block/cursor-consumed"},
+    {"path": "/block/block-before"},
+    {"path": "/block/block-inside"},
+    {"path": "/block/block-inside-timer"},
+    {"path": "/block/block-before-timer"},
+    {"path": "/block/sql-then-put-await"},
+    {"path": "/block/txsync"},
+    {"path": "/block/tx-async"}
+  ]
+}

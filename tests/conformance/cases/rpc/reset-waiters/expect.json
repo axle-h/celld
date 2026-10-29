@@ -1,0 +1,60 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "aborting": "threw Error: Error: aborted",
+        "holding": "threw Error: Error: aborted",
+        "after": "pong",
+        "fresh": "pong"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "aborting": "threw Error: Error: aborted",
+        "holding": "threw Error: Error: aborted",
+        "queued": "threw Error: Error: aborted",
+        "fresh": "pong"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: Error: aborted",
+        "waiter": "threw Error: Error: aborted",
+        "after": "pong"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: block threw",
+        "waiter": "threw Error: block threw",
+        "after": "pong"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: Error: aborted",
+        "waiter": "armed",
+        "after": "pong"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: block threw",
+        "waiter": "armed",
+        "after": "pong"
+      }
+    }
+  ]
+}

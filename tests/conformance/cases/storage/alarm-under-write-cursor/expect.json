@@ -1,0 +1,14 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": "threw internal error; reference = <ref>"
+    },
+    {
+      "status": 200,
+      "body": "threw no such table: t: SQLITE_ERROR"
+    }
+  ]
+}

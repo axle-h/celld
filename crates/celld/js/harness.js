@@ -92,6 +92,13 @@ const __setBodyBytes = (owner, bytes) => {
 const __Array = Array;
 const __ArrayFill = Array.prototype.fill;
 const __ObjectSetPrototypeOf = Object.setPrototypeOf;
+const __TypedArraySet = Object.getPrototypeOf(Uint8Array.prototype).set;
+const __TypedArraySubarray = Object.getPrototypeOf(Uint8Array.prototype).subarray;
+const __typedLength = (() => {
+  const length = Object.getOwnPropertyDescriptor(
+    Object.getPrototypeOf(Uint8Array.prototype), "length").get;
+  return (array) => __ReflectApply(length, array, []);
+})();
 // A property of a host result only if the result has it itself, so a getter
 // a Worker put on Object.prototype never answers for a missing one.
 const __own = (object, key) =>
@@ -563,6 +570,7 @@ class CelldHttpBodyStream extends CelldChunkStream {
 // Keep the internal prototypes and their specialized read/tee behavior.
 for (const bodyStream of [CelldChunkStream, CelldBodyStream, CelldHttpBodyStream]) {
   Object.defineProperty(bodyStream.prototype, "constructor", {
+    __proto__: null,
     value: ReadableStream, writable: true, configurable: true,
   });
 }
@@ -723,7 +731,7 @@ globalThis.Response = class Response {
     // A redirect response owns a guarded header list. Without the guard, an
     // application can rewrite Location after construction, which differs
     // from both Fetch and Workerd even though the initial response is valid.
-    Object.defineProperty(response.headers, "_immutable", { value: true });
+    Object.defineProperty(response.headers, "_immutable", { __proto__: null, value: true });
     return response;
   }
   static error() {
@@ -783,7 +791,7 @@ globalThis.Response = class Response {
       cf: this.cf === undefined ? undefined : structuredClone(this.cf),
     });
     if (this.headers._immutable)
-      Object.defineProperty(response.headers, "_immutable", { value: true });
+      Object.defineProperty(response.headers, "_immutable", { __proto__: null, value: true });
     response.type = this.type;
     response.url = this.url;
     response.redirected = this.redirected;
@@ -987,7 +995,7 @@ globalThis.Request = class Request {
     if (this.cf !== undefined) init.cf = structuredClone(this.cf);
     const request = new Request(this.url, init);
     if (this.headers._immutable)
-      Object.defineProperty(request.headers, "_immutable", { value: true });
+      Object.defineProperty(request.headers, "_immutable", { __proto__: null, value: true });
     request._oneTimeBody = this._oneTimeBody;
     return request;
   }
@@ -1310,7 +1318,7 @@ const __fetchNetwork = async (req, chain, container) => {
     },
   );
   // The server's headers, which the Worker can read but not change.
-  Object.defineProperty(response.headers, "_immutable", { value: true });
+  Object.defineProperty(response.headers, "_immutable", { __proto__: null, value: true });
   response.url = req.url;
   return response;
 };
@@ -1364,7 +1372,7 @@ const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
       status: raw.status,
       headers: raw.headers,
     });
-    Object.defineProperty(response.headers, "_immutable", { value: true });
+    Object.defineProperty(response.headers, "_immutable", { __proto__: null, value: true });
     response.url = req.url;
     return response;
   }
@@ -1598,6 +1606,7 @@ const __r2Object = (object, body) => {
   const drain = () => __r2Drain(body, length);
   r2.body = body;
   Object.defineProperty(r2, "bodyUsed", {
+    __proto__: null,
     get: () => body.locked || body._disturbed === true,
   });
   r2.arrayBuffer = async () => (await drain()).buffer;
@@ -2187,8 +2196,9 @@ const __NESTED_TRANSACTION_RUNNING_COMMIT =
 // the event loop has moved on, which is when workerd lets a nested critical
 // section start.
 const __afterTurn = () => __op_timer(__timer_alloc(), 0);
-// What `ctx.storage` and a transaction callback's view share. Only the root,
-// a DurableObjectStorage, has transaction(): workerd's DurableObjectTransaction
+// What `ctx.storage` and a transaction callback's view share; each class
+// exposes only workerd's methods (see below). Only the root, a
+// DurableObjectStorage, has transaction(): workerd's DurableObjectTransaction
 // (actor-state.h) has none, and a nested transaction starts through
 // `ctx.storage`, which places it inside the innermost open layer.
 //
@@ -2197,15 +2207,13 @@ const __afterTurn = () => __op_timer(__timer_alloc(), 0);
 // Only the object's state and a transaction construct one; `new
 // storage.constructor()` throws "Illegal constructor", as in workerd. The
 // root's `kv` and `sql` are its own properties, as workerd's are; a
-// transaction view has none, and reaches them through the getters.
+// transaction view has neither.
 const __kStorage = Symbol("DurableObjectStorage");
 // The harness's view of a storage object, which no script reaches.
 let __storageInternals;
 class __DurableObjectStorageBase {
   #scope;
   #state;
-  #sql;
-  #kv;
   #transactionRoot;
   #transactionDepth;
   #transactionControl;
@@ -2228,17 +2236,19 @@ class __DurableObjectStorageBase {
     this.#transactionRoot = transactionRoot || this;
     this.#transactionDepth = transactionDepth;
     this.#transactionControl = transactionControl;
-    this.#kv = new SyncKvStorage(__kStorage, this);
-    this.#sql = new SqlStorage(__kStorage, scope, state, this);
+    // The root's own `kv` and `sql`, as workerd's are; a transaction has
+    // neither.
     if (!transactionRoot) {
-      for (const [name, value] of [["kv", this.#kv], ["sql", this.#sql]])
+      for (const [name, value] of [
+        ["kv", new SyncKvStorage(__kStorage, this)],
+        ["sql", new SqlStorage(__kStorage, scope, state, this)],
+      ])
         __ObjectDefineProperty(this, name, {
+          __proto__: null,
           value, writable: true, enumerable: true, configurable: true,
         });
     }
   }
-  get kv() { return this.#kv; }
-  get sql() { return this.#sql; }
   static {
     __storageInternals = {
       scope: (storage) => storage.#scope,
@@ -2836,6 +2846,22 @@ class DurableObjectTransaction extends __DurableObjectStorageBase {
     }
   }
 }
+// workerd's two classes share no prototype, and each has only its own
+// methods (probed, `storage/transaction-surface`): a transaction has
+// `rollback()` and no `transactionSync()`, `sync()`, `kv` or `sql`, and the
+// root storage no `rollback()`. The base keeps the shared implementation,
+// and its private state, out of sight.
+for (const [cls, names] of [
+  [DurableObjectStorage, ["delete", "deleteAlarm", "deleteAll", "get",
+    "getAlarm", "list", "put", "setAlarm", "sync", "transactionSync"]],
+  [DurableObjectTransaction, ["delete", "deleteAlarm", "deleteAll", "get",
+    "getAlarm", "list", "put", "rollback", "setAlarm"]],
+]) {
+  for (const name of names)
+    __ObjectDefineProperty(cls.prototype, name,
+      Object.getOwnPropertyDescriptor(__DurableObjectStorageBase.prototype, name));
+  __ObjectSetPrototypeOf(cls.prototype, __ObjectPrototype);
+}
 // The storage methods as the harness defined them, for celld's own cells that
 // run in a script's isolate (a workflow instance, the cron schedule). A
 // script can replace these methods on the prototypes, and the replacement
@@ -2977,6 +3003,19 @@ const __blockEnter = (scope, event, owner) => {
   };
   __cellBlocks.set(scope, fresh);
   return { block: fresh, record };
+};
+// An abort ends the critical section its instance holds. The callback can
+// still be running, but for an instance that no longer exists, so the gate
+// opens for the replacement, and whatever queued behind it is refused with
+// the abort's error, as workerd fails the old object's queued events. The
+// block's own release later finds its hold gone.
+const __releaseResetGate = (scope, error) => {
+  const block = __cellBlocks.get(scope);
+  if (block === undefined) return;
+  const holder = block.holder === null ? undefined : block.events.get(block.holder);
+  if (holder !== undefined)
+    __gate_release(scope, block.holder, holder.owner, __describeFailure(error));
+  __cellBlocks.delete(scope);
 };
 const __blockLeave = (scope, block, event) => {
   if (!block.events.delete(event)) return;
@@ -3194,7 +3233,7 @@ class DurableObjectFacets {
 // string form, such as `Object.create(null)`, is a legal thing to throw.
 function __describeFailure(error) {
   try {
-    return String((error && error.message) || error);
+    return __String((error && error.message) || error);
   } catch {
     return "critical section failed";
   }
@@ -3559,6 +3598,9 @@ class DurableObjectState {
   #blockDepth = 0;
   #facetDepth;
   #nestedBlocks;
+  // This instance's token in the node's registry (`do_instances.rs`), which
+  // stubs bind to; a facet's stubs keep their own state, so it has none.
+  #instance;
   // Workerd worker-rpc.c++ getTargetInfo(): RPC needs `extends
   // DurableObject` unless the js_rpc compat flag is on. Decided once, by
   // `_instance`; dispatch reads a boolean.
@@ -3578,6 +3620,7 @@ class DurableObjectState {
     this.#facets = new DurableObjectFacets(__kFacets, this);
     const facet = __cell.facetConfigs[scope];
     this.#facetDepth = facet?.depth ?? 0;
+    if (facet === undefined) this.#instance = __do_instance_begin(scope);
     const separator = scope.indexOf(":");
     const className = separator < 0 ? scope : scope.slice(0, separator);
     this.#id = facet === undefined
@@ -3597,6 +3640,7 @@ class DurableObjectState {
     // loopback surface as ctx.exports on stateless entrypoints, built on
     // first read.
     __ObjectDefineProperty(this, "exports", {
+      __proto__: null,
       get: () => __ctxExports(),
       enumerable: true,
       configurable: true,
@@ -3609,6 +3653,7 @@ class DurableObjectState {
       id: (state) => state.#id,
       facets: (state) => state.#facets,
       aborted: (state) => state.#aborted,
+      instance: (state) => state.#instance,
       facetDepth: (state) => state.#facetDepth,
       rpcOk: (state) => state.#rpcOk,
       setRpcOk: (state, ok) => { state.#rpcOk = ok; },
@@ -3637,6 +3682,9 @@ class DurableObjectState {
       throw new Error(
         "blockConcurrencyWhile() calls are nested too deeply.",
       );
+    // workerd commits the writes made so far before the callback runs, so
+    // the block's failure discards only what the block wrote.
+    __storage_commit_implicit(this.#scope);
     if (this.#blockDepth > 0) {
       // A stale reaction can run while an unrelated live block makes this
       // actor's depth nonzero. It cannot ride that hold when either half of
@@ -3793,6 +3841,8 @@ class DurableObjectState {
   // V8 drops the microtasks queued in it, so rejecting the running events
   // now would lose their reactions. The host rejects them once the turn has
   // ended instead (`__wakeResetEvents`).
+  // `error` can be anything a script threw. Each step runs whatever the
+  // others do, and none reads more of the error than its message and name.
   #markReset(error, terminating = false) {
     this.#aborted = true;
     this.#resetError = error;
@@ -3801,11 +3851,25 @@ class DurableObjectState {
     __storageInternals.abandonOpenTransactions(this.#storage, error);
     if (terminating) __resetWakes.add(this);
     else this.#failRunningEvents();
+    // A stub bound to this instance throws this error from now on.
+    if (this.#instance !== undefined) {
+      try {
+        __do_instance_reset(this.#scope, this.#instance, __resetEnvelope(error));
+      } catch (failure) {
+        try { console.error("a reset could not be recorded", failure); } catch {}
+      }
+    }
   }
+  // Each event's driver waits on its own ops, so the drivers are asked to
+  // look: the rejection settles the events in this turn, and one awaiting a
+  // timer or a subrequest would otherwise answer only when that completed,
+  // or never.
   #failRunningEvents() {
     const events = this.#runningEvents;
+    if (events.size === 0) return;
     this.#runningEvents = new Set();
     for (const event of events) event.reject(this.#resetError);
+    __io_context_poll();
   }
   #resetFailure() {
     return this.#resetError ??
@@ -3847,7 +3911,7 @@ class DurableObjectState {
     this.#markReset(error);
     const scope = this.#ownScope();
     if (scope === undefined) return;
-    __storage_cancel_pending_puts(scope);
+    __storage_discard_uncommitted(scope);
     delete __cell.instances[scope];
     // Under a stub-mediated caller (this scope is not the current
     // event) the failure breaks the actor, as Workerd joins it
@@ -3873,7 +3937,8 @@ class DurableObjectState {
     }
     const terminating = __currentActorScope() === scope;
     this.#markReset(error, terminating);
-    __storage_cancel_pending_puts(scope);
+    __storage_discard_uncommitted(scope);
+    __releaseResetGate(scope, error);
     delete __cell.instances[scope];
     // Direct host-dispatched event on this actor: the uncatchable
     // terminate_execution path. Under a same-isolate stub caller,
@@ -4088,7 +4153,7 @@ __celld.__retireInputGateContext = (context) => {
         new Error("the cell's critical section ended without releasing"),
       );
     }
-    __storage_cancel_pending_puts(scope);
+    __storage_discard_uncommitted(scope);
     if (instance !== undefined && __cell.instances[scope] === instance)
       delete __cell.instances[scope];
     for (const record of block.events.values()) {
@@ -4200,7 +4265,7 @@ const __wrapServiceResponse = (res, url) => {
     },
   );
   // The constructor copies headers, so mark the copy.
-  Object.defineProperty(wrapped.headers, "_immutable", { value: true });
+  Object.defineProperty(wrapped.headers, "_immutable", { __proto__: null, value: true });
   wrapped.url = url;
   // An upgraded pair whose both ends live in this isolate: link them
   // directly -- the host connection seam only reaches external
@@ -4940,7 +5005,7 @@ const __corruptLiftedPayload = (key) => new Error(
   __jsonString(key) + ".");
 const __defineData = (target, key, value) => __ObjectDefineProperty(
   target, key,
-  { value, enumerable: true, configurable: true, writable: true });
+  { __proto__: null, value, enumerable: true, configurable: true, writable: true });
 // An object with no prototype, so that assigning a key never reaches a
 // setter on one. V8 keeps it in fast mode, where a `{ __proto__: null }`
 // literal starts as a dictionary, which costs a stored lift about half
@@ -5236,9 +5301,9 @@ const __rpcProject = (value) => {
   return { tree, originals, unsupported, lift };
 };
 const __tagged = (tag, sc) => {
-  const out = new Uint8Array(sc.length + 1);
+  const out = new __Uint8Array(__typedLength(sc) + 1);
   out[0] = tag;
-  out.set(sc, 1);
+  __ReflectApply(__TypedArraySet, out, [sc, 1]);
   return out;
 };
 // ---- request-context confinement -------------------------------
@@ -5403,19 +5468,17 @@ const __newEntry = (target) => {
   __stubEntries.set(entry.id, entry);
   return entry;
 };
-// Actors broken in JS: scope -> reason. Workerd's DO ctx.abort
-// rejects in-flight and future calls; when the abort fires under a
-// same-isolate stub caller, terminate_execution would unwind that
-// caller too (the routed dispatch re-enters the isolate), so the
-// breakage is recorded here instead: contexts hosting the actor's
-// exported stubs abort (in-flight ops reject with the reason,
-// later ops with the post-abort message) and RPC dispatch to the
-// scope rejects with the reason. Direct host-dispatched DO events
-// keep the uncatchable terminate_execution path.
-const __brokenActors = new Map();
+// An actor broken in JS. Workerd's DO ctx.abort rejects in-flight
+// and future calls; when the abort fires under a same-isolate stub
+// caller, terminate_execution would unwind that caller too (the
+// routed dispatch re-enters the isolate), so the contexts hosting
+// the actor's exported stubs abort instead (in-flight ops reject
+// with the reason, later ops with the post-abort message). Stubs
+// bound to the instance throw the reason from then on
+// (`do_instances.rs`), and a fresh one reaches a new instance.
+// Direct host-dispatched DO events keep the uncatchable
+// terminate_execution path.
 const __actorBreak = (scope, reason) => {
-  if (__brokenActors.has(scope)) return;
-  __brokenActors.set(scope, reason);
   for (const entry of __stubEntries.values())
     if (entry.scope === scope)
       __ctxAbort(entry.ctx, new __ActorAbort(reason));
@@ -5432,7 +5495,6 @@ const __cellRelease = (scope) => {
   delete __cell.instances[scope];
   delete __cell.idNames[scope];
   delete __cell.facetConfigs[scope];
-  __brokenActors.delete(scope);
   // An abandoned block can never run `__blockLeave`. A normal eviction
   // cannot abandon a block because its event keeps the cell in flight. A
   // stop that waits for nobody can, so the release drops every block record
@@ -5446,9 +5508,7 @@ const __cellRelease = (scope) => {
     if (entry.scope !== scope) continue;
     entry.released = true;
     __stubEntries.delete(entry.id);
-    // Break in-flight ops as an abort would, but not through
-    // `__actorBreak`: that records the scope broken for the life of the
-    // isolate, which is the state this function drops.
+    // Break in-flight ops as an abort would, with the release's reason.
     __ctxAbort(entry.ctx, new __ActorAbort(__releasedStubError()));
   }
 };
@@ -6394,6 +6454,7 @@ const __rpcResultDisposer = (value) => {
   if (value !== null && typeof value === "object" &&
       !__stubMeta.has(value) && !Object.hasOwn(value, Symbol.dispose))
     Reflect.defineProperty(value, Symbol.dispose, {
+      __proto__: null,
       value: __rpcNoDisposer, writable: true, configurable: true,
     });
   return value;
@@ -6917,15 +6978,21 @@ const __rpcOut = (value, lift, params = false, transit = undefined) => {
 // (V8 serializes Error natively), custom own properties beside it.
 const __rpcErrOut = (error) => {
   // `name` rides in the props: V8 only round-trips the standard
-  // Error subclass names, and e.g. DataCloneError must survive.
-  const props = error instanceof Error
-    ? { ...error, name: error.name } : {};
+  // Error subclass names, and e.g. DataCloneError must survive. A value a
+  // script threw can throw as it is read (a getter, a revoked Proxy), and
+  // then crosses as its message only.
   let sc;
   try {
+    const props = error instanceof Error
+      ? { ...error, name: error.name } : {};
     sc = __sc_encode([error, props]);
   } catch {
-    const error_ = new Error(String(error?.message ?? error));
-    sc = __sc_encode([error_, { name: String(error?.name ?? "Error") }]);
+    let name = "Error";
+    try {
+      const own = error?.name;
+      if (typeof own === "string") name = own;
+    } catch {}
+    return __plainErrorEnvelope(name, __describeFailure(error));
   }
   return __tagged(0, sc);
 };
@@ -6967,6 +7034,7 @@ const __rpcDes = (bytes) => {
         !__ReflectApply(__WeakMapHas, __stubMeta, [value]) &&
         (handles.length > 0 || disposers.length > 0)) {
       __ObjectDefineProperty(value, Symbol.dispose, {
+        __proto__: null,
         writable: true,
         configurable: true,
         value: () => {
@@ -7061,17 +7129,27 @@ const __dispatchName = (name) => name === undefined ? undefined
 // What a failed Durable Object call throws: a routing error as the
 // DurableObjectRoutingError it names, and an object's abort or exit as the
 // reason alone, which breaks the stub (`broken`).
+// A host op's rejection, read for the host's markers: the object's
+// termination (`__actor_abort`, `process.exit()`) or its reset before the call
+// was delivered (`CellJob::fail_reset`). Only the host writes a marker, and
+// only at the start of the message; an error decoded from the callee's answer
+// never comes here, so no text a script throws can pose as one.
+const __DO_CALL_MARKERS = [
+  "__CELLD_ACTOR_ABORT__:", "__CELLD_PROCESS_EXIT__:", "__CELLD_ACTOR_RESET__:",
+];
 const __doCallFailure = (error) => {
   const routingError = __durableObjectRoutingError(error);
   if (routingError !== null) return { error: routingError, broken: false };
-  const message = String(error && error.message || error);
-  const marker = ["__CELLD_ACTOR_ABORT__:", "__CELLD_PROCESS_EXIT__:"]
-    .find((candidate) => message.includes(candidate));
-  if (!marker) return { error, broken: false };
-  return {
-    error: new Error(message.slice(message.indexOf(marker) + marker.length)),
-    broken: true,
-  };
+  const message = __describeFailure(error);
+  for (let i = 0; i < __DO_CALL_MARKERS.length; i++) {
+    const marker = __DO_CALL_MARKERS[i];
+    if (__ReflectApply(__StringIndexOf, message, [marker]) !== 0) continue;
+    return {
+      error: new Error(__ReflectApply(__StringSlice, message, [marker.length])),
+      broken: true,
+    };
+  }
+  return { error, broken: false };
 };
 let __namespaceGet, __cellRpc;
 // The class and the namespace key are private and only `makeNamespace`
@@ -7135,11 +7213,15 @@ class DurableObjectNamespace {
       if (dispatchName !== undefined) __cell.idNames[scope] = dispatchName;
       const transit = __rpcTransit(false);
       try {
-        return __rpcDes(await __rpc_call(
-          scope, dispatchName ?? null, method,
-          __rpcOut(args, true, true, transit)));
-      } catch (error) {
-        throw __doCallFailure(error).error;
+        let reply;
+        try {
+          reply = await __rpc_call(
+            scope, dispatchName ?? null, method,
+            __rpcOut(args, true, true, transit));
+        } catch (error) {
+          throw __doCallFailure(error).error;
+        }
+        return __rpcDes(reply);
       } finally {
         __rpcTransitEnd(transit);
       }
@@ -7162,7 +7244,27 @@ class DurableObjectNamespace {
       id,
     };
     let brokenReason = null;
+    // The head naming the instance this stub's first answer came from
+    // (`__doBoundHead`). Once that instance is reset the stub stays broken,
+    // as in workerd: `stale` is the reset's error envelope, which every later
+    // call throws.
+    let head = __DO_UNBOUND_HEAD;
+    let stale = null;
+    const reply = (bytes) => {
+      if (bytes[0] === 4) {
+        if (bytes.length < 2 + __DO_TOKEN_LEN)
+          throw new TypeError("Malformed Durable Object RPC answer.");
+        head = __doBoundHead(
+          __ReflectApply(__TypedArraySubarray, bytes, [1, 1 + __DO_TOKEN_LEN]));
+        return __ReflectApply(__TypedArraySubarray, bytes, [1 + __DO_TOKEN_LEN]);
+      }
+      if (bytes[0] !== 5) return bytes;
+      if (bytes.length < 2) throw new TypeError("Malformed Durable Object RPC answer.");
+      stale = __ReflectApply(__TypedArraySubarray, bytes, [1]);
+      return stale;
+    };
     const invoke = async (operation) => {
+      if (stale !== null) return __rpcDes(stale);
       if (brokenReason !== null) throw new Error(brokenReason);
       try {
         return await operation();
@@ -7246,7 +7348,7 @@ class DurableObjectNamespace {
           webSocket: __responseSocket(r),
         });
         // As a service binding's: the headers came from another Worker.
-        Object.defineProperty(response.headers, "_immutable", { value: true });
+        Object.defineProperty(response.headers, "_immutable", { __proto__: null, value: true });
         return response;
     };
     // Every cell RPC goes out through the host, whichever node owns the
@@ -7254,19 +7356,23 @@ class DurableObjectNamespace {
     // abort and exit markers revive; bytes that land elsewhere revive as
     // loud foreign stubs. The first name is the method; the rest of a path,
     // or a property read, rides with the arguments (`__doRpcRequest`).
-    const call = (path, args) => invoke(async () => {
+    // `invoke` reads only the host op's rejection; the answer, and an error
+    // it carries from the callee, decode outside it.
+    const call = async (path, args) => {
+      if (stale !== null) return __rpcDes(stale);
+      if (brokenReason !== null) throw new Error(brokenReason);
       const transit = __rpcTransit(false);
       const argsSc = __rpcOut(
         path.length === 1 && args !== null
           ? args : { path: path.slice(1), args },
         true, true, transit);
       try {
-        return __rpcDes(await __rpc_call(
-          scope, dispatchName ?? null, path[0], argsSc));
+        return __rpcDes(reply(await invoke(() => __rpc_call(
+          scope, dispatchName ?? null, path[0], argsSc, head))));
       } finally {
         __rpcTransitEnd(transit);
       }
-    });
+    };
     const session = { get: (path) => call(path, null), call };
     // A member is an RpcProperty, as on workerd's Fetcher: calling it returns
     // an RpcPromise, so a caller can pipeline through its result before
@@ -7309,6 +7415,7 @@ const __attachResponseRequestCancellation = (
     : [requestController];
   if (requestControllers !== response.__celldRequestControllers) {
     Object.defineProperty(response, "__celldRequestControllers", {
+      __proto__: null,
       value: requestControllers,
     });
   } else {
@@ -7330,6 +7437,7 @@ const __attachResponseRequestCancellation = (
     } catch {}
   });
   Object.defineProperty(response, "__celldCancellationWrapped", {
+    __proto__: null,
     value: true,
   });
 };
@@ -7426,13 +7534,93 @@ const __rpcTargetInstance = async (scope) => {
 // `{ path: [rest], args }`, with null args for a read. Stubs only ever send
 // an array of arguments, so the two cannot be confused.
 const __doRpcRequest = (method, value) => {
-  if (Array.isArray(value)) return [[method], value];
+  if (__ArrayIsArray(value)) return [[method], value];
   if (value !== null && typeof value === "object" &&
-      Array.isArray(value.path) &&
+      __ArrayIsArray(value.path) &&
       value.path.every((name) => typeof name === "string") &&
-      (value.args === null || Array.isArray(value.args)))
+      (value.args === null || __ArrayIsArray(value.args)))
     return [[method, ...value.path], value.args];
   throw new TypeError("Malformed Durable Object RPC request.");
+};
+// A stub's call and its answers name the instance it is bound to, as the
+// token `__do_instance_begin` minted (16 bytes), framed around the payload:
+// a call is tag 6, then 1 and the token, or 0 before the stub's first answer
+// (a head the stub keeps, which `__rpc_call` puts before the payload as it
+// copies it, so the call copies nothing more); an answer is tag 4 and the
+// token of the instance that answered, when the stub is bound to another, or
+// tag 5 and the reset's error envelope, when the instance the stub is bound
+// to was reset. The runtime classes' clients and facets send the payload
+// bare, and bind to nothing.
+const __DO_TOKEN_LEN = 16;
+const __DO_UNBOUND_HEAD = new Uint8Array([6, 0]);
+const __doBoundHead = (token) => {
+  const head = new __Uint8Array(2 + __DO_TOKEN_LEN);
+  head[0] = 6;
+  head[1] = 1;
+  for (let i = 0; i < __DO_TOKEN_LEN; i++) head[2 + i] = token[i];
+  return head;
+};
+const __doBindReply = (token, reply) => {
+  const out = new __Uint8Array(1 + __DO_TOKEN_LEN + reply.length);
+  out[0] = 4;
+  __ReflectApply(__TypedArraySet, out, [token, 1]);
+  __ReflectApply(__TypedArraySet, out, [reply, 1 + __DO_TOKEN_LEN]);
+  return out;
+};
+// A reset's error as its stale stubs receive it: its name and the start of
+// its message, as an Error whose stack is that text. Nothing else of the
+// value is read (a getter or a revoked Proxy would throw), and the envelope
+// stays within the node registry's bound (`do_instances.rs`) whatever the
+// script set `Error.stackTraceLimit` to.
+const __RESET_MESSAGE_MAX = 1024;
+const __RESET_ENVELOPE_MAX = 8192;
+// The classes V8's serializer keeps, so a stale stub's error keeps its type.
+const __RESET_ERROR_CLASSES = {
+  __proto__: null, Error, EvalError, RangeError, ReferenceError, SyntaxError,
+  TypeError, URIError,
+};
+// An Error of class `name` (one V8 keeps, else Error) with `message`, whose
+// name, message and stack are its own, so its serialization reads nothing a
+// script can replace on the prototypes.
+const __plainError = (name, message) => {
+  const copy = new (__RESET_ERROR_CLASSES[name] ?? __RESET_ERROR_CLASSES.Error)(message);
+  __ObjectDefineProperty(copy, "name", {
+    __proto__: null, value: name, writable: true, configurable: true,
+  });
+  __ObjectDefineProperty(copy, "stack", {
+    __proto__: null, value: name + ": " + message, writable: true, configurable: true,
+  });
+  return copy;
+};
+// The envelope of an error crossing as `name` and `message` only.
+const __plainErrorEnvelope = (name, message) =>
+  __tagged(0, __sc_encode([__plainError(name, message), { __proto__: null, name }]));
+const __resetEnvelope = (error) => {
+  const message = __ReflectApply(__StringSlice, __describeFailure(error),
+    [0, __RESET_MESSAGE_MAX]);
+  let name = "Error";
+  try {
+    const own = error === null || typeof error !== "object" ? undefined : error.name;
+    if (typeof own === "string") name = __ReflectApply(__StringSlice, own, [0, 64]);
+  } catch {}
+  // The error's own properties ride too, as on workerd, when they can be
+  // read and cloned within the bound; otherwise its name alone does, and if
+  // even that fails the host keeps a plain reset (no envelope).
+  try {
+    const envelope = __tagged(0, __sc_encode([__plainError(name, message), { ...error, name }]));
+    if (__typedLength(envelope) <= __RESET_ENVELOPE_MAX) return envelope;
+  } catch {}
+  try {
+    return __plainErrorEnvelope(name, message);
+  } catch {
+    return undefined;
+  }
+};
+const __doStaleReply = (reset) => __tagged(5,
+  typeof reset === "string" ? __plainErrorEnvelope("Error", reset) : reset);
+const __sameToken = (a, b) => {
+  for (let i = 0; i < __DO_TOKEN_LEN; i++) if (a[i] !== b[i]) return false;
+  return true;
 };
 // One call into a Durable Object, by workerd's rules for an entrypoint: its
 // handler names are reserved, and only class members are visible. A runtime
@@ -7479,20 +7667,43 @@ __celld.__dispatchRpc = async (scope, method, args, internal) => {
       return JSON.stringify(result) ?? "null";
     }
     return await __ctxRun(undefined, () => (async () => {
+      // The instance a stub is bound to (null before its first answer, and
+      // undefined from a caller that binds to none), and the one that
+      // served the call.
+      let bound, serving, reset;
+      if (args[0] === 6) {
+        const head = args[1] === 1 ? 2 + __DO_TOKEN_LEN : 2;
+        if ((args[1] !== 0 && args[1] !== 1) || args.length <= head)
+          throw new TypeError("Malformed Durable Object RPC request.");
+        bound = args[1] === 1
+          ? __ReflectApply(__TypedArraySubarray, args, [2, head]) : null;
+        args = __ReflectApply(__TypedArraySubarray, args, [head]);
+      }
       const decoded = __rpcDesArgs(args);
       try {
-        return await __rpcRun(async () => {
-          // A broken actor (JS-flavored ctx.abort) rejects every
-          // later call with the reason. One gated field read.
-          if (__brokenActors.size !== 0) {
-            const broken = __brokenActors.get(scope);
-            if (broken !== undefined) throw broken;
+        const reply = await __rpcRun(async () => {
+          // A stub bound to an instance that was reset throws its error,
+          // and the object is not instantiated for it. A stub bound to the
+          // live instance needs no look in the node's registry.
+          if (bound) {
+            const live = __instanceState(__cell.instances[scope]);
+            const token = live === undefined ? undefined : __objectState.instance(live);
+            if (token === undefined || !__sameToken(token, bound)) {
+              reset = __do_instance_stale(scope, bound);
+              if (reset !== undefined) return undefined;
+            }
           }
           const inst = await __rpcTargetInstance(scope);
           const [path, callArgs] = __doRpcRequest(method, decoded.args);
-          return __objectState.untilReset(__instanceState(inst),
+          const state = __instanceState(inst);
+          serving = __objectState.instance(state);
+          return __objectState.untilReset(state,
             __doRpcCall(scope, inst, path, callArgs, internal));
         }, true);
+        if (reset !== undefined) return __doStaleReply(reset);
+        return bound !== undefined && serving !== undefined &&
+          (bound === null || !__sameToken(bound, serving))
+          ? __doBindReply(serving, reply) : reply;
       } finally {
         __disposeReceived(decoded.received);
       }
@@ -11852,7 +12063,7 @@ const __cfUnimplementedError = (name) =>
   new Error(`cloudflare:workers export '${name}' is not implemented in celld`);
 const __cfUnimplementedFunction = (name) => {
   const stub = function () { throw __cfUnimplementedError(name); };
-  Object.defineProperty(stub, "name", { value: name });
+  Object.defineProperty(stub, "name", { __proto__: null, value: name });
   return stub;
 };
 const __cfInertKey = (key) =>
@@ -11896,6 +12107,7 @@ const __cf = __celld.__cf = {
     }
     constructor() {
       Object.defineProperty(this, "__celldRpcTarget", {
+        __proto__: null,
         value: __rpcNoClone, enumerable: true,
       });
     }
@@ -11990,6 +12202,7 @@ function __ctxRestore() {
 const __withCtxRestore = (ctx) => {
   if (__cell.compat.allowIrrevocableStubStorage) {
     __ObjectDefineProperty(ctx, "restore", {
+      __proto__: null,
       value: __ctxRestore, writable: true, configurable: true,
     });
   }
@@ -12306,6 +12519,7 @@ if (!globalThis.DOMException) {
       InvalidNodeTypeError: 24, DataCloneError: 25,
     };
     Object.defineProperty(globalThis.DOMException.prototype, "code", {
+      __proto__: null,
       get() { return legacy[this.name] ?? 0; },
       enumerable: true, configurable: true,
     });
@@ -12341,7 +12555,7 @@ if (!globalThis.AbortSignal) {
       this.reason = undefined;
       // Fixed, as a Headers' is (headers.js).
       __ObjectDefineProperty(this, "__celldHost",
-        { value: __rpcNoClone, enumerable: true });
+        { __proto__: null, value: __rpcNoClone, enumerable: true });
     }
     throwIfAborted() { if (this.aborted) throw this.reason; }
     static abort(reason = new DOMException("The operation was aborted", "AbortError")) {
@@ -12364,6 +12578,7 @@ if (!globalThis.AbortSignal) {
     }
   };
   Object.defineProperty(globalThis.AbortSignal.prototype, "onabort", {
+    __proto__: null,
     configurable: true,
     enumerable: true,
     get() {
@@ -12419,7 +12634,7 @@ if (!globalThis.Blob) {
         ? rawType.toLowerCase() : "";
       // Fixed, as a Headers' is (headers.js).
       __ObjectDefineProperty(this, "__celldHost",
-        { value: __blobNoClone, enumerable: true });
+        { __proto__: null, value: __blobNoClone, enumerable: true });
       // Two passes. First convert every part in order -- string
       // conversion runs user code (Symbol.toPrimitive), which may
       // resize a backing buffer. Buffers and views are carried through
@@ -12566,6 +12781,7 @@ __celld.__blobOf = (buffer, type) => {
     return wrapper;
   };
   defineProperty(Function.prototype, "toString", {
+    __proto__: null,
     value: disguise(toString, functionToString),
     writable: true, enumerable: false, configurable: true,
   });
@@ -12575,8 +12791,9 @@ __celld.__blobOf = (buffer, type) => {
     const original = prototype[name];
     if (typeof original !== "function") return;
     const wrapper = wrap(original, () => wrapper);
-    defineProperty(wrapper, "length", { value: original.length });
+    defineProperty(wrapper, "length", { __proto__: null, value: original.length });
     defineProperty(prototype, name, {
+      __proto__: null,
       value: disguise(wrapper, original),
       writable: true, enumerable: false, configurable: true,
     });
@@ -12598,6 +12815,7 @@ __celld.__blobOf = (buffer, type) => {
       defineProperty(wrapper, key, Object.getOwnPropertyDescriptor(Original, key));
     }
     defineProperty(Original.prototype, "constructor", {
+      __proto__: null,
       value: wrapper, writable: true, enumerable: false, configurable: true,
     });
     return disguise(wrapper, Original);
@@ -13916,6 +14134,7 @@ Object.defineProperties(__CloudflareDate, {
   },
 });
 Object.defineProperty(__NativeDate.prototype, "constructor", {
+  __proto__: null,
   value: __CloudflareDate,
   writable: true,
   configurable: true,
@@ -14009,6 +14228,7 @@ if (!globalThis.structuredClone) {
       const exception = new DOMException(data.message, data.name);
       if (data.stack !== undefined)
         Object.defineProperty(exception, "stack", {
+          __proto__: null,
           value: data.stack, configurable: true, writable: true,
         });
       return exception;
@@ -14016,7 +14236,7 @@ if (!globalThis.structuredClone) {
   };
   const defineHostType = (prototype, serialize) => {
     if (!Object.prototype.hasOwnProperty.call(prototype, hostBrand))
-      Object.defineProperty(prototype, hostBrand, { value: serialize });
+      Object.defineProperty(prototype, hostBrand, { __proto__: null, value: serialize });
   };
   const defineUnsupportedType = (constructor) => {
     if (typeof constructor === "function")
@@ -14321,7 +14541,7 @@ class __FsStats {
     this.mtime = new Date(0);
     this.ctime = new Date(0);
     this.birthtime = new Date(0);
-    Object.defineProperty(this, "__kind", { value: file ? "file" : "directory" });
+    Object.defineProperty(this, "__kind", { __proto__: null, value: file ? "file" : "directory" });
     if (bigint) {
       for (const name of [
         "dev", "ino", "mode", "nlink", "uid", "gid", "rdev", "size",

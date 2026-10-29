@@ -215,6 +215,9 @@ pub struct Slot {
     /// Wakes the drivers of the events still in the isolate when it is
     /// condemned (`until_condemned`).
     condemned_wake: tokio::sync::Notify,
+    /// Cells of this isolate whose storage failed a commit, for the Actor to
+    /// move (`take_broken_cells`).
+    broken_cells: std::sync::Mutex<Vec<(String, HeapId)>>,
     #[cfg(celld_internal_tests)]
     turn_observations: Mutex<Vec<String>>,
 }
@@ -224,6 +227,15 @@ type CondemnHook = Box<dyn Fn(&Slot) + Send + Sync>;
 /// How many isolates this process has condemned, so a watcher can tell that
 /// one was without scanning every slot.
 static CONDEMNATIONS: AtomicU64 = AtomicU64::new(0);
+
+/// How many cells were ever marked broken (`Slot::mark_broken`), read as
+/// `CONDEMNATIONS` is: a watcher that sees a new count finds the cell queued.
+static BREAKS: AtomicU64 = AtomicU64::new(0);
+
+/// The number of cells marked broken so far.
+pub(crate) fn breaks() -> u64 {
+    BREAKS.load(Ordering::Acquire)
+}
 
 /// The number of isolates condemned so far.
 pub(crate) fn condemnations() -> u64 {
@@ -369,6 +381,7 @@ impl Slot {
             condemned: AtomicBool::new(false),
             condemn_hook: OnceLock::new(),
             condemned_wake: tokio::sync::Notify::new(),
+            broken_cells: std::sync::Mutex::new(Vec::new()),
             #[cfg(celld_internal_tests)]
             turn_observations: Mutex::new(Vec::new()),
         })
@@ -404,6 +417,7 @@ impl Slot {
             condemned: AtomicBool::new(false),
             condemn_hook: OnceLock::new(),
             condemned_wake: tokio::sync::Notify::new(),
+            broken_cells: std::sync::Mutex::new(Vec::new()),
             turn_observations: Mutex::new(Vec::new()),
         })
     }
@@ -520,6 +534,22 @@ impl Slot {
             return;
         }
         notified.await;
+    }
+
+    /// The cell `scope` of this isolate failed a commit and must move to a
+    /// new instance (`js::do_instances::cell_broken`).
+    pub(crate) fn mark_broken(&self, scope: &str) {
+        self.broken_cells
+            .lock()
+            .unwrap()
+            .push((scope.to_string(), self.heap_id));
+        BREAKS.fetch_add(1, Ordering::Release);
+    }
+
+    /// The cells marked broken since the last take, each with the heap it
+    /// broke in.
+    pub(crate) fn take_broken_cells(&self) -> Vec<(String, HeapId)> {
+        std::mem::take(&mut *self.broken_cells.lock().unwrap())
     }
 
     /// Whether [`condemn`](Self::condemn) ran.
@@ -735,6 +765,7 @@ impl Pool {
             condemned: AtomicBool::new(false),
             condemn_hook: OnceLock::new(),
             condemned_wake: tokio::sync::Notify::new(),
+            broken_cells: std::sync::Mutex::new(Vec::new()),
             #[cfg(celld_internal_tests)]
             turn_observations: Mutex::new(Vec::new()),
         });

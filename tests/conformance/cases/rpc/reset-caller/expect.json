@@ -1,0 +1,111 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: Error: aborted",
+        "call": "threw Error: Error: aborted"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: Error: aborted",
+        "call": "threw Error: Error: aborted"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: Error: aborted",
+        "call": "threw Error: Error: aborted"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: block threw",
+        "call": "threw Error: block threw"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: block threw",
+        "call": "threw Error: block threw"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: block threw",
+        "call": "threw Error: block threw"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: Error: aborted",
+        "call": "threw Error: Error: aborted"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: Error: aborted",
+        "call": "threw Error: Error: aborted"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: Error: aborted",
+        "call": "threw Error: Error: aborted"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: block threw",
+        "call": "threw Error: block threw"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: block threw",
+        "call": "threw Error: block threw"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: block threw",
+        "call": "threw Error: block threw"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "caller": "pong",
+        "freshCaller": "pong",
+        "target": "pong",
+        "freshTarget": "pong"
+      }
+    }
+  ]
+}

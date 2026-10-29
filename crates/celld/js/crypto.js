@@ -111,11 +111,11 @@
     }
     constructor(type, algorithm, extractable, usages, material) {
       Object.defineProperties(this, {
-        type: { value: type, enumerable: true },
-        algorithm: { value: algorithm, enumerable: true },
-        extractable: { value: Boolean(extractable), enumerable: true },
-        usages: { value: Object.freeze(Array.from(usages || [])), enumerable: true },
-        __celldMaterial: { value: material },
+        type: { __proto__: null, value: type, enumerable: true },
+        algorithm: { __proto__: null, value: algorithm, enumerable: true },
+        extractable: { __proto__: null, value: Boolean(extractable), enumerable: true },
+        usages: { __proto__: null, value: Object.freeze(Array.from(usages || [])), enumerable: true },
+        __celldMaterial: { __proto__: null, value: material },
       });
     }
     get [Symbol.toStringTag]() { return "CryptoKey"; }
@@ -837,8 +837,8 @@
       // because nobody awaited `digest`.
       digest.catch(() => {});
       Object.defineProperties(this, {
-        digest: { value: digest, enumerable: true },
-        bytesWritten: { get: () => BigInt(state.written), enumerable: true },
+        digest: { __proto__: null, value: digest, enumerable: true },
+        bytesWritten: { __proto__: null, get: () => BigInt(state.written), enumerable: true },
       });
       this.__celldDigestState = state;
     }

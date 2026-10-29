@@ -1,0 +1,46 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "chain": [
+          [
+            "constructor",
+            "delete",
+            "deleteAlarm",
+            "deleteAll",
+            "get",
+            "getAlarm",
+            "list",
+            "put",
+            "rollback",
+            "setAlarm"
+          ]
+        ],
+        "own": [],
+        "members": {
+          "get": "function",
+          "put": "function",
+          "delete": "function",
+          "list": "function",
+          "deleteAll": "function",
+          "getAlarm": "function",
+          "setAlarm": "function",
+          "deleteAlarm": "function",
+          "rollback": "function",
+          "transaction": "undefined",
+          "transactionSync": "undefined",
+          "sync": "undefined",
+          "kv": "undefined",
+          "sql": "undefined"
+        },
+        "hasSql": false,
+        "isStorage": false,
+        "read": "v",
+        "afterRollback": null
+      }
+    }
+  ]
+}

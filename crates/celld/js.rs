@@ -743,6 +743,23 @@ impl CellJob {
         }
     }
 
+    /// Refuse this event because the object it was sent to was reset before
+    /// it could be delivered: it queued behind a `blockConcurrencyWhile()`
+    /// that failed. A Durable Object stub's call reads the marker as its
+    /// object's reset, and stays broken, as a workerd stub that reached the
+    /// reset instance does (`__doCallFailure`). A facet's stub keeps its own
+    /// state, so its call gets the failure as it is.
+    pub(crate) fn fail_reset(self, failure: String) {
+        match &self {
+            CellJob::Fetch { scope, .. } | CellJob::Rpc { scope, .. }
+                if !crate::engine_api::is_facet_cell(scope) =>
+            {
+                self.fail(anyhow!("{ACTOR_RESET_MARKER}{failure}"))
+            }
+            _ => self.fail(anyhow!(failure)),
+        }
+    }
+
     /// Fail this event without running it.
     pub fn fail(self, error: anyhow::Error) {
         match self {
@@ -2559,7 +2576,10 @@ const HEAP_ADMISSION_SHARE: f64 = 0.9;
 
 /// workerd's error for an event that ran while its isolate reached the heap
 /// limit (`io-context.h`), and for every later event of that isolate.
-const MEMORY_EXCEEDED: &str = "Worker has exceeded memory limit.";
+pub(crate) const MEMORY_EXCEEDED: &str = "Worker has exceeded memory limit.";
+/// Prefixes the failure of a call refused because its object was reset;
+/// the caller's stub strips it (`__doCallFailure`).
+const ACTOR_RESET_MARKER: &str = "__CELLD_ACTOR_RESET__:";
 
 /// workerd's `TypeError`s for a body read whole that the isolate's memory
 /// limit cannot hold: one whose length is known to be past it, before any
@@ -4632,6 +4652,24 @@ impl InFlight {
                 send_and_end(tc, &self.context, reply, dispatch)
             }
             Answer::Ack(reply) => send_and_end(tc, &self.context, reply, self.write_delta()),
+            // The handler's writes commit before its alarm is consumed: a
+            // commit that fails, now or in an earlier turn of the handler,
+            // resets the object, and the alarm counts as a failed run that
+            // retries, as on workerd.
+            Answer::Alarm(reply)
+                if self.scope.as_deref().is_some_and(|cell| {
+                    storage::sql_critical_error(cell).is_some()
+                        || storage::commit_or_reset(cell).is_err()
+                }) =>
+            {
+                let error = self
+                    .scope
+                    .as_deref()
+                    .and_then(storage::sql_critical_error)
+                    .unwrap_or_else(|| "internal error".to_string());
+                self.settle_alarm(false, true);
+                send_and_end(tc, &self.context, reply, Err(anyhow!(error)))
+            }
             Answer::Alarm(reply) => {
                 // The handler ran and returned, so close the claim as a
                 // success. This is the only path that does: every other
@@ -8407,7 +8445,8 @@ ops! { OP_NAMES, install_op_functions,
         "__storage_queue_put_serialized" => storage_ops::op_storage_queue_put_serialized,
         "__storage_flush_pending_puts" => storage_ops::op_storage_flush_pending_puts,
         "__storage_sync" => storage_ops::op_storage_sync,
-        "__storage_cancel_pending_puts" => storage_ops::op_storage_cancel_pending_puts,
+        "__storage_discard_uncommitted" => storage_ops::op_storage_discard_uncommitted,
+        "__storage_commit_implicit" => storage_ops::op_storage_commit_implicit,
         "__actor_abort" => op_actor_abort,
         "__cron_plan" => op_cron_plan,
         "__kv_blob" => op_kv_blob,
@@ -8490,6 +8529,10 @@ ops! { OP_NAMES, install_op_functions,
         "__isolate_condemn" => op_isolate_condemn,
         "__timer_alloc" => op_timer_alloc,
         "__io_context_id" => op_io_context_id,
+        "__io_context_poll" => op_io_context_poll,
+        "__do_instance_begin" => do_instances::op_do_instance_begin,
+        "__do_instance_reset" => do_instances::op_do_instance_reset,
+        "__do_instance_stale" => do_instances::op_do_instance_stale,
         "__with_input_gate_context" => op_with_input_gate_context,
         "__gate_acquire" => op_gate_acquire,
         "__gate_wait" => op_gate_wait,
@@ -11069,7 +11112,22 @@ fn op_rpc_call(
     let name_value = args.get(1);
     let name = (!name_value.is_null_or_undefined()).then(|| name_value.to_rust_string_lossy(scope));
     let method = args.get(2).to_rust_string_lossy(scope);
-    let args = RpcData::V8(view_bytes(args.get(3)).unwrap_or_default().into());
+    // A Durable Object stub's call puts the head naming its instance before
+    // the payload (`__DO_UNBOUND_HEAD` in the harness), joined here in the
+    // one copy the payload takes anyway.
+    let head = args.get(4);
+    let payload = args.get(3);
+    let mut bytes = Vec::new();
+    if let Ok(head) = v8::Local::<v8::ArrayBufferView>::try_from(head) {
+        bytes.resize(head.byte_length(), 0);
+        head.copy_contents(&mut bytes);
+    }
+    if let Ok(payload) = v8::Local::<v8::ArrayBufferView>::try_from(payload) {
+        let at = bytes.len();
+        bytes.resize(at + payload.byte_length(), 0);
+        payload.copy_contents(&mut bytes[at..]);
+    }
+    let args = RpcData::V8(bytes.into());
     let (tx, rx) = tokio::sync::oneshot::channel();
     let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::CellRpc);
     let request = RpcCallReq {
@@ -11913,6 +11971,32 @@ mod http_stream_owner_tests {
         })
         .join()
         .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod io_context_poll_tests {
+    use super::*;
+
+    /// A poll another turn asks for wakes the event's driver once, and is
+    /// taken once: the wait that `handed_ready` ends finds it on its next
+    /// pass (`runtime::wake`).
+    #[test]
+    fn a_requested_poll_wakes_the_driver_and_is_taken_once() {
+        let context = IoContext::new();
+        assert!(!context.take_poll_request());
+        context.request_poll();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), context.handed_ready())
+                .await
+                .expect("the request wakes a parked driver");
+        });
+        assert!(context.take_poll_request());
+        assert!(!context.take_poll_request());
     }
 }
 
@@ -13382,6 +13466,28 @@ fn op_io_context_id(
     rv.set(v8::String::new(scope, &id).unwrap().into());
 }
 
+/// `__io_context_poll()` — ask the driver of every event of this isolate to
+/// look at its promise, because this turn may have settled it: a reset
+/// rejected the events of its object (`#failRunningEvents`). A reset is rare,
+/// and a poll of an event it did not settle only finds it pending, so no
+/// event records which driver is its own.
+fn op_io_context_poll(
+    scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let contexts: Vec<Arc<IoContext>> = actor_runtime_state(scope)
+        .io_contexts
+        .lock()
+        .unwrap()
+        .values()
+        .filter_map(Weak::upgrade)
+        .collect();
+    for context in contexts {
+        context.request_poll();
+    }
+}
+
 fn return_gate_acquisition(
     scope: &mut v8::PinScope,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -13806,6 +13912,7 @@ fn webcrypto_return_bytes(
 
 mod container;
 mod crypto;
+pub(crate) mod do_instances;
 mod html_rewriter;
 mod tcp;
 #[cfg(celld_internal_tests)]
@@ -14836,9 +14943,16 @@ pub struct IoContext {
     /// pays that back on a loop that turns once per operation the event
     /// completes.
     handed_len: AtomicUsize,
-    /// Wakes this event's driver when `handed` grows or a pending entrypoint
-    /// starts. Both changes can make the driver's current wait obsolete.
+    /// Wakes this event's driver when `handed` grows, a pending entrypoint
+    /// starts, or another turn settled this event (`poll_requested`). Each
+    /// change can make the driver's current wait obsolete.
     handed_wake: tokio::sync::Notify,
+    /// Set when another event's turn settled this event's promise: a reset
+    /// of its Durable Object fails every event still running on it, in the
+    /// resetting turn. The driver waits only on its own ops, which can be a
+    /// timer or a subrequest that never completes, so without this it would
+    /// answer when that op did, or never.
+    poll_requested: AtomicBool,
     /// IDs of nested `WorkerEntrypoint` calls that have not settled. The
     /// driver consumes these IDs only when the request has no native work, so
     /// it can reject the calls instead of timing out the enclosing event.
@@ -15066,6 +15180,7 @@ impl IoContext {
             handed: Mutex::new(Some(Vec::new())),
             handed_len: AtomicUsize::new(0),
             handed_wake: tokio::sync::Notify::new(),
+            poll_requested: AtomicBool::new(false),
             pending_events: Mutex::new(HashSet::new()),
             subrequest_limit: limits.and_then(|limits| limits.sub_requests),
             subrequests: AtomicUsize::new(0),
@@ -15180,6 +15295,18 @@ impl IoContext {
     /// state has to stay consistent with the queue.
     pub(crate) async fn handed_ready(&self) {
         self.handed_wake.notified().await;
+    }
+
+    /// Ask this event's driver to look at its promise, which another turn
+    /// has settled (see `poll_requested`).
+    fn request_poll(&self) {
+        self.poll_requested.store(true, Ordering::Release);
+        self.handed_wake.notify_one();
+    }
+
+    /// Whether another turn asked for a poll since the last call.
+    pub(crate) fn take_poll_request(&self) -> bool {
+        self.poll_requested.swap(false, Ordering::AcqRel)
     }
 
     /// Hand this event's driver everything a foreign turn left for it.

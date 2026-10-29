@@ -1,0 +1,30 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: Error: aborted",
+        "waiter": "closed",
+        "events": [
+          "close 1006"
+        ],
+        "after": "pong"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "started": "started",
+        "reset": "threw Error: block threw",
+        "waiter": "closed",
+        "events": [
+          "close 1006"
+        ],
+        "after": "pong"
+      }
+    }
+  ]
+}

@@ -387,8 +387,9 @@ running then fails with `Worker has exceeded memory limit.`, and so does every
 other event still running in the isolate. celld replaces the isolate, so the
 next request runs in a new one. Every Durable Object the isolate hosted
 resets and starts again in a new isolate, as after `ctx.abort()`: its storage
-keeps what was written before the reset, its hibernatable WebSockets stay
-open, and its other WebSockets close with code 1012.
+keeps what was committed before the reset, but not the writes of the turn the
+limit stopped, its hibernatable WebSockets stay open, and its other WebSockets
+close with code 1012.
 
 While a Worker loads, celld stops the load at the limit: a load whose module
 scope reaches it fails with `Script startup exceeded memory limits.`, and a

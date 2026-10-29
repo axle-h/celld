@@ -1,0 +1,7 @@
+{
+  "normalize": [{"pattern": "reference = [a-z0-9]+", "replace": "reference = <ref>", "why": "workerd names each internal error with a random reference"}],
+  "workers": ["app"],
+  "steps": [
+    {"path": "/"}
+  ]
+}

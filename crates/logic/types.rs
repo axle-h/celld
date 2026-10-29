@@ -820,6 +820,13 @@ pub enum Event {
     IsolateCondemned {
         isolate: crate::isolate::HeapId,
     },
+    /// A cell's storage failed to commit what a turn wrote, which resets the
+    /// object, as workerd's broken output gate does. The cell moves out of
+    /// its isolate and starts again at the same epoch, as a condemned
+    /// isolate's cells do, so its next event builds a new instance.
+    CellBroken {
+        cell: CellId,
+    },
     /// The node adopted a new application generation. Every resident cell on
     /// an older generation moves to it at a safe point, or by force once
     /// `max_age_ms` has passed since this event. A resident cell whose class

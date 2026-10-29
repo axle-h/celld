@@ -524,8 +524,11 @@ I/O type of the object reached first -- `ActorCacheInterface` for storage,
 cross-request one. A cursor is refused before it hands out even the row it
 prefetched, and closing one from another object is a no-op. Resetting or
 aborting an object (`ctx.abort()`, a failed critical section) discards its
-buffered writes, drops its instance and breaks it only for the object the
-caller actually is, decided by the instance registry. The host takes the
+buffered and uncommitted writes, drops its instance and breaks it only for the
+object the caller actually is, decided by the instance registry. The token a
+stub learns of the instance it reached (`do_instances.rs`) grants nothing: the
+stub sends it back, and it only makes that stub's own calls fail once the
+instance was reset. The host takes the
 object from the running event, never from a scope the script passes.
 
 A Worker Loader id answers only in the isolate that loaded the Worker.

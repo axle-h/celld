@@ -1,0 +1,13 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/stateless/block"},
+    {"path": "/stateless/abort"},
+    {"path": "/stateless/self-abort"},
+    {"path": "/object/block"},
+    {"path": "/object/abort"},
+    {"path": "/queued"},
+    {"path": "/typed"},
+    {"path": "/constructor"}
+  ]
+}

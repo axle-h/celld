@@ -34,6 +34,7 @@ const NOT_BYTES = 'This ReadableStream did not return bytes.';
 function _readResult(value, done) {
   const r = { value, done };
   Object.defineProperty(r, 'then', {
+    __proto__: null,
     value: undefined,
     enumerable: false,
     writable: true,
@@ -122,9 +123,9 @@ class ReadableByteStreamController {
     stream._controller = c;
     // Instance overrides so shared prototype paths stay unbranched.
     Object.defineProperties(stream, {
-      getReader: { value: byteGetReader, writable: true,
+      getReader: { __proto__: null, value: byteGetReader, writable: true,
                    configurable: true },
-      _cancel: { value: byteCancel, writable: true,
+      _cancel: { __proto__: null, value: byteCancel, writable: true,
                  configurable: true },
     });
     if (startFn) {
