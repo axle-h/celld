@@ -1,0 +1,230 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "params": {
+          "classInstance": "DataCloneError: Could not serialize object of type \"Forge\". This type does not support serialization.",
+          "date": "DataCloneError: Could not serialize object of type \"Date\". This type does not support serialization.",
+          "regexp": "DataCloneError: Could not serialize object of type \"RegExp\". This type does not support serialization.",
+          "map": "DataCloneError: Could not serialize object of type \"Map\". This type does not support serialization.",
+          "error": "DataCloneError: Could not serialize object of type \"Error\". This type does not support serialization.",
+          "array": "DataCloneError: Could not serialize object of type \"Array\". This type does not support serialization.",
+          "headers": "DataCloneError: Could not serialize object of type \"Headers\". This type does not support serialization.",
+          "blob": "DataCloneError: Could not serialize object of type \"Blob\". This type does not support serialization.",
+          "request": "DataCloneError: Could not serialize object of type \"Request\". This type does not support serialization.",
+          "signal": "DataCloneError: Could not serialize object of type \"AbortSignal\". This type does not support serialization.",
+          "stream": "DataCloneError: Could not serialize object of type \"ReadableStream\". This type does not support serialization.",
+          "rpcTarget": "DataCloneError: Could not serialize object of type \"JsRpcTarget\". This type does not support serialization.",
+          "nullProto": "DataCloneError: Could not serialize object of type \"Object\". This type does not support serialization."
+        },
+        "paramsLift": {
+          "classInstance": "DataCloneError: Could not serialize object of type \"Forge\". This type does not support serialization.",
+          "date": "DataCloneError: Could not serialize object of type \"Date\". This type does not support serialization.",
+          "regexp": "DataCloneError: Could not serialize object of type \"RegExp\". This type does not support serialization.",
+          "map": "DataCloneError: Could not serialize object of type \"Map\". This type does not support serialization.",
+          "error": "DataCloneError: Could not serialize object of type \"Error\". This type does not support serialization.",
+          "array": "DataCloneError: Could not serialize object of type \"Array\". This type does not support serialization.",
+          "headers": "DataCloneError: Could not serialize object of type \"Headers\". This type does not support serialization.",
+          "blob": "DataCloneError: Could not serialize object of type \"Blob\". This type does not support serialization.",
+          "request": "DataCloneError: Could not serialize object of type \"Request\". This type does not support serialization.",
+          "signal": "DataCloneError: Could not serialize object of type \"AbortSignal\". This type does not support serialization.",
+          "stream": "DataCloneError: Could not serialize object of type \"ReadableStream\". This type does not support serialization.",
+          "rpcTarget": "DataCloneError: Could not serialize object of type \"JsRpcTarget\". This type does not support serialization.",
+          "nullProto": "DataCloneError: Could not serialize object of type \"Object\". This type does not support serialization."
+        },
+        "result": {
+          "classInstance": "DataCloneError: Could not serialize object of type \"Forge\". This type does not support serialization.",
+          "date": "DataCloneError: Could not serialize object of type \"Date\". This type does not support serialization.",
+          "regexp": "DataCloneError: Could not serialize object of type \"RegExp\". This type does not support serialization.",
+          "map": "DataCloneError: Could not serialize object of type \"Map\". This type does not support serialization.",
+          "error": "DataCloneError: Could not serialize object of type \"Error\". This type does not support serialization.",
+          "array": "DataCloneError: Could not serialize object of type \"Array\". This type does not support serialization.",
+          "headers": "DataCloneError: Could not serialize object of type \"Headers\". This type does not support serialization.",
+          "blob": "DataCloneError: Could not serialize object of type \"Blob\". This type does not support serialization.",
+          "request": "DataCloneError: Could not serialize object of type \"Request\". This type does not support serialization.",
+          "signal": "DataCloneError: Could not serialize object of type \"AbortSignal\". This type does not support serialization.",
+          "stream": "DataCloneError: Could not serialize object of type \"ReadableStream\". This type does not support serialization.",
+          "rpcTarget": "DataCloneError: Could not serialize object of type \"JsRpcTarget\". This type does not support serialization.",
+          "nullProto": "DataCloneError: Could not serialize object of type \"Object\". This type does not support serialization."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "params": {
+          "classInstance": "DataCloneError: Could not serialize object of type \"Forge\". This type does not support serialization.",
+          "date": "DataCloneError: Could not serialize object of type \"Date\". This type does not support serialization.",
+          "regexp": "DataCloneError: Could not serialize object of type \"RegExp\". This type does not support serialization.",
+          "map": "DataCloneError: Could not serialize object of type \"Map\". This type does not support serialization.",
+          "error": "DataCloneError: Could not serialize object of type \"Error\". This type does not support serialization.",
+          "array": "DataCloneError: Could not serialize object of type \"Array\". This type does not support serialization.",
+          "headers": "DataCloneError: Could not serialize object of type \"Headers\". This type does not support serialization.",
+          "blob": "DataCloneError: Could not serialize object of type \"Blob\". This type does not support serialization.",
+          "request": "DataCloneError: Could not serialize object of type \"Request\". This type does not support serialization.",
+          "signal": "DataCloneError: Could not serialize object of type \"AbortSignal\". This type does not support serialization.",
+          "stream": "DataCloneError: Could not serialize object of type \"ReadableStream\". This type does not support serialization.",
+          "rpcTarget": "DataCloneError: Could not serialize object of type \"JsRpcTarget\". This type does not support serialization.",
+          "nullProto": "DataCloneError: Could not serialize object of type \"Object\". This type does not support serialization."
+        },
+        "paramsLift": {
+          "classInstance": "DataCloneError: Could not serialize object of type \"Forge\". This type does not support serialization.",
+          "date": "DataCloneError: Could not serialize object of type \"Date\". This type does not support serialization.",
+          "regexp": "DataCloneError: Could not serialize object of type \"RegExp\". This type does not support serialization.",
+          "map": "DataCloneError: Could not serialize object of type \"Map\". This type does not support serialization.",
+          "error": "DataCloneError: Could not serialize object of type \"Error\". This type does not support serialization.",
+          "array": "DataCloneError: Could not serialize object of type \"Array\". This type does not support serialization.",
+          "headers": "DataCloneError: Could not serialize object of type \"Headers\". This type does not support serialization.",
+          "blob": "DataCloneError: Could not serialize object of type \"Blob\". This type does not support serialization.",
+          "request": "DataCloneError: Could not serialize object of type \"Request\". This type does not support serialization.",
+          "signal": "DataCloneError: Could not serialize object of type \"AbortSignal\". This type does not support serialization.",
+          "stream": "DataCloneError: Could not serialize object of type \"ReadableStream\". This type does not support serialization.",
+          "rpcTarget": "DataCloneError: Could not serialize object of type \"JsRpcTarget\". This type does not support serialization.",
+          "nullProto": "DataCloneError: Could not serialize object of type \"Object\". This type does not support serialization."
+        },
+        "result": {
+          "classInstance": "DataCloneError: Could not serialize object of type \"Forge\". This type does not support serialization.",
+          "date": "DataCloneError: Could not serialize object of type \"Date\". This type does not support serialization.",
+          "regexp": "DataCloneError: Could not serialize object of type \"RegExp\". This type does not support serialization.",
+          "map": "DataCloneError: Could not serialize object of type \"Map\". This type does not support serialization.",
+          "error": "DataCloneError: Could not serialize object of type \"Error\". This type does not support serialization.",
+          "array": "DataCloneError: Could not serialize object of type \"Array\". This type does not support serialization.",
+          "headers": "DataCloneError: Could not serialize object of type \"Headers\". This type does not support serialization.",
+          "blob": "DataCloneError: Could not serialize object of type \"Blob\". This type does not support serialization.",
+          "request": "DataCloneError: Could not serialize object of type \"Request\". This type does not support serialization.",
+          "signal": "DataCloneError: Could not serialize object of type \"AbortSignal\". This type does not support serialization.",
+          "stream": "DataCloneError: Could not serialize object of type \"ReadableStream\". This type does not support serialization.",
+          "rpcTarget": "DataCloneError: Could not serialize object of type \"JsRpcTarget\". This type does not support serialization.",
+          "nullProto": "DataCloneError: Could not serialize object of type \"Object\". This type does not support serialization."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "classInstance": "DataCloneError: Could not serialize object of type \"Forge\". This type does not support serialization.",
+        "date": "DataCloneError: Could not serialize object of type \"Date\". This type does not support serialization.",
+        "regexp": "DataCloneError: Could not serialize object of type \"RegExp\". This type does not support serialization.",
+        "map": "DataCloneError: Could not serialize object of type \"Map\". This type does not support serialization.",
+        "error": "DataCloneError: Could not serialize object of type \"Error\". This type does not support serialization.",
+        "array": "DataCloneError: Could not serialize object of type \"Array\". This type does not support serialization.",
+        "headers": "DataCloneError: Could not serialize object of type \"Headers\". This type does not support serialization.",
+        "blob": "DataCloneError: Could not serialize object of type \"Blob\". This type does not support serialization.",
+        "request": "DataCloneError: Could not serialize object of type \"Request\". This type does not support serialization.",
+        "signal": "DataCloneError: Could not serialize object of type \"AbortSignal\". This type does not support serialization.",
+        "stream": "DataCloneError: Could not serialize object of type \"ReadableStream\". This type does not support serialization.",
+        "rpcTarget": "DataCloneError: Could not serialize object of type \"JsRpcTarget\". This type does not support serialization.",
+        "nullProto": "DataCloneError: Could not serialize object of type \"Object\". This type does not support serialization."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "classInstance": "DataCloneError: Could not serialize object of type \"Forge\". This type does not support serialization.",
+        "date": "DataCloneError: Could not serialize object of type \"Date\". This type does not support serialization.",
+        "regexp": "DataCloneError: Could not serialize object of type \"RegExp\". This type does not support serialization.",
+        "map": "DataCloneError: Could not serialize object of type \"Map\". This type does not support serialization.",
+        "error": "DataCloneError: Could not serialize object of type \"Error\". This type does not support serialization.",
+        "array": "DataCloneError: Could not serialize object of type \"Array\". This type does not support serialization.",
+        "headers": "DataCloneError: Could not serialize object of type \"Headers\". This type does not support serialization.",
+        "blob": "DataCloneError: Could not serialize object of type \"Blob\". This type does not support serialization.",
+        "request": "DataCloneError: Could not serialize object of type \"Request\". This type does not support serialization.",
+        "signal": "DataCloneError: Could not serialize object of type \"AbortSignal\". This type does not support serialization.",
+        "stream": "DataCloneError: Could not serialize object of type \"ReadableStream\". This type does not support serialization.",
+        "rpcTarget": "DataCloneError: Could not serialize object of type \"JsRpcTarget\". This type does not support serialization.",
+        "nullProto": "DataCloneError: Could not serialize object of type \"Object\". This type does not support serialization."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "classInstance": {
+          "get": "plain",
+          "many": "plain",
+          "kv": "plain"
+        },
+        "date": {
+          "get": "plain",
+          "many": "plain",
+          "kv": "plain"
+        },
+        "regexp": {
+          "get": "plain",
+          "many": "plain",
+          "kv": "plain"
+        },
+        "map": {
+          "get": "plain",
+          "many": "plain",
+          "kv": "plain"
+        },
+        "error": {
+          "get": "plain",
+          "many": "plain",
+          "kv": "plain"
+        },
+        "array": {
+          "get": "plain",
+          "many": "plain",
+          "kv": "plain"
+        },
+        "headers": {
+          "get": "plain",
+          "many": "plain",
+          "kv": "plain"
+        },
+        "blob": {
+          "get": "plain",
+          "many": "plain",
+          "kv": "plain"
+        },
+        "request": {
+          "get": "plain",
+          "many": "plain",
+          "kv": "plain"
+        },
+        "signal": {
+          "get": "plain",
+          "many": "plain",
+          "kv": "plain"
+        },
+        "stream": {
+          "get": "plain",
+          "many": "plain",
+          "kv": "plain"
+        },
+        "rpcTarget": {
+          "get": "plain",
+          "many": "plain",
+          "kv": "plain"
+        },
+        "nullProto": {
+          "get": "plain",
+          "many": "plain",
+          "kv": "plain"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "classInstance": "plain",
+        "date": "plain",
+        "regexp": "plain",
+        "map": "plain",
+        "error": "plain",
+        "array": "plain",
+        "headers": "plain",
+        "blob": "plain",
+        "request": "plain",
+        "signal": "plain",
+        "stream": "plain",
+        "rpcTarget": "plain",
+        "nullProto": "plain"
+      }
+    }
+  ]
+}

@@ -1,1 +1,20 @@
-{ "name": "app", "main": "index.js", "compatibility_date": "2026-01-01" }
+// Plain data shaped like celld's markers, on every path that serialises a
+// script's values and workerd runs: RPC (a loopback entrypoint, a Durable
+// Object, a facet, a service binding, a Dynamic Worker), Durable Object
+// storage, a Queue message and a Workflow's params, step output, event and
+// output.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["allow_irrevocable_stub_storage"],
+  "services": [{ "binding": "OTHER", "service": "other" }],
+  "durable_objects": { "bindings": [{ "name": "OBJ", "class_name": "Obj" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Obj"] }],
+  "queues": {
+    "producers": [{ "binding": "QUEUE", "queue": "marker-shaped" }],
+    "consumers": [{ "queue": "marker-shaped", "max_batch_timeout": 0 }]
+  },
+  "workflows": [{ "name": "marker-shaped", "binding": "FLOW", "class_name": "Flow" }],
+  "worker_loaders": [{ "binding": "LOADER" }]
+}

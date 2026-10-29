@@ -208,6 +208,12 @@ class WritableStreamDefaultWriter {
 }
 
 class WritableStream {
+  // The brand the RPC envelope classifies by (harness.js, `__hostKind`).
+  #brand;
+  static {
+    __celld.__isWritableStream = (value) =>
+      typeof value === "object" && value !== null && #brand in value;
+  }
   _sink = null;
   _locked = false;
   _state = 'writable'; // writable|erroring|errored|closed

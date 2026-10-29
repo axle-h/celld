@@ -477,9 +477,12 @@ binding's methods:
   "Illegal constructor", as in workerd. A binding calls its cell without a
   stub, and without any method a script can replace on a prototype (a
   namespace's `get` or `getByName`, a stub's members), so a replacement never
-  receives a namespace, id or stub of a runtime cell. RPC data shaped like
-  celld's marker for one of these cells' stubs arrives as the plain data it
-  is.
+  receives a namespace, id or stub of a runtime cell. Data shaped like one
+  of celld's RPC or storage markers, such as the marker for one of these
+  cells' stubs, arrives as the plain data it is: celld escapes a script's
+  keys that start with `__celld$` in every payload and stored value it
+  marks, and tells its host values from data by brand, never by the
+  prototype an object claims, so only celld writes a marker.
 - **Celld's cells beside a script.** A workflow instance's cell and the cron
   schedule run in the script's isolates. Their instances and state are
   private (no property, registry entry or prototype lookup a script can

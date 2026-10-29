@@ -146,6 +146,12 @@ The `tail` and `email` handlers are unavailable.
 ### [RPC](https://developers.cloudflare.com/workers/runtime-apis/rpc/)
 
 - An RPC stub, or a stream passed over RPC, cannot cross an isolate boundary.
+  Nor can a Request or Response whose body is a stream not yet read into
+  memory. A Headers, Blob, Request or Response crosses by value everywhere
+  workerd serializes one, Durable Object storage and a Worker Loader env
+  included, and a File or CryptoKey is refused, as in workerd.
+- An `AbortSignal` crosses RPC without the experimental
+  `enable_abortsignal_rpc` flag, which workerd needs to serialize one.
 - A Durable Object stub's `connect()` throws "Fetcher.connect() is not
   implemented in celld". workerd hands the object's `connect` handler a
   socket.

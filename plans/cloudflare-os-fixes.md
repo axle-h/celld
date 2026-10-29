@@ -470,8 +470,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 38 | 1.28 RPC method lookup on every receiver (security) | done | `8e1f06e` |
 | 39 | 1.49 part A: Durable Object scope grants on the host (security) | done | `53e6198` |
 | 39b | 1.50 TCP socket and HTMLRewriter ownership, socket cap, continuations (1.52) (security) | done | `fe784d8` |
-| 39c | 1.49 part B: internals out of user reach, cell re-validation (security) | next | |
-| 39d | 1.53 marker-shaped RPC data, with 1.29's forgeable-marker item (security) | queued | |
+| 39c | 1.49 part B: internals out of user reach, cell re-validation (security) | done | `1e8ac01` |
+| 39d | 1.53 marker-shaped RPC data, with 1.29's forgeable-marker item (security) | next | |
 | 40+ | Phase 1 in plan order (1.29, 1.30, 1.34, 1.36-1.44, 1.46-1.48, 1.51, 1.54, 1.55, 1.56), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
@@ -2960,6 +2960,10 @@ them (xfail):
   be used once. Use tee() first if you need to read it twice.`
 - A received request's headers are mutable, and so are its clone's.
   workerd's are immutable (`Can't modify immutable headers.`).
+- Reading a Response body twice (`text()` then `text()`) does not throw;
+  workerd gives the "Body has already been used" error above. And
+  `new Request(a)` leaves `a.bodyUsed` false, where workerd marks `a`'s body
+  used (found by the 1.53 review; add both to `builtins/body-defaults`).
 
 ### 1.24 Wrangler `alias` (found by 0.5)
 
@@ -4351,6 +4355,297 @@ same isolate by its counter and `__stubIsolate`, a `Math.random()` token.
 Escape a script's plain objects whose keys collide with a marker in the
 lift, or carry markers out of band.
 
+**As built (done).**
+- **Design: escape the keys.** In a lifted tree (RPC envelopes 0x01 and
+  0x02, a stored stub row, a Worker Loader env) every marker is a plain
+  object literal whose *first* key starts with `__celld$` and a character
+  other than `$`; `__celld$disp` beside a plain object's keys carries its
+  disposer. The lift gives a script's key that starts with `__celld$` one
+  more `$` after the prefix (`__celld$x` -> `__celld$$x`, `__celld$$x` ->
+  `__celld$$$x`) and the revival removes it, so the escape is a bijection
+  whose image never holds a marker key, and the receiver tells a marker
+  from data by its first key alone. Chosen over out-of-band markers (a
+  side list of paths, or V8 host objects through the serializer delegate)
+  because it is one rule in JS on both ends, local to each object, and
+  costs nothing on the plain path: plain data still crosses as one V8
+  clone (0xff) with no walk on either side, and a lifted tree pays two
+  string comparisons per key (a key starts with `__celld$` exactly when it
+  sorts in `["__celld$", "__celld%")`, which calls nothing a script can
+  replace). Only plain objects are ever markers: arrays, Maps, Sets and
+  host objects are never interpreted (the lift leaves Map and Set contents
+  to the clone, and the revival does not walk them), so their keys need no
+  escape. A tree object with an unescaped `__celld$` key other than a
+  marker's or `__celld$disp`, or a marker kind the tree cannot hold, is
+  refused with "corrupt RPC or storage payload" (no lift writes one).
+- **Paths.** `__stubLift`/`__stubRevive` (RPC args and results: same
+  isolate, cross-isolate, peer tunnel, service bindings, ctx.exports, DO
+  and facet RPC, loader RPC and props), `__storedLift`/`__storedRevive`
+  (`ctx.storage` get, get-many, list, and `storage.kv` get and list), and
+  the Worker Loader env (which refused the key `__celld$loaderSvc` with a
+  DataCloneError; workerd delivers it). The two revivals share one walker,
+  `__reviveLifted`. Queue bodies, Workflow params, step outputs, events
+  and outputs, and WebSocket attachments are plain clones that no revival
+  reads; `structuredClone` uses its own host-object brand
+  (`op_structured_clone`), not markers. No Rust code reads a marker key.
+- **The runtime-cell special case** (1.49 part B) is gone: data can no
+  longer pose as a `__celld$do` marker, and no lift writes one for a
+  runtime class. `rpc/runtime-cell-marker` still passes.
+- **`__stubIsolate`** is 128 bits from the host CSPRNG (`$$randomValues`,
+  drawn before any script runs) instead of `Math.random()`. It is no
+  authority any more (only a lift writes a marker); it only keeps another
+  isolate's marker from naming a local entry.
+- **Host values by brand (review round).** The escape covers only the
+  objects the lift copies, and the lift used to pick them by prototype
+  (`instanceof`), while V8's serializer writes any ordinary object as a
+  plain object: `Object.create(Date.prototype)` or
+  `Object.create(Headers.prototype)` holding a marker key crossed unescaped
+  and revived as a marker, in the same isolate and, over a service
+  binding, in the callee's (a stub of the callee's own class); a class
+  instance in a stored stub row, or in a Worker Loader env, did the same.
+  Every envelope now classifies by brand (`__hostKind`, `__TYPE_*`):
+  V8's own type checks (`op_util_type_flags`, which gained
+  `is_wasm_module_object`) for builtins, and a private-field brand for each
+  of celld's host classes (`Headers`, `Blob`, `File`, `Request`,
+  `Response`, `ReadableStream`, `WritableStream`, `AbortSignal`,
+  `RpcTarget`, `CryptoKey`), exported from a static block. Only a Proxy is
+  still classified by the prototype chain it presents, as workerd does.
+  - RPC (`__rpcProject`, `__stubLift`): a genuine host or cloned builtin
+    crosses as itself, a Map or Set is copied, a plain object or array is
+    copied and escaped, and any other object is refused with workerd's
+    text, `Could not serialize object of type "<constructor name>". This
+    type does not support serialization.` (probed: a class instance names
+    its class; `Object.create` of `Date`, `RegExp`, `Map`, `Error`,
+    `Array`, `Headers`, `Blob`, `Request`, `AbortSignal` and
+    `ReadableStream` prototypes names that type; of `RpcTarget.prototype`,
+    `"JsRpcTarget"`; a null prototype, `"Object"`). An object read through a
+    Proxy, which the projection does not walk, is classified the same way
+    in the lift (it was left to the clone unescaped). A Proxy presenting
+    neither a plain object nor an RpcTarget, a null prototype included,
+    gets workerd's proxy error. `Object.create(RpcTarget.prototype)` is no
+    RpcTarget any more (1.29's brand item).
+  - Storage (`__storedLift`): every object V8 writes as a plain object is
+    copied and escaped, whatever its prototype, as workerd stores it
+    (probed: each shape above reads back as a plain object). The brand
+    check runs only off `Object.prototype`, since it costs an op per object,
+    so a Proxy presenting a plain object is copied through its traps in a
+    stub row, where workerd's clone refuses it (workerd stores no such row).
+  - Worker Loader env: classified as RPC is, with workerd's refusals
+    (probed: the same texts), and V8's clone error is a DataCloneError
+    there, as in workerd.
+  - Queue bodies and Workflow values are plain clones (no revival), and
+    workerd queues each shape as a plain object, as celld does.
+- **Host instances never reach the clone (second review round).** celld's
+  host classes are JavaScript classes, which V8 writes as plain objects of
+  their own keys: only an own, deletable function property (`__celldHost`)
+  failed the clone. A Headers stripped of it and given marker keys, left to
+  the clone in a lifted tree (across isolates, in storage, in a Loader env),
+  revived as a marker. Now:
+  - A lifted tree never hands a host instance to V8. A value crosses as a
+    marker built from its state on every transport (`__hostValueMarker`):
+    a Headers' entries from its list (`__celld.__headerPairs`, not its
+    iterator), a Blob's bytes and type, a Request's or Response's parts and
+    headers; a body as bytes, or as a stream handle within an isolate. So
+    Headers, Blob, Request and Response now cross isolates by value, as in
+    workerd, and storage and a Loader env store or pass them
+    (`__hostValueOutsideRpc`, revived by `__reviveHostValue`), as workerd
+    does (probed). What workerd refuses, celld refuses with its text: a
+    File and a CryptoKey everywhere (`Could not serialize object of type
+    "File"`); outside RPC a stream, and a Request or Response with a body
+    (`ReadableStream can only be serialized for RPC.`, `WritableStream ...`)
+    and an AbortSignal (`AbortSignal serialization is not enabled.`). A
+    stream (or streamed body) across isolates is celld's own refusal ("RPC
+    streams cannot cross isolate boundaries yet.", plan 7.1). An RpcTarget
+    in storage keeps celld's text (workerd's is "Remote RPC references can
+    only be serialized for RPC."), and a Proxy presenting one gets it too
+    (it had become V8's TypeError). A File no longer crosses RPC (it did,
+    as a File marker; workerd refuses it).
+  - A payload holding a host instance skips the plain clone
+    (`projected.host`), so a stripped one cannot cross as a plain object
+    either. The poison is fixed (non-writable, non-configurable) on Headers,
+    Blob and AbortSignal, so storage's plain clone fails for them too.
+  - A stored array keeps its holes and named keys, as workerd stores it
+    (probed), and the revival walks an array's named keys.
+- **Every marker field from the value's own state, checked again on
+  revival (third review round).** A Request's `_bodyBytes` and a Blob's
+  `_bytes` were writable own properties the lift sent as the body, and the
+  revival revived any non-bytes body: `r._bodyBytes = { "__celld$do": ... }`
+  minted a stub of the receiver's own class, and a Blob marker forged its
+  body and type. Now:
+  - A Request's and Response's buffered body and a Blob's bytes and type are
+    private fields (`#bodyBytes`, `#bytes`, `#type`), reached through
+    `__bodyBytesOf`, `__setBodyBytes`, `__blobBytesOf` and `__blobTypeOf`;
+    a Blob's `size` and `type` are prototype accessors, as in workerd (they
+    were own properties). A property a script names `_bodyBytes`, `_bytes`
+    or `type` is its own and changes nothing that crosses, as in workerd.
+  - A Request's and Response's other attributes (url, method, redirect,
+    status, statusText, cf, headers, body) stay own properties in celld
+    (1.36's accessors item), so the lift checks each one's type (strings,
+    an integer status, a plain-object `cf`, a branded Headers, a branded
+    stream body) and refuses the value otherwise. What a script defines
+    over them crosses, where workerd ignores it:
+    `rpc/marker-shaped-host-attributes` (xfail 1.36).
+  - The revival (`__reviveHostValue`) checks every field's type again, and
+    a body is null, a Uint8Array (by V8's type check, a new
+    `op_util_type_flags` bit) or, over RPC, a stream marker the lift built
+    (first key `__celld$rs`); anything else is "corrupt RPC or storage
+    payload: a malformed `<kind>` marker."
+  - Storage and a Loader env refuse a Request or Response with any body,
+    buffered or not, as workerd does.
+  - A class made non-extensible after its prototype was replaced throws a
+    fixed TypeError when constructed ("Failed to construct 'File': its
+    prototype was replaced and it was made non-extensible."), and one made
+    so during `super()` keeps the prototype the script set last.
+  - The stored lift walks an array by index when it has every index and
+    nothing else, and by key otherwise.
+- **Brands a script cannot stamp (second review round).** A derived class's
+  `super()` calls the class's current [[Prototype]], so `Object.setPrototypeOf(
+  File, function () { return target; })` had `new File()` install `#name` on
+  `target`, which then classified as a File; the same held for
+  `AbortSignal`'s brand, and for the private state of `WebSocket` (1.21), a
+  body stream's id (`CelldHttpBodyStream`, 1.8/1.26) and the body streams'
+  internal registration, and the storage objects. Each derived host class
+  records its real base (`__recordBase`) and runs `super()` between
+  `__pinBase` and `__unpinBase`, which point it at that base for the call
+  and then restore the script's prototype (so the change stays visible, as
+  workerd's constructors stay extensible, and every instance is one its base
+  really built). Audit:
+  - pinned: `File`, `AbortSignal`, `WebSocket`, `CelldChunkStream`,
+    `CelldBodyStream`, `CelldHttpBodyStream`, `DurableObjectStorage`,
+    `DurableObjectTransaction`;
+  - base classes, whose fields only their own allocation gets: `Headers`,
+    `Blob`, `Request`, `Response`, `ReadableStream`, `WritableStream`,
+    `RpcTarget`, `CryptoKey`, `EventTarget`, `DurableObjectState`, the
+    storage base, `Socket` (1.50), `HTMLRewriter` (1.50), and the 1.49 part B
+    classes;
+  - WeakMap and WeakSet brands (`__stubMeta`, `__svcMeta`, `__doStubMeta`,
+    `__outboundMeta`, `__rpcSignalMeta`, `__rpcStreamMeta`,
+    `__instanceState`, `__durableClassMeta`): filled by harness code for
+    objects it made (Proxies or base-class instances), never by a derived
+    constructor;
+  - derived classes with no private state or brand, where a redirect only
+    changes which object a constructor writes data onto: the `Event`
+    subclasses, `DOMException`, `NonRetryableError`, `RpcPromise`,
+    `MessagePort`, `EventSource`, `DigestStream`, `FixedLengthStream`,
+    `ByteDefaultReader` (1.56).
+- **Primordials on these paths.** The lift, both revivals, the projection
+  and the loader env walk use captured `Object.keys`, `getPrototypeOf`,
+  `defineProperty`, `Array.isArray`, `Array.prototype.push` and the
+  WeakMap/Map methods on `__stubMeta`, `__svcMeta`, `__doStubMeta`,
+  `__outboundMeta`, `__stubEntries` and their own tables. The RPC lift now
+  rewrites the projection's own copies in place (own data properties, so
+  no prototype setter sees the tree) and copies only an object reached
+  through a Proxy or one it escapes, onto a null-prototype object
+  (`__bareObject`); the stored lift copies onto such objects and arrays
+  whose indices are already own (`__ownArray`). Markers are literals with
+  every field own (`np`, `p`, `r` always present), so no optional field is
+  read through a prototype getter. Left, all on values already classified
+  by brand: the Headers iterator in the lift, the signal and stream revival
+  helpers' Map and Set calls, `__unwrapStoredMap`'s Map iteration, the
+  projection's own `seen`/`originals` tables (which hold only the script's
+  data), and the Map and Set walks of the projection and the loader env
+  (1.56).
+- **Test hook.** `__celld.__liftedForTest` exists only in test builds:
+  `bootstrap.rs` puts `LIFTED_TEST_HOOK` at the harness's
+  `/*__CELLD_TEST_LIFTED_HOOK__*/` under `cfg(test)`.
+- **Wire and storage formats.** RPC frames and the tunnel are unchanged (7
+  has not shipped; builds from before this change do not interoperate,
+  which the stop-all upgrade note already covers, now saying so). A stored
+  stub row is tagged 0x02; an 0x01 row an older build wrote is refused on
+  read ("storage: this value holds a stub and was stored by an older celld
+  build ..."), since its unescaped keys could revive as markers
+  (`storage_ops.rs`, `UNESCAPED_STORED_STUB_TAG`). Plain rows are
+  unchanged. `docs/README.md` "Upgrade notes" says what happens to them.
+- **Cost** (`celld dev`, lab build, 20 operations on a 22,000-object,
+  110,000-key nested value, after the review round; HEAD rebuilt from
+  `git archive`, means of two interleaved runs of 5, after the third
+  review round): RPC plain (no lift) 534 -> 542 ms and RPC lifted (a
+  Headers beside) 769 -> 723 ms, both within the runs' spread (the lift now
+  rewrites the projection in place, and the projection's one op per object,
+  which used to be `__util_proxy_details`, is `__util_type_flags`); DO
+  storage of a value with a stub, put + get, 147 -> 192 ms (put alone
+  83 -> 101, get alone 65 -> 78; arrays are walked by key unless they hold
+  every index and nothing else); plain storage 57 -> 59. Fetch throughput
+  (`ab`, `celld dev`, 8 clients): hello-world 20,469 -> 20,224 requests/s,
+  a 1 MiB body proxied through a service binding (4 clients) 2,719 -> 2,673
+  requests/s, both within the runs' spread. The extra is on stub-bearing
+  rows only: the captured-method calls and the stored lift's copies. The
+  copies are `Object.setPrototypeOf({}, null)` (`__bareObject`): a
+  `{ __proto__: null }` literal starts as a dictionary in V8 and made a
+  stored put about 50% slower, as a brand op on every stored object did.
+- **Tests.**
+  - Differential: `rpc/marker-shaped-data` (no longer xfail), every key
+    celld gives a meaning (`__celld$stub`, `$svc`, `$do`, `$hdr`, `$blob`,
+    `$req`, `$res`, `$rs`, `$ws`, `$sig`, `$disp`, `$unsupported`,
+    `$loaderSvc`) and escape-shaped keys (`__celld$`, `__celld$$`,
+    `__celld$$hdr`, `__celld$$$stub`, `__celld$%`), on each value, all on
+    one object, in an array and nested, on the holding object too: params
+    and results of ctx.exports, DO and facet RPC under no lift, a Headers,
+    a Request, an RpcTarget and a function; service-binding RPC; a Dynamic
+    Worker's env, props and RPC params; DO storage get, get-many, list and
+    `kv`; a Queue body (`v8`); a Workflow's params, step output, event and
+    output. Shared data in `lib/worker/marker-shaped.js` (`#marker-shaped`).
+    `rpc/marker-shaped-objects`: a class instance, `Object.create` of nine
+    host and builtin prototypes and of `RpcTarget.prototype`, and a null
+    prototype, each holding every marker key, over ctx.exports and DO RPC
+    (params alone and beside a Headers, results), a service binding and a
+    Loader env (workerd's refusal), and in storage get, get-many and `kv`
+    and a Queue body (plain data). At HEAD its RPC, DO, service and loader
+    steps fail. `rpc/marker-shaped-proxies` (xfail 1.29): Proxies of
+    such objects, which workerd stubs over RPC when they present a plain
+    object and refuses in storage, a Queue and a Loader env with V8's
+    DataCloneError (celld copies by value, and refuses with a TypeError and
+    `QUEUE_ERROR` in storage and a Queue).
+    `rpc/marker-shaped-facet-params` (xfail 3.1): a facet's params beside a
+    capability, which celld refuses until 3.1.
+  - celld-only: `rpc/marker-shaped-data-internal`, a stored service stub
+    and DO stub beside the data through every storage read (the stub still
+    answers), and an AbortSignal beside it in same-isolate params and
+    results and a cross-isolate service-binding call (workerd stores no
+    such stub here and needs the experimental `enable_abortsignal_rpc`),
+    and the objects of `rpc/marker-shaped-objects` stored beside a stub
+    (each reads back as a plain object; at HEAD the step fails).
+  - Second round: `rpc/marker-shaped-hosts` (differential): genuine
+    Headers, Headers subclass, Blob, Blob subclass, Request, Response with
+    and without a body, File and streams, each given every marker key after
+    an attempt to delete the poison, over ctx.exports RPC (params alone and
+    beside a Headers, results), a service binding (streams aside, 7.1),
+    storage and a Loader env, and objects stamped through File's and
+    AbortSignal's constructors on the same paths. At HEAD it fails.
+    `rpc/abortsignal-without-flag` (xfail 1.29): celld serializes an
+    AbortSignal over RPC without workerd's experimental flag.
+  - Third round: `rpc/marker-shaped-hosts` also sends a Blob with own
+    `_bytes` and `type`, a Request with a body and own `_bodyBytes` shaped
+    like a DO stub marker, and a Response with own `_bodyBytes` shaped like
+    a Blob marker; each arrives as it really is, on every path.
+    `rpc/marker-shaped-host-attributes` (xfail 1.36): own `url`, `cf` and
+    `status` over a Request's and Response's attributes cross in celld.
+  - Unit (`js::marker_key_tests`): the escape is undone exactly, is
+    injective and never yields a marker key (keys around the prefix,
+    already-escaped ones, `__proto__`); an RPC payload and a stored row keep
+    every such key, its order, a cycle through an escaped object and the
+    lifted value beside them; unescaped reserved keys and foreign marker
+    kinds are refused; an older build's 0x01 stub row is refused; host
+    values are classified by brand (each host class, `Object.create` of its
+    prototype and a Proxy of it; genuine and created Dates, RegExps and
+    Errors); and an object claiming the Date, Headers, RpcTarget, a null or
+    a class prototype is refused over RPC with workerd's text and stored as
+    plain data; a host value crosses from its state, never its own keys
+    (the poison stays, a Headers with marker keys arrives without them, a
+    Blob is stored by value, and File, a stream, a signal and a body are
+    refused in storage with workerd's texts); and a constructor pointed at a
+    function that returns another object stamps no brand on it, still
+    makes a genuine instance, and leaves the script's prototype in place;
+    and a host marker with a field no lift writes (a body shaped like a DO
+    stub, Blob or array marker, a stream marker in storage, a Blob's bytes
+    or type, a Headers pair, a Response's status or `cf` of the wrong type)
+    is refused, while a script's own `_bodyBytes` and `_bytes` change
+    nothing a Request or Blob sends.
+  - At HEAD: `rpc/marker-shaped-data` fails its RPC, DO, facet and loader
+    steps (its service, storage, Queue and Workflow steps pass: those paths
+    lift nothing workerd also takes), `rpc/marker-shaped-data-internal`
+    fails both steps, and the unit tests need the new test hook
+    (`__celld.__liftedForTest`).
+
 ### 1.54 A finished request's continuation runs as the resolver (found by 1.50) — low
 
 A continuation of a request that has already finished -- a module-scope
@@ -4405,6 +4700,19 @@ host authority and no cross-script reach, and each predates part B:
   `Object.hasOwn(__cell.namespaceKeys, …)` (~6253) use the uncaptured
   `hasOwn`; `Math.min(...driver.blocked.map(...))` (~10915) spreads Workflow
   driver entries. Use `__ObjectHasOwn` and a counted loop.
+- Left by 1.53 on the RPC and storage paths, all on values already
+  classified by brand (so none decides what is a marker): the Headers
+  iterator (`[...v]`) in the lift, the signal and stream revival helpers'
+  Map and Set calls, `__unwrapStoredMap`'s Map iteration and `set`, the
+  projection's own `seen`/`originals` tables, and the Map and Set walks of
+  the projection and the Worker Loader env (encode and revival).
+- Derived classes without private state or a brand still take a script's
+  redirected [[Prototype]] in `super()` (1.53's audit): the `Event`
+  subclasses, `DOMException`, `NonRetryableError`, `RpcPromise`,
+  `MessagePort`, `EventSource`, `DigestStream`, `FixedLengthStream` and
+  `ByteDefaultReader` then write their data onto the object the redirect
+  returns. No authority rides on them; `__pinBase` would make them match
+  workerd's constructors, which ignore the redirect.
 - Latent: `__rpcProject` (~4797) treats any non-`Object.prototype` object as
   unsupported, so returning one of part B's null-prototype objects over RPC
   would fail. Nothing does today.
@@ -4419,15 +4727,22 @@ the close, bounded by a timeout.
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 
-- **Security: forgeable markers.** The lift copies user keys named
-  `__celld$stub` without escaping them, so a user object can pose as a
-  marker if it knows `__stubIsolate`. That token comes from `Math.random`.
+- **Security: forgeable markers (done, 1.53).** The lift copies user keys
+  named `__celld$stub` without escaping them, so a user object can pose as
+  a marker if it knows `__stubIsolate`. That token comes from `Math.random`.
   The reach is same isolate and same script only. Escape user keys, or use
-  a brand JS cannot forge, as 1.8 and 1.21 did.
+  a brand JS cannot forge, as 1.8 and 1.21 did. 1.53 escapes them, and the
+  token now comes from the host CSPRNG and carries no authority.
+- An AbortSignal crosses RPC without the experimental
+  `enable_abortsignal_rpc` flag; workerd refuses it ("AbortSignal
+  serialization is not enabled."). `rpc/abortsignal-without-flag` (xfail).
 - A Proxy that presents a plain object is serialised by value; workerd stubs
-  it and, under 1.13, calls its `dup()`.
+  it and, under 1.13, calls its `dup()`. `rpc/marker-shaped-proxies`
+  (xfail) records it, with storage's and a Queue's Proxy refusals, a
+  TypeError and `QUEUE_ERROR` where workerd's is V8's DataCloneError.
 - The RpcTarget check is `instanceof`, where workerd uses the JSG brand, so
-  `Object.create(RpcTarget.prototype)` is accepted.
+  `Object.create(RpcTarget.prototype)` is accepted. (Done in 1.53: a
+  private-field brand; such an object is refused as `"JsRpcTarget"`.)
 - If a call fails after `__rpcOut` but before the callee decodes (a gate
   refusal, or `__rpc_call` rejecting), the lifted refs leak in both modes.
 - The cross-isolate DO path leaks one stub entry per call, and under 1.13 one

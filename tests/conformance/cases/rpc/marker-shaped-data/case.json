@@ -1,1 +1,13 @@
-{"xfail": "1.53", "workers": ["app"], "steps": [{"path": "/"}]}
+{
+  "workers": ["app", "other"],
+  "steps": [
+    {"path": "/rpc"},
+    {"path": "/do"},
+    {"path": "/facet"},
+    {"path": "/service"},
+    {"path": "/loader"},
+    {"path": "/storage"},
+    {"path": "/queue"},
+    {"path": "/workflow"}
+  ]
+}

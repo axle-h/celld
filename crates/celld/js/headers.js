@@ -57,6 +57,7 @@ function _checkValue(value) {
 // flatten into a plain object -- RPC
 // serialization lifts it natively instead.
 const _noClone = () => {};
+const _defineProperty = Object.defineProperty;
 
 // The spec's header list, plus the sorted pair list derived from it.
 //
@@ -118,6 +119,21 @@ function _pairs(state) {
 
 class Headers {
   #list = _newList();
+  // The brand the RPC and storage envelopes classify by (harness.js,
+  // `__hostKind`): a prototype says nothing about what a value is.
+  // The RPC lift reads a Headers' entries from its list, never through a
+  // method or iterator a script can replace on the instance.
+  static {
+    __celld.__isHeaders = (value) =>
+      typeof value === "object" && value !== null && #list in value;
+    __celld.__headerPairs = (headers) => {
+      const pairs = _pairs(headers.#list);
+      const out = new Array(pairs.length);
+      for (let i = 0; i < pairs.length; i++)
+        out[i] = [pairs[i][0], pairs[i][1]];
+      return out;
+    };
+  }
 
   #checkMutable() {
     if (this._immutable)
@@ -143,7 +159,10 @@ class Headers {
   }
 
   constructor(init) {
-    this.__celldHost = _noClone;
+    // Fixed, so a script cannot delete it and have the clone write the
+    // Headers as a plain object.
+    _defineProperty(this, "__celldHost",
+      { value: _noClone, enumerable: true });
     if (init === undefined) return;
     if (init === null || typeof init !== "object")
       throw new TypeError("Invalid Headers init");

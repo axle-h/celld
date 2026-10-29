@@ -1,0 +1,11 @@
+{
+  "workers": ["app", "other"],
+  "steps": [
+    {"path": "/rpc"},
+    {"path": "/do"},
+    {"path": "/service"},
+    {"path": "/loader"},
+    {"path": "/storage"},
+    {"path": "/queue"}
+  ]
+}

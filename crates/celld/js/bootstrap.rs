@@ -121,7 +121,10 @@ static POST_HARNESS: &[BootstrapSource] = &[
 // one external buffer in the binary and checks the ASCII requirement at
 // compile time. Compiled code and the objects created by the script remain
 // isolate-local; this shares only the original source buffer.
-#[cfg(any(not(celld_internal_tests), all(test, celld_internal_tests)))]
+#[cfg(any(
+    all(not(celld_internal_tests), not(test)),
+    all(test, celld_internal_tests)
+))]
 static HARNESS_SOURCE: v8::OneByteConst =
     v8::String::create_external_onebyte_const(HARNESS.as_bytes());
 
@@ -267,7 +270,10 @@ pub(super) fn bootstrap_sources_for_test<'s>(
         .collect()
 }
 
-#[cfg(any(not(celld_internal_tests), all(test, celld_internal_tests)))]
+#[cfg(any(
+    all(not(celld_internal_tests), not(test)),
+    all(test, celld_internal_tests)
+))]
 fn shipping_harness_source<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::String> {
     v8::String::new_from_onebyte_const(scope, &HARNESS_SOURCE).expect("static harness source")
 }
@@ -284,12 +290,35 @@ pub(super) fn install_prelude<'s>(
     Ok(())
 }
 
+/// Where the harness takes `LIFTED_TEST_HOOK` in a test build.
+#[cfg(test)]
+const LIFTED_TEST_HOOK_MARK: &str = "/*__CELLD_TEST_LIFTED_HOOK__*/";
+
+/// The lifted RPC and storage encodings, for `js::marker_key_tests`: the key
+/// escape, the brand classification, an RPC payload and a stored row out and
+/// back in, and the revival of a tree given as is. Only a test build has it.
+#[cfg(test)]
+const LIFTED_TEST_HOOK: &str = r#"__celld.__liftedForTest = {
+  escape: (key) => __isMarkerKey(key) ? __escapeKey(key) : key,
+  unescape: (key) => __isEscapedKey(key) ? __unescapeKey(key) : key,
+  hostKind: (value) => __hostKind(value),
+  cloned: (value) => (__util_type_flags(value) & __TYPE_CLONED) !== 0,
+  rpc: (value) => __rpcDes(__rpcOut(value, true)),
+  stored: (value) => __storedRevive(
+    __sc_decode(__storedBytes(value, null).subarray(1))),
+  revive: (tree) => __stubRevive(tree).value,
+  storedRevive: __storedRevive,
+  service: () => __entrypointStub("default", undefined),
+  bodyBytes: __bodyBytesOf,
+};"#;
+
 pub(super) fn install_harness<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     arguments: &InternalArguments<'s>,
 ) -> Result<()> {
     #[cfg(celld_internal_tests)]
     let harness = HARNESS
+        .replace(LIFTED_TEST_HOOK_MARK, LIFTED_TEST_HOOK)
         .replace(
             "/*__CELLD_TEST_WORKFLOW_EVENT_CONSUMED__*/",
             "__test_workflow_event_consumed();",
@@ -322,6 +351,13 @@ pub(super) fn install_harness<'s>(
     run_bootstrap_script(scope, "harness.js", harness.as_str(), arguments)?;
     #[cfg(not(celld_internal_tests))]
     {
+        #[cfg(test)]
+        let harness = v8::String::new(
+            scope,
+            &HARNESS.replace(LIFTED_TEST_HOOK_MARK, LIFTED_TEST_HOOK),
+        )
+        .expect("test harness source");
+        #[cfg(not(test))]
         let harness = shipping_harness_source(scope);
         run_internal_script(scope, Some("harness.js"), harness, arguments)?;
     }

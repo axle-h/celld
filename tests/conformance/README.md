@@ -61,9 +61,11 @@ compatibility dates and flags, `#process-env` is
 `lib/worker/process-env.js`, the `process.env` report each
 `node/process-env` Worker gives under its own date and flags,
 `#ws-close-reply` is `lib/worker/ws-close-reply.js`, the WebSocket close
-replies the `flags/websocket-*-reply` cases check under different flags, and
+replies the `flags/websocket-*-reply` cases check under different flags,
 `#clone` is `lib/worker/clone.js`, the `Response.clone()` and
-`Request.clone()` checks the `fetch/*-clone*` cases run on each source.
+`Request.clone()` checks the `fetch/*-clone*` cases run on each source, and
+`#marker-shaped` is `lib/worker/marker-shaped.js`, the plain data shaped like
+celld's markers that the `rpc/marker-shaped-*` cases send on each path.
 
 ```json
 {

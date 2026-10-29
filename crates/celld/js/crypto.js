@@ -103,6 +103,12 @@
   }
 
   class CryptoKey {
+    // The brand the RPC envelope classifies by (harness.js, `__hostKind`).
+    #brand;
+    static {
+      __celld.__isCryptoKey = (value) =>
+        typeof value === "object" && value !== null && #brand in value;
+    }
     constructor(type, algorithm, extractable, usages, material) {
       Object.defineProperties(this, {
         type: { value: type, enumerable: true },

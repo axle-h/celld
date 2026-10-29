@@ -42,6 +42,7 @@
       "promise", "map", "set", "mapIterator", "setIterator", "weakMap",
       "weakSet", "arrayBuffer", "dataView", "sharedArrayBuffer", "proxy",
       "moduleNamespaceObject", "typedArray", "arrayBufferView",
+      "wasmModuleObject", "uint8Array",
     ];
     const bits = { __proto__: null };
     names.forEach((n, i) => { bits[n] = 1 << i; });

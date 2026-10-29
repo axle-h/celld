@@ -1,0 +1,733 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "params": {
+          "headers": {
+            "class": "Headers",
+            "markerKeys": [],
+            "headers": [
+              [
+                "a",
+                "b"
+              ]
+            ]
+          },
+          "headersSub": {
+            "class": "Headers",
+            "markerKeys": [],
+            "headers": [
+              [
+                "a",
+                "b"
+              ]
+            ]
+          },
+          "blob": {
+            "class": "Blob",
+            "markerKeys": [],
+            "blob": [
+              1,
+              "text/plain",
+              "x"
+            ]
+          },
+          "blobSub": {
+            "class": "Blob",
+            "markerKeys": [],
+            "blob": [
+              1,
+              "",
+              "x"
+            ]
+          },
+          "request": {
+            "class": "Request",
+            "markerKeys": [],
+            "request": [
+              "GET",
+              "https://example.com/",
+              [
+                [
+                  "a",
+                  "b"
+                ]
+              ],
+              ""
+            ]
+          },
+          "responseEmpty": {
+            "class": "Response",
+            "markerKeys": [],
+            "response": [
+              201,
+              [
+                [
+                  "a",
+                  "b"
+                ]
+              ],
+              ""
+            ]
+          },
+          "response": {
+            "class": "Response",
+            "markerKeys": [],
+            "response": [
+              200,
+              [
+                [
+                  "a",
+                  "b"
+                ],
+                [
+                  "content-type",
+                  "text/plain"
+                ]
+              ],
+              "x"
+            ]
+          },
+          "file": "DataCloneError: Could not serialize object of type \"File\". This type does not support serialization.",
+          "readable": {
+            "class": "ReadableStream",
+            "markerKeys": []
+          },
+          "writable": {
+            "class": "WritableStream",
+            "markerKeys": []
+          },
+          "blobTampered": {
+            "class": "Blob",
+            "markerKeys": [],
+            "blob": [
+              1,
+              "text/plain",
+              "x"
+            ]
+          },
+          "requestTampered": {
+            "class": "Request",
+            "markerKeys": [],
+            "request": [
+              "POST",
+              "https://example.com/",
+              [
+                [
+                  "content-type",
+                  "text/plain"
+                ]
+              ],
+              "real"
+            ]
+          },
+          "responseTampered": {
+            "class": "Response",
+            "markerKeys": [],
+            "response": [
+              204,
+              [],
+              ""
+            ]
+          }
+        },
+        "paramsLift": {
+          "headers": {
+            "class": "Headers",
+            "markerKeys": [],
+            "headers": [
+              [
+                "a",
+                "b"
+              ]
+            ]
+          },
+          "headersSub": {
+            "class": "Headers",
+            "markerKeys": [],
+            "headers": [
+              [
+                "a",
+                "b"
+              ]
+            ]
+          },
+          "blob": {
+            "class": "Blob",
+            "markerKeys": [],
+            "blob": [
+              1,
+              "text/plain",
+              "x"
+            ]
+          },
+          "blobSub": {
+            "class": "Blob",
+            "markerKeys": [],
+            "blob": [
+              1,
+              "",
+              "x"
+            ]
+          },
+          "request": {
+            "class": "Request",
+            "markerKeys": [],
+            "request": [
+              "GET",
+              "https://example.com/",
+              [
+                [
+                  "a",
+                  "b"
+                ]
+              ],
+              ""
+            ]
+          },
+          "responseEmpty": {
+            "class": "Response",
+            "markerKeys": [],
+            "response": [
+              201,
+              [
+                [
+                  "a",
+                  "b"
+                ]
+              ],
+              ""
+            ]
+          },
+          "response": {
+            "class": "Response",
+            "markerKeys": [],
+            "response": [
+              200,
+              [
+                [
+                  "a",
+                  "b"
+                ],
+                [
+                  "content-type",
+                  "text/plain"
+                ]
+              ],
+              "x"
+            ]
+          },
+          "file": "DataCloneError: Could not serialize object of type \"File\". This type does not support serialization.",
+          "readable": {
+            "class": "ReadableStream",
+            "markerKeys": []
+          },
+          "writable": {
+            "class": "WritableStream",
+            "markerKeys": []
+          },
+          "blobTampered": {
+            "class": "Blob",
+            "markerKeys": [],
+            "blob": [
+              1,
+              "text/plain",
+              "x"
+            ]
+          },
+          "requestTampered": {
+            "class": "Request",
+            "markerKeys": [],
+            "request": [
+              "POST",
+              "https://example.com/",
+              [
+                [
+                  "content-type",
+                  "text/plain"
+                ]
+              ],
+              "real"
+            ]
+          },
+          "responseTampered": {
+            "class": "Response",
+            "markerKeys": [],
+            "response": [
+              204,
+              [],
+              ""
+            ]
+          }
+        },
+        "result": {
+          "headers": {
+            "class": "Headers",
+            "markerKeys": [],
+            "headers": [
+              [
+                "a",
+                "b"
+              ]
+            ]
+          },
+          "headersSub": {
+            "class": "Headers",
+            "markerKeys": [],
+            "headers": [
+              [
+                "a",
+                "b"
+              ]
+            ]
+          },
+          "blob": {
+            "class": "Blob",
+            "markerKeys": [],
+            "blob": [
+              1,
+              "text/plain",
+              "x"
+            ]
+          },
+          "blobSub": {
+            "class": "Blob",
+            "markerKeys": [],
+            "blob": [
+              1,
+              "",
+              "x"
+            ]
+          },
+          "request": {
+            "class": "Request",
+            "markerKeys": [],
+            "request": [
+              "GET",
+              "https://example.com/",
+              [
+                [
+                  "a",
+                  "b"
+                ]
+              ],
+              ""
+            ]
+          },
+          "responseEmpty": {
+            "class": "Response",
+            "markerKeys": [],
+            "response": [
+              201,
+              [
+                [
+                  "a",
+                  "b"
+                ]
+              ],
+              ""
+            ]
+          },
+          "response": {
+            "class": "Response",
+            "markerKeys": [],
+            "response": [
+              200,
+              [
+                [
+                  "a",
+                  "b"
+                ],
+                [
+                  "content-type",
+                  "text/plain"
+                ]
+              ],
+              "x"
+            ]
+          },
+          "file": "DataCloneError: Could not serialize object of type \"File\". This type does not support serialization.",
+          "readable": {
+            "class": "ReadableStream",
+            "markerKeys": []
+          },
+          "writable": {
+            "class": "WritableStream",
+            "markerKeys": []
+          },
+          "blobTampered": {
+            "class": "Blob",
+            "markerKeys": [],
+            "blob": [
+              1,
+              "text/plain",
+              "x"
+            ]
+          },
+          "requestTampered": {
+            "class": "Request",
+            "markerKeys": [],
+            "request": [
+              "POST",
+              "https://example.com/",
+              [
+                [
+                  "content-type",
+                  "text/plain"
+                ]
+              ],
+              "real"
+            ]
+          },
+          "responseTampered": {
+            "class": "Response",
+            "markerKeys": [],
+            "response": [
+              204,
+              [],
+              ""
+            ]
+          }
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "headers": {
+          "class": "Headers",
+          "markerKeys": [],
+          "headers": [
+            [
+              "a",
+              "b"
+            ]
+          ]
+        },
+        "headersSub": {
+          "class": "Headers",
+          "markerKeys": [],
+          "headers": [
+            [
+              "a",
+              "b"
+            ]
+          ]
+        },
+        "blob": {
+          "class": "Blob",
+          "markerKeys": [],
+          "blob": [
+            1,
+            "text/plain",
+            "x"
+          ]
+        },
+        "blobSub": {
+          "class": "Blob",
+          "markerKeys": [],
+          "blob": [
+            1,
+            "",
+            "x"
+          ]
+        },
+        "request": {
+          "class": "Request",
+          "markerKeys": [],
+          "request": [
+            "GET",
+            "https://example.com/",
+            [
+              [
+                "a",
+                "b"
+              ]
+            ],
+            ""
+          ]
+        },
+        "responseEmpty": {
+          "class": "Response",
+          "markerKeys": [],
+          "response": [
+            201,
+            [
+              [
+                "a",
+                "b"
+              ]
+            ],
+            ""
+          ]
+        },
+        "response": {
+          "class": "Response",
+          "markerKeys": [],
+          "response": [
+            200,
+            [
+              [
+                "a",
+                "b"
+              ],
+              [
+                "content-type",
+                "text/plain"
+              ]
+            ],
+            "x"
+          ]
+        },
+        "file": "DataCloneError: Could not serialize object of type \"File\". This type does not support serialization.",
+        "blobTampered": {
+          "class": "Blob",
+          "markerKeys": [],
+          "blob": [
+            1,
+            "text/plain",
+            "x"
+          ]
+        },
+        "requestTampered": {
+          "class": "Request",
+          "markerKeys": [],
+          "request": [
+            "POST",
+            "https://example.com/",
+            [
+              [
+                "content-type",
+                "text/plain"
+              ]
+            ],
+            "real"
+          ]
+        },
+        "responseTampered": {
+          "class": "Response",
+          "markerKeys": [],
+          "response": [
+            204,
+            [],
+            ""
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "headers": {
+          "class": "Headers",
+          "markerKeys": [],
+          "headers": [
+            [
+              "a",
+              "b"
+            ]
+          ]
+        },
+        "headersSub": {
+          "class": "Headers",
+          "markerKeys": [],
+          "headers": [
+            [
+              "a",
+              "b"
+            ]
+          ]
+        },
+        "blob": {
+          "class": "Blob",
+          "markerKeys": [],
+          "blob": [
+            1,
+            "text/plain",
+            "x"
+          ]
+        },
+        "blobSub": {
+          "class": "Blob",
+          "markerKeys": [],
+          "blob": [
+            1,
+            "",
+            "x"
+          ]
+        },
+        "request": {
+          "class": "Request",
+          "markerKeys": [],
+          "request": [
+            "GET",
+            "https://example.com/",
+            [
+              [
+                "a",
+                "b"
+              ]
+            ],
+            ""
+          ]
+        },
+        "responseEmpty": {
+          "class": "Response",
+          "markerKeys": [],
+          "response": [
+            201,
+            [
+              [
+                "a",
+                "b"
+              ]
+            ],
+            ""
+          ]
+        },
+        "response": "DataCloneError: ReadableStream can only be serialized for RPC.",
+        "file": "DataCloneError: Could not serialize object of type \"File\". This type does not support serialization.",
+        "readable": "DataCloneError: ReadableStream can only be serialized for RPC.",
+        "writable": "DataCloneError: WritableStream can only be serialized for RPC.",
+        "blobTampered": {
+          "class": "Blob",
+          "markerKeys": [],
+          "blob": [
+            1,
+            "text/plain",
+            "x"
+          ]
+        },
+        "requestTampered": "DataCloneError: ReadableStream can only be serialized for RPC.",
+        "responseTampered": {
+          "class": "Response",
+          "markerKeys": [],
+          "response": [
+            204,
+            [],
+            ""
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "headers": {
+          "class": "Headers",
+          "markerKeys": [],
+          "headers": [
+            [
+              "a",
+              "b"
+            ]
+          ]
+        },
+        "headersSub": {
+          "class": "Headers",
+          "markerKeys": [],
+          "headers": [
+            [
+              "a",
+              "b"
+            ]
+          ]
+        },
+        "blob": {
+          "class": "Blob",
+          "markerKeys": [],
+          "blob": [
+            1,
+            "text/plain",
+            "x"
+          ]
+        },
+        "blobSub": {
+          "class": "Blob",
+          "markerKeys": [],
+          "blob": [
+            1,
+            "",
+            "x"
+          ]
+        },
+        "request": {
+          "class": "Request",
+          "markerKeys": [],
+          "request": [
+            "GET",
+            "https://example.com/",
+            [
+              [
+                "a",
+                "b"
+              ]
+            ],
+            ""
+          ]
+        },
+        "responseEmpty": {
+          "class": "Response",
+          "markerKeys": [],
+          "response": [
+            201,
+            [
+              [
+                "a",
+                "b"
+              ]
+            ],
+            ""
+          ]
+        },
+        "response": "DataCloneError: ReadableStream can only be serialized for RPC.",
+        "file": "DataCloneError: Could not serialize object of type \"File\". This type does not support serialization.",
+        "readable": "DataCloneError: ReadableStream can only be serialized for RPC.",
+        "writable": "DataCloneError: WritableStream can only be serialized for RPC.",
+        "blobTampered": {
+          "class": "Blob",
+          "markerKeys": [],
+          "blob": [
+            1,
+            "text/plain",
+            "x"
+          ]
+        },
+        "requestTampered": "DataCloneError: ReadableStream can only be serialized for RPC.",
+        "responseTampered": {
+          "class": "Response",
+          "markerKeys": [],
+          "response": [
+            204,
+            [],
+            ""
+          ]
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "params": {
+          "file": "plain",
+          "signal": "plain"
+        },
+        "service": {
+          "file": "plain",
+          "signal": "plain"
+        },
+        "storage": {
+          "file": "plain",
+          "signal": "plain"
+        },
+        "loader": {
+          "file": "plain",
+          "signal": "plain"
+        }
+      }
+    }
+  ]
+}

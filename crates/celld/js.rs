@@ -11786,7 +11786,7 @@ mod http_stream_owner_tests {
         }
     }
 
-    fn worker(name: &str) -> Worker {
+    pub(super) fn worker(name: &str) -> Worker {
         let config = Arc::new(WorkerConfig::new(WorkerConfigOptions {
             src: "export default { fetch() { return new Response(); } };\n".into(),
             script_name: name.into(),
@@ -11910,6 +11910,373 @@ mod http_stream_owner_tests {
             assert!(guard.is_ok());
             drop(guard);
             service.cancel_source(response);
+        })
+        .join()
+        .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod marker_key_tests {
+    //! The key escape of the lifted RPC and storage encodings (plan 1.53): a
+    //! script's keys that start with `__celld$` round-trip, none reads as a
+    //! marker, and a tree with such a key unescaped is refused.
+    use super::*;
+
+    /// Run `body` with `__celld` bound in a fresh Worker's isolate, and
+    /// answer what it returned as text, or the message it threw.
+    fn eval(body: &'static str) -> Result<String, String> {
+        let _ = crate::asyncrt::test_host_runtime();
+        Engine::init();
+        // On a thread started after V8, as `runtime::init_v8` requires.
+        std::thread::spawn(move || {
+            let mut worker = super::http_stream_owner_tests::worker("markers");
+            let _runtime = crate::asyncrt::test_host_runtime().enter();
+            worker.with_scope_for_test(|scope| {
+                let tc = std::pin::pin!(v8::TryCatch::new(scope));
+                let tc = &mut tc.init();
+                match run_internal_snippet(tc, body) {
+                    Some(value) => Ok(value.to_rust_string_lossy(tc)),
+                    None => Err(tc
+                        .exception()
+                        .map(|error| error.to_rust_string_lossy(tc))
+                        .unwrap_or_default()),
+                }
+            })
+        })
+        .join()
+        .unwrap()
+    }
+
+    /// Keys around the prefix, ones that already look escaped, and the
+    /// marker keys themselves.
+    const KEYS: &str = r#"["__celld$x", "__celld$", "__celld$$", "__celld$$x",
+        "__celld$$$x", "__celld$$$", "__celld$hdr", "__celld$stub", "__celld$disp",
+        "__celld%", "__celld", "__celld#", "__celle", "_celld$x", "x__celld$",
+        "", "0", "__proto__", "constructor"]"#;
+
+    #[test]
+    fn the_escape_is_undone_exactly_and_never_yields_a_marker_key() {
+        let body = format!(
+            "const t = __celld.__liftedForTest; const keys = {KEYS};
+             const escaped = keys.map(t.escape);
+             return JSON.stringify({{
+               back: keys.every((key, i) => t.unescape(escaped[i]) === key),
+               distinct: new Set(escaped).size === keys.length,
+               reserved: escaped.filter((key) =>
+                 key.startsWith('__celld$') && !key.startsWith('__celld$$')),
+               untouched: keys.filter((key) => !key.startsWith('__celld$'))
+                 .every((key) => t.escape(key) === key),
+               escaped: escaped.slice(0, 6),
+             }});"
+        );
+        let body: &'static str = Box::leak(body.into_boxed_str());
+        assert_eq!(
+            eval(body).unwrap(),
+            r#"{"back":true,"distinct":true,"reserved":[],"untouched":true,"escaped":["__celld$$x","__celld$$","__celld$$$","__celld$$$x","__celld$$$$x","__celld$$$$"]}"#
+        );
+    }
+
+    /// Every key around the prefix, each holding a marker's fields, in
+    /// objects, arrays and a cycle, beside `lift`: the value as JSON-able
+    /// text and the checks a receiver makes of it.
+    const ROUND_TRIP: &str = r#"
+        const t = __celld.__liftedForTest; const keys = KEYS;
+        const shaped = (key) => ({ [key]: [["a", "b"]], t: "t", c: true, v: "x", n: null });
+        const data = Object.fromEntries(keys.map((key) => [key, shaped(key)]));
+        data.list = keys.map(shaped);
+        data.self = data;
+        // An object the receiver copies to unescape, in a cycle.
+        data.cyclic = { "__celld$x": 1 };
+        data.cyclic.self = data.cyclic;
+        const value = { lift: LIFT, data };
+        const out = ROUND(value);
+        const plain = (v) => v !== null && typeof v === "object" &&
+          Object.getPrototypeOf(v) === (Array.isArray(v) ? Array.prototype : Object.prototype);
+        return JSON.stringify({
+          keys: JSON.stringify(Object.keys(out.data)) === JSON.stringify(Object.keys(data)),
+          values: keys.every((key) => plain(out.data[key]) &&
+            JSON.stringify(out.data[key]) === JSON.stringify(shaped(key))),
+          list: JSON.stringify(out.data.list) === JSON.stringify(data.list),
+          cycle: out.data.self === out.data,
+          escapedCycle: out.data.cyclic.self === out.data.cyclic &&
+            JSON.stringify(Object.keys(out.data.cyclic)) === '["__celld$x","self"]',
+          lift: CHECK,
+        });"#;
+
+    fn round_trip(round: &str, lift: &str, check: &str) -> String {
+        let body = ROUND_TRIP
+            .replace("KEYS", KEYS)
+            .replace("ROUND", round)
+            .replace("LIFT", lift)
+            .replace("CHECK", check);
+        eval(Box::leak(body.into_boxed_str())).unwrap()
+    }
+
+    const KEPT: &str =
+        r#"{"keys":true,"values":true,"list":true,"cycle":true,"escapedCycle":true,"lift":true}"#;
+
+    #[test]
+    fn an_rpc_payload_keeps_marker_shaped_keys_and_its_markers() {
+        assert_eq!(
+            round_trip(
+                "t.rpc",
+                r#"new Headers([["k", "v"]])"#,
+                r#"out.lift instanceof Headers && out.lift.get("k") === "v""#,
+            ),
+            KEPT
+        );
+    }
+
+    #[test]
+    fn a_stored_row_keeps_marker_shaped_keys_and_its_stubs() {
+        assert_eq!(
+            round_trip("t.stored", "t.service()", "typeof out.lift === 'function'"),
+            KEPT
+        );
+    }
+
+    #[test]
+    fn a_tree_with_an_unescaped_reserved_key_is_refused() {
+        let corrupt = |key: &str| {
+            format!(
+                "Error: corrupt RPC or storage payload: a plain object has the reserved key \"{key}\"."
+            )
+        };
+        for (tree, refused) in [
+            // A key no lift writes, first or beside others.
+            (r#"t.revive({ a: { "__celld$x": 1 } })"#, "__celld$x"),
+            (
+                r#"t.revive({ a: { b: 1, "__celld$hdr": [] } })"#,
+                "__celld$hdr",
+            ),
+            // A kind this tree cannot hold.
+            (
+                r#"t.revive({ "__celld$unsupported": 1 })"#,
+                "__celld$unsupported",
+            ),
+            (r#"t.storedRevive({ "__celld$stub": 1 })"#, "__celld$stub"),
+            (
+                r#"t.storedRevive({ a: 1, "__celld$disp": 1 })"#,
+                "__celld$disp",
+            ),
+        ] {
+            let body = format!("const t = __celld.__liftedForTest; {tree}; return 'revived';");
+            assert_eq!(
+                eval(Box::leak(body.into_boxed_str())),
+                Err(corrupt(refused)),
+                "{tree}"
+            );
+        }
+        // An escaped key first is data, and an array is never a marker.
+        let body = r#"const t = __celld.__liftedForTest;
+            return JSON.stringify([t.revive({ "__celld$$hdr": [] }),
+              t.revive([{ "__celld$$stub": 1 }]), t.storedRevive({ "__celld$$do": "X" })]);"#;
+        assert_eq!(
+            eval(body).unwrap(),
+            r#"[{"__celld$hdr":[]},[{"__celld$stub":1}],{"__celld$do":"X"}]"#
+        );
+    }
+
+    #[test]
+    fn host_values_are_classified_by_brand_not_prototype() {
+        let body = r#"const t = __celld.__liftedForTest;
+            const { RpcTarget } = __celld.__cf;
+            class Target extends RpcTarget {}
+            const genuine = {
+              headers: new Headers(), blob: new Blob([]), file: new File([], "f"),
+              request: new Request("https://example.com/"), response: new Response(null),
+              readable: new ReadableStream(), writable: new WritableStream(),
+              signal: new AbortController().signal, target: new Target(),
+            };
+            const out = {};
+            for (const [kind, value] of Object.entries(genuine)) {
+              out[kind] = [t.hostKind(value),
+                t.hostKind(Object.create(Object.getPrototypeOf(value))) ?? null,
+                t.hostKind(new Proxy(value, {})) ?? null];
+            }
+            out.date = [t.cloned(new Date()), t.cloned(Object.create(Date.prototype))];
+            out.regexp = [t.cloned(/x/), t.cloned(Object.create(RegExp.prototype))];
+            out.error = [t.cloned(new TypeError()), t.cloned(Object.create(Error.prototype))];
+            return JSON.stringify(out);"#;
+        let mut expected = String::from("{");
+        for kind in [
+            "headers", "blob", "file", "request", "response", "readable", "writable", "signal",
+            "target",
+        ] {
+            expected.push_str(&format!(r#""{kind}":["{kind}",null,null],"#));
+        }
+        expected.push_str(r#""date":[true,false],"regexp":[true,false],"error":[true,false]}"#);
+        assert_eq!(eval(body).unwrap(), expected);
+    }
+
+    #[test]
+    fn an_object_claiming_a_host_prototype_is_refused_over_rpc_and_stored_as_data() {
+        let body = r#"const t = __celld.__liftedForTest;
+            const { RpcTarget } = __celld.__cf;
+            const fields = (object) => Object.assign(object,
+              { "__celld$hdr": [["a", "b"]], "__celld$do": "X", v: "x", n: null });
+            const out = {};
+            for (const [name, proto] of [["date", Date.prototype], ["headers", Headers.prototype],
+                ["target", RpcTarget.prototype], ["null", null], ["class", class Forge {}.prototype]]) {
+              try {
+                t.rpc({ lift: new Headers(), v: fields(Object.create(proto)) });
+                out[name] = "crossed";
+              } catch (error) {
+                out[name] = error.message;
+              }
+              const stored = t.stored({ stub: t.service(), v: fields(Object.create(proto)) }).v;
+              out[name + "Stored"] = Object.getPrototypeOf(stored) === Object.prototype &&
+                JSON.stringify(stored) === JSON.stringify(fields({}));
+            }
+            return JSON.stringify(out);"#;
+        let refused = |name: &str| {
+            format!(
+                r#"Could not serialize object of type \"{name}\". This type does not support serialization."#
+            )
+        };
+        assert_eq!(
+            eval(body).unwrap(),
+            format!(
+                r#"{{"date":"{}","dateStored":true,"headers":"{}","headersStored":true,"target":"{}","targetStored":true,"null":"{}","nullStored":true,"class":"{}","classStored":true}}"#,
+                refused("Date"),
+                refused("Headers"),
+                refused("JsRpcTarget"),
+                refused("Object"),
+                refused("Forge"),
+            )
+        );
+    }
+
+    #[test]
+    fn a_constructor_pointed_elsewhere_stamps_no_brand() {
+        // A derived host class whose [[Prototype]] a script pointed at a
+        // function returning its own object: the constructor still makes a
+        // genuine instance, the object gets no brand, and the script's
+        // prototype is back afterwards.
+        let body = r#"const t = __celld.__liftedForTest;
+            const out = {};
+            for (const [name, cls, make] of [
+                ["file", File, () => new File([], "n")],
+                ["signal", AbortSignal, () => new AbortController().signal]]) {
+              const target = {};
+              const redirect = function () { return target; };
+              const base = Object.getPrototypeOf(cls);
+              Object.setPrototypeOf(cls, redirect);
+              let made;
+              try { made = make(); } finally {
+                out[name] = { restored: Object.getPrototypeOf(cls) === redirect };
+                Object.setPrototypeOf(cls, base);
+              }
+              out[name].target = t.hostKind(target) ?? null;
+              out[name].made = t.hostKind(made) ?? null;
+            }
+            return JSON.stringify(out);"#;
+        assert_eq!(
+            eval(body).unwrap(),
+            r#"{"file":{"restored":true,"target":null,"made":"file"},"signal":{"restored":true,"target":null,"made":"signal"}}"#
+        );
+    }
+
+    #[test]
+    fn a_host_value_crosses_from_its_state_never_its_own_keys() {
+        let body = r#"const t = __celld.__liftedForTest;
+            const keys = (h) => Object.assign(h, { "__celld$do": "X", v: "x", n: null });
+            const fixed = (() => {
+              const headers = new Headers();
+              try { delete headers.__celldHost; } catch {}
+              return Object.hasOwn(headers, "__celldHost") ? "kept" : "deleted";
+            })();
+            const rpc = t.rpc({ lift: new Headers(), v: keys(new Headers([["a", "b"]])) }).v;
+            const stored = t.stored({ stub: t.service(),
+              v: keys(new Blob(["x"], { type: "text/plain" })) }).v;
+            const refused = (value) => {
+              try { t.stored({ stub: t.service(), v: value }); return "stored"; }
+              catch (error) { return error.message; }
+            };
+            return JSON.stringify({
+              fixed,
+              rpc: [rpc instanceof Headers, Object.hasOwn(rpc, "__celld$do"), [...rpc]],
+              stored: [stored instanceof Blob, Object.hasOwn(stored, "__celld$do"), stored.type],
+              file: refused(new File([], "f")),
+              stream: refused(new ReadableStream()),
+              signal: refused(new AbortController().signal),
+              body: refused(new Response("x")),
+            });"#;
+        assert_eq!(
+            eval(body).unwrap(),
+            concat!(
+                r#"{"fixed":"kept","rpc":[true,false,[["a","b"]]],"#,
+                r#""stored":[true,false,"text/plain"],"#,
+                r#""file":"Could not serialize object of type \"File\". This type does not support serialization.","#,
+                r#""stream":"ReadableStream can only be serialized for RPC.","#,
+                r#""signal":"AbortSignal serialization is not enabled.","#,
+                r#""body":"ReadableStream can only be serialized for RPC."}"#
+            )
+        );
+    }
+
+    #[test]
+    fn a_host_value_marker_with_a_field_no_lift_writes_is_refused() {
+        let body = r#"const t = __celld.__liftedForTest;
+            const req = (b) => ({ "__celld$req": "https://example.com/", m: "GET", h: [],
+              r: "follow", c: undefined, b });
+            const out = [];
+            for (const [revive, tree] of [
+                [t.revive, req({ "__celld$do": "X", v: "ab", n: null })],
+                [t.revive, req({ "__celld$blob": new Uint8Array(), y: "text/forged" })],
+                [t.revive, req([1, 2])],
+                [t.storedRevive, req({ "__celld$rs": 1, t: "t" })],
+                [t.revive, { "__celld$blob": [1], y: "" }],
+                [t.revive, { "__celld$blob": new Uint8Array(), y: 1 }],
+                [t.revive, { "__celld$hdr": [["a"]] }],
+                [t.revive, { "__celld$res": "200", t: "", h: [], c: null, e: false, b: null }],
+                [t.revive, { "__celld$res": 200, t: "", h: [], c: new Date(), e: false, b: null }]]) {
+              try { revive(tree); out.push("revived"); } catch (error) { out.push(error.message); }
+            }
+            // A script's own `_bodyBytes` or `_bytes` names nothing.
+            const request = new Request("https://example.com/", { method: "POST", body: "real" });
+            request._bodyBytes = { "__celld$do": "X" };
+            const blob = new Blob(["real"]);
+            blob._bytes = new Uint8Array([1]);
+            const sent = t.rpc({ request, blob });
+            return JSON.stringify({ out,
+              request: new TextDecoder().decode(t.bodyBytes(sent.request)),
+              blob: sent.blob.size });"#;
+        let malformed =
+            |kind: &str| format!("corrupt RPC or storage payload: a malformed {kind} marker.");
+        let req = malformed("__celld$req");
+        let expected = format!(
+            r#"{{"out":["{req}","{req}","{req}","{req}","{}","{}","{}","{}","{}"],"request":"real","blob":4}}"#,
+            malformed("__celld$blob"),
+            malformed("__celld$blob"),
+            malformed("__celld$hdr"),
+            malformed("__celld$res"),
+            malformed("__celld$res"),
+        );
+        assert_eq!(eval(body).unwrap(), expected);
+    }
+
+    #[test]
+    fn an_older_builds_stub_row_is_refused() {
+        let _ = crate::asyncrt::test_host_runtime();
+        Engine::init();
+        std::thread::spawn(|| {
+            let mut worker = super::http_stream_owner_tests::worker("old-row");
+            worker.with_scope_for_test(|scope| {
+                let tc = std::pin::pin!(v8::TryCatch::new(scope));
+                let tc = &mut tc.init();
+                let sentinel = v8::Object::new(tc).into();
+                // A stub row as builds before plan 1.53 wrote it: tag 0x01,
+                // then a clone of `{}`.
+                let row = storage::StoredValue::V8(vec![0x01, 0xff, 0x0f, 0x6f, 0x7b, 0x00]);
+                assert!(storage_ops::deserialize_stored(tc, row, sentinel).is_none());
+                let message = tc.exception().unwrap().to_rust_string_lossy(tc);
+                assert!(
+                    message.contains("stored by an older celld build"),
+                    "{message}"
+                );
+            });
         })
         .join()
         .unwrap();
@@ -15411,7 +15778,7 @@ fn op_util_type_flags(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let v = args.get(0);
-    let checks: [bool; 27] = [
+    let checks: [bool; 29] = [
         v.is_external(),
         v.is_date(),
         v.is_arguments_object(),
@@ -15439,6 +15806,8 @@ fn op_util_type_flags(
         v.is_module_namespace_object(),
         v.is_typed_array(),
         v.is_array_buffer_view(),
+        v.is_wasm_module_object(),
+        v.is_uint8_array(),
     ];
     let mut flags: u32 = 0;
     for (i, hit) in checks.iter().enumerate() {

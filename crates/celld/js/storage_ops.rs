@@ -953,12 +953,16 @@ pub(super) fn op_storage_sync_list_next(
     }
     match storage::sync_list_next(cursor) {
         Ok(Some((key, value))) => {
+            // An older build's stub row has thrown its own error.
+            let unescaped = is_unescaped_stub_row(&value);
             let Some((decoded, _)) = deserialize_stored(scope, value, args.get(1)) else {
-                throw_storage_error(
-                    scope,
-                    "kv.list",
-                    format!("deserialization failed for key {key}"),
-                );
+                if !unescaped {
+                    throw_storage_error(
+                        scope,
+                        "kv.list",
+                        format!("deserialization failed for key {key}"),
+                    );
+                }
                 return;
             };
             let pair = v8::Array::new(scope, 2);
@@ -1142,9 +1146,15 @@ pub(super) fn deserialize_storage_value<'s>(
 }
 
 /// First byte of a stored-stub row: a durable stub marker tree follows
-/// as an ordinary V8 clone. Plain rows keep V8's own 0xff prefix, so
-/// the tag branch never runs for them.
-const STORED_STUB_TAG: u8 = 0x01;
+/// as an ordinary V8 clone, its script keys escaped (`harness.js`, "Marker
+/// keys"). Plain rows keep V8's own 0xff prefix, so the tag branch never
+/// runs for them.
+const STORED_STUB_TAG: u8 = 0x02;
+
+/// The first byte of a stored-stub row that a build before plan 1.53 wrote,
+/// whose script keys were not escaped, so a key shaped like a marker would
+/// revive as one. Deployments are fresh, so such a row is refused, not read.
+const UNESCAPED_STORED_STUB_TAG: u8 = 0x01;
 
 fn wrap_stored<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -1157,15 +1167,33 @@ fn wrap_stored<'s>(
     pair.into()
 }
 
+fn is_unescaped_stub_row(value: &storage::StoredValue) -> bool {
+    matches!(value, storage::StoredValue::V8(bytes)
+        if bytes.first() == Some(&UNESCAPED_STORED_STUB_TAG))
+}
+
 /// Decode one stored row for JS. A stub-tagged row comes back as
 /// `[sentinel, tree]` (plus `true`), which only the storage wrapper —
 /// holder of the closure-private sentinel — turns back into live stubs.
-fn deserialize_stored<'s>(
+/// An older build's stub row throws.
+pub(super) fn deserialize_stored<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: storage::StoredValue,
     sentinel: v8::Local<v8::Value>,
 ) -> Option<(v8::Local<'s, v8::Value>, bool)> {
     match value {
+        value if is_unescaped_stub_row(&value) => {
+            let message = v8::String::new(
+                scope,
+                "storage: this value holds a stub and was stored by an older celld \
+                 build, whose stub rows this build does not read (docs/README.md, \
+                 \"Upgrade notes\")",
+            )
+            .unwrap();
+            let exception = v8::Exception::error(scope, message);
+            scope.throw_exception(exception);
+            None
+        }
         storage::StoredValue::V8(bytes) if bytes.first() == Some(&STORED_STUB_TAG) => {
             let tree =
                 deserialize_storage_value(scope, storage::StoredValue::V8(bytes[1..].to_vec()))?;

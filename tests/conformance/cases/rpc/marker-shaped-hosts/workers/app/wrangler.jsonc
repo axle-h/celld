@@ -1,0 +1,12 @@
+// Genuine host values carrying celld's marker keys as own properties, and
+// objects stamped by a derived host class's constructor, on every path that
+// serialises a script's values and workerd runs.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "OTHER", "service": "other" }],
+  "durable_objects": { "bindings": [{ "name": "OBJ", "class_name": "Obj" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Obj"] }],
+  "worker_loaders": [{ "binding": "LOADER" }]
+}

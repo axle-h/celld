@@ -1,0 +1,10 @@
+{
+  "workers": ["app", "other"],
+  "steps": [
+    {"path": "/rpc"},
+    {"path": "/service"},
+    {"path": "/storage"},
+    {"path": "/loader"},
+    {"path": "/stamped"}
+  ]
+}

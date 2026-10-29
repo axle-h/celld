@@ -1,0 +1,422 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "service-get": {
+          "forged": {
+            "__celld$stub": "same",
+            "__celld$svc": "same",
+            "__celld$do": "same",
+            "__celld$hdr": "same",
+            "__celld$blob": "same",
+            "__celld$req": "same",
+            "__celld$res": "same",
+            "__celld$rs": "same",
+            "__celld$ws": "same",
+            "__celld$sig": "same",
+            "__celld$disp": "same",
+            "__celld$unsupported": "same",
+            "__celld$loaderSvc": "same",
+            "__celld$": "same",
+            "__celld$$": "same",
+            "__celld$$hdr": "same",
+            "__celld$$$stub": "same",
+            "__celld$%": "same",
+            "all": "same",
+            "list": "same",
+            "deep": "same",
+            "keys": "same"
+          },
+          "stub": "pong"
+        },
+        "service-many": {
+          "forged": {
+            "__celld$stub": "same",
+            "__celld$svc": "same",
+            "__celld$do": "same",
+            "__celld$hdr": "same",
+            "__celld$blob": "same",
+            "__celld$req": "same",
+            "__celld$res": "same",
+            "__celld$rs": "same",
+            "__celld$ws": "same",
+            "__celld$sig": "same",
+            "__celld$disp": "same",
+            "__celld$unsupported": "same",
+            "__celld$loaderSvc": "same",
+            "__celld$": "same",
+            "__celld$$": "same",
+            "__celld$$hdr": "same",
+            "__celld$$$stub": "same",
+            "__celld$%": "same",
+            "all": "same",
+            "list": "same",
+            "deep": "same",
+            "keys": "same"
+          },
+          "stub": "pong"
+        },
+        "service-list": {
+          "forged": {
+            "__celld$stub": "same",
+            "__celld$svc": "same",
+            "__celld$do": "same",
+            "__celld$hdr": "same",
+            "__celld$blob": "same",
+            "__celld$req": "same",
+            "__celld$res": "same",
+            "__celld$rs": "same",
+            "__celld$ws": "same",
+            "__celld$sig": "same",
+            "__celld$disp": "same",
+            "__celld$unsupported": "same",
+            "__celld$loaderSvc": "same",
+            "__celld$": "same",
+            "__celld$$": "same",
+            "__celld$$hdr": "same",
+            "__celld$$$stub": "same",
+            "__celld$%": "same",
+            "all": "same",
+            "list": "same",
+            "deep": "same",
+            "keys": "same"
+          },
+          "stub": "pong"
+        },
+        "service-kv": {
+          "forged": {
+            "__celld$stub": "same",
+            "__celld$svc": "same",
+            "__celld$do": "same",
+            "__celld$hdr": "same",
+            "__celld$blob": "same",
+            "__celld$req": "same",
+            "__celld$res": "same",
+            "__celld$rs": "same",
+            "__celld$ws": "same",
+            "__celld$sig": "same",
+            "__celld$disp": "same",
+            "__celld$unsupported": "same",
+            "__celld$loaderSvc": "same",
+            "__celld$": "same",
+            "__celld$$": "same",
+            "__celld$$hdr": "same",
+            "__celld$$$stub": "same",
+            "__celld$%": "same",
+            "all": "same",
+            "list": "same",
+            "deep": "same",
+            "keys": "same"
+          },
+          "stub": "pong"
+        },
+        "service-kvList": {
+          "forged": {
+            "__celld$stub": "same",
+            "__celld$svc": "same",
+            "__celld$do": "same",
+            "__celld$hdr": "same",
+            "__celld$blob": "same",
+            "__celld$req": "same",
+            "__celld$res": "same",
+            "__celld$rs": "same",
+            "__celld$ws": "same",
+            "__celld$sig": "same",
+            "__celld$disp": "same",
+            "__celld$unsupported": "same",
+            "__celld$loaderSvc": "same",
+            "__celld$": "same",
+            "__celld$$": "same",
+            "__celld$$hdr": "same",
+            "__celld$$$stub": "same",
+            "__celld$%": "same",
+            "all": "same",
+            "list": "same",
+            "deep": "same",
+            "keys": "same"
+          },
+          "stub": "pong"
+        },
+        "object-get": {
+          "forged": {
+            "__celld$stub": "same",
+            "__celld$svc": "same",
+            "__celld$do": "same",
+            "__celld$hdr": "same",
+            "__celld$blob": "same",
+            "__celld$req": "same",
+            "__celld$res": "same",
+            "__celld$rs": "same",
+            "__celld$ws": "same",
+            "__celld$sig": "same",
+            "__celld$disp": "same",
+            "__celld$unsupported": "same",
+            "__celld$loaderSvc": "same",
+            "__celld$": "same",
+            "__celld$$": "same",
+            "__celld$$hdr": "same",
+            "__celld$$$stub": "same",
+            "__celld$%": "same",
+            "all": "same",
+            "list": "same",
+            "deep": "same",
+            "keys": "same"
+          },
+          "stub": "pong"
+        },
+        "object-many": {
+          "forged": {
+            "__celld$stub": "same",
+            "__celld$svc": "same",
+            "__celld$do": "same",
+            "__celld$hdr": "same",
+            "__celld$blob": "same",
+            "__celld$req": "same",
+            "__celld$res": "same",
+            "__celld$rs": "same",
+            "__celld$ws": "same",
+            "__celld$sig": "same",
+            "__celld$disp": "same",
+            "__celld$unsupported": "same",
+            "__celld$loaderSvc": "same",
+            "__celld$": "same",
+            "__celld$$": "same",
+            "__celld$$hdr": "same",
+            "__celld$$$stub": "same",
+            "__celld$%": "same",
+            "all": "same",
+            "list": "same",
+            "deep": "same",
+            "keys": "same"
+          },
+          "stub": "pong"
+        },
+        "object-list": {
+          "forged": {
+            "__celld$stub": "same",
+            "__celld$svc": "same",
+            "__celld$do": "same",
+            "__celld$hdr": "same",
+            "__celld$blob": "same",
+            "__celld$req": "same",
+            "__celld$res": "same",
+            "__celld$rs": "same",
+            "__celld$ws": "same",
+            "__celld$sig": "same",
+            "__celld$disp": "same",
+            "__celld$unsupported": "same",
+            "__celld$loaderSvc": "same",
+            "__celld$": "same",
+            "__celld$$": "same",
+            "__celld$$hdr": "same",
+            "__celld$$$stub": "same",
+            "__celld$%": "same",
+            "all": "same",
+            "list": "same",
+            "deep": "same",
+            "keys": "same"
+          },
+          "stub": "pong"
+        },
+        "object-kv": {
+          "forged": {
+            "__celld$stub": "same",
+            "__celld$svc": "same",
+            "__celld$do": "same",
+            "__celld$hdr": "same",
+            "__celld$blob": "same",
+            "__celld$req": "same",
+            "__celld$res": "same",
+            "__celld$rs": "same",
+            "__celld$ws": "same",
+            "__celld$sig": "same",
+            "__celld$disp": "same",
+            "__celld$unsupported": "same",
+            "__celld$loaderSvc": "same",
+            "__celld$": "same",
+            "__celld$$": "same",
+            "__celld$$hdr": "same",
+            "__celld$$$stub": "same",
+            "__celld$%": "same",
+            "all": "same",
+            "list": "same",
+            "deep": "same",
+            "keys": "same"
+          },
+          "stub": "pong"
+        },
+        "object-kvList": {
+          "forged": {
+            "__celld$stub": "same",
+            "__celld$svc": "same",
+            "__celld$do": "same",
+            "__celld$hdr": "same",
+            "__celld$blob": "same",
+            "__celld$req": "same",
+            "__celld$res": "same",
+            "__celld$rs": "same",
+            "__celld$ws": "same",
+            "__celld$sig": "same",
+            "__celld$disp": "same",
+            "__celld$unsupported": "same",
+            "__celld$loaderSvc": "same",
+            "__celld$": "same",
+            "__celld$$": "same",
+            "__celld$$hdr": "same",
+            "__celld$$$stub": "same",
+            "__celld$%": "same",
+            "all": "same",
+            "list": "same",
+            "deep": "same",
+            "keys": "same"
+          },
+          "stub": "pong"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "params": {
+          "forged": {
+            "__celld$stub": "same",
+            "__celld$svc": "same",
+            "__celld$do": "same",
+            "__celld$hdr": "same",
+            "__celld$blob": "same",
+            "__celld$req": "same",
+            "__celld$res": "same",
+            "__celld$rs": "same",
+            "__celld$ws": "same",
+            "__celld$sig": "same",
+            "__celld$disp": "same",
+            "__celld$unsupported": "same",
+            "__celld$loaderSvc": "same",
+            "__celld$": "same",
+            "__celld$$": "same",
+            "__celld$$hdr": "same",
+            "__celld$$$stub": "same",
+            "__celld$%": "same",
+            "all": "same",
+            "list": "same",
+            "deep": "same",
+            "keys": "same"
+          },
+          "signal": true
+        },
+        "result": {
+          "forged": {
+            "__celld$stub": "same",
+            "__celld$svc": "same",
+            "__celld$do": "same",
+            "__celld$hdr": "same",
+            "__celld$blob": "same",
+            "__celld$req": "same",
+            "__celld$res": "same",
+            "__celld$rs": "same",
+            "__celld$ws": "same",
+            "__celld$sig": "same",
+            "__celld$disp": "same",
+            "__celld$unsupported": "same",
+            "__celld$loaderSvc": "same",
+            "__celld$": "same",
+            "__celld$$": "same",
+            "__celld$$hdr": "same",
+            "__celld$$$stub": "same",
+            "__celld$%": "same",
+            "all": "same",
+            "list": "same",
+            "deep": "same",
+            "keys": "same"
+          },
+          "signal": true
+        },
+        "service": {
+          "forged": {
+            "__celld$stub": "same",
+            "__celld$svc": "same",
+            "__celld$do": "same",
+            "__celld$hdr": "same",
+            "__celld$blob": "same",
+            "__celld$req": "same",
+            "__celld$res": "same",
+            "__celld$rs": "same",
+            "__celld$ws": "same",
+            "__celld$sig": "same",
+            "__celld$disp": "same",
+            "__celld$unsupported": "same",
+            "__celld$loaderSvc": "same",
+            "__celld$": "same",
+            "__celld$$": "same",
+            "__celld$$hdr": "same",
+            "__celld$$$stub": "same",
+            "__celld$%": "same",
+            "all": "same",
+            "list": "same",
+            "deep": "same",
+            "keys": "same"
+          },
+          "signal": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "classInstance": {
+          "get": "plain",
+          "kv": "plain"
+        },
+        "date": {
+          "get": "plain",
+          "kv": "plain"
+        },
+        "regexp": {
+          "get": "plain",
+          "kv": "plain"
+        },
+        "map": {
+          "get": "plain",
+          "kv": "plain"
+        },
+        "error": {
+          "get": "plain",
+          "kv": "plain"
+        },
+        "array": {
+          "get": "plain",
+          "kv": "plain"
+        },
+        "headers": {
+          "get": "plain",
+          "kv": "plain"
+        },
+        "blob": {
+          "get": "plain",
+          "kv": "plain"
+        },
+        "request": {
+          "get": "plain",
+          "kv": "plain"
+        },
+        "signal": {
+          "get": "plain",
+          "kv": "plain"
+        },
+        "stream": {
+          "get": "plain",
+          "kv": "plain"
+        },
+        "rpcTarget": {
+          "get": "plain",
+          "kv": "plain"
+        },
+        "nullProto": {
+          "get": "plain",
+          "kv": "plain"
+        }
+      }
+    }
+  ]
+}

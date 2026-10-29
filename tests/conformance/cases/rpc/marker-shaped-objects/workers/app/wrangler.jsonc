@@ -1,0 +1,16 @@
+// Objects that claim a prototype (a class instance, Object.create of a host
+// or builtin prototype, a null prototype) holding celld's marker keys, on
+// every path that serialises a script's values and workerd runs.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [{ "binding": "OTHER", "service": "other" }],
+  "durable_objects": { "bindings": [{ "name": "OBJ", "class_name": "Obj" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Obj"] }],
+  "queues": {
+    "producers": [{ "binding": "QUEUE", "queue": "marker-shaped-objects" }],
+    "consumers": [{ "queue": "marker-shaped-objects", "max_batch_timeout": 0 }]
+  },
+  "worker_loaders": [{ "binding": "LOADER" }]
+}

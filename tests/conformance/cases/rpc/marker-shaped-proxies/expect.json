@@ -1,0 +1,41 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "params": {
+          "proxyPlain": "stub",
+          "proxyClass": "DataCloneError: Proxy could not be serialized because it is not a valid RPC receiver type. The Proxy must emulate either a plain object or an RpcTarget, as indicated by the Proxy's prototype chain.",
+          "proxyNull": "DataCloneError: Proxy could not be serialized because it is not a valid RPC receiver type. The Proxy must emulate either a plain object or an RpcTarget, as indicated by the Proxy's prototype chain."
+        },
+        "paramsLift": {
+          "proxyPlain": "stub",
+          "proxyClass": "DataCloneError: Proxy could not be serialized because it is not a valid RPC receiver type. The Proxy must emulate either a plain object or an RpcTarget, as indicated by the Proxy's prototype chain.",
+          "proxyNull": "DataCloneError: Proxy could not be serialized because it is not a valid RPC receiver type. The Proxy must emulate either a plain object or an RpcTarget, as indicated by the Proxy's prototype chain."
+        },
+        "service": {
+          "proxyPlain": "stub",
+          "proxyClass": "DataCloneError: Proxy could not be serialized because it is not a valid RPC receiver type. The Proxy must emulate either a plain object or an RpcTarget, as indicated by the Proxy's prototype chain.",
+          "proxyNull": "DataCloneError: Proxy could not be serialized because it is not a valid RPC receiver type. The Proxy must emulate either a plain object or an RpcTarget, as indicated by the Proxy's prototype chain."
+        },
+        "storage": {
+          "proxyPlain": "DataCloneError: #<Object> could not be cloned.",
+          "proxyClass": "DataCloneError: #<Forge> could not be cloned.",
+          "proxyNull": "DataCloneError: [object Object] could not be cloned."
+        },
+        "queue": {
+          "proxyPlain": "DataCloneError: #<Object> could not be cloned.",
+          "proxyClass": "DataCloneError: #<Forge> could not be cloned.",
+          "proxyNull": "DataCloneError: [object Object] could not be cloned."
+        },
+        "loader": {
+          "proxyPlain": "DataCloneError: #<Object> could not be cloned.",
+          "proxyClass": "DataCloneError: #<Forge> could not be cloned.",
+          "proxyNull": "DataCloneError: [object Object] could not be cloned."
+        }
+      }
+    }
+  ]
+}

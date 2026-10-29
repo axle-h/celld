@@ -309,6 +309,12 @@ class ReadableStreamDefaultReader {
 }
 
 class ReadableStream {
+  // The brand the RPC envelope classifies by (harness.js, `__hostKind`).
+  #brand;
+  static {
+    __celld.__isReadableStream = (value) =>
+      typeof value === "object" && value !== null && #brand in value;
+  }
   _queue = [];
   // Parallel array of chunk sizes (always 1 when no
   // strategy.size is set) and the running total, for

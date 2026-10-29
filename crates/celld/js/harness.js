@@ -28,6 +28,70 @@ const __ArraySort = Array.prototype.sort;
 const __FunctionBind = Function.prototype.bind;
 const __ObjectDefineProperty = Object.defineProperty;
 const __ObjectHasOwn = Object.hasOwn;
+const __ObjectKeys = Object.keys;
+const __ObjectGetPrototypeOf = Object.getPrototypeOf;
+const __ObjectPrototype = Object.prototype;
+const __ArrayPush = Array.prototype.push;
+// A derived class's `super()` calls whatever the class's [[Prototype]] is
+// at that moment, which a script can set (`Object.setPrototypeOf(File,
+// function () { return target; })`), and the class's private fields then
+// land on the object that call returned: a script could have any object
+// stamped with a host class's brand. Each derived host class records its real
+// base (`__recordBase`, from a static block) and runs its `super()` between
+// `__pinBase` and `__unpinBase`, which point it at that base for the call
+// and then restore whatever the script set, so the script still sees its own
+// change and every instance is one its base really constructed. A class the
+// script made non-extensible after changing its prototype cannot be pinned,
+// and its construction throws.
+const __realBases = new __SafeWeakMap();
+const __recordBase = (cls) => __ReflectApply(__WeakMapSet, __realBases,
+  [cls, { base: __ObjectGetPrototypeOf(cls), name: cls.name }]);
+const __pinBase = (cls) => {
+  const current = __ObjectGetPrototypeOf(cls);
+  const { base, name } = __ReflectApply(__WeakMapGet, __realBases, [cls]);
+  if (current !== base) {
+    try {
+      __ObjectSetPrototypeOf(cls, base);
+    } catch {
+      throw new TypeError("Failed to construct '" + name + "': its " +
+        "prototype was replaced and it was made non-extensible.");
+    }
+  }
+  return current;
+};
+// A script that set the prototype again during `super()` and made the class
+// non-extensible keeps what it set last.
+const __unpinBase = (cls, current) => {
+  if (current === __ReflectApply(__WeakMapGet, __realBases, [cls]).base)
+    return;
+  try {
+    __ObjectSetPrototypeOf(cls, current);
+  } catch {
+    // The class is non-extensible with the script's own prototype.
+  }
+};
+// The brands of the harness's own host classes, set by each class's static
+// block (`__hostKind`).
+let __isRequest, __isResponse, __isBlob, __isFile, __isAbortSignal,
+  __isRpcTarget;
+// A Request's or Response's buffered body (null for a stream body), and a
+// Blob's bytes: private, so what a subrequest, a lift or a read sends is
+// the value's own, never a property a script set. undefined for an object
+// that is no Request, Response or Blob.
+let __requestBodyBytes, __setRequestBodyBytes, __responseBodyBytes,
+  __setResponseBodyBytes, __blobBytesOf, __blobTypeOf, __setBlobBytes;
+const __bodyBytesOf = (owner) =>
+  owner === null || typeof owner !== "object" ? undefined
+    : __isRequest(owner) ? __requestBodyBytes(owner)
+    : __isResponse(owner) ? __responseBodyBytes(owner)
+    : undefined;
+const __setBodyBytes = (owner, bytes) => {
+  if (__isRequest(owner)) __setRequestBodyBytes(owner, bytes);
+  else __setResponseBodyBytes(owner, bytes);
+};
+const __Array = Array;
+const __ArrayFill = Array.prototype.fill;
+const __ObjectSetPrototypeOf = Object.setPrototypeOf;
 // A property of a host result only if the result has it itself, so a getter
 // a Worker put on Object.prototype never answers for a missing one.
 const __own = (object, key) =>
@@ -59,8 +123,8 @@ function __bodyBytes(body) {
 // request, long after that.
 function __typedBody(body) {
   if (body == null || typeof body !== "object") return null;
-  if (globalThis.Blob && body instanceof Blob)
-    return { bytes: body._bytes.slice(), type: body.type };
+  if (globalThis.Blob && __isBlob(body))
+    return { bytes: __blobBytesOf(body).slice(), type: __blobTypeOf(body) };
   if (globalThis.FormData && body instanceof FormData)
     return __multipartBody(body);
   if (globalThis.URLSearchParams && body instanceof URLSearchParams)
@@ -100,12 +164,12 @@ function __multipartBody(form) {
     let header = `--${boundary}\r\nContent-Disposition: form-data; name="${
       __mimeEscape(name)
     }"`;
-    if (value instanceof Blob) {
+    if (__isBlob(value)) {
       header += `; filename="${__mimeEscape(value.name)}"`;
       header += `\r\nContent-Type: ${value.type || "application/octet-stream"}`;
     }
     chunks.push(encoder.encode(`${header}\r\n\r\n`));
-    chunks.push(value instanceof Blob ? value._bytes : encoder.encode(value));
+    chunks.push(__isBlob(value) ? __blobBytesOf(value) : encoder.encode(value));
     chunks.push(encoder.encode("\r\n"));
   }
   chunks.push(encoder.encode(`--${boundary}--\r\n`));
@@ -193,7 +257,7 @@ const __handOverBody = (target, bytes) => {
       bytes.byteOffset !== 0 || bytes.byteLength !== bytes.buffer.byteLength)
     return bytes.slice().buffer;
   __handedOverBodies.add(target);
-  target._bodyBytes = new Uint8Array(0);
+  __setBodyBytes(target, new Uint8Array(0));
   return bytes.buffer;
 };
 // The rest of a body stream, as one buffer nothing else holds. A host
@@ -227,7 +291,7 @@ async function __drainStream(stream, expected = stream?._expectedLength) {
 async function __drainBody(target) {
   const bytes = await __drainStream(target.body);
   __ownedBodies.add(bytes);
-  target._bodyBytes = bytes;
+  __setBodyBytes(target, bytes);
   // text() memoizes into _body on demand. Decoding here charges every
   // binary passthrough the cost of a string it never reads.
   target._body = undefined;
@@ -278,27 +342,33 @@ const __cancelError = (reason) => reason instanceof Error
 // byte-stream prelude, so a Worker that never asks for a BYOB reader never
 // pays for it.
 class CelldChunkStream extends ReadableStream {
+  static { __recordBase(this); }
   constructor(pull, cancel) {
     const st = {
       pull, rest: null, done: false, pulling: null, cancelled: false,
     };
-    super({
-      async pull(controller) {
-        const chunk = await __chunkTake(st);
-        // A cancel while the source was pulled has closed the stream.
-        if (st.cancelled) return;
-        if (chunk === null) controller.close();
-        else controller.enqueue(chunk);
-      },
-      cancel(reason) {
-        if (st.cancelled) return;
-        st.cancelled = true;
-        st.rest = null;
-        if (st.done) return;
-        st.done = true;
-        return cancel?.(reason);
-      },
-    }, { highWaterMark: 0 });
+    const set = __pinBase(CelldChunkStream);
+    try {
+      super({
+        async pull(controller) {
+          const chunk = await __chunkTake(st);
+          // A cancel while the source was pulled has closed the stream.
+          if (st.cancelled) return;
+          if (chunk === null) controller.close();
+          else controller.enqueue(chunk);
+        },
+        cancel(reason) {
+          if (st.cancelled) return;
+          st.cancelled = true;
+          st.rest = null;
+          if (st.done) return;
+          st.done = true;
+          return cancel?.(reason);
+        },
+      }, { highWaterMark: 0 });
+    } finally {
+      __unpinBase(CelldChunkStream, set);
+    }
     this._chunks = st;
     __celld.__streamIo.internal(this);
   }
@@ -391,6 +461,7 @@ const __unlockedBody = (req) => {
 };
 // A body whose bytes are in the isolate. Chunks are views of those bytes.
 class CelldBodyStream extends CelldChunkStream {
+  static { __recordBase(this); }
   constructor(owner) {
     // Couple the stream to its buffered owner, so _bodyBytes and the stream
     // cannot be installed from different arrays. Copying the owner's bytes
@@ -398,17 +469,22 @@ class CelldBodyStream extends CelldChunkStream {
     if (!(owner instanceof globalThis.Request) &&
         !(owner instanceof globalThis.Response))
       throw new TypeError("CelldBodyStream requires a buffered body owner");
-    const bytes = owner._bodyBytes;
+    const bytes = __bodyBytesOf(owner);
     if (!(bytes instanceof Uint8Array))
       throw new TypeError("CelldBodyStream owner requires buffered body bytes");
     const st = { bytes, off: 0 };
-    super(() => {
-      if (st.off >= st.bytes.byteLength) return null;
-      const end = Math.min(st.off + 64 * 1024, st.bytes.byteLength);
-      const chunk = st.bytes.subarray(st.off, end);
-      st.off = end;
-      return chunk;
-    });
+    const set = __pinBase(CelldBodyStream);
+    try {
+      super(() => {
+        if (st.off >= st.bytes.byteLength) return null;
+        const end = Math.min(st.off + 64 * 1024, st.bytes.byteLength);
+        const chunk = st.bytes.subarray(st.off, end);
+        st.off = end;
+        return chunk;
+      });
+    } finally {
+      __unpinBase(CelldBodyStream, set);
+    }
     this._st = st;
     // Known length, so re-using this stream as a subrequest body
     // still advertises Content-Length.
@@ -441,6 +517,7 @@ let __hostStreamId;
 class CelldHttpBodyStream extends CelldChunkStream {
   #id;
   static {
+    __recordBase(this);
     __hostStreamId = (body) => {
       if (typeof body !== "object" || body === null || !(#id in body))
         return undefined;
@@ -454,11 +531,16 @@ class CelldHttpBodyStream extends CelldChunkStream {
   }
   constructor(streamId) {
     const id = Number(streamId);
-    super(async () => {
-      // The end of the stream arrives as a string.
-      const chunk = await __http_stream_read(id);
-      return typeof chunk === "string" ? null : chunk;
-    }, () => { __http_stream_cancel(id); });
+    const set = __pinBase(CelldHttpBodyStream);
+    try {
+      super(async () => {
+        // The end of the stream arrives as a string.
+        const chunk = await __http_stream_read(id);
+        return typeof chunk === "string" ? null : chunk;
+      }, () => { __http_stream_cancel(id); });
+    } finally {
+      __unpinBase(CelldHttpBodyStream, set);
+    }
     this.#id = id;
     __celld.__streamIo.own(this, "ReadableStreamSource");
   }
@@ -510,12 +592,12 @@ const __cloneBody = (target) => {
   if (body === null) return null;
   if (target._bodyUsed || body.locked)
     throw new TypeError("This ReadableStream is currently locked to a reader,");
-  if (target._bodyBytes !== null && body instanceof CelldBodyStream &&
+  if (__bodyBytesOf(target) !== null && body instanceof CelldBodyStream &&
       !body._disturbed)
-    return target._bodyBytes;
+    return __bodyBytesOf(target);
   const [left, right] = body.tee();
   target.body = left;
-  target._bodyBytes = null;
+  __setBodyBytes(target, null);
   return right;
 };
 // workerd converts a Response's status as a WebIDL `long`: a value that is
@@ -540,6 +622,17 @@ globalThis.Response = class Response {
   // Read-only, as in workerd, so the socket a response carries is the one it
   // was made with.
   #webSocket = null;
+  // The buffered body, or null for a stream body (`__bodyBytesOf`).
+  #bodyBytes = null;
+  // The brand the RPC envelope classifies by (`__hostKind`).
+  static {
+    __isResponse = (value) =>
+      typeof value === "object" && value !== null && #webSocket in value;
+    __responseBodyBytes = (response) => response.#bodyBytes;
+    __setResponseBodyBytes = (response, bytes) => {
+      response.#bodyBytes = bytes;
+    };
+  }
   get webSocket() { return this.#webSocket; }
   constructor(body, init = {}, origin = undefined) {
     const fromNetwork = origin === __NETWORK_RESPONSE;
@@ -556,7 +649,7 @@ globalThis.Response = class Response {
         else if (iterable !== null) body = iterable;
       }
     }
-    this._bodyBytes = stream !== null
+    this.#bodyBytes = stream !== null
       ? null
       : typed ? typed.bytes : __bodyBytes(body);
     // Never decoded eagerly: a whole-body UTF-8 decode costs seconds for a
@@ -643,12 +736,12 @@ globalThis.Response = class Response {
   async _consume() {
     if (__handedOverBodies.has(this)) throw new TypeError(__BODY_USED);
     if (__closedUnread(this.body)) return new Uint8Array();
-    if (this._bodyBytes !== null) {
+    if (__bodyBytesOf(this) !== null) {
       if (this.body !== null && this.body._cancelled)
         throw new TypeError(
           "Body has already been used. It can only be used once. " +
           "Use tee() first if you need to read it multiple times.");
-      return this._bodyBytes;
+      return __bodyBytesOf(this);
     }
     return __drainBody(this);
   }
@@ -715,6 +808,18 @@ const __parseRedirectMode = (value) => {
     '"manual" and check the response status code).');
 };
 globalThis.Request = class Request {
+  // The brand the RPC envelope classifies by (`__hostKind`).
+  #brand;
+  // The buffered body, or null for a stream body (`__bodyBytesOf`).
+  #bodyBytes = null;
+  static {
+    __isRequest = (value) =>
+      typeof value === "object" && value !== null && #brand in value;
+    __requestBodyBytes = (request) => request.#bodyBytes;
+    __setRequestBodyBytes = (request, bytes) => {
+      request.#bodyBytes = bytes;
+    };
+  }
   constructor(input, init = {}) {
     const prior = input instanceof Request ? input : null;
     const suppliedSignal = init.signal !== undefined;
@@ -749,17 +854,17 @@ globalThis.Request = class Request {
         else if (iterable !== null) body = iterable;
       }
     }
-    if (!hasBody && prior && prior._bodyBytes === null) {
+    if (!hasBody && prior && __bodyBytesOf(prior) === null) {
       // Adopt the prior request's stream; per spec the prior body
       // is disturbed by the new request.
       stream = prior.body;
       prior._bodyUsed = true;
     }
-    this._bodyBytes = stream !== null
+    this.#bodyBytes = stream !== null
       ? null
       : hasBody
         ? (typed ? typed.bytes : __bodyBytes(body))
-        : (prior ? prior._bodyBytes.slice() : new Uint8Array());
+        : (prior ? __bodyBytesOf(prior).slice() : new Uint8Array());
     // An incoming request's body is a one-time stream in workerd, even when
     // celld holds it as bytes, so a redirect can't send it again
     // (see __fetchThrough). A copy that adopts the body keeps that.
@@ -839,7 +944,7 @@ globalThis.Request = class Request {
   async _consume() {
     if (__handedOverBodies.has(this)) throw new TypeError(__BODY_USED);
     if (__closedUnread(this.body)) return new Uint8Array();
-    if (this._bodyBytes !== null) return this._bodyBytes;
+    if (__bodyBytesOf(this) !== null) return __bodyBytesOf(this);
     return __drainBody(this);
   }
   async text() {
@@ -944,8 +1049,8 @@ globalThis.console = {
 // stream has no host owner, so it uses the existing byte fallback.
 const __subrequestBody = async (req, absent = false) => {
   if (absent) return { body: undefined, streamId: undefined };
-  if (req._bodyBytes !== null)
-    return { body: req._bodyBytes, streamId: undefined };
+  if (__bodyBytesOf(req) !== null)
+    return { body: __bodyBytesOf(req), streamId: undefined };
   __unlockedBody(req);
   const streamId = __hostStreamId(req.body);
   if (streamId === undefined) {
@@ -1057,8 +1162,8 @@ const __fetchThrough = async (req, send) => {
   // A byte body is never consumed in place: every send copies it. No send
   // changes `req`'s headers, so they are read only once a redirect needs them.
   const replayable = req.body === null ||
-    (req._bodyBytes !== null && !req._oneTimeBody);
-  let body = req.body === null ? undefined : req._bodyBytes;
+    (__bodyBytesOf(req) !== null && !req._oneTimeBody);
+  let body = req.body === null ? undefined : __bodyBytesOf(req);
   let method = req.method;
   const signal = req._signalForSubrequests;
   const cf = req.cf;
@@ -2706,12 +2811,31 @@ class __DurableObjectStorageBase {
   }
 }
 class DurableObjectStorage extends __DurableObjectStorageBase {
+  static { __recordBase(this); }
+  constructor(...args) {
+    const set = __pinBase(DurableObjectStorage);
+    try {
+      super(...args);
+    } finally {
+      __unpinBase(DurableObjectStorage, set);
+    }
+  }
   async transaction(f) {
     return __storageInternals.transaction(this, f);
   }
 }
 // The view a transaction callback receives.
-class DurableObjectTransaction extends __DurableObjectStorageBase {}
+class DurableObjectTransaction extends __DurableObjectStorageBase {
+  static { __recordBase(this); }
+  constructor(...args) {
+    const set = __pinBase(DurableObjectTransaction);
+    try {
+      super(...args);
+    } finally {
+      __unpinBase(DurableObjectTransaction, set);
+    }
+  }
+}
 // The storage methods as the harness defined them, for celld's own cells that
 // run in a script's isolate (a workflow instance, the cron schedule). A
 // script can replace these methods on the prototypes, and the replacement
@@ -4066,7 +4190,7 @@ const __wrapServiceResponse = (res, url) => {
   const wrapped = new Response(
     // Buffered bodies re-stream (an empty buffer still yields a
     // stream, as over real HTTP); a streaming body passes through.
-    res._bodyBytes !== null ? res._bodyBytes : res.body,
+    __bodyBytesOf(res) !== null ? __bodyBytesOf(res) : res.body,
     {
       status: res.status,
       statusText:
@@ -4298,55 +4422,82 @@ __celld.__makeLoader = () => {
     if (value === undefined || value === null)
       return { env: undefined, envRoutes: [] };
     const envRoutes = [];
-    const seen = new Map();
+    const seen = new __SafeMap();
+    const cache = (v, out) => __ReflectApply(__MapSet, seen, [v, out]);
     const project = (v) => {
       if (v === null ||
           (typeof v !== "object" && typeof v !== "function")) return v;
-      const cached = seen.get(v);
+      const cached = __ReflectApply(__MapGet, seen, [v]);
       if (cached !== undefined) return cached;
-      const route = __outboundMeta.get(v);
+      const route = __ReflectApply(__WeakMapGet, __outboundMeta, [v]);
       if (route !== undefined) {
         const marker = { [__loaderServiceMarker]: envRoutes.length };
-        seen.set(v, marker);
-        envRoutes.push([
+        cache(v, marker);
+        __ReflectApply(__ArrayPush, envRoutes, [[
           route.script,
           route.entrypoint,
           route.propsSc ?? (route.props === undefined
             ? new Uint8Array() : __rpcOut(route.props, false)),
-        ]);
+        ]]);
         return marker;
       }
-      if (Object.prototype.hasOwnProperty.call(v, __loaderServiceMarker))
-        throw new DOMException(
-          `Worker Loader env contains the reserved key ` +
-          `${JSON.stringify(__loaderServiceMarker)}.`,
-          "DataCloneError");
-      if (typeof v === "function" || v instanceof __cf.RpcTarget ||
-          __stubMeta.has(v) || __doStubMeta.has(v))
+      if (typeof v === "function" || __isRpcTarget(v) ||
+          __ReflectApply(__WeakMapHas, __stubMeta, [v]) ||
+          __ReflectApply(__WeakMapHas, __doStubMeta, [v]))
         throw new DOMException(
           "Worker Loader env supports only Service Binding capabilities.",
           "DataCloneError");
-      if (v instanceof Map) {
-        const out = new Map();
-        seen.set(v, out);
-        for (const [key, item] of v) out.set(project(key), project(item));
-        return out;
+      // Classified by brand, as an RPC payload is (`__rpcProject`): a
+      // Proxy and a value V8 writes as itself go to the clone as they are,
+      // a host class's instance crosses by value where workerd passes it
+      // and is refused with workerd's error otherwise, as in storage
+      // (`__hostValueOutsideRpc`), Maps and Sets are walked, a plain object
+      // or an array is copied, its keys escaped as in an RPC envelope's
+      // lifted tree, so data cannot pose as a marker (plan 1.53), and any
+      // other object is refused with workerd's error.
+      const flags = __util_type_flags(v);
+      if ((flags & (__TYPE_PROXY | __TYPE_CLONED)) !== 0) return v;
+      const array = __ArrayIsArray(v);
+      if (!array && (__ObjectGetPrototypeOf(v) !== __ObjectPrototype ||
+          (flags & (__TYPE_MAP | __TYPE_SET)) !== 0)) {
+        const kind = __hostKind(v);
+        if (kind !== undefined) {
+          const marker = __hostValueOutsideRpc(v, kind);
+          cache(v, marker);
+          return marker;
+        }
+        if ((flags & __TYPE_MAP) !== 0) {
+          const out = new Map();
+          cache(v, out);
+          for (const [key, item] of v) out.set(project(key), project(item));
+          return out;
+        }
+        if ((flags & __TYPE_SET) !== 0) {
+          const out = new Set();
+          cache(v, out);
+          for (const item of v) out.add(project(item));
+          return out;
+        }
+        throw __rpcUnsupportedType(v);
       }
-      if (v instanceof Set) {
-        const out = new Set();
-        seen.set(v, out);
-        for (const item of v) out.add(project(item));
-        return out;
+      const out = array ? [] : __bareObject();
+      cache(v, out);
+      const keys = __ObjectKeys(v);
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        if (array) __defineData(out, key, project(v[key]));
+        else out[__isMarkerKey(key) ? __escapeKey(key) : key] = project(v[key]);
       }
-      const proto = Object.getPrototypeOf(v);
-      if (!Array.isArray(v) && proto !== Object.prototype && proto !== null)
-        return v;
-      const out = Array.isArray(v) ? [] : {};
-      seen.set(v, out);
-      for (const key of Object.keys(v)) out[key] = project(v[key]);
       return out;
     };
-    return { env: __sc_encode(project(value)), envRoutes };
+    const tree = project(value);
+    try {
+      return { env: __sc_encode(tree), envRoutes };
+    } catch (error) {
+      // V8 refuses a Proxy (or another value it cannot clone) as workerd
+      // reports it, a DataCloneError.
+      throw __dataCloneError(error);
+    }
   };
   const encodeModules = (c) => {
     if (c === null || typeof c !== "object" || c.modules === null
@@ -4498,7 +4649,7 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
     // would: known length -> Content-Length, unknown -> chunked. On the
     // target's copy only: a redirect sends the caller's headers again.
     let framing = null;
-    if (req._bodyBytes === null &&
+    if (__bodyBytesOf(req) === null &&
         !req.headers.has("content-length") &&
         !req.headers.has("transfer-encoding")) {
       const length = req.body._expectedLength;
@@ -4680,24 +4831,54 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
 
 __celld.__installLoaderEnv = (bytes, routes) => {
   const env = __sc_decode(bytes);
-  const seen = new Set();
+  const seen = new Map();
   const revive = (v) => {
     if (v === null || typeof v !== "object") return v;
-    const routeIndex = Object.prototype.hasOwnProperty.call(
-        v, __loaderServiceMarker) ? v[__loaderServiceMarker] : undefined;
-    if (Number.isSafeInteger(routeIndex) && routeIndex >= 0) {
+    const plain = !__ArrayIsArray(v) &&
+      __ObjectGetPrototypeOf(v) === __ObjectPrototype;
+    const keys = plain ? __ObjectKeys(v) : null;
+    if (plain && keys.length !== 0 && keys[0] === __loaderServiceMarker) {
+      const routeIndex = v[__loaderServiceMarker];
       // Rust supplies flat [script, entrypoint, props] triples, and the marker
       // stores the triple index rather than an offset into that array.
       const routeOffset = routeIndex * 3;
-      if (!Number.isSafeInteger(routeOffset) || routeOffset + 2 >= routes.length)
+      if (!Number.isSafeInteger(routeIndex) || routeIndex < 0 ||
+          !Number.isSafeInteger(routeOffset) || routeOffset + 2 >= routes.length)
         throw new DOMException(
           "Worker Loader env contains an invalid capability.",
           "DataCloneError");
       return __makeServiceBinding(
         routes[routeOffset], routes[routeOffset + 1], routes[routeOffset + 2]);
     }
-    if (seen.has(v)) return v;
-    seen.add(v);
+    const cached = seen.get(v);
+    if (cached !== undefined) return cached;
+    // A host value's marker (`__hostValueOutsideRpc`).
+    if (plain && keys.length !== 0 && __isMarkerKey(keys[0]) &&
+        !__isEscapedKey(keys[0])) {
+      const revived = __reviveHostValue(v, keys[0], revive, false);
+      if (revived === undefined) throw __corruptLiftedPayload(keys[0]);
+      seen.set(v, revived);
+      return revived;
+    }
+    if (plain) {
+      // Unescape onto a copy, which keeps the key order.
+      let escaped = false;
+      for (let i = 0; i < keys.length; i++) {
+        if (!__isMarkerKey(keys[i])) continue;
+        if (!__isEscapedKey(keys[i])) throw __corruptLiftedPayload(keys[i]);
+        escaped = true;
+      }
+      const out = escaped ? {} : v;
+      seen.set(v, out);
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        if (!escaped) v[key] = revive(v[key]);
+        else __defineData(out,
+          __isEscapedKey(key) ? __unescapeKey(key) : key, revive(v[key]));
+      }
+      return out;
+    }
+    seen.set(v, v);
     if (v instanceof Map) {
       const entries = [...v];
       v.clear();
@@ -4710,9 +4891,11 @@ __celld.__installLoaderEnv = (bytes, routes) => {
       for (const item of items) v.add(revive(item));
       return v;
     }
-    if (Array.isArray(v) || Object.getPrototypeOf(v) === Object.prototype ||
-        Object.getPrototypeOf(v) === null)
-      for (const key of Object.keys(v)) v[key] = revive(v[key]);
+    if (__ArrayIsArray(v)) {
+      const indices = __ObjectKeys(v);
+      for (let i = 0; i < indices.length; i++)
+        v[indices[i]] = revive(v[indices[i]]);
+    }
     return v;
   };
   Object.assign(__cell.env, revive(env));
@@ -4731,13 +4914,233 @@ __celld.__installLoaderEnv = (bytes, routes) => {
 // Request/Response) and no capabilities -- decoded like 0x01, but a
 // reply so tagged does not root its callee context. 0x00 = clone of
 // [error, ownProps] -- a callee exception crossing as a real Error.
+//
+// Marker keys. In a lifted tree (envelopes 0x01 and 0x02, and a stored row
+// tagged as holding stubs) every marker is a plain object whose first key
+// starts with `__celld$` and a character other than `$` (`__celld$stub`,
+// `__celld$hdr`, ...), and `__celld$disp` beside a plain object's own keys
+// carries its disposer. A script's own key that starts with `__celld$` gets
+// one more `$` after that prefix on the way out (`__celld$x` becomes
+// `__celld$$x`, `__celld$$x` becomes `__celld$$$x`) and loses it on the way
+// in. So no plain object of a script's reads as a marker, and every key
+// arrives as it was sent (plan 1.53). Arrays are never markers and carry no
+// disposer, so their keys cross as they are. The prefix tests are two string
+// comparisons, which call nothing a script can replace: a key starts with
+// `__celld$` exactly when it sorts from that prefix up to `__celld%`.
+const __isMarkerKey = (key) => key >= "__celld$" && key < "__celld%";
+const __isEscapedKey = (key) => key >= "__celld$$" && key < "__celld$%";
+const __escapeKey = (key) =>
+  "__celld$$" + __ReflectApply(__StringSlice, key, [8]);
+const __unescapeKey = (key) =>
+  "__celld$" + __ReflectApply(__StringSlice, key, [9]);
+// A tree object that no lift made: a stored row an older build wrote, whose
+// keys were not escaped, or bytes from something other than a lift.
+const __corruptLiftedPayload = (key) => new Error(
+  "corrupt RPC or storage payload: a plain object has the reserved key " +
+  __jsonString(key) + ".");
+const __defineData = (target, key, value) => __ObjectDefineProperty(
+  target, key,
+  { value, enumerable: true, configurable: true, writable: true });
+// An object with no prototype, so that assigning a key never reaches a
+// setter on one. V8 keeps it in fast mode, where a `{ __proto__: null }`
+// literal starts as a dictionary, which costs a stored lift about half
+// again.
+const __bareObject = () => __ObjectSetPrototypeOf({}, null);
+// An array whose indices below `length` are already its own, so that
+// assigning one never reaches a setter on a prototype; cheaper than
+// defining each.
+const __ownArray = (length) =>
+  __ReflectApply(__ArrayFill, new __Array(length), [undefined]);
 const __dataCloneError = (error) => new DOMException(
   String(error && error.message || error), "DataCloneError");
+// The type a refusal names: V8's constructor name, as workerd's
+// serializer reports it, except that an object claiming RpcTarget's
+// prototype without its brand is workerd's "JsRpcTarget".
 const __rpcUnsupportedType = (value) => new DOMException(
   'Could not serialize object of type "' +
-  (__util_constructor_name(value) || "Object") +
+  (__isRpcTarget(value) || !(value instanceof __cf.RpcTarget)
+    ? __util_constructor_name(value) || "Object" : "JsRpcTarget") +
   '". This type does not support serialization.',
   "DataCloneError");
+// ---- host values by brand ----------------------------------------
+// What a value is, from V8's own type checks (`op_util_type_flags`) and the
+// brands of celld's host classes, never from its prototype: a script sets
+// that, and V8's serializer writes `Object.create(Date.prototype)`, a class
+// instance or a null-prototype object as a plain object. The envelopes
+// decide by this what crosses as itself, what is copied (and so escaped)
+// and what is refused, so nothing they leave to V8 is an ordinary object.
+const __TYPE_PROXY = 1 << 23;
+const __TYPE_MAP = 1 << 14;
+const __TYPE_SET = 1 << 15;
+// Values V8's serializer writes as themselves: a Date, a boxed BigInt,
+// boolean, number or string, a native error, a RegExp, an ArrayBuffer, a
+// view of one, a SharedArrayBuffer and a compiled Wasm module.
+const __TYPE_CLONED = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) |
+  (1 << 8) | (1 << 9) | (1 << 20) | (1 << 21) | (1 << 22) | (1 << 25) |
+  (1 << 26) | (1 << 27);
+const __isHeaders = __celld.__isHeaders;
+const __isReadableStream = __celld.__isReadableStream;
+const __isWritableStream = __celld.__isWritableStream;
+// The host class an object is an instance of, by brand, or undefined.
+// crypto.js loads after the harness, so its brand is read when needed.
+const __hostKind = (v) =>
+  __isHeaders(v) ? "headers"
+    : __isFile(v) ? "file"
+    : __isBlob(v) ? "blob"
+    : __isRequest(v) ? "request"
+    : __isResponse(v) ? "response"
+    : __isReadableStream(v) ? "readable"
+    : __isWritableStream(v) ? "writable"
+    : __isAbortSignal(v) ? "signal"
+    : __isRpcTarget(v) ? "target"
+    : __celld.__isCryptoKey !== undefined && __celld.__isCryptoKey(v)
+      ? "cryptokey"
+    : undefined;
+// A Headers' entries, read from its list (headers.js), for a marker; any
+// other value where a request or response holds its headers is refused.
+const __headerPairsOf = (headers) => {
+  if (headers === null || typeof headers !== "object" || !__isHeaders(headers))
+    throw __rpcUnsupportedType(headers);
+  return __celld.__headerPairs(headers);
+};
+// workerd's refusals of host values outside RPC (probed: storage and a
+// Worker Loader env), and celld's of a stream across isolates.
+const __streamOnlyForRpc = (kind) => new DOMException(
+  (kind === "writable" ? "WritableStream" : "ReadableStream") +
+  " can only be serialized for RPC.", "DataCloneError");
+const __signalNotEnabled = () => new DOMException(
+  "AbortSignal serialization is not enabled.", "DataCloneError");
+const __streamAcrossIsolates = () => new DOMException(
+  "RPC streams cannot cross isolate boundaries yet.", "DataCloneError");
+// The marker a host value crosses as by value, as workerd serializes it on
+// every transport: a Headers' entries, a Blob's bytes and type, and a
+// Request's or Response's parts: no body is null, and a buffered body is
+// its bytes and a stream body what `body(stream)` makes of it, or, with
+// `body` null (outside RPC), either is refused; a File and a CryptoKey are
+// refused, as in workerd. The bytes, a Blob's type and the header list are
+// the value's private state; a Request's and Response's other attributes
+// are its own properties in celld (plan 1.36), so each must have its type
+// or the value is refused. Nothing a script set can make a field the
+// receiver interprets (`__reviveHostValue` checks each again). undefined
+// for a kind that is not a value (a stream, a signal, an RpcTarget).
+const __hostValueMarker = (v, kind, body) => {
+  switch (kind) {
+    case "headers":
+      return { "__celld$hdr": __headerPairsOf(v) };
+    case "blob":
+      return { "__celld$blob": __blobBytesOf(v), y: __blobTypeOf(v) };
+    case "request": {
+      const { url, method, redirect } = v;
+      if (typeof url !== "string" || typeof method !== "string" ||
+          typeof redirect !== "string")
+        throw __rpcUnsupportedType(v);
+      return { "__celld$req": url, m: method,
+               h: __headerPairsOf(v.headers), r: redirect,
+               c: __hostCf(v), b: __hostBody(v, body) };
+    }
+    case "response": {
+      // Workerd serializes the socket too, and a WebSocket does not
+      // serialize. Dropping it would revive a 101 with nothing to switch to.
+      if (v.webSocket) throw __rpcUnsupportedType(v.webSocket);
+      const { status, statusText, type } = v;
+      if (!__NumberIsInteger(status) || typeof statusText !== "string")
+        throw __rpcUnsupportedType(v);
+      return { "__celld$res": status,
+               t: statusText || __STATUS_TEXT[status] || "",
+               h: __headerPairsOf(v.headers), c: __hostCf(v),
+               e: type === "error", b: __hostBody(v, body) };
+    }
+    case "file":
+    case "cryptokey":
+      throw __rpcUnsupportedType(v);
+  }
+  return undefined;
+};
+// A Request's or Response's `cf`: absent, or a plain object, which the
+// receiver hands to the constructor as data.
+const __hostCf = (v) => {
+  const cf = v.cf;
+  if (cf !== undefined && cf !== null &&
+      (typeof cf !== "object" || __ObjectGetPrototypeOf(cf) !== __ObjectPrototype))
+    throw __rpcUnsupportedType(v);
+  return cf;
+};
+// A body: null without one; outside RPC, workerd's refusal; otherwise its
+// private bytes, or what `body` makes of the stream it holds, which must be
+// a stream.
+const __hostBody = (v, body) => {
+  const stream = v.body;
+  if (stream === null) return null;
+  if (body === null) throw __streamOnlyForRpc("readable");
+  const bytes = __bodyBytesOf(v);
+  if (bytes !== null) return bytes;
+  if (!__isReadableStream(stream)) throw __rpcUnsupportedType(v);
+  return body(stream);
+};
+// A host value outside RPC (stored, or in a Worker Loader env): by value
+// where workerd keeps it, otherwise workerd's refusal. A body crosses
+// nowhere but RPC, buffered or not.
+const __hostValueOutsideRpc = (v, kind) => {
+  if (kind === "readable" || kind === "writable")
+    throw __streamOnlyForRpc(kind);
+  if (kind === "signal") throw __signalNotEnabled();
+  return __hostValueMarker(v, kind, null);
+};
+// What a by-value host marker revives as, or undefined for another kind.
+// Every field must have the type the lift gave it, and a body is bytes, null
+// or, where `streams` (RPC), a stream marker the lift built: anything else
+// is a payload no lift wrote.
+const __reviveHostValue = (v, kind, revive, streams) => {
+  const fail = () => {
+    throw new Error("corrupt RPC or storage payload: a malformed " +
+      kind + " marker.");
+  };
+  const pairs = (h) => {
+    if (!__ArrayIsArray(h)) fail();
+    for (let i = 0; i < h.length; i++) {
+      const pair = h[i];
+      if (!__ArrayIsArray(pair) || pair.length !== 2 ||
+          typeof pair[0] !== "string" || typeof pair[1] !== "string") fail();
+    }
+    return h;
+  };
+  const cf = (c) => {
+    if (c !== undefined && c !== null &&
+        (typeof c !== "object" ||
+         __ObjectGetPrototypeOf(c) !== __ObjectPrototype)) fail();
+    return c;
+  };
+  const body = (b) => {
+    if (b === null || __isUint8Array(b)) return b;
+    if (streams && b !== null && typeof b === "object" &&
+        __ObjectGetPrototypeOf(b) === __ObjectPrototype) {
+      const keys = __ObjectKeys(b);
+      if (keys.length !== 0 && keys[0] === "__celld$rs") return revive(b);
+    }
+    fail();
+  };
+  switch (kind) {
+    case "__celld$hdr":
+      return new Headers(pairs(v[kind]));
+    case "__celld$blob":
+      if (!__isUint8Array(v[kind]) || typeof v.y !== "string") fail();
+      return __reviveBlob(v.y, v[kind]);
+    case "__celld$req":
+      if (typeof v[kind] !== "string" || typeof v.m !== "string" ||
+          typeof v.r !== "string") fail();
+      return __reviveRequest(v[kind], v.m, pairs(v.h), v.r, cf(v.c),
+        body(v.b));
+    case "__celld$res":
+      if (!__NumberIsInteger(v[kind]) || typeof v.t !== "string" ||
+          typeof v.e !== "boolean") fail();
+      return __reviveResponse(v[kind], v.t, pairs(v.h), cf(v.c), v.e,
+        body(v.b));
+  }
+  return undefined;
+};
+const __TYPE_UINT8ARRAY = 1 << 28;
+const __isUint8Array = (v) => v !== null && typeof v === "object" &&
+  (__util_type_flags(v) & __TYPE_UINT8ARRAY) !== 0;
 // V8 clones a user-class instance and a null-prototype object as plain data,
 // but Workerd refuses both over RPC. Project the value graph before V8 can
 // erase that distinction. The projection also snapshots enumerable getters,
@@ -4749,31 +5152,51 @@ const __rpcUnsupportedType = (value) => new DOMException(
 // so whatever the lift took before it is released, as in workerd.
 // `unsupported` maps each placeholder to its error, in projection order.
 const __rpcProject = (value) => {
+  let host = false;
   const seen = new Map();
   const originals = new WeakMap();
   const unsupported = new Map();
-  const set = (target, key, value) => Object.defineProperty(target, key, {
-    value, enumerable: true, configurable: true, writable: true,
-  });
   const project = (v) => {
     if (v === null || (typeof v !== "object" && typeof v !== "function"))
       return v;
     const cached = seen.get(v);
     if (cached !== undefined) return cached;
-    if (typeof v === "function" || v instanceof __cf.RpcTarget ||
-        __stubMeta.has(v) || __svcMeta.has(v) || __doStubMeta.has(v) ||
-        v instanceof Headers || v instanceof Blob || v instanceof Request ||
-        v instanceof Response || v instanceof ReadableStream ||
-        v instanceof WritableStream || v instanceof AbortSignal ||
-        v instanceof Date || v instanceof RegExp || v instanceof Error ||
-        v instanceof ArrayBuffer || ArrayBuffer.isView(v) ||
-        (typeof SharedArrayBuffer !== "undefined" &&
-          v instanceof SharedArrayBuffer) ||
-        (typeof CryptoKey !== "undefined" && v instanceof CryptoKey) ||
-        (typeof WebAssembly !== "undefined" &&
-          v instanceof WebAssembly.Module) ||
-        __util_proxy_details(v) !== undefined) return v;
-    if (v instanceof Map) {
+    // Capabilities and Proxies go to the lift as they are.
+    if (typeof v === "function" ||
+        __ReflectApply(__WeakMapHas, __stubMeta, [v]) ||
+        __ReflectApply(__WeakMapHas, __svcMeta, [v]) ||
+        __ReflectApply(__WeakMapHas, __doStubMeta, [v])) return v;
+    const flags = __util_type_flags(v);
+    if ((flags & __TYPE_PROXY) !== 0) return v;
+    if (__ArrayIsArray(v)) {
+      const out = new Array(v.length);
+      seen.set(v, out);
+      originals.set(out, v);
+      const keys = __ObjectKeys(v);
+      for (let i = 0; i < keys.length; i++)
+        __defineData(out, keys[i], project(v[keys[i]]));
+      return out;
+    }
+    // A plain object. (A host class's instance given Object.prototype is
+    // copied as one too: its own keys, escaped where they need it.)
+    if (__ObjectGetPrototypeOf(v) === __ObjectPrototype &&
+        (flags & (__TYPE_CLONED | __TYPE_MAP | __TYPE_SET)) === 0) {
+      const out = {};
+      seen.set(v, out);
+      originals.set(out, v);
+      const keys = __ObjectKeys(v);
+      for (let i = 0; i < keys.length; i++)
+        __defineData(out, keys[i], project(v[keys[i]]));
+      return out;
+    }
+    if ((flags & __TYPE_CLONED) !== 0) return v;
+    // A host instance goes to the lift, which builds its marker from its
+    // state: the plain clone would write a stripped one as a plain object.
+    if (__hostKind(v) !== undefined) {
+      host = true;
+      return v;
+    }
+    if ((flags & __TYPE_MAP) !== 0) {
       const out = new Map();
       seen.set(v, out);
       for (const [key, entry] of v) {
@@ -4781,32 +5204,20 @@ const __rpcProject = (value) => {
       }
       return out;
     }
-    if (v instanceof Set) {
+    if ((flags & __TYPE_SET) !== 0) {
       const out = new Set();
       seen.set(v, out);
       for (const entry of v) out.add(project(entry));
       return out;
     }
-    if (Array.isArray(v)) {
-      const out = new Array(v.length);
-      seen.set(v, out);
-      originals.set(out, v);
-      for (const key of Object.keys(v)) set(out, key, project(v[key]));
-      return out;
-    }
-    if (Object.getPrototypeOf(v) !== Object.prototype) {
-      const placeholder = { "__celld$unsupported": __rpcNoClone };
-      unsupported.set(placeholder, __rpcUnsupportedType(v));
-      seen.set(v, placeholder);
-      return placeholder;
-    }
-    const out = {};
-    seen.set(v, out);
-    originals.set(out, v);
-    for (const key of Object.keys(v)) set(out, key, project(v[key]));
-    return out;
+    // Any other object is ordinary, whatever its prototype claims.
+    const placeholder = { "__celld$unsupported": __rpcNoClone };
+    unsupported.set(placeholder, __rpcUnsupportedType(v));
+    seen.set(v, placeholder);
+    return placeholder;
   };
-  return { tree: project(value), originals, unsupported };
+  const tree = project(value);
+  return { tree, originals, unsupported, host };
 };
 const __tagged = (tag, sc) => {
   const out = new Uint8Array(sc.length + 1);
@@ -4939,7 +5350,18 @@ const __stubMeta = new WeakMap();
 // reject its unsupported prototype.
 const __doStubMeta = new WeakMap();
 let __nextStubId = 1;
-const __stubIsolate = Math.random().toString(36).slice(2);
+// Which isolate a marker's entry id belongs to. Only a lift writes a marker
+// (a script's keys are escaped), so the token is no authority: it keeps a
+// marker from another isolate from naming a local entry. 128 random bits,
+// drawn before any script runs.
+const __stubIsolate = (() => {
+  const words = new Uint32Array(4);
+  $$randomValues(words);
+  let token = "";
+  for (let i = 0; i < words.length; i++)
+    token += (words[i] + 0x100000000).toString(16).slice(1);
+  return token;
+})();
 const __newEntry = (target) => {
   // `scope` records the actor event that minted the entry (top of
   // the event stack at lift time), so an actor breakage can find
@@ -5156,8 +5578,7 @@ const __writableBridge = (writer) => {
   };
   return bridge;
 };
-const __liftStream = (v) => {
-  const readable = v instanceof ReadableStream;
+const __liftStream = (v, readable = __isReadableStream(v)) => {
   const key = readable ? "__celld$rs" : "__celld$ws";
   const meta = __rpcStreamMeta.get(v);
   if (meta !== undefined && !meta.disposed && !v.locked) {
@@ -5236,9 +5657,8 @@ const __liftSignal = (signal) => {
       }, { once: true });
     }
   }
-  const marker = { "__celld$sig": meta.id, a: signal.aborted };
-  if (signal.aborted) marker.r = __rpcSignalReasonOut(signal.reason);
-  return marker;
+  return { "__celld$sig": meta.id, a: signal.aborted,
+           r: signal.aborted ? __rpcSignalReasonOut(signal.reason) : null };
 };
 const __rpcSignalRefresh = () => {
   for (const [id, receivers] of __rpcSignalReceivers) {
@@ -5299,7 +5719,7 @@ const __rpcParamDup = (v) => {
       "a dup() method which did not return another function. Either " +
       "remove the dup() method or make sure it returns a function.";
   } else {
-    if (object && replacement instanceof __cf.RpcTarget &&
+    if (object && __isRpcTarget(replacement) &&
         __util_proxy_details(replacement) === undefined)
       return replacement;
     // "RcpTarget" is workerd's spelling.
@@ -5318,30 +5738,39 @@ const __rpcParamDup = (v) => {
 // handle is disposed (dup() first to keep one) and the receiver
 // adopts it. Returns null when nothing was liftable. Throws a
 // projected value's refusal where the walk meets it.
+//
+// The walk rewrites the projection in place: its plain objects and
+// arrays are the projection's own copies, whose keys are own data
+// properties, so no setter a script put on a prototype sees the tree.
+// A plain object with a key that starts with `__celld$` is copied
+// instead, onto a null-prototype object, with that key escaped (see
+// "Marker keys"). Markers are object literals, their marker key first
+// and every field own.
 const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
   const { originals, unsupported } = projected;
   let lifted = false;
   // Capabilities (stubs, disposers) root the callee context;
   // by-value host types do not -- they pick the 0x02 envelope.
   let caps = false;
-  const seen = new Map();
+  const seen = new __SafeMap();
+  const cache = (v, out) => __ReflectApply(__MapSet, seen, [v, out]);
+  const ref = (entry) => __ReflectApply(__ArrayPush, refs, [entry]);
   const ctx = __ctxNow();
-  // A buffered body crosses as its bytes; a live-stream body
-  // crosses as a stream handle (a capability, so the reply
-  // roots its callee context and the pulls keep working).
-  const liftBody = (v) => {
-    if (v._bodyBytes !== null) return v._bodyBytes;
+  // A stream body crosses as a stream handle (a capability, so the reply
+  // roots its callee context and the pulls keep working), within an isolate.
+  const liftBody = (stream) => {
+    if (!allowCapabilities) throw __streamAcrossIsolates();
     caps = true;
-    return __liftStream(v.body);
+    return __liftStream(stream, true);
   };
   const lift = (v) => {
     if (v === null ||
         (typeof v !== "object" && typeof v !== "function")) return v;
-    const cached = seen.get(v);
+    const cached = __ReflectApply(__MapGet, seen, [v]);
     if (cached !== undefined) return cached;
-    const refused = unsupported.get(v);
+    const refused = __ReflectApply(__MapGet, unsupported, [v]);
     if (refused !== undefined) throw refused;
-    const meta = __stubMeta.get(v);
+    const meta = __ReflectApply(__WeakMapGet, __stubMeta, [v]);
     if (meta) {
       if (!allowCapabilities) return v;
       lifted = true;
@@ -5356,13 +5785,13 @@ const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
         meta.disposed = true; // the ref moves to the receiver
         __ctxUnregister(meta);
       }
-      refs.push(meta.entry);
+      ref(meta.entry);
       const marker = { "__celld$stub": meta.entry.id,
-                       t: __stubIsolate, c: meta.callable };
-      seen.set(v, marker);
+                       t: __stubIsolate, c: meta.callable, np: false };
+      cache(v, marker);
       return marker;
     }
-    const svc = __svcMeta.get(v);
+    const svc = __ReflectApply(__WeakMapGet, __svcMeta, [v]);
     if (svc !== undefined) {
       if (!allowCapabilities) return v;
       // A loopback service stub (ctx.exports): name + props cross
@@ -5371,11 +5800,15 @@ const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
       // nested channel tokens).
       lifted = true;
       caps = true;
-      const marker = { "__celld$svc": svc.name, t: __stubIsolate };
-      seen.set(v, marker);
+      const marker = { "__celld$svc": svc.name, t: __stubIsolate,
+                       p: undefined };
+      cache(v, marker);
       if (svc.props !== undefined) marker.p = lift(svc.props);
       return marker;
     }
+    // The projection's own plain objects and arrays are data: walk them.
+    const copy = __ReflectApply(__WeakMapGet, originals, [v]);
+    if (copy !== undefined) return walk(v, copy, __ArrayIsArray(v));
     // Workerd refuses to serialize its promise/property handles.
     if (v instanceof __cf.RpcPromise || v instanceof __cf.RpcProperty)
       throw new DOMException(
@@ -5383,35 +5816,39 @@ const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
         (v instanceof __cf.RpcPromise ? "RpcPromise" : "RpcProperty") +
         '". This type does not support serialization.',
         "DataCloneError");
-    if (typeof v === "function" || v instanceof __cf.RpcTarget) {
+    // Classified by brand (`__hostKind`); only a Proxy is classified by
+    // the prototype chain it presents, as workerd does.
+    const proxy = (__util_type_flags(v) & __TYPE_PROXY) !== 0;
+    const kind = proxy ? undefined : __hostKind(v);
+    if (typeof v === "function" || kind === "target" ||
+        (proxy && v instanceof __cf.RpcTarget)) {
       if (!allowCapabilities) return v;
       lifted = true;
       caps = true;
       const target = dupStubs ? __rpcParamDup(v) : v;
       const entry = __newEntry(target);
-      refs.push(entry);
-      const marker = { "__celld$stub": entry.id,
-                       t: __stubIsolate,
-                       c: typeof target === "function" };
+      ref(entry);
       // A Proxy that claims to be an RpcTarget crosses as a stub, but a
       // call that returns one has no pipeline: workerd's brand check
       // (isInstanceOf<JsRpcTarget>) fails for it. The stub it revives as
       // says so (`__walkLocal`); a stub passed on from there is an
       // ordinary one.
-      if (typeof target !== "function" &&
-          __util_proxy_details(target) !== undefined)
-        marker.np = true;
-      seen.set(v, marker);
+      const marker = { "__celld$stub": entry.id,
+                       t: __stubIsolate,
+                       c: typeof target === "function",
+                       np: typeof target !== "function" &&
+                         __util_proxy_details(target) !== undefined };
+      cache(v, marker);
       return marker;
     }
-    const doId = __doStubMeta.get(v);
+    const doId = __ReflectApply(__WeakMapGet, __doStubMeta, [v]);
     if (doId !== undefined) {
       if (!allowCapabilities) return v;
       lifted = true;
       caps = true;
       const marker = { "__celld$do": __doIdClass(doId),
                        v: doId.toString(), n: v.name ?? null };
-      seen.set(v, marker);
+      cache(v, marker);
       return marker;
     }
     // HTTP host types cross by value, as in Workerd's RPC
@@ -5419,71 +5856,75 @@ const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
     // for bodies (the marker aliases the live buffer; the clone
     // is the one wire copy), and no signal -- the receiver mints
     // a fresh one. A live stream body cannot cross yet.
+    // A host instance never reaches the clone in a lifted tree: V8 would
+    // write it as a plain object of its own keys, which a script sets. A
+    // value crosses as a marker built from its state, on every transport
+    // (`__hostValueMarker`); a stream crosses as a handle, within an isolate
+    // only; a signal as its process-wide identity.
     let marker;
-    if (v instanceof Headers) {
-      if (!allowCapabilities) return v;
-      marker = { "__celld$hdr": [...v] };
-    } else if (v instanceof Blob) {
-      if (!allowCapabilities) return v;
-      marker = { "__celld$blob": v._bytes, y: v.type };
-      if (v instanceof File) {
-        marker.n = v.name;
-        marker.m = v.lastModified;
-      }
-    } else if (v instanceof Request) {
-      if (!allowCapabilities) return v;
-      marker = { "__celld$req": v.url, m: v.method,
-                 h: [...v.headers], r: v.redirect, c: v.cf,
-                 b: liftBody(v) };
-    } else if (v instanceof Response) {
-      if (!allowCapabilities) return v;
-      // Workerd serializes the socket too, and a WebSocket does not
-      // serialize. Dropping it would revive a 101 with nothing to switch to.
-      if (v.webSocket) throw __rpcUnsupportedType(v.webSocket);
-      marker = { "__celld$res": v.status,
-                 t: v.statusText ||
-                    __STATUS_TEXT[v.status] || "",
-                 h: [...v.headers], c: v.cf,
-                 e: v.type === "error",
-                 b: v.body === null ? null : liftBody(v) };
-    } else if (v instanceof ReadableStream ||
-               v instanceof WritableStream) {
-      if (!allowCapabilities) return v;
+    if (kind === "readable" || kind === "writable") {
+      if (!allowCapabilities) throw __streamAcrossIsolates();
       caps = true;
-      marker = __liftStream(v);
-    } else if (v instanceof AbortSignal) {
+      marker = __liftStream(v, kind === "readable");
+    } else if (kind === "signal") {
       marker = __liftSignal(v);
+    } else if (kind !== undefined) {
+      marker = __hostValueMarker(v, kind, liftBody);
     }
     if (marker !== undefined) {
       lifted = true;
-      seen.set(v, marker);
+      cache(v, marker);
       return marker;
     }
-    const proto = Object.getPrototypeOf(v);
-    if (!Array.isArray(v) &&
-        proto !== Object.prototype && proto !== null) {
-      // A Proxy emulating neither a plain object nor an RpcTarget
-      // is Workerd's canonical proxy serialization error.
-      if (__util_proxy_details(v) !== undefined)
-        throw new DOMException(
-          "Proxy could not be serialized because it is not a " +
-          "valid RPC receiver type. The Proxy must emulate either " +
-          "a plain object or an RpcTarget, as indicated by the " +
-          "Proxy's prototype chain.", "DataCloneError");
-      return v; // host/other: leave to the clone
+    // What is left is a value V8 writes as itself (a Date, a RegExp, an
+    // ArrayBuffer, a Map or Set: their contents stay the clone's), a Proxy,
+    // or an object read through a Proxy, which the projection did not walk
+    // and which is classified here as it would have been.
+    if (!proxy) {
+      if ((__util_type_flags(v) &
+          (__TYPE_CLONED | __TYPE_MAP | __TYPE_SET)) !== 0) return v;
+      const array = __ArrayIsArray(v);
+      if (array || __ObjectGetPrototypeOf(v) === __ObjectPrototype)
+        return walk(v, v, array);
+      throw __rpcUnsupportedType(v);
     }
-    const out = Array.isArray(v) ? [] : {};
-    seen.set(v, out);
-    for (const key of Object.keys(v)) out[key] = lift(v[key]);
-    const disposerSource = originals.get(v) ?? v;
-    const disposer = disposerSource[Symbol.dispose];
-    if (allowCapabilities && !Array.isArray(v) &&
+    // A Proxy emulating neither a plain object nor an RpcTarget is
+    // Workerd's canonical proxy serialization error. One emulating a
+    // plain object is copied through its traps, never written to.
+    const array = __ArrayIsArray(v);
+    if (!array && __ObjectGetPrototypeOf(v) !== __ObjectPrototype)
+      throw new DOMException(
+        "Proxy could not be serialized because it is not a " +
+        "valid RPC receiver type. The Proxy must emulate either " +
+        "a plain object or an RpcTarget, as indicated by the " +
+        "Proxy's prototype chain.", "DataCloneError");
+    return walk(v, v, array);
+  };
+  // Lift the keys of a plain object or array `v`: in place when it is the
+  // projection's own copy and needs no escape, otherwise onto a copy.
+  // `source` is the script's object, whose disposer it carries.
+  const walk = (v, source, array) => {
+    const keys = __ObjectKeys(v);
+    // The projection's copy is not the script's object; a Proxy is.
+    let inPlace = source !== v;
+    for (let i = 0; inPlace && !array && i < keys.length; i++)
+      if (__isMarkerKey(keys[i])) inPlace = false;
+    const out = inPlace ? v : array ? [] : __bareObject();
+    cache(v, out);
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (inPlace) v[key] = lift(v[key]);
+      else if (array) __defineData(out, key, lift(v[key]));
+      else out[__isMarkerKey(key) ? __escapeKey(key) : key] = lift(v[key]);
+    }
+    const disposer = source[Symbol.dispose];
+    if (allowCapabilities && !array &&
         typeof disposer === "function" && disposer !== __rpcNoDisposer) {
       lifted = true;
       caps = true;
-      const entry = __newEntry(__rpcBindMethod(disposer, disposerSource));
-      refs.push(entry);
-      out["__celld$disp"] = entry.id;
+      const entry = __newEntry(__rpcBindMethod(disposer, source));
+      ref(entry);
+      __defineData(out, "__celld$disp", entry.id);
     }
     return out;
   };
@@ -5492,17 +5933,13 @@ const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
 };
 // Revive host-type markers into real instances, adopting the wire
 // bytes directly -- no copy beyond the clone's own.
-const __reviveBlob = (marker, bytes) => {
-  const blob = marker.n !== undefined
-    ? new File([], marker.n,
-        { type: marker.y, lastModified: marker.m })
-    : new Blob([], { type: marker.y });
-  blob._bytes = bytes;
-  blob.size = bytes.byteLength;
+const __reviveBlob = (type, bytes) => {
+  const blob = new Blob([], { type });
+  __setBlobBytes(blob, bytes);
   return blob;
 };
 const __adoptBody = (target, bytes) => {
-  target._bodyBytes = bytes;
+  __setBodyBytes(target, bytes);
   target._body = undefined; // decoded lazily on the first text()/json()
   const body = target.body;
   if (body !== null) {
@@ -5510,26 +5947,21 @@ const __adoptBody = (target, bytes) => {
     body._expectedLength = bytes.byteLength;
   }
 };
-// A non-bytes `b` is a live-stream body marker: revive it and
-// let the constructor adopt it as a streaming body.
-const __reviveRequest = (marker, url, revive) => {
-  if (!(marker.b instanceof Uint8Array))
-    return new Request(url, { method: marker.m,
-      headers: marker.h, redirect: marker.r, cf: marker.c,
-      body: revive(marker.b) });
-  const req = new Request(url, { method: marker.m,
-    headers: marker.h, redirect: marker.r, cf: marker.c });
-  __adoptBody(req, marker.b);
+// A body that is not bytes is a revived stream, which the constructor
+// adopts as a streaming body.
+const __reviveRequest = (url, method, headers, redirect, cf, body) => {
+  if (!__isUint8Array(body))
+    return new Request(url, { method, headers, redirect, cf, body });
+  const req = new Request(url, { method, headers, redirect, cf });
+  __adoptBody(req, body);
   return req;
 };
-const __reviveResponse = (marker, revive) => {
-  const bytes = marker.b instanceof Uint8Array;
-  const res = new Response(
-    marker.b === null ? null : bytes ? "" : revive(marker.b), {
-      status: marker["__celld$res"], statusText: marker.t,
-      headers: marker.h, cf: marker.c });
-  if (bytes) __adoptBody(res, marker.b);
-  if (marker.e) res.type = "error";
+const __reviveResponse = (status, statusText, headers, cf, error, body) => {
+  const bytes = __isUint8Array(body);
+  const res = new Response(body === null ? null : bytes ? "" : body,
+    { status, statusText, headers, cf });
+  if (bytes) __adoptBody(res, body);
+  if (error) res.type = "error";
   return res;
 };
 // Wire a received stream handle to a local endpoint built with
@@ -5589,85 +6021,104 @@ const __reviveSignal = (marker, id) => {
   __rpcSignalSubscribe(receiver);
   return signal;
 };
-// The inverse: markers become live handles. `handles` collects the
-// revived stubs (for call-end param disposal or result-tree
+// Walk a lifted tree back into a script's value: `reviveMarker(marker,
+// kind, revive)` answers what each marker becomes, or undefined for a kind
+// this tree cannot hold; `disposers` collects `__celld$disp` entries (null
+// where a tree carries none). Each object revives once, so a marker the
+// value holds twice carries one reference (the lift shares it): one handle,
+// one disposal.
+//
+// Only a plain object can be a marker, and it is one when its first key is
+// a marker key: a lift escaped every key of a script's that starts with
+// `__celld$`. Such a key is unescaped here, onto a copy that keeps the key
+// order. Any other key with the prefix is refused: no lift wrote it.
+const __reviveLifted = (value, reviveMarker, disposers) => {
+  const seen = new __SafeMap();
+  const cache = (v, out) => __ReflectApply(__MapSet, seen, [v, out]);
+  const revive = (v) => {
+    if (v === null || typeof v !== "object") return v;
+    const cached = __ReflectApply(__MapGet, seen, [v]);
+    if (cached !== undefined) return cached;
+    // An array's named keys carry lifted values too, and its holes stay.
+    if (__ArrayIsArray(v)) {
+      cache(v, v);
+      const keys = __ObjectKeys(v);
+      for (let i = 0; i < keys.length; i++) v[keys[i]] = revive(v[keys[i]]);
+      return v;
+    }
+    if (__ObjectGetPrototypeOf(v) !== __ObjectPrototype) return v;
+    const keys = __ObjectKeys(v);
+    const first = keys.length === 0 ? "" : keys[0];
+    if (__isMarkerKey(first) && first !== "__celld$disp" &&
+        !__isEscapedKey(first)) {
+      const revived = reviveMarker(v, first, revive);
+      if (revived === undefined) throw __corruptLiftedPayload(first);
+      cache(v, revived);
+      return revived;
+    }
+    let out = v;
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (!__isMarkerKey(key)) continue;
+      if (__isEscapedKey(key)) {
+        if (out === v) out = {};
+      } else if (key === "__celld$disp" && disposers !== null) {
+        const entry = __ReflectApply(__MapGet, __stubEntries, [v[key]]);
+        if (entry) __ReflectApply(__ArrayPush, disposers, [entry]);
+        delete v[key];
+      } else {
+        throw __corruptLiftedPayload(key);
+      }
+    }
+    cache(v, out);
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (key === "__celld$disp") continue;
+      if (out === v) v[key] = revive(v[key]);
+      else __defineData(out,
+        __isEscapedKey(key) ? __unescapeKey(key) : key, revive(v[key]));
+    }
+    return out;
+  };
+  return revive(value);
+};
+// The inverse of `__stubLift`: markers become live handles. `handles`
+// collects the revived stubs (for call-end param disposal or result-tree
 // disposal); `disposers` collects remote Symbol.dispose entries.
 const __stubRevive = (value) => {
   const handles = [];
   const disposers = [];
-  const seen = new Set();
-  // A marker the value holds twice carries one reference (the lift
-  // shares it), so it revives once: one handle, one disposal.
-  const stubs = new Map();
-  const revive = (v) => {
-    if (v === null || typeof v !== "object") return v;
-    const stubId = v["__celld$stub"];
-    if (stubId !== undefined) {
-      const revived = stubs.get(v);
-      if (revived !== undefined) return revived;
-      const entry = v.t === __stubIsolate
-        ? __stubEntries.get(stubId) : undefined;
-      const stub = entry === undefined
-        ? __foreignStub()
-        : __makeStub(entry, v.c);
-      const meta = __stubMeta.get(stub);
-      if (meta) {
-        handles.push(meta);
-        if (v.np === true) meta.noPipeline = true;
+  const reviveMarker = (v, kind, revive) => {
+    switch (kind) {
+      case "__celld$stub": {
+        const entry = v.t === __stubIsolate
+          ? __ReflectApply(__MapGet, __stubEntries, [v[kind]]) : undefined;
+        const stub = entry === undefined
+          ? __foreignStub()
+          : __makeStub(entry, v.c);
+        const meta = __ReflectApply(__WeakMapGet, __stubMeta, [stub]);
+        if (meta) {
+          __ReflectApply(__ArrayPush, handles, [meta]);
+          if (v.np) meta.noPipeline = true;
+        }
+        return stub;
       }
-      stubs.set(v, stub);
-      return stub;
+      case "__celld$svc":
+        return v.t === __stubIsolate
+          ? __entrypointStub(v[kind], revive(v.p))
+          : __foreignStub();
+      case "__celld$do":
+        return __namespaceGet(__cell.makeNamespace(v[kind]),
+          __newDoId(v[kind], v.v, v.n ?? undefined));
+      case "__celld$rs": return __reviveStream(v, v[kind], true, handles);
+      case "__celld$ws": return __reviveStream(v, v[kind], false, handles);
+      case "__celld$sig": return __reviveSignal(v, v[kind]);
     }
-    const svcName = v["__celld$svc"];
-    if (svcName !== undefined)
-      return v.t === __stubIsolate
-        ? __entrypointStub(svcName, revive(v.p))
-        : __foreignStub();
-    // A runtime class's stub is never handed to a script, so none is ever
-    // lifted: a marker naming one is a script's own data (1.53), and
-    // revives as that data rather than as a stub of a runtime cell.
-    const doClass = v["__celld$do"];
-    if (doClass !== undefined && !__isRuntimeClass(doClass)) {
-      return __namespaceGet(__cell.makeNamespace(doClass),
-        __newDoId(doClass, v.v, v.n ?? undefined));
-    }
-    const hdr = v["__celld$hdr"];
-    if (hdr !== undefined) return new Headers(hdr);
-    const blobBytes = v["__celld$blob"];
-    if (blobBytes !== undefined) return __reviveBlob(v, blobBytes);
-    const reqUrl = v["__celld$req"];
-    if (reqUrl !== undefined)
-      return __reviveRequest(v, reqUrl, revive);
-    if (v["__celld$res"] !== undefined)
-      return __reviveResponse(v, revive);
-    const rsId = v["__celld$rs"];
-    if (rsId !== undefined)
-      return __reviveStream(v, rsId, true, handles);
-    const wsId = v["__celld$ws"];
-    if (wsId !== undefined)
-      return __reviveStream(v, wsId, false, handles);
-    const sigId = v["__celld$sig"];
-    if (sigId !== undefined) return __reviveSignal(v, sigId);
-    if (seen.has(v)) return v;
-    seen.add(v);
-    if (Array.isArray(v)) {
-      for (let i = 0; i < v.length; i++) v[i] = revive(v[i]);
-      return v;
-    }
-    const proto = Object.getPrototypeOf(v);
-    if (proto !== Object.prototype && proto !== null) return v;
-    for (const key of Object.keys(v)) {
-      if (key === "__celld$disp") {
-        const entry = __stubEntries.get(v[key]);
-        if (entry) disposers.push(entry);
-        delete v[key];
-        continue;
-      }
-      v[key] = revive(v[key]);
-    }
-    return v;
+    return __reviveHostValue(v, kind, revive, true);
   };
-  return { value: revive(value), handles, disposers };
+  return {
+    value: __reviveLifted(value, reviveMarker, disposers), handles, disposers,
+  };
 };
 // A marker that crossed an isolate boundary: fail on use, loudly. A
 // pipelined path through one fails too (`__walkLocal`).
@@ -6119,37 +6570,42 @@ const __entrypointStub = (name, props) => {
 // in any isolate). A transient handle -- a received RPC stub, a
 // function, an RpcTarget -- dies with its isolate; persisting its
 // entry id would revive garbage after a restart, so it is refused.
-// A stub-bearing row is written as 0x01 + clone(marker tree), off
+// A stub-bearing row is written as 0x02 + clone(marker tree), off
 // the plain-clone fast path (the lift runs only after the plain
 // clone already threw, exactly like the RPC envelope). Reads hand
 // tagged rows to JS as [sentinel, tree]; the sentinel never leaves
-// this script and no user value can decode to it, so revival
-// cannot be spoofed by data shaped like a marker.
+// this script and no user value can decode to it, and the tree's keys
+// are escaped as an RPC envelope's are, so revival cannot be spoofed by
+// data shaped like a marker. Tag 0x01 was the same row before that
+// escape, which storage refuses (`storage_ops.rs`).
+const __STORED_STUB_TAG = 2;
+const __transientStubError = () => new DOMException(
+  "Durable Object storage can only store stubs with " +
+  "durable identity: service stubs from ctx.exports and " +
+  "Durable Object stubs. This value is a transient RPC " +
+  "handle that would not survive a restart.",
+  "DataCloneError");
 const __storedSentinel = {};
 const __storedLift = (value) => {
   let lifted = false;
-  const seen = new Map();
+  const seen = new __SafeMap();
+  const cache = (v, out) => __ReflectApply(__MapSet, seen, [v, out]);
   const lift = (v) => {
     if (v === null ||
         (typeof v !== "object" && typeof v !== "function")) return v;
-    const cached = seen.get(v);
+    const cached = __ReflectApply(__MapGet, seen, [v]);
     if (cached !== undefined) return cached;
     // Ordering mirrors __stubLift: identify proxies by their
     // side tables and brands before touching any property -- a
     // stub or pipeline proxy answers every property read with a
     // fresh RpcProperty node.
-    if (__stubMeta.has(v) || v instanceof __cf.RpcTarget)
-      throw new DOMException(
-        "Durable Object storage can only store stubs with " +
-        "durable identity: service stubs from ctx.exports and " +
-        "Durable Object stubs. This value is a transient RPC " +
-        "handle that would not survive a restart.",
-        "DataCloneError");
-    const svc = __svcMeta.get(v);
+    if (__ReflectApply(__WeakMapHas, __stubMeta, [v]) || __isRpcTarget(v))
+      throw __transientStubError();
+    const svc = __ReflectApply(__WeakMapGet, __svcMeta, [v]);
     if (svc !== undefined) {
       lifted = true;
-      const marker = { "__celld$svc": svc.name };
-      seen.set(v, marker);
+      const marker = { "__celld$svc": svc.name, p: undefined };
+      cache(v, marker);
       if (svc.props !== undefined) marker.p = lift(svc.props);
       return marker;
     }
@@ -6161,26 +6617,84 @@ const __storedLift = (value) => {
         '". This type does not support serialization.',
         "DataCloneError");
     if (typeof v === "function") return v; // leave to the clone
-    const doId = __doStubMeta.get(v);
+    const doId = __ReflectApply(__WeakMapGet, __doStubMeta, [v]);
     if (doId !== undefined) {
       lifted = true;
       const marker = { "__celld$do": __doIdClass(doId),
                        v: doId.toString(), n: v.name ?? null };
-      seen.set(v, marker);
+      cache(v, marker);
       return marker;
     }
-    if (Array.isArray(v)) {
-      const out = [];
-      seen.set(v, out);
-      for (let i = 0; i < v.length; i++) out[i] = lift(v[i]);
+    // A value V8 writes as itself (a Date, a Map, an ArrayBuffer, ...) is
+    // left to the clone, and so is a Proxy, which it refuses, unless the
+    // Proxy presents an RpcTarget, refused above for any RpcTarget. A host
+    // class's instance is stored by value where workerd stores it, and
+    // refused with workerd's error otherwise (`__hostValueOutsideRpc`). V8
+    // writes every other object as a plain object, whatever its prototype
+    // (a class instance, `Object.create(Headers.prototype)`), as workerd
+    // stores it, so it is copied with its keys escaped. The brand check runs
+    // only off Object.prototype, since it costs an op per object, so a Proxy
+    // presenting a plain object or an array is copied through its traps,
+    // where workerd's clone refuses it (workerd stores no such stub row).
+    const array = __ArrayIsArray(v);
+    if (!array && __ObjectGetPrototypeOf(v) !== __ObjectPrototype) {
+      const flags = __util_type_flags(v);
+      if ((flags & __TYPE_PROXY) !== 0) {
+        if (v instanceof __cf.RpcTarget) throw __transientStubError();
+        return v;
+      }
+      if ((flags & (__TYPE_CLONED | __TYPE_MAP | __TYPE_SET)) !== 0)
+        return v;
+      const kind = __hostKind(v);
+      if (kind !== undefined) {
+        const marker = __hostValueOutsideRpc(v, kind);
+        lifted = true;
+        cache(v, marker);
+        return marker;
+      }
+    }
+    // No setter a script put on a prototype sees the copies: an array's
+    // indices are its own before they are assigned (its holes are deleted
+    // again, and its named keys defined), and a plain object's copy has no
+    // prototype, which the clone does not keep.
+    if (array) {
+      const length = v.length;
+      const out = __ownArray(length);
+      cache(v, out);
+      const keys = __ObjectKeys(v);
+      // Every index and nothing else (indices come first, in order, so the
+      // last key is the last index): no hole, no named key.
+      if (keys.length === length &&
+          (length === 0 || keys[length - 1] === "" + (length - 1))) {
+        for (let i = 0; i < length; i++) out[i] = lift(v[i]);
+        return out;
+      }
+      let indices = 0;
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        const index = +key;
+        if (index >>> 0 === index && "" + index === key && index < length) {
+          out[index] = lift(v[key]);
+          indices++;
+        } else {
+          __defineData(out, key, lift(v[key]));
+        }
+      }
+      for (let i = 0; indices < length && i < length; i++) {
+        if (!__ObjectHasOwn(v, i)) {
+          delete out[i];
+          indices++;
+        }
+      }
       return out;
     }
-    const proto = Object.getPrototypeOf(v);
-    if (proto !== Object.prototype && proto !== null)
-      return v; // host/other: leave to the clone
-    const out = {};
-    seen.set(v, out);
-    for (const key of Object.keys(v)) out[key] = lift(v[key]);
+    const out = __bareObject();
+    cache(v, out);
+    const keys = __ObjectKeys(v);
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      out[__isMarkerKey(key) ? __escapeKey(key) : key] = lift(v[key]);
+    }
     return out;
   };
   const tree = lift(value);
@@ -6192,40 +6706,22 @@ const __storedLift = (value) => {
 const __storedBytes = (value, error) => {
   const tree = __storedLift(value);
   if (tree === null) throw error;
-  return __tagged(1, __sc_encode(tree));
+  return __tagged(__STORED_STUB_TAG, __sc_encode(tree));
 };
-const __storedRevive = (value) => {
-  const seen = new Set();
-  const revive = (v) => {
-    if (v === null || typeof v !== "object") return v;
-    const svcName = v["__celld$svc"];
-    if (svcName !== undefined)
-      return __entrypointStub(svcName, revive(v.p));
-    // As in `__stubRevive`: never a runtime class's stub.
-    const doClass = v["__celld$do"];
-    if (doClass !== undefined && !__isRuntimeClass(doClass))
-      return __namespaceGet(__cell.makeNamespace(doClass),
-        __newDoId(doClass, v.v, v.n ?? undefined));
-    if (seen.has(v)) return v;
-    seen.add(v);
-    if (Array.isArray(v)) {
-      for (let i = 0; i < v.length; i++) v[i] = revive(v[i]);
-      return v;
-    }
-    const proto = Object.getPrototypeOf(v);
-    if (proto !== Object.prototype && proto !== null) return v;
-    for (const key of Object.keys(v)) v[key] = revive(v[key]);
-    return v;
-  };
-  return revive(value);
-};
+const __storedRevive = (value) => __reviveLifted(value, (v, kind, revive) => {
+  if (kind === "__celld$svc") return __entrypointStub(v[kind], revive(v.p));
+  if (kind === "__celld$do")
+    return __namespaceGet(__cell.makeNamespace(v[kind]),
+      __newDoId(v[kind], v.v, v.n ?? undefined));
+  return __reviveHostValue(v, kind, revive, false);
+}, null);
 const __unwrapStored = (v) =>
-  Array.isArray(v) && v[0] === __storedSentinel
+  __ArrayIsArray(v) && v[0] === __storedSentinel
     ? __storedRevive(v[1]) : v;
 // A map result is wrapped as a whole only when it holds at least
 // one tagged row, so the per-entry walk never runs on plain data.
 const __unwrapStoredMap = (v) => {
-  if (!Array.isArray(v) || v[0] !== __storedSentinel) return v;
+  if (!__ArrayIsArray(v) || v[0] !== __storedSentinel) return v;
   const map = v[1];
   for (const [key, value] of map)
     map.set(key, __unwrapStored(value));
@@ -6263,35 +6759,40 @@ const __ctxExports = () => __ctxExportsCache ??= (() => {
 // a call's arguments, whose stubs rpc_params_dup_stubs duplicates.
 const __rpcOut = (value, lift, params = false) => {
   const projected = __rpcProject(value);
-  try {
-    return __sc_encode(projected.tree);
-  } catch (error) {
-    // A cross-isolate call lifts only a live signal. A same-isolate call can
-    // also transfer the existing host values and JS capability handles.
-    // A failure releases every entry reference the lift took, newest
-    // first, as workerd drops the capabilities of a message it could not
-    // build: an RpcTarget the call took is disposed, and a transferred
-    // stub's reference goes with its handle.
-    const refs = [];
+  // A payload with a host instance skips the plain clone (`__rpcProject`).
+  let error = null;
+  if (!projected.host) {
     try {
-      // A refused value the lift did not walk to (inside a Map, say) fails
-      // the clone with its own error.
-      const refusal = (cloneError) =>
-        projected.unsupported.values().next().value ??
-        __dataCloneError(cloneError);
-      const lifted = __stubLift(projected, lift, refs,
-        params && __cell.compat.rpcParamsDupStubs);
-      if (lifted === null) throw refusal(error);
-      try {
-        return __tagged(
-          lifted.caps ? 1 : 2, __sc_encode(lifted.tree));
-      } catch (error_) {
-        throw refusal(error_);
-      }
-    } catch (failure) {
-      for (let i = refs.length - 1; i >= 0; i--) __releaseEntry(refs[i]);
-      throw failure;
+      return __sc_encode(projected.tree);
+    } catch (error_) {
+      error = error_;
     }
+  }
+  // A cross-isolate call lifts host values by value and a live signal. A
+  // same-isolate call also transfers streams and JS capability handles.
+  // A failure releases every entry reference the lift took, newest
+  // first, as workerd drops the capabilities of a message it could not
+  // build: an RpcTarget the call took is disposed, and a transferred
+  // stub's reference goes with its handle.
+  const refs = [];
+  try {
+    // A refused value the lift did not walk to (inside a Map, say) fails
+    // the clone with its own error.
+    const refusal = (cloneError) =>
+      projected.unsupported.values().next().value ??
+      __dataCloneError(cloneError);
+    const lifted = __stubLift(projected, lift, refs,
+      params && __cell.compat.rpcParamsDupStubs);
+    if (lifted === null) throw refusal(error);
+    try {
+      return __tagged(
+        lifted.caps ? 1 : 2, __sc_encode(lifted.tree));
+    } catch (error_) {
+      throw refusal(error_);
+    }
+  } catch (failure) {
+    for (let i = refs.length - 1; i >= 0; i--) __releaseEntry(refs[i]);
+    throw failure;
   }
 };
 // A callee exception as tagged bytes: the Error crosses by value
@@ -6333,15 +6834,16 @@ const __rpcDes = (bytes) => {
     const { value, handles, disposers } =
       __stubRevive(__sc_decode(bytes.subarray(1)));
     if (value !== null && typeof value === "object" &&
-        !__stubMeta.has(value) &&
+        !__ReflectApply(__WeakMapHas, __stubMeta, [value]) &&
         (handles.length > 0 || disposers.length > 0)) {
-      Object.defineProperty(value, Symbol.dispose, {
+      __ObjectDefineProperty(value, Symbol.dispose, {
         writable: true,
         configurable: true,
         value: () => {
-          for (const handle of handles) __disposeStub(handle);
-          for (const entry of disposers) {
-            __stubEntries.delete(entry.id);
+          for (let i = 0; i < handles.length; i++) __disposeStub(handles[i]);
+          for (let i = 0; i < disposers.length; i++) {
+            const entry = disposers[i];
+            __ReflectApply(__MapDelete, __stubEntries, [entry.id]);
             Promise.resolve().then(() => entry.target());
           }
         },
@@ -6359,6 +6861,9 @@ const __rpcDes = (bytes) => {
   }
   throw error;
 };
+// Test builds put the lifted encodings' hook for `js::marker_key_tests`
+// here (`bootstrap.rs`, `LIFTED_TEST_HOOK`).
+/*__CELLD_TEST_LIFTED_HOOK__*/
 // Deprecated Fetcher `get()`/`put()`/`delete()` HTTP helpers, kept by
 // the fetcher_has_get_put_delete compat flag (Workerd http.c++):
 // shortcuts for fetch() with the corresponding method.
@@ -6545,15 +7050,15 @@ class DurableObjectNamespace {
         // rather than the whole body (#156). The host keeps it a stream for a
         // local cell and collects it only to sign a cross-node frame. A held
         // body -- or a stream with no host id -- crosses as its bytes.
-        if (req._bodyBytes === null) __unlockedBody(req);
-        const bodyStreamId = req._bodyBytes === null
+        if (__bodyBytesOf(req) === null) __unlockedBody(req);
+        const bodyStreamId = __bodyBytesOf(req) === null
           ? __hostStreamId(req.body)
           : undefined;
         const body_ = bodyStreamId !== undefined
           ? new Uint8Array()
-          : req._bodyBytes === null
+          : __bodyBytesOf(req) === null
             ? await req._consume()
-            : req._bodyBytes;
+            : __bodyBytesOf(req);
         if (bodyStreamId !== undefined) {
           // The cell reads this upload through the same host stream id, so the
           // Worker's wrapper must not also read it: lock it (a late read throws
@@ -6652,7 +7157,7 @@ const __attachResponseRequestCancellation = (
   wrapBody,
 ) => {
   if (!(response instanceof Response) ||
-      response._bodyBytes !== null ||
+      __bodyBytesOf(response) !== null ||
       response.body === null) {
     return;
   }
@@ -11243,6 +11748,13 @@ const __cf = __celld.__cf = {
   // plain-clone path and into the stub lift (Workerd rejects these
   // from plain serialization outright).
   RpcTarget: class RpcTarget {
+    // workerd's JSG brand: `Object.create(RpcTarget.prototype)` is no
+    // RpcTarget (`__hostKind`).
+    #brand;
+    static {
+      __isRpcTarget = (value) =>
+        typeof value === "object" && value !== null && #brand in value;
+    }
     constructor() {
       Object.defineProperty(this, "__celldRpcTarget", {
         value: __rpcNoClone, enumerable: true,
@@ -11661,6 +12173,13 @@ if (!globalThis.DOMException) {
 if (!globalThis.AbortSignal) {
   const __abortBrand = Symbol("abortSignal");
   globalThis.AbortSignal = class AbortSignal extends EventTarget {
+    // The brand the RPC envelope classifies by (`__hostKind`).
+    #brand;
+    static {
+      __recordBase(this);
+      __isAbortSignal = (value) =>
+        typeof value === "object" && value !== null && #brand in value;
+    }
     // The Headers/Blob clone-poisoning brand: V8's structured
     // clone throws on functions, so a live signal reaches the
     // RPC lift instead of silently flattening to plain data.
@@ -11671,10 +12190,17 @@ if (!globalThis.AbortSignal) {
       if (arguments[0] !== __abortBrand) {
         throw new TypeError("Illegal constructor");
       }
-      super();
+      const set = __pinBase(AbortSignal);
+      try {
+        super();
+      } finally {
+        __unpinBase(AbortSignal, set);
+      }
       this.aborted = false;
       this.reason = undefined;
-      this.__celldHost = __rpcNoClone;
+      // Fixed, as a Headers' is (headers.js).
+      __ObjectDefineProperty(this, "__celldHost",
+        { value: __rpcNoClone, enumerable: true });
     }
     throwIfAborted() { if (this.aborted) throw this.reason; }
     static abort(reason = new DOMException("The operation was aborted", "AbortError")) {
@@ -11723,19 +12249,36 @@ if (!globalThis.Blob) {
   // a Blob reaches the RPC lift instead of silently flattening.
   const __blobNoClone = () => {};
   globalThis.Blob = class Blob {
+    // The brand the RPC envelope classifies by (`__hostKind`).
+    #brand;
+    // The bytes and the type, private as workerd's are, so that what the
+    // Blob reads, sends and stores is its own (`__blobBytesOf`); `size` and
+    // `type` are prototype accessors, as in workerd.
+    #bytes;
+    #type;
+    static {
+      __isBlob = (value) =>
+        typeof value === "object" && value !== null && #brand in value;
+      __blobBytesOf = (value) =>
+        value !== null && typeof value === "object" && #bytes in value
+          ? value.#bytes : undefined;
+      __blobTypeOf = (blob) => blob.#type;
+      __setBlobBytes = (blob, bytes) => {
+        blob.#bytes = bytes;
+      };
+    }
     constructor(parts = [], options = {}) {
-      // size is assigned before type so both land in the order the
-      // inspect output below reports them.
       if (options && options.endings !== undefined)
         throw new Error(
           "The 'endings' field on 'Options' is not implemented.");
-      this.size = 0;
       // A type outside U+0020..U+007E is not a valid MIME type and is
       // dropped rather than stored.
       const rawType = String(options.type || "");
-      this.type = /^[\u0020-\u007e]*$/.test(rawType)
+      this.#type = /^[\u0020-\u007e]*$/.test(rawType)
         ? rawType.toLowerCase() : "";
-      this.__celldHost = __blobNoClone;
+      // Fixed, as a Headers' is (headers.js).
+      __ObjectDefineProperty(this, "__celldHost",
+        { value: __blobNoClone, enumerable: true });
       // Two passes. First convert every part in order -- string
       // conversion runs user code (Symbol.toPrimitive), which may
       // resize a backing buffer. Buffers and views are carried through
@@ -11747,7 +12290,7 @@ if (!globalThis.Blob) {
       // argument limit on multi-megabyte parts.
       const sources = [];
       for (const part of parts) {
-        if (part instanceof Blob) sources.push(part._bytes);
+        if (__isBlob(part)) sources.push(__blobBytesOf(part));
         else if (part instanceof ArrayBuffer ||
                  ArrayBuffer.isView(part)) sources.push(part);
         else sources.push(new TextEncoder().encode(String(part)));
@@ -11769,20 +12312,17 @@ if (!globalThis.Blob) {
         bytes.set(chunk, offset);
         offset += chunk.byteLength;
       }
-      // Non-enumerable: the backing store is not part of the object's
-      // observable shape (inspect, JSON, spread).
-      Object.defineProperty(this, "_bytes", {
-        value: bytes, writable: true, configurable: true,
-      });
-      this.size = total;
+      this.#bytes = bytes;
     }
-    async arrayBuffer() { return this._bytes.slice().buffer; }
-    async bytes() { return this._bytes.slice(); }
-    async text() { return new TextDecoder().decode(this._bytes); }
+    get size() { return this.#bytes.byteLength; }
+    get type() { return this.#type; }
+    async arrayBuffer() { return this.#bytes.slice().buffer; }
+    async bytes() { return this.#bytes.slice(); }
+    async text() { return new TextDecoder().decode(this.#bytes); }
     // A platform stream, as in workerd, so a BYOB reader works on it. Each
     // chunk is a copy: the Blob's bytes stay its own.
     stream() {
-      const bytes = this._bytes;
+      const bytes = this.#bytes;
       let offset = 0;
       return new CelldChunkStream(() => {
         if (offset >= bytes.byteLength) return null;
@@ -11802,7 +12342,7 @@ if (!globalThis.Blob) {
       };
       const a = norm(start, 0), b = norm(end, this.size);
       return new Blob(
-        [this._bytes.subarray(a, Math.max(a, b))], { type });
+        [this.#bytes.subarray(a, Math.max(a, b))], { type });
     }
     get [Symbol.toStringTag]() { return "Blob"; }
   };
@@ -11815,8 +12355,7 @@ __celld.__blobOf = (buffer, type) => {
   const bytes = new Uint8Array(buffer);
   if (bytes.byteLength > 134217728)
     throw new RangeError(`Blob size ${bytes.byteLength} exceeds limit 134217728`);
-  blob._bytes = bytes;
-  blob.size = bytes.byteLength;
+  __setBlobBytes(blob, bytes);
   return blob;
 };
 // Memory V8 grows outside its allocator: WebAssembly memories, and buffers
@@ -12143,12 +12682,22 @@ if (!globalThis.File) {
   globalThis.File = class File extends Blob {
     #name;
     #lastModified;
+    static {
+      __recordBase(this);
+      __isFile = (value) =>
+        typeof value === "object" && value !== null && #name in value;
+    }
     constructor(parts, name, options = {}) {
       if (arguments.length < 2)
         throw new TypeError(
           "Failed to construct 'File': 2 arguments required, but " +
           `only ${arguments.length} present.`);
-      super(parts, options);
+      const set = __pinBase(File);
+      try {
+        super(parts, options);
+      } finally {
+        __unpinBase(File, set);
+      }
       this.#name = String(name);
       const lm = options == null ? undefined : options.lastModified;
       if (lm === undefined) this.#lastModified = Date.now();
@@ -12547,6 +13096,7 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
   // nor write the host id, the peer, the target or the owner.
   #s;
   static {
+    __recordBase(this);
     __wsState = (value) => {
       if (value === null || (typeof value !== "object" && typeof value !== "function") ||
           !(#s in value))
@@ -12575,7 +13125,12 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
     // socket id.
     const internal = __wsInit;
     __wsInit = null;
-    super();
+    const set = __pinBase(WebSocket);
+    try {
+      super();
+    } finally {
+      __unpinBase(WebSocket, set);
+    }
     const dialed = internal === null;
     // Internal options are null-prototype objects, so nothing a Worker puts
     // on Object.prototype supplies a missing one.
@@ -13321,13 +13876,13 @@ if (!globalThis.structuredClone) {
 
   defineHostType(Blob.prototype, function() {
     return {
-      type: "Blob", bytes: this._bytes,
+      type: "Blob", bytes: __blobBytesOf(this),
       mimeType: this.type,
     };
   });
   defineHostType(File.prototype, function() {
     return {
-      type: "File", bytes: this._bytes,
+      type: "File", bytes: __blobBytesOf(this),
       mimeType: this.type, name: this.name,
       lastModified: this.lastModified,
     };
@@ -14040,7 +14595,7 @@ __celld.__readResponse = (r) => {
   const hostStreamId = r.__celldRequestControllers
     ? undefined
     : __hostStreamId(r.body);
-  const bodyStreamId = r._bodyBytes === null
+  const bodyStreamId = __bodyBytesOf(r) === null
     ? hostStreamId ?? __bridgeResponseStream(
       r.body,
       r.__celldRequestControllers,
@@ -14058,7 +14613,7 @@ __celld.__readResponse = (r) => {
       acceptedWebSocket,
     };
   }
-  const bytes = r._bodyBytes;
+  const bytes = __bodyBytesOf(r);
   return {
     status: r.status,
     bodyBytes: bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
