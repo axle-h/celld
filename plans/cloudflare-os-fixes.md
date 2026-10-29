@@ -473,7 +473,7 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 39c | 1.49 part B: internals out of user reach, cell re-validation (security) | done | `1e8ac01` |
 | 39d | 1.53 marker-shaped RPC data, with 1.29's forgeable-marker item (security) | done | `278cb9d` |
 | 40 | 1.29 RPC serialisation follow-ups (leaks, Proxies, signals, flags) | done | `6b09eee` |
-| 41 | 1.30 Durable Object reset follow-ups (hang, stale stubs, discarded writes, storage surface) | done | (this commit) |
+| 41 | 1.30 Durable Object reset follow-ups (hang, stale stubs, discarded writes, storage surface) | done | `a7272a7` |
 | 42+ | Phase 1 in plan order (1.34, 1.36-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.59), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
