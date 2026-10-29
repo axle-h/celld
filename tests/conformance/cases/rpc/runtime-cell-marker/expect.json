@@ -1,0 +1,35 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "kv": {
+          "tag": "[object Object]",
+          "keys": [
+            "__celld$do",
+            "v",
+            "n"
+          ]
+        },
+        "queue": {
+          "tag": "[object Object]",
+          "keys": [
+            "__celld$do",
+            "v",
+            "n"
+          ]
+        },
+        "d1": {
+          "tag": "[object Object]",
+          "keys": [
+            "__celld$do",
+            "v",
+            "n"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,8 +1,12 @@
-// Refusals only: each step names a cell of `back`'s namespaces from
-// `front`'s code, and expects the host to refuse it (plan 1.49). A scope is
-// computable from public strings, so naming one must not reach it: the host
-// checks the call against what `front`'s own configuration binds. `/own`
-// shows the same paths still reach `front`'s own cells.
+// Refusals only (plan 1.49): `front` must not reach `back`'s namespaces, and
+// no state a script can write names a cell. A scope is computable from public
+// strings, so the host checks every call against what `front`'s own
+// configuration binds (unit-tested in `js::scope_grant_op_tests`, since no
+// script can hand the host a scope any more). These steps check that the
+// harness hands a script nothing that would: the namespace and id
+// constructors are refused, the storage, facet and state objects keep their
+// scope private, and a forged property names nothing. `/own` shows the same
+// paths still reach `front`'s own cells.
 import { DurableObject } from "cloudflare:workers";
 
 // celld's namespace keys, which are fixed strings.
@@ -21,10 +25,9 @@ async function refused(fn) {
   }
 }
 
-// A namespace of any class, through the constructor every namespace shares.
-function namespace(env, [className, key]) {
-  return new env.PROBE.constructor(className, key);
-}
+// The scope-shaped state a script could once write.
+const SCOPED = ["_scope", "_state", "_className", "_namespaceKey", "_stub", "_namespace"];
+const scoped = (object) => SCOPED.filter((name) => name in object);
 
 export class Child extends DurableObject {
   fetch() {
@@ -35,64 +38,56 @@ export class Child extends DurableObject {
 export class Probe extends DurableObject {
   alarm() {}
 
-  // The storage and alarm operations, with the storage object naming
-  // another object's scope.
+  // The storage objects keep their scope private: a `_scope` a script sets
+  // is a property of its own, and the operations still act on this object.
   async storage(target) {
     const storage = this.ctx.storage;
-    const own = storage._scope;
+    const before = { storage: scoped(storage), sql: scoped(storage.sql), kv: scoped(storage.kv) };
     storage._scope = target;
     storage.sql._scope = target;
     try {
-      const out = {};
-      for (const [name, use] of Object.entries({
-        get: () => storage.get("k"),
-        put: () => storage.put("k", "v"),
-        list: () => storage.list().then((map) => [...map]),
-        kvGet: () => storage.kv.get("k"),
-        sql: () => storage.sql.exec("SELECT 1 AS one").toArray(),
-        getAlarm: () => storage.getAlarm(),
-        setAlarm: () => storage.setAlarm(Date.now() + 60_000),
-        deleteAlarm: () => storage.deleteAlarm(),
-      })) {
-        out[name] = await refused(use);
-      }
-      return out;
+      await storage.put("k", "forged");
+      return {
+        before,
+        get: await storage.get("k"),
+        sql: storage.sql.exec("SELECT 1 AS one").one().one,
+        setAlarm: await storage.setAlarm(Date.now() + 60_000).then(() => "set"),
+      };
     } finally {
-      storage._scope = own;
-      storage.sql._scope = own;
+      delete storage._scope;
+      delete storage.sql._scope;
     }
   }
 
-  // A facet, with the facet manager naming another object as its own.
+  // The facet manager keeps its object private: a `_state` naming another
+  // object leaves the facet this object's.
   async facet(target) {
     const facets = this.ctx.facets;
-    const own = facets._state;
+    const before = scoped(facets);
     facets._state = { _scope: target, _facetDepth: 0 };
     try {
-      return await refused(() => facets.get("child", () => ({ class: this.ctx.exports.Child }))
-        .fetch("http://child/").then((response) => response.text()));
+      return {
+        before,
+        facet: await refused(() => facets.get("child", () => ({ class: this.ctx.exports.Child }))
+          .fetch("http://child/").then((response) => response.text())),
+      };
     } finally {
-      facets._state = own;
+      delete facets._state;
     }
   }
 
-  // blockConcurrencyWhile with the gate's cell forged to another object:
-  // the input gate is the running object's, never a scope from JS, so a
-  // forged scope cannot shut another object's gate.
+  // blockConcurrencyWhile acts on this object's gate whatever `_scope` says.
   async gate(target) {
     const ctx = this.ctx;
-    const own = ctx._scope;
-    const out = {};
-    for (const [name, scope] of Object.entries({ crossScript: target, sameScript: own + "x" })) {
+    const out = { before: scoped(ctx) };
+    for (const [name, scope] of Object.entries({ crossScript: target, sameScript: "Probe:x" })) {
       ctx._scope = scope;
       try {
         out[name] = await refused(() => ctx.blockConcurrencyWhile(() => "ran"));
       } finally {
-        ctx._scope = own;
+        delete ctx._scope;
       }
     }
-    // The running object's own gate still works.
-    out.own = await refused(() => ctx.blockConcurrencyWhile(() => "ran"));
     return out;
   }
 
@@ -103,18 +98,16 @@ export class Probe extends DurableObject {
   async getValue() {
     return (await this.ctx.storage.get("v")) ?? null;
   }
-  // ctx.abort() with the object scope forged to another object: a reset acts
-  // only on the object this is the registered instance of, so a forged scope
-  // resets at most this object, never the named one.
+  // ctx.abort() with `_scope` set to another object's: a reset acts only on
+  // the object this ctx is, so the named object keeps its state.
   async abortForged(target) {
     const ctx = this.ctx;
-    const own = ctx._scope;
     ctx._scope = target;
     try {
       ctx.abort("forged abort");
       return "aborted";
     } finally {
-      ctx._scope = own;
+      delete ctx._scope;
     }
   }
 
@@ -147,26 +140,24 @@ export default {
         d1: await env.DB.prepare("SELECT 1 AS one").first("one"),
       });
     }
-    if (path === "/do-fetch") {
-      return Response.json(await refused(() => namespace(env, BACK_VAULT).getByName("x")
-        .fetch("http://vault/").then((response) => response.text())));
-    }
-    if (path === "/do-rpc") {
-      return Response.json(await refused(() => namespace(env, BACK_VAULT).getByName("x").read()));
-    }
-    if (path === "/runtime") {
+    if (path === "/namespace") {
+      // Every namespace shares one constructor, which a script once called
+      // with any class and key; and an id's constructor, with any value.
+      const construct = (key) => refused(() => new env.PROBE.constructor(...key));
+      const id = env.PROBE.idFromName("x");
       return Response.json({
-        kv: await refused(() => namespace(env, KV).getByName("back-kv/0").__kvGet({ keys: ["k"] })),
-        queue: await refused(() => namespace(env, QUEUE).getByName("back-jobs").__queueMetrics({})),
-        dlq: await refused(() => namespace(env, QUEUE).getByName("back-dlq").__queueMetrics({})),
-        d1: await refused(() => namespace(env, D1).getByName("back-db").__d1Exec({ sql: "SELECT 1" })),
-        workflow: await refused(() => namespace(env, BACK_FLOW).getByName("back-flow/x")
-          .fetch("http://flow/").then((response) => response.text())),
-        // Another shard of front's own KV namespace is not front's cell.
-        kvShard: await refused(() => namespace(env, KV).getByName("front-kv/1").__kvGet({ keys: ["k"] })),
+        vault: await construct(BACK_VAULT),
+        workflow: await construct(BACK_FLOW),
+        kv: await construct(KV),
+        queue: await construct(QUEUE),
+        d1: await construct(D1),
+        id: await refused(() => new id.constructor("Vault", id.toString())),
+        namespace: scoped(env.PROBE),
+        idState: scoped(id),
+        bindings: { kv: scoped(env.KV), queue: scoped(env.QUEUE), db: scoped(env.DB) },
       });
     }
-    const target = `Vault:${namespace(env, BACK_VAULT).idFromName("x")}`;
+    const target = `Vault:${"ab".repeat(32)}`;
     if (path === "/storage") return Response.json(await env.PROBE.getByName("probe").storage(target));
     if (path === "/facet") return Response.json(await env.PROBE.getByName("probe").facet(target));
     if (path === "/gate") return Response.json(await env.PROBE.getByName("probe").gate(target));

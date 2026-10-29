@@ -75,6 +75,9 @@ resident-cell cap bound it.
   that names another script.
 - The Workflows REST API and the `wrangler workflows` commands are
   unavailable. Drive an instance through the binding.
+- The binding has no own properties and an instance only `id`, and their
+  constructors throw "Illegal constructor". workerd's carry a public
+  `binding` and construct from any argument.
 
 The [Cloudflare compatibility](../cloudflare-compat.md#services) page lists
 the runtime APIs and the unsupported services.

@@ -357,6 +357,16 @@ fn internal_global(scope: &mut v8::PinScope, name: &str) -> Result<v8::Global<v8
     Ok(v8::Global::new(scope, function))
 }
 
+/// An object with no prototype, for a harness registry the host fills: a
+/// lookup or an assignment by name must not reach a getter or setter a
+/// script put on `Object.prototype`.
+fn null_prototype_object<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
+    let object = v8::Object::new(scope);
+    let null = v8::null(scope).into();
+    object.set_prototype(scope, null);
+    object
+}
+
 pub(super) fn register_class(
     scope: &mut v8::PinScope,
     name: &str,
@@ -488,7 +498,7 @@ pub(super) fn inject_workflows(
     workflow_bindings: &[WorkflowBinding],
 ) -> Result<()> {
     let cell = cell_state(scope)?;
-    let map = v8::Object::new(scope);
+    let map = null_prototype_object(scope);
     for binding in workflow_bindings {
         let key =
             v8::String::new(scope, &binding.workflow).ok_or_else(|| anyhow!("workflow name"))?;
@@ -518,7 +528,7 @@ pub(super) fn inject_containers(
     containers: &[crate::container::ContainerSpec],
 ) -> Result<()> {
     let cell = cell_state(scope)?;
-    let map = v8::Object::new(scope);
+    let map = null_prototype_object(scope);
     for spec in containers {
         let key =
             v8::String::new(scope, &spec.class_name).ok_or_else(|| anyhow!("container class"))?;
@@ -860,7 +870,7 @@ pub(super) fn inject_queue_config(scope: &mut v8::PinScope, config: &WorkerConfi
     let source = format!(
         "const q = {queue};\n\
          const c = __celld.__cell;\n\
-         c.queueConsumers = q.consumers;\n\
+         c.queueConsumers = Object.assign({{ __proto__: null }}, q.consumers);\n\
          c.queueLeaseDurationMs = q.leaseDurationMs;\n\
          c.queueLimits = q.limits;"
     );
@@ -1101,7 +1111,7 @@ pub(super) fn adopt_embedded_cell(
         .get(tc, configs_key.into())
         .and_then(|value| value.to_object(tc))
         .ok_or_else(|| anyhow!("missing facet config registry"))?;
-    let config = v8::Object::new(tc);
+    let config = null_prototype_object(tc);
     let id_key = v8::String::new(tc, "id").unwrap();
     let id_value =
         storage_ops::deserialize_storage_value(tc, storage::StoredValue::V8(startup.id_sc))

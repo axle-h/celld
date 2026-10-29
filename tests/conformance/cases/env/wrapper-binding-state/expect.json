@@ -1,0 +1,46 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "database": {
+          "own": [
+            "alwaysPrimarySession",
+            "fetcher"
+          ],
+          "construct": "constructed"
+        },
+        "statement": {
+          "own": [
+            "dbSession",
+            "statement",
+            "params"
+          ],
+          "construct": "constructed"
+        },
+        "session": {
+          "own": [
+            "fetcher",
+            "bookmarkOrConstraint"
+          ],
+          "construct": "constructed"
+        },
+        "workflow": {
+          "own": [
+            "binding"
+          ],
+          "construct": "constructed"
+        },
+        "instance": {
+          "own": [
+            "id",
+            "binding"
+          ],
+          "construct": "constructed"
+        }
+      }
+    }
+  ]
+}

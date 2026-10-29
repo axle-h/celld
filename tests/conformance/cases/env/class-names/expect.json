@@ -1,0 +1,53 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "namespace": [
+          "DurableObjectNamespace",
+          "[object DurableObjectNamespace]"
+        ],
+        "id": [
+          "DurableObjectId",
+          "[object DurableObjectId]"
+        ],
+        "kv": [
+          "KvNamespace",
+          "[object KvNamespace]"
+        ],
+        "queue": [
+          "WorkerQueue",
+          "[object WorkerQueue]"
+        ],
+        "object": {
+          "ctx": [
+            "DurableObjectState",
+            "[object DurableObjectState]"
+          ],
+          "storage": [
+            "DurableObjectStorage",
+            "[object DurableObjectStorage]"
+          ],
+          "sql": [
+            "SqlStorage",
+            "[object SqlStorage]"
+          ],
+          "cursor": [
+            "Cursor",
+            "[object Cursor]"
+          ],
+          "kv": [
+            "SyncKvStorage",
+            "[object SyncKvStorage]"
+          ],
+          "facets": [
+            "DurableObjectFacets",
+            "[object DurableObjectFacets]"
+          ]
+        }
+      }
+    }
+  ]
+}

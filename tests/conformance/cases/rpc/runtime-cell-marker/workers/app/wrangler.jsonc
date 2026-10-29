@@ -1,0 +1,9 @@
+// Plain data shaped like celld's marker for a KV, Queue or D1 cell's stub.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "kv_namespaces": [{ "binding": "KV", "id": "marker-kv" }],
+  "queues": { "producers": [{ "binding": "QUEUE", "queue": "marker-queue" }] },
+  "d1_databases": [{ "binding": "DB", "database_name": "marker-db", "database_id": "marker-db" }]
+}

@@ -1,0 +1,38 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "namespace": {
+          "own": [],
+          "construct": "TypeError: Illegal constructor"
+        },
+        "id": {
+          "own": [
+            "jurisdiction",
+            "name"
+          ],
+          "construct": "TypeError: Illegal constructor"
+        },
+        "stub": [
+          "name",
+          "id"
+        ],
+        "kv": {
+          "own": [],
+          "construct": "TypeError: Illegal constructor"
+        },
+        "queue": {
+          "own": [],
+          "construct": "TypeError: Illegal constructor"
+        },
+        "ping": "pong",
+        "equals": true,
+        "kvPut": "v",
+        "queueSend": "sent"
+      }
+    }
+  ]
+}

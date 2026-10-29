@@ -1,0 +1,79 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "ctx": {
+          "own": [
+            "facets",
+            "container",
+            "storage",
+            "id",
+            "props",
+            "exports"
+          ],
+          "construct": "TypeError: Illegal constructor"
+        },
+        "storage": {
+          "own": [
+            "kv",
+            "sql"
+          ],
+          "construct": "TypeError: Illegal constructor"
+        },
+        "sql": {
+          "own": [],
+          "construct": "TypeError: Illegal constructor"
+        },
+        "cursor": {
+          "own": [],
+          "construct": "TypeError: Illegal constructor"
+        },
+        "kv": {
+          "own": [],
+          "construct": "TypeError: Illegal constructor"
+        },
+        "list": {
+          "own": [],
+          "construct": "TypeError: Illegal constructor"
+        },
+        "facets": {
+          "own": [],
+          "construct": "TypeError: Illegal constructor"
+        },
+        "id": {
+          "own": [
+            "jurisdiction",
+            "name"
+          ],
+          "construct": "TypeError: Illegal constructor"
+        },
+        "transaction": {
+          "own": [],
+          "construct": "TypeError: Illegal constructor"
+        },
+        "rows": [
+          {
+            "a": 1
+          },
+          {
+            "a": 2
+          }
+        ],
+        "columns": [
+          "a"
+        ],
+        "rowsRead": 2,
+        "kvGet": "v",
+        "listed": [
+          [
+            "k",
+            "v"
+          ]
+        ]
+      }
+    }
+  ]
+}

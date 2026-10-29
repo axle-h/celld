@@ -1,0 +1,8 @@
+// A SQL cursor's rowsWritten counts its own statement's writes only.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": { "bindings": [{ "name": "OBJ", "class_name": "Obj" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Obj"] }]
+}

@@ -1,0 +1,33 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": "installed"
+    },
+    {
+      "status": 200,
+      "body": {
+        "kv": [
+          "v",
+          1
+        ],
+        "queue": 1,
+        "d1": [
+          1,
+          2,
+          1
+        ],
+        "workflow": [
+          "complete",
+          {
+            "patched": true
+          }
+        ],
+        "object": "v",
+        "foreign": [],
+        "ownNamespaceCalls": true,
+        "ownStorageCalls": true
+      }
+    }
+  ]
+}

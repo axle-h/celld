@@ -1,0 +1,11 @@
+// A script that replaces the randomness builtins its Queue's cell uses.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "kv_namespaces": [{ "binding": "KV", "id": "isolate-kv" }],
+  "queues": {
+    "producers": [{ "binding": "JOBS", "queue": "isolate-jobs" }],
+    "consumers": [{ "queue": "isolate-jobs", "max_batch_timeout": 0 }]
+  }
+}

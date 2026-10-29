@@ -619,6 +619,10 @@ pub enum CellJob {
         name: Option<String>,
         method: String,
         args: RpcData,
+        /// The caller may use a runtime cell's internal methods
+        /// (`scope_grant::Caller::internal`), such as one Queue cell's
+        /// dead-letter transfer into another. A binding's call never may.
+        internal: bool,
         reply: tokio::sync::oneshot::Sender<Result<RpcOutcome>>,
     },
     WsOpen {
@@ -688,6 +692,28 @@ impl CellJob {
             | CellJob::Alarm { scope, .. } => scope,
             #[cfg(celld_internal_tests)]
             CellJob::SyncErrorForTest { scope, .. } => scope,
+        }
+    }
+
+    /// A Durable Object RPC from the admitted `caller`, which decides whether
+    /// the call may use a runtime cell's internal methods.
+    pub(crate) fn rpc(
+        scope: String,
+        name: Option<String>,
+        method: String,
+        args: RpcData,
+        request_id: Option<RequestId>,
+        caller: &crate::scope_grant::Caller,
+        reply: tokio::sync::oneshot::Sender<Result<RpcOutcome>>,
+    ) -> Self {
+        CellJob::Rpc {
+            request_id,
+            scope,
+            name,
+            method,
+            args,
+            internal: caller.internal(),
+            reply,
         }
     }
 
@@ -1921,7 +1947,15 @@ pub struct QueueConsumerRegistration {
 enum WorkerOrigin {
     Deployment,
     Dynamic,
+    /// The isolates the shared runtime cells run in
+    /// ([`WorkerConfig::runtime_cells`]).
+    Runtime,
 }
+
+/// The module the runtime cells' isolates load: no application code, only a
+/// default export, which the load requires. Nothing routes a request to it.
+const RUNTIME_CELLS_MODULE: &str =
+    "export default { fetch() { return new Response(null, { status: 404 }); } };\n";
 
 type ResourceLimits = crate::WorkerInvocationLimits;
 
@@ -1987,10 +2021,11 @@ pub struct WorkerConfig {
     kv_bindings: Vec<(String, String)>,
     queue_bindings: Vec<QueueBinding>,
     pub(crate) queue_consumers: Vec<QueueConsumerRegistration>,
-    /// This script declared a consumer in its own manifest. The deployment-
-    /// wide catalog later replaces `queue_consumers` in every isolate, so the
-    /// catalog cannot answer whether this particular default export can omit
-    /// `fetch` and provide only `queue`.
+    /// This script declared a consumer in its own manifest, so its default
+    /// export may omit `fetch` and provide only `queue` (and must provide
+    /// `queue`). Not `!queue_consumers.is_empty()`: the runtime cells' config
+    /// carries the deployment's whole consumer catalog there
+    /// ([`WorkerConfig::runtime_cells`]) and has no queue handler.
     declares_queue_consumer: bool,
     workflow_bindings: Vec<WorkflowBinding>,
     vars: Vec<(String, WorkerVar)>,
@@ -2170,14 +2205,68 @@ impl WorkerConfig {
         }
     }
 
+    /// The isolates the shared runtime classes (`deploy::is_shared_reserved_class`:
+    /// KV, Queue and D1) run in, as the script `deploy::RUNTIME_SCRIPT`. They
+    /// load no application code, so a Worker's patched builtins never run in
+    /// a runtime cell's event, and their grant is the runtime cells' own
+    /// (`ScopeGrant::runtime_cells`), not a script's. `classes` are the shared
+    /// classes the deployment uses, for their namespace keys; `queue_consumers`
+    /// is the deployment's consumer catalog, which the Queue cells deliver
+    /// by. The compatibility date is the newest this binary knows and no flag
+    /// is set: the cells are celld's own code, so no Worker's choice applies.
+    pub fn runtime_cells(
+        classes: Vec<String>,
+        queue_consumers: Vec<QueueConsumerRegistration>,
+        node: String,
+        generation: crate::generation::GenerationId,
+    ) -> Self {
+        let compat = Compat::from_flags(crate::compat_flags::compile_lenient(
+            Some(&crate::compat_flags::NEWEST_DATE.to_string()),
+            &[],
+        ));
+        let mut config = Self::new(WorkerConfigOptions {
+            src: RUNTIME_CELLS_MODULE.to_string(),
+            script_name: crate::deploy::RUNTIME_SCRIPT.to_string(),
+            do_classes: classes,
+            bindings: Vec::new(),
+            r2_bindings: Vec::new(),
+            d1_bindings: Vec::new(),
+            kv_bindings: Vec::new(),
+            queue_bindings: Vec::new(),
+            queue_consumers: Vec::new(),
+            workflow_bindings: Vec::new(),
+            vars: Vec::new(),
+            node,
+            modules: Vec::new(),
+            compat,
+        })
+        .with_queue_consumers(queue_consumers)
+        .with_generation(generation);
+        config.origin = WorkerOrigin::Runtime;
+        config
+    }
+
     /// The Durable Object cells this script's code may call. A Dynamic Worker
     /// declares no binding, so it may call none; its facets are reached
     /// through the facet ops, which act on the running object only.
     pub(crate) fn scope_grant(&self) -> Arc<crate::scope_grant::ScopeGrant> {
         self.scope_grant
             .get_or_init(|| {
-                if self.origin == WorkerOrigin::Dynamic {
-                    return Arc::new(crate::scope_grant::ScopeGrant::none(&self.script_name));
+                match self.origin {
+                    WorkerOrigin::Dynamic => {
+                        return Arc::new(crate::scope_grant::ScopeGrant::none(&self.script_name))
+                    }
+                    WorkerOrigin::Runtime => {
+                        return Arc::new(crate::scope_grant::ScopeGrant::runtime_cells(
+                            self.queue_consumers.iter().map(|consumer| {
+                                (
+                                    consumer.config.queue.as_str(),
+                                    consumer.config.dead_letter_queue.as_deref(),
+                                )
+                            }),
+                        ))
+                    }
+                    WorkerOrigin::Deployment => {}
                 }
                 Arc::new(crate::scope_grant::ScopeGrant::new(
                     crate::scope_grant::GrantSource {
@@ -2190,16 +2279,6 @@ impl WorkerConfig {
                             .map(|binding| binding.queue.as_str())
                             .collect(),
                         d1_databases: self.d1_bindings.iter().map(|(_, id)| id.as_str()).collect(),
-                        consumed_queues: self
-                            .queue_consumers
-                            .iter()
-                            .map(|consumer| {
-                                (
-                                    consumer.config.queue.as_str(),
-                                    consumer.config.dead_letter_queue.as_deref(),
-                                )
-                            })
-                            .collect(),
                     },
                 ))
             })
@@ -6514,6 +6593,7 @@ fn begin_cell(tc: &mut v8::PinScope, job: CellJob, event_time: i64) -> Begun {
             name,
             method,
             args,
+            internal,
             reply,
         } => {
             if let Err(error) = register_actor_name(tc, &scope, name.as_deref()) {
@@ -6533,6 +6613,7 @@ fn begin_cell(tc: &mut v8::PinScope, job: CellJob, event_time: i64) -> Begun {
                         v8::String::new(tc, &scope).unwrap().into(),
                         v8::String::new(tc, &method).unwrap().into(),
                         rpc_data_value(tc, args),
+                        v8::Boolean::new(tc, internal).into(),
                     ];
                     let recv = v8::undefined(tc).into();
                     f.call(tc, recv, &arguments)
@@ -10360,6 +10441,7 @@ fn op_facet_rpc(
             name: None,
             method,
             args: RpcData::V8(call_args.into()),
+            internal: false,
             reply,
         };
         let driving = tokio::spawn(crate::runtime::drive_cell(
@@ -10663,12 +10745,14 @@ fn op_loader_drop(
 }
 
 /// The caller of a Durable Object call that the running JavaScript makes to
-/// `target`, or the refusal when its script holds no grant for that cell.
-/// The host checks the caller again before routing, and the owner node once
-/// more, but a refusal here throws at the call that made it.
+/// `target` -- an RPC, or with `fetch` a fetch or WebSocket upgrade
+/// (`Caller::admit_fetch`) -- or the refusal when its script holds no grant
+/// for it. The host checks the caller again before routing, and the owner
+/// node once more, but a refusal here throws at the call that made it.
 fn admitted_caller(
     scope: &mut v8::PinScope,
     target: &str,
+    fetch: bool,
 ) -> Result<crate::scope_grant::Caller, String> {
     // The grant consults the running event only for the Queue relay (a Queue
     // cell reaching the catalog's other Queue cells), so the egress lock is
@@ -10683,9 +10767,12 @@ fn admitted_caller(
         grant: actor_runtime_state(scope).grant.clone(),
         event,
     });
-    caller
-        .admit(target)
-        .map_err(|refusal| refusal.to_string())?;
+    let admitted = if fetch {
+        caller.admit_fetch(target)
+    } else {
+        caller.admit(target)
+    };
+    admitted.map_err(|refusal| refusal.to_string())?;
     Ok(caller)
 }
 
@@ -10712,7 +10799,7 @@ fn op_do_call_impl(
     cancellable: bool,
 ) {
     let cell = args.get(0).to_rust_string_lossy(scope);
-    let caller = match admitted_caller(scope, &cell) {
+    let caller = match admitted_caller(scope, &cell, true) {
         Ok(caller) => caller,
         Err(refusal) => return loader_throw(scope, &refusal),
     };
@@ -10975,7 +11062,7 @@ fn op_rpc_call(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let cell = args.get(0).to_rust_string_lossy(scope);
-    let caller = match admitted_caller(scope, &cell) {
+    let caller = match admitted_caller(scope, &cell, false) {
         Ok(caller) => caller,
         Err(refusal) => return loader_throw(scope, &refusal),
     };
@@ -11926,6 +12013,28 @@ mod scope_grant_op_tests {
         });
     }
 
+    /// A runtime cell the script's binding names takes its RPC, but no fetch
+    /// or WebSocket upgrade: that is the cell's operator protocol, which
+    /// only celld calls, from the authenticated `/runtime/` route.
+    #[test]
+    fn a_runtime_cells_operator_handler_is_refused_to_a_binding() {
+        in_isolate(|worker| {
+            let _current = CurrentGuard::enter(IoContext::new());
+            worker.with_scope_for_test(|scope| {
+                let own = crate::engine_api::kv_cell_scope("app-kv", 0);
+                let refusal = crate::scope_grant::operator_refusal(&own);
+                let args = [own.as_str(), "", "http://cell/", "POST"];
+                for result in [
+                    call_op(scope, op_do_call, &args),
+                    call_op(scope, op_do_call_cancellable, &args),
+                ] {
+                    assert_eq!(result, Err(format!("Error: {refusal}")));
+                }
+                assert_eq!(call_op(scope, op_rpc_call, &[&own, "", "__kvGet"]), Ok(()));
+            });
+        });
+    }
+
     /// Every op that takes a storage scope acts on the running object only:
     /// another object's scope gets workerd's cross-object error, and outside
     /// any object event its cross-request error.
@@ -12066,6 +12175,622 @@ mod scope_grant_op_tests {
         );
         drop(take_loader_owner(&owner));
         assert!(loaded_worker_of(&owner, id).is_none());
+    }
+}
+
+#[cfg(test)]
+mod runtime_cell_tests {
+    //! The KV, Queue and D1 cells as their isolate runs them: an isolate with
+    //! no script's code, whose cells answer a binding only its own methods,
+    //! another runtime cell their internal ones, and check again everything
+    //! a binding validates in the caller's isolate. No script reaches a
+    //! runtime cell's stub any more, so these call the cells directly.
+    use super::*;
+
+    /// Run `body` with `__celld` bound, settle the microtasks it queued, and
+    /// answer what its promise resolved to, as JSON text.
+    fn settle(scope: &mut v8::PinScope, body: &str) -> String {
+        let value = run_internal_snippet(scope, body).expect("the snippet runs");
+        scope.perform_microtask_checkpoint();
+        let promise = v8::Local::<v8::Promise>::try_from(value).expect("a promise");
+        assert_eq!(promise.state(), v8::PromiseState::Fulfilled, "{body}");
+        promise.result(scope).to_rust_string_lossy(scope)
+    }
+
+    /// Run `f` in an isolate of the runtime cells, whose catalog has the
+    /// queue `jobs` with the dead-letter queue `jobs-dlq`.
+    fn in_runtime_isolate(f: impl FnOnce(&mut Worker) + Send + 'static) {
+        let _ = crate::asyncrt::test_host_runtime();
+        Engine::init();
+        std::thread::spawn(|| {
+            let config = Arc::new(WorkerConfig::runtime_cells(
+                vec![
+                    crate::deploy::KV_CLASS.into(),
+                    crate::deploy::QUEUE_CLASS.into(),
+                    crate::deploy::D1_CLASS.into(),
+                ],
+                vec![QueueConsumerRegistration {
+                    script: "app".into(),
+                    config: crate::protocol::QueueConsumerConfig {
+                        queue: "jobs".into(),
+                        max_batch_size: 10,
+                        max_batch_timeout: 0,
+                        max_retries: 0,
+                        dead_letter_queue: Some("jobs-dlq".into()),
+                        max_concurrency: None,
+                        retry_delay: None,
+                    },
+                }],
+                String::new(),
+                1,
+            ));
+            let mut worker = Worker::load_config(config).unwrap();
+            let _runtime = crate::asyncrt::test_host_runtime().enter();
+            f(&mut worker);
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// Call a host op through V8 with `args`, as the harness would; answer
+    /// what it returned, or what it threw.
+    fn call_op_with<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        op: impl v8::MapFnTo<v8::FunctionCallback>,
+        args: &[v8::Local<'s, v8::Value>],
+    ) -> Result<v8::Local<'s, v8::Value>, String> {
+        let tc = std::pin::pin!(v8::TryCatch::new(scope));
+        let tc = &mut tc.init();
+        let function = v8::Function::new(tc, op).unwrap();
+        let recv = v8::undefined(tc).into();
+        match function.call(tc, recv, args) {
+            Some(value) => Ok(v8::Local::new(tc, value)),
+            None => Err(tc
+                .exception()
+                .map(|error| error.to_rust_string_lossy(tc))
+                .unwrap_or_default()),
+        }
+    }
+
+    /// Make the RPC `method(...args)` to `cell` from `worker`'s code, through
+    /// `op_rpc_call`, in `context`: the op checks the grant, and answers what
+    /// it threw or the operation it enqueued, which `op_rpc_receive` runs.
+    /// `args` is JavaScript source for the argument array, encoded as a
+    /// stub's call is (structured clone).
+    fn op_rpc(
+        worker: &mut Worker,
+        context: Arc<IoContext>,
+        cell: &str,
+        method: &str,
+        args: &str,
+    ) -> Result<Vec<asyncrt::OpFuture>, String> {
+        let _current = CurrentGuard::enter(context);
+        let before = asyncrt::spawn_count();
+        worker.with_scope_for_test(|scope| {
+            let value = run_internal_snippet(scope, &format!("return {args};")).unwrap();
+            let bytes = call_op_with(scope, storage_ops::op_sc_encode, &[value]).unwrap();
+            let cell = v8::String::new(scope, cell).unwrap().into();
+            let name = v8::null(scope).into();
+            let method = v8::String::new(scope, method).unwrap().into();
+            call_op_with(scope, op_rpc_call, &[cell, name, method, bytes]).map(|_| ())
+        })?;
+        Ok(asyncrt::drain_spawns_from(before)
+            .into_iter()
+            .map(|(_, operation, _, _)| operation)
+            .collect())
+    }
+
+    /// Run the operations `op_rpc` enqueued, and answer the call they sent to
+    /// the host channel.
+    fn op_rpc_receive(operations: Vec<asyncrt::OpFuture>) -> crate::host_channels::RpcCallReq {
+        let runtime = crate::asyncrt::test_host_runtime();
+        for operation in operations {
+            runtime.spawn(operation);
+        }
+        let mut calls = RPC_CALLS.lock().unwrap();
+        runtime
+            .block_on(calls.as_mut().unwrap().recv())
+            .expect("the op sends the call to the host")
+    }
+
+    /// The host channel the RPC op sends to, which only these tests read.
+    static RPC_CALLS: std::sync::Mutex<
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::host_channels::RpcCallReq>>,
+    > = std::sync::Mutex::new(None);
+
+    /// Dispatch a received call as the host does: admit its caller, and run
+    /// it as a cell event of `cells`. Answers the method's error message, or
+    /// "returned".
+    fn dispatch(
+        cells: &Arc<crate::pool::Slot>,
+        decoder: &mut Worker,
+        call: crate::host_channels::RpcCallReq,
+    ) -> String {
+        if let Err(refusal) = call.caller.admit(&call.scope) {
+            return refusal.to_string();
+        }
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        let job = CellJob::rpc(
+            call.scope,
+            call.name,
+            call.method,
+            call.args,
+            None,
+            &call.caller,
+            reply,
+        );
+        let runtime = crate::asyncrt::test_host_runtime();
+        runtime.block_on(crate::runtime::drive_cell(
+            cells.affiliate(),
+            job,
+            None,
+            None,
+        ));
+        let outcome = runtime.block_on(receive).unwrap().unwrap();
+        let RpcData::V8(bytes) = outcome.data else {
+            panic!("a structured-clone call answers in kind");
+        };
+        if bytes[0] != 0 {
+            return "returned".to_string();
+        }
+        // The error envelope: a tag, then `[error, props]`.
+        decoder.with_scope_for_test(|scope| {
+            let bytes = bytes_value(scope, bytes[1..].to_vec());
+            let decoded = call_op_with(scope, storage_ops::op_sc_decode, &[bytes]).unwrap();
+            let pair = decoded.to_object(scope).unwrap();
+            let error = pair.get_index(scope, 0).unwrap();
+            error.to_rust_string_lossy(scope)
+        })
+    }
+
+    /// A script's RPC op call takes the host's path to the cell:
+    /// `op_rpc_call` admits the script's grant, the host channel carries the
+    /// caller, the dispatch marks the job internal or not (`CellJob::rpc`,
+    /// `Caller::internal`), and the cell's `__doRpcCall` answers by that. (The
+    /// binding's client and the binary's routing are the conformance cases'.) A script's call to a runtime cell's
+    /// internal or event methods is refused there, its fetch at the op, and
+    /// another shard of its own namespace at the op; a call that skipped the
+    /// binding's checks is refused inside the cell. The runtime cells' own
+    /// call, from a Queue cell's event, reaches the internal method.
+    #[test]
+    fn a_scripts_op_call_reaches_the_cell_through_the_host() {
+        let _ = crate::asyncrt::test_host_runtime();
+        Engine::init();
+        std::thread::spawn(|| {
+            let runtime = crate::asyncrt::test_host_runtime();
+            let _entered = runtime.enter();
+            let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+            assert!(
+                RPC_CALL_TX.set(sender).is_ok(),
+                "only this test reads the RPC channel"
+            );
+            *RPC_CALLS.lock().unwrap() = Some(receiver);
+            let mut app = Worker::load_config(Arc::new(WorkerConfig::new(WorkerConfigOptions {
+                src: "export default { fetch() { return new Response(); } };\n".into(),
+                script_name: "app".into(),
+                do_classes: vec![
+                    crate::deploy::KV_CLASS.into(),
+                    crate::deploy::QUEUE_CLASS.into(),
+                ],
+                bindings: Vec::new(),
+                r2_bindings: Vec::new(),
+                d1_bindings: Vec::new(),
+                kv_bindings: vec![("KV".into(), "app-kv".into())],
+                queue_bindings: vec![QueueBinding {
+                    environment: "QUEUE".into(),
+                    queue: "jobs".into(),
+                    delivery_delay: 0,
+                }],
+                queue_consumers: Vec::new(),
+                workflow_bindings: Vec::new(),
+                vars: Vec::new(),
+                node: String::new(),
+                modules: Vec::new(),
+                compat: Compat::default(),
+            })))
+            .unwrap();
+            let cells = crate::pool::Slot::for_test(
+                Worker::load_config(Arc::new(WorkerConfig::runtime_cells(
+                    vec![
+                        crate::deploy::KV_CLASS.into(),
+                        crate::deploy::QUEUE_CLASS.into(),
+                    ],
+                    vec![QueueConsumerRegistration {
+                        script: "app".into(),
+                        config: crate::protocol::QueueConsumerConfig {
+                            queue: "jobs".into(),
+                            max_batch_size: 10,
+                            max_batch_timeout: 0,
+                            max_retries: 0,
+                            dead_letter_queue: Some("jobs-dlq".into()),
+                            max_concurrency: None,
+                            retry_delay: None,
+                        },
+                    }],
+                    String::new(),
+                    1,
+                )))
+                .unwrap(),
+            );
+            let kv = crate::engine_api::kv_cell_scope("app-kv", 0);
+            let queue = crate::engine_api::queue_cell_scope("jobs");
+            let dlq = crate::engine_api::queue_cell_scope("jobs-dlq");
+            let dir = tempfile::tempdir().unwrap();
+            for (index, cell) in [&kv, &queue, &dlq].into_iter().enumerate() {
+                let path = dir.path().join(format!("{index}.db"));
+                let path = path.to_str().unwrap().to_string();
+                runtime
+                    .block_on(cells.turn(|worker| {
+                        worker.own_cell(
+                            cell,
+                            Some(CellStorage {
+                                path: &path,
+                                epoch: 1,
+                                replicated_wake: false,
+                                vfs: None,
+                            }),
+                        )
+                    }))
+                    .unwrap();
+            }
+            let refused = |method: &str| {
+                format!("TypeError: The RPC receiver does not implement the method \"{method}\".")
+            };
+            let mut script_call = |cell: &str, method: &str, args: &str| {
+                match op_rpc(&mut app, IoContext::new(), cell, method, args) {
+                    Ok(operations) => {
+                        let call = op_rpc_receive(operations);
+                        assert!(!call.caller.internal(), "a script's call is never internal");
+                        // `dispatch` decodes in a second script isolate.
+                        dispatch(&cells, &mut decoder(), call)
+                    }
+                    Err(thrown) => thrown,
+                }
+            };
+            assert_eq!(
+                script_call(&queue, "__queueDlqAcceptBatch", r#"[{ transfers: [] }]"#),
+                refused("__queueDlqAcceptBatch")
+            );
+            assert_eq!(
+                script_call(&kv, "__kvSweep", r#"[{ now: 0, limit: 1 }]"#),
+                refused("__kvSweep")
+            );
+            assert_eq!(
+                script_call(&kv, "__kvPut", r#"[{ entries: [{ key: "k".repeat(600), value: new Uint8Array(1), tag: "text", metadata: null, expiresAt: null }] }]"#),
+                "Error: KV_ERROR: a key is at most 512 bytes, got 600"
+            );
+            let shard = crate::engine_api::kv_cell_scope("app-kv", 1);
+            assert_eq!(
+                script_call(&shard, "__kvGet", r#"[{ keys: ["k"] }]"#),
+                format!("Error: {}", crate::scope_grant::refusal("app", &shard))
+            );
+            // The operator handler, at the op.
+            app.with_scope_for_test(|scope| {
+                let _current = CurrentGuard::enter(IoContext::new());
+                let args: Vec<v8::Local<v8::Value>> = [kv.as_str(), "", "http://cell/", "POST"]
+                    .iter()
+                    .map(|arg| v8::String::new(scope, arg).unwrap().into())
+                    .collect();
+                assert_eq!(
+                    call_op_with(scope, op_do_call, &args).map(|_| ()),
+                    Err(format!("Error: {}", crate::scope_grant::operator_refusal(&kv)))
+                );
+            });
+            // The runtime cells' own call, from a Queue cell's event.
+            let operations = runtime
+                .block_on(cells.turn(|worker| {
+                    // The event has written nothing, so its call trails no
+                    // write and needs no output gate.
+                    let context = cell_event_context_for_test(&queue);
+                    context.egress.lock().unwrap()[0].before = worker
+                        .with_scope_for_test(|_| storage::write_position(&queue))
+                        .unwrap()
+                        .unwrap_or(0);
+                    op_rpc(
+                        worker,
+                        context,
+                        &dlq,
+                        "__queueDlqAcceptBatch",
+                        r#"[{ transfers: [] }]"#,
+                    )
+                }))
+                .unwrap();
+            let call = op_rpc_receive(operations);
+            assert!(call.caller.internal());
+            assert_eq!(
+                dispatch(&cells, &mut decoder(), call),
+                "Error: QUEUE_ERROR: a Queue transfer batch has an invalid size"
+            );
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// An isolate that decodes a cell's error envelope.
+    fn decoder() -> Worker {
+        Worker::load_config(Arc::new(WorkerConfig::new(WorkerConfigOptions {
+            src: "export default { fetch() { return new Response(); } };\n".into(),
+            script_name: "decoder".into(),
+            do_classes: Vec::new(),
+            bindings: Vec::new(),
+            r2_bindings: Vec::new(),
+            d1_bindings: Vec::new(),
+            kv_bindings: Vec::new(),
+            queue_bindings: Vec::new(),
+            queue_consumers: Vec::new(),
+            workflow_bindings: Vec::new(),
+            vars: Vec::new(),
+            node: String::new(),
+            modules: Vec::new(),
+            compat: Compat::default(),
+        })))
+        .unwrap()
+    }
+
+    /// The isolate holds the runtime's classes and nothing of a script's: no
+    /// binding, no var, and the runtime cells' own grant.
+    #[test]
+    fn the_runtime_cells_isolate_holds_no_script() {
+        in_runtime_isolate(|worker| {
+            worker.with_scope_for_test(|scope| {
+                let grant = actor_runtime_state(scope).grant.clone();
+                assert_eq!(grant.script(), crate::deploy::RUNTIME_SCRIPT);
+                let dlq = crate::engine_api::queue_cell_scope("jobs-dlq");
+                let event = crate::engine_api::queue_cell_scope("jobs");
+                assert!(grant.admits(Some(&event), &dlq));
+                assert!(!grant.admits(None, &crate::engine_api::kv_cell_scope("kv", 0)));
+                let shape = settle(
+                    scope,
+                    "const c = __celld.__cell;\n\
+                     return Promise.resolve(JSON.stringify({\n\
+                       script: c.script,\n\
+                       env: Object.keys(c.env),\n\
+                       classes: Object.keys(c.classes).filter((name) => !name.startsWith('.')).sort(),\n\
+                       exports: Object.keys(c.doExports).sort(),\n\
+                     }));",
+                );
+                assert_eq!(
+                    shape,
+                    r#"{"script":"__runtime","env":[],"classes":["__D1Database","__KvNamespace","__Queue","__Workflow"],"exports":["__D1Database","__KvNamespace","__Queue","__Workflow"]}"#
+                );
+            });
+        });
+    }
+
+    /// A binding's call reaches only the binding's methods; an internal one
+    /// (another runtime cell's) also the internal methods, and no other. A
+    /// peer's JSON `null` arguments are a call with none.
+    #[test]
+    fn a_runtime_cell_answers_a_binding_only_its_methods() {
+        in_runtime_isolate(|worker| {
+            let queue = crate::engine_api::queue_cell_scope("jobs-dlq");
+            let kv = crate::engine_api::kv_cell_scope("kv", 0);
+            let d1 = crate::engine_api::d1_cell_scope("db");
+            let call = |scope: &str, method: &str, args: &str, internal: bool| {
+                format!(
+                    "return __celld.__dispatchRpc({scope:?}, {method:?}, {args:?}, {internal})\n\
+                       .then((value) => JSON.stringify({{ answered: value }}), (error) => String(error));"
+                )
+            };
+            let refused = |method: &str| {
+                format!("TypeError: The RPC receiver does not implement the method \"{method}\".")
+            };
+            for (cell, method, args, internal, expected) in [
+                // The dead-letter transfer is internal: a binding's call is
+                // refused, another Queue cell's reaches the method, which
+                // checks its transfers.
+                (
+                    &queue,
+                    "__queueDlqAcceptBatch",
+                    r#"[{"transfers":[]}]"#,
+                    false,
+                    refused("__queueDlqAcceptBatch"),
+                ),
+                (
+                    &queue,
+                    "__queueDlqAcceptBatch",
+                    r#"[{"transfers":[]}]"#,
+                    true,
+                    "Error: QUEUE_ERROR: a Queue transfer batch has an invalid size".to_string(),
+                ),
+                // A runtime cell's other methods serve its own events.
+                (&queue, "_purge", "[]", false, refused("_purge")),
+                (&queue, "_purge", "[]", true, refused("_purge")),
+                (&queue, "_settle", "[{}]", true, refused("_settle")),
+                (&queue, "alarm", "[]", true, refused("alarm")),
+                (
+                    &kv,
+                    "__kvSweep",
+                    r#"[{"now":0,"limit":1}]"#,
+                    false,
+                    refused("__kvSweep"),
+                ),
+                (
+                    &kv,
+                    "__kvSweep",
+                    r#"[{"now":0,"limit":1}]"#,
+                    true,
+                    refused("__kvSweep"),
+                ),
+                (&kv, "_put", "[[]]", true, refused("_put")),
+                (&kv, "_open", "[]", false, refused("_open")),
+                (
+                    &d1,
+                    "__d1Migrate",
+                    r#"["m","SELECT 1","t"]"#,
+                    false,
+                    refused("__d1Migrate"),
+                ),
+                (&d1, "ctx", "[]", true, refused("ctx")),
+                // A binding's method, read as a property or through a path.
+                (
+                    &kv,
+                    "__kvGet",
+                    r#"{"path":[],"args":null}"#,
+                    false,
+                    refused("__kvGet"),
+                ),
+                (
+                    &kv,
+                    "__kvGet",
+                    r#"{"path":["call"],"args":[]}"#,
+                    false,
+                    refused("__kvGet"),
+                ),
+                // `null` is no arguments: the method runs, and refuses them.
+                (
+                    &kv,
+                    "__kvGet",
+                    "null",
+                    false,
+                    "Error: KV_ERROR: keys must be an array of strings".to_string(),
+                ),
+            ] {
+                let _current = CurrentGuard::enter(cell_event_context_for_test(cell));
+                let answer = worker.with_scope_for_test(|scope| {
+                    settle(scope, &call(cell, method, args, internal))
+                });
+                assert_eq!(answer, expected, "{method} internal={internal} {args}");
+            }
+        });
+    }
+
+    /// Each binding call is checked again inside the cell, with the binding's
+    /// own errors, before it touches the cell's storage: a caller that
+    /// skipped its isolate's checks gains nothing. A call that passes them
+    /// reaches the cell's storage, which this test's receiver does not have.
+    #[test]
+    fn a_runtime_cell_checks_what_a_binding_sends() {
+        in_runtime_isolate(|worker| {
+            let _current = CurrentGuard::enter(IoContext::new());
+            let checks = worker.with_scope_for_test(|scope| {
+                settle(
+                    scope,
+                    r#"
+const classes = __celld.__cell.classes;
+const kv = __celld.__cell.kvLimits;
+const q = __celld.__cell.queueLimits;
+const out = {};
+const run = async (name, cls, method, ...args) => {
+  try {
+    await classes[cls].prototype[method].call({}, ...args);
+    out[name] = "ran";
+  } catch (error) {
+    out[name] = String(error);
+  }
+};
+const bytes = (n) => new Uint8Array(n);
+const entry = (fields) => ({
+  key: "k", value: bytes(1), tag: "text", metadata: null, expiresAt: null, ...fields,
+});
+const message = (fields) => ({
+  body: bytes(1), contentType: "bytes", size: 1, delaySeconds: 0, ...fields,
+});
+const uuid = "0190f0c2-1d2e-7000-8000-000000000001";
+const transfer = (fields, entryFields) => ({
+  transferId: uuid,
+  deadLetterSource: "jobs",
+  entry: { id: uuid, body: bytes(1), contentType: "bytes", size: 1, ...entryFields },
+  ...fields,
+});
+return (async () => {
+  await run("kvPutOk", "__KvNamespace", "__kvPut", { entries: [entry({})] });
+  await run("kvPutKey", "__KvNamespace", "__kvPut", { entries: [entry({ key: "k".repeat(kv.maxKeyBytes + 1) })] });
+  await run("kvPutEmptyKey", "__KvNamespace", "__kvPut", { entries: [entry({ key: "" })] });
+  await run("kvPutKeyType", "__KvNamespace", "__kvPut", { entries: [entry({ key: 1 })] });
+  await run("kvPutValue", "__KvNamespace", "__kvPut", { entries: [entry({ value: bytes(kv.maxValueBytes + 1) })] });
+  await run("kvPutValueType", "__KvNamespace", "__kvPut", { entries: [entry({ value: "text" })] });
+  await run("kvPutTag", "__KvNamespace", "__kvPut", { entries: [entry({ tag: "json" })] });
+  await run("kvPutMetadata", "__KvNamespace", "__kvPut", { entries: [entry({ metadata: JSON.stringify("m".repeat(kv.maxMetadataBytes)) })] });
+  await run("kvPutMetadataJson", "__KvNamespace", "__kvPut", { entries: [entry({ metadata: "{" })] });
+  await run("kvPutExpired", "__KvNamespace", "__kvPut", { entries: [entry({ expiresAt: 0 })] });
+  await run("kvPutExpiry", "__KvNamespace", "__kvPut", { entries: [entry({ expiresAt: "soon" })] });
+  await run("kvPutCount", "__KvNamespace", "__kvPut", { entries: [] });
+  await run("kvGetCount", "__KvNamespace", "__kvGet", { keys: Array.from({ length: kv.maxBulkKeys + 1 }, (_, i) => "k" + i) });
+  await run("kvGetEmpty", "__KvNamespace", "__kvGet", { keys: [] });
+  await run("kvDeleteKey", "__KvNamespace", "__kvDelete", { keys: ["k".repeat(kv.maxKeyBytes + 1)] });
+  await run("kvListLimit", "__KvNamespace", "__kvList", { prefix: "", limit: kv.maxListLimit + 1, after: "" });
+  await run("kvListPrefix", "__KvNamespace", "__kvList", { prefix: 1, limit: 1, after: "" });
+  await run("queueSendOk", "__Queue", "__queueSend", { entries: [message({})] });
+  await run("queueSendSize", "__Queue", "__queueSend", { entries: [message({ size: 0 })] });
+  await run("queueSendLarge", "__Queue", "__queueSend", { entries: [message({ body: bytes(q.maxMessageBytes + 1), size: q.maxMessageBytes + 1 })] });
+  await run("queueSendType", "__Queue", "__queueSend", { entries: [message({ contentType: "xml" })] });
+  await run("queueSendBody", "__Queue", "__queueSend", { entries: [message({ body: "text" })] });
+  await run("queueSendDelay", "__Queue", "__queueSend", { entries: [message({ delaySeconds: q.maxDelaySeconds + 1 })] });
+  await run("queueSendCount", "__Queue", "__queueSend", { entries: Array.from({ length: q.maxBatchMessages + 1 }, () => message({})) });
+  await run("queueSendBatchBytes", "__Queue", "__queueSend", { entries: Array.from({ length: 3 }, () => message({ body: bytes(q.maxMessageBytes), size: q.maxMessageBytes })) });
+  await run("queueSendEmpty", "__Queue", "__queueSend", { entries: [] });
+  await run("dlqOk", "__Queue", "__queueDlqAcceptBatch", { transfers: [transfer({})] });
+  await run("dlqTransferId", "__Queue", "__queueDlqAcceptBatch", { transfers: [transfer({ transferId: "x" })] });
+  await run("dlqMessageId", "__Queue", "__queueDlqAcceptBatch", { transfers: [transfer({}, { id: "x" })] });
+  await run("dlqSize", "__Queue", "__queueDlqAcceptBatch", { transfers: [transfer({}, { size: 9 })] });
+  await run("dlqSource", "__Queue", "__queueDlqAcceptBatch", { transfers: [transfer({ deadLetterSource: 7 })] });
+  await run("d1Sql", "__D1Database", "__d1Query", [{ sql: 1, params: [] }]);
+  await run("d1Params", "__D1Database", "__d1Batch", [{ sql: "SELECT 1", params: "x" }]);
+  await run("d1Statements", "__D1Database", "__d1Query", "SELECT 1");
+  await run("d1Exec", "__D1Database", "__d1Exec", { sql: "SELECT 1" });
+  __celld.__cell.workflows.flow = "Flow";
+  const create = (fields) => ({
+    workflowName: "flow", instanceId: "i1", params: undefined,
+    retention: { successMs: 1000, errorMs: 1000 }, locationHint: undefined, ...fields,
+  });
+  await run("wfCreateOk", "__Workflow", "__wfCreate", create({}));
+  await run("wfWorkflow", "__Workflow", "__wfCreate", create({ workflowName: "other" }));
+  await run("wfInstance", "__Workflow", "__wfCreate", create({ instanceId: "-bad" }));
+  await run("wfRetention", "__Workflow", "__wfCreate", create({ retention: { successMs: -1, errorMs: 0 } }));
+  await run("wfLocation", "__Workflow", "__wfCreate", create({ locationHint: "mars" }));
+  return JSON.stringify(out);
+})();
+"#,
+                )
+            });
+            let checks: serde_json::Value = serde_json::from_str(&checks).unwrap();
+            let expected = serde_json::json!({
+                // Past the checks, a call reaches the cell's storage.
+                "kvPutOk": "TypeError: this._put is not a function",
+                "kvPutKey": "Error: KV_ERROR: a key is at most 512 bytes, got 513",
+                "kvPutEmptyKey": "Error: KV_ERROR: a key must not be empty",
+                "kvPutKeyType": "Error: KV_ERROR: a key must be a string",
+                "kvPutValue": "Error: KV_ERROR: a value is at most 26214400 bytes, got 26214401",
+                "kvPutValueType": "Error: KV_ERROR: a put value must be bytes",
+                "kvPutTag": "Error: KV_ERROR: a value's content tag is \"text\" or \"bytes\", got \"json\"",
+                "kvPutMetadata": "Error: KV_ERROR: metadata is at most 1024 bytes, got 1026",
+                "kvPutMetadataJson": "Error: KV_ERROR: metadata must be JSON text",
+                "kvPutExpired": "Error: KV_ERROR: expiration 0 is in the past",
+                "kvPutExpiry": "Error: KV_ERROR: an expiration must be a time in whole milliseconds",
+                "kvPutCount": "Error: KV_ERROR: a put has an invalid number of entries",
+                "kvGetCount": "Error: KV_ERROR: a bulk get takes at most 100 keys, got 101",
+                "kvGetEmpty": "Error: KV_ERROR: a bulk get needs at least one key",
+                "kvDeleteKey": "Error: KV_ERROR: a key is at most 512 bytes, got 513",
+                "kvListLimit": "Error: KV_ERROR: a list limit is from 1 to 1000",
+                "kvListPrefix": "Error: KV_ERROR: a list prefix must be a string",
+                "queueSendOk": "TypeError: Cannot read properties of undefined (reading 'calls')",
+                "queueSendSize": "Error: QUEUE_ERROR: a message declares 0 bytes, but has 1",
+                "queueSendLarge": "Error: QUEUE_ERROR: a message is at most 128000 bytes, got 128001",
+                "queueSendType": "Error: QUEUE_ERROR: contentType must be \"text\", \"bytes\", \"json\", or \"v8\", got \"xml\"",
+                "queueSendBody": "Error: QUEUE_ERROR: a message body must be bytes",
+                "queueSendDelay": "Error: QUEUE_ERROR: delaySeconds must be an integer from 0 to 86400",
+                "queueSendCount": "Error: QUEUE_ERROR: a batch has at most 100 messages",
+                "queueSendBatchBytes": "Error: QUEUE_ERROR: a batch is at most 256000 bytes, got 384000",
+                "queueSendEmpty": "Error: QUEUE_ERROR: sendBatch() needs at least one message",
+                "dlqOk": "TypeError: this._open is not a function",
+                "dlqTransferId": "Error: QUEUE_ERROR: a Queue transfer has an invalid transfer id",
+                "dlqMessageId": "Error: QUEUE_ERROR: a Queue transfer has an invalid message id",
+                "dlqSize": "Error: QUEUE_ERROR: a transferred message declares 9 bytes, but has 1",
+                "dlqSource": "Error: QUEUE_ERROR: a Queue transfer has an invalid dead-letter source",
+                "d1Sql": "Error: D1_ERROR: a statement takes SQL text",
+                "d1Params": "Error: D1_ERROR: a statement's bind values are an array",
+                "d1Statements": "Error: D1_ERROR: a query takes an array of statements",
+                "d1Exec": "Error: D1_ERROR: exec() takes SQL text",
+                // Past the checks, a create compares the cell it runs in.
+                "wfCreateOk": "TypeError: Cannot read private member #state from an object whose class did not declare it",
+                "wfWorkflow": "Error: WORKFLOW_ERROR: unknown workflow \"other\"",
+                "wfInstance": "Error: WORKFLOW_ERROR: invalid instance id \"-bad\"",
+                "wfRetention": "Error: WORKFLOW_ERROR: create() option retention is invalid",
+                "wfLocation": "Error: WORKFLOW_ERROR: create() has invalid locationHint \"mars\"",
+            });
+            assert_eq!(checks, expected);
+        });
     }
 }
 
@@ -12311,7 +13036,7 @@ fn op_gate_wait(
     // forged scope naming another script's cell is refused. The running
     // event can be a different cell than `cell` (object A's stub into B),
     // so this cannot bind to the running event the way acquire does.
-    if let Err(refusal) = admitted_caller(scope, &cell) {
+    if let Err(refusal) = admitted_caller(scope, &cell, false) {
         return loader_throw(scope, &refusal);
     }
     let id = asyncrt::enqueue(async move {

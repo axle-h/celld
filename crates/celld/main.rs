@@ -1455,7 +1455,7 @@ async fn dispatch_rpc_call(app: AppHandle, call: RpcCallReq) {
                             app.runtime
                                 .as_ref()
                                 .context("no cell runtime")?
-                                .rpc(scope, name, method, args, local_request_id, parent)
+                                .rpc(scope, name, method, args, local_request_id, parent, &caller)
                                 .await
                         })
                         .await;
@@ -2069,7 +2069,7 @@ pub(crate) async fn dispatch_forwarded_fetch(
     let _request_body_guard = celld::js::RequestBodyGuard::of(&request_body);
     // Before routing, so a refused call activates nothing. Answered as a
     // handler failure, which node A raises to its caller as an error.
-    if let Err(refusal) = forwarded_caller(&app, caller).admit(&scope) {
+    if let Err(refusal) = forwarded_caller(&app, caller).admit_fetch(&scope) {
         return ForwardedFetchOutcome::Reply(peer_response(internal_do_worker_error(refusal)));
     }
     let preserve_representation_length = method.eq_ignore_ascii_case("HEAD");
@@ -2341,7 +2341,8 @@ pub(crate) async fn dispatch_forwarded_rpc(app: AppHandle, call: ForwardedRpc) -
         parent,
         caller,
     } = call;
-    if let Err(refusal) = forwarded_caller(&app, caller).admit(&scope) {
+    let caller = forwarded_caller(&app, caller);
+    if let Err(refusal) = caller.admit(&scope) {
         return peer_response(response(StatusCode::FORBIDDEN, format!("{refusal:#}")));
     }
     let result = match app.request(scope.clone()).await {
@@ -2355,7 +2356,15 @@ pub(crate) async fn dispatch_forwarded_rpc(app: AppHandle, call: ForwardedRpc) -
                 return peer_response(response(StatusCode::SERVICE_UNAVAILABLE, "no cell runtime"));
             };
             let completed = local
-                .run(runtime.rpc(scope, name, rpc_method, args, local_request_id, parent))
+                .run(runtime.rpc(
+                    scope,
+                    name,
+                    rpc_method,
+                    args,
+                    local_request_id,
+                    parent,
+                    &caller,
+                ))
                 .await;
             match completed.result {
                 Ok(outcome) => Ok(outcome.data),

@@ -1292,7 +1292,6 @@ mod tests {
                 kv_namespaces: Vec::new(),
                 queues: Vec::new(),
                 d1_databases: Vec::new(),
-                consumed_queues: Vec::new(),
             },
         ));
         let own = format!("Own:{}", "cd".repeat(32));
@@ -1309,6 +1308,39 @@ mod tests {
         .resolve(known);
         assert!(unknown.admit(&own).is_err());
         assert!(TunnelCaller::Host.resolve(known).admit(&other).is_ok());
+    }
+
+    /// A Queue cell's dead-letter transfer to a Queue cell on node B names the
+    /// runtime cells as its caller: B gives it the runtime cells' grant, which
+    /// reaches the catalog's Queue cells from a Queue cell's event, and lets
+    /// it call their internal methods. A script's call does neither.
+    #[test]
+    fn node_b_admits_the_runtime_cells_relay_only() {
+        let runtime = Arc::new(celld::scope_grant::ScopeGrant::runtime_cells([(
+            "jobs",
+            Some("jobs-dlq"),
+        )]));
+        let known =
+            |script: &str| (script == celld::deploy::RUNTIME_SCRIPT).then(|| runtime.clone());
+        let queue = celld::engine_api::queue_cell_scope("jobs");
+        let dlq = celld::engine_api::queue_cell_scope("jobs-dlq");
+        let relay = TunnelCaller::Script {
+            script: celld::deploy::RUNTIME_SCRIPT.to_string(),
+            event: Some(queue.clone()),
+        }
+        .resolve(known);
+        assert!(relay.admit(&dlq).is_ok());
+        assert!(relay.internal());
+        assert!(relay.admit_fetch(&dlq).is_err());
+        let outside_event = TunnelCaller::Script {
+            script: celld::deploy::RUNTIME_SCRIPT.to_string(),
+            event: None,
+        }
+        .resolve(known);
+        assert!(outside_event.admit(&dlq).is_err());
+        let script = script_caller().resolve(known);
+        assert!(script.admit(&dlq).is_err());
+        assert!(!script.internal());
     }
 
     #[test]

@@ -1,0 +1,8 @@
+// The D1 and Workflow bindings, which workerd builds in JavaScript.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "d1_databases": [{ "binding": "DB", "database_name": "wrapper-db", "database_id": "wrapper-db" }],
+  "workflows": [{ "name": "wrapper-flow", "binding": "FLOW", "class_name": "Flow" }]
+}

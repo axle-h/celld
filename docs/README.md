@@ -506,7 +506,7 @@ values are sampled every second.
 | `remote_route_refreshes` | Cached routes that expired and started a new lookup. Normal lease renewal increases it |
 | `allocator` | Rust allocator bytes: `allocated_bytes`, `resident_bytes`, `mapped_bytes`, `retained_bytes`. V8 heaps are not included |
 | `libc_malloc` | Linux only: `in_use_bytes` and `free_bytes` of the C allocator that SQLite and V8 use |
-| `deployment.isolates`, `deployment.draining` | Per Worker script (`cells`, `stateless`, `services`): `live`, `live_empty`, `retiring`, `freed`, `heap_bytes`, `external_bytes` |
+| `deployment.isolates`, `deployment.draining` | Per Worker script (`cells`, `stateless`, `services`): `live`, `live_empty`, `retiring`, `freed`, `heap_bytes`, `external_bytes`. The KV, Queue and D1 cells are under `cells.__runtime`: they run in isolates of their own, beside no script's code |
 
 A `live_empty` count that persists for more than 30 seconds means that
 isolate maintenance does not run. A persistent `retiring` count means that
@@ -611,6 +611,9 @@ release, so keep operator tooling and celld releases together.
   so a rolling update is not possible. Stop every node, then start the new
   version. A node that dials a peer on the other version fails the call at
   once and logs `peer_tunnel_version_mismatch` once for that peer.
+  Builds from between the two halves of this change (each call naming its
+  caller, then the KV, Queue and D1 cells moving to their own isolates) do
+  not interoperate on the tunnel either; stop-all covers them too.
   `celld deploy` and `celld dev` need esbuild 0.28.0, 0.28.1 or 0.28.2, and
   refuse another version. esbuild no longer reads `NODE_PATH`, as under
   Wrangler, so a bundle that needed it no longer builds.

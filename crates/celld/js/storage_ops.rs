@@ -357,12 +357,14 @@ pub(super) fn op_storage_cancel_pending_puts(
     // Only ever called while resetting or retiring a cell (a concurrency
     // failure, `ctx.abort()`, a dropped critical section), which can be the
     // running event's own cell or, under a stub-mediated caller, another cell
-    // of the same script. It discards buffered writes, so a forged `_scope`
-    // could drop another object's. It clears only a cell the running script
-    // may reach -- its own classes, its own KV/Queue/D1 cells, the Queue relay
-    // -- so a cross-script scope clears nothing. No throw: a reset must not
-    // fail because the scope was not the caller's to clear.
-    if admitted_caller(scope, &cell).is_err() {
+    // of the same script. It discards buffered writes, so a scope naming
+    // another object would drop that object's. The harness passes only the
+    // scope a reset authenticated, and this clears only a cell the running
+    // script may reach -- its own classes, its own KV/Queue/D1 cells, and for
+    // the runtime cells the Queue relay -- so a cross-script scope clears
+    // nothing. No throw: a reset must not fail because the scope was not the
+    // caller's to clear.
+    if admitted_caller(scope, &cell, false).is_err() {
         return;
     }
     actor_runtime_state(scope)

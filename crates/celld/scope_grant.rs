@@ -14,6 +14,14 @@
 //! facets are reached through the facet ops, which act on the running
 //! object only.
 //!
+//! The shared runtime cells (KV, Queue and D1) run in an isolate of their
+//! own, with no application code beside them (`WorkerConfig::runtime_cells`).
+//! Its grant reaches only what their own events need: a Queue cell's event
+//! reaches the deployment's other Queue cells, for dead-letter transfers and
+//! redrives. A script reaches a runtime cell by RPC alone: their `fetch` is
+//! the operator protocol, which only celld itself calls, from the
+//! authenticated `/runtime/` route and Queue settlement.
+//!
 //! The grant is checked where a call leaves JavaScript (`op_do_call_impl`,
 //! `op_rpc_call`), again where the host dispatches it, and on the owner node
 //! for a call that crossed the peer tunnel, which carries the caller.
@@ -35,10 +43,12 @@ pub struct ScopeGrant {
     /// transfer moves messages to the queue's dead-letter queue, and a
     /// redrive moves them back to the queue they came from. Those are the
     /// consumed queues and their dead-letter queues of the deployment's
-    /// consumer catalog, which every isolate carries. The Queue cell runs in
-    /// the first script's isolates, so this is not that script's grant:
-    /// it applies only while a Queue cell's event runs.
+    /// consumer catalog. Only the runtime cells' grant has any, and it
+    /// applies only while a Queue cell's event runs.
     queue_relay: HashSet<String>,
+    /// The grant of the isolate the shared runtime cells run in, whose calls
+    /// may use the cells' internal methods (`Caller::internal`).
+    runtime: bool,
 }
 
 /// What a script's configuration declares, for [`ScopeGrant::new`].
@@ -53,8 +63,6 @@ pub struct GrantSource<'a> {
     pub queues: Vec<&'a str>,
     /// The identities of the script's D1 databases.
     pub d1_databases: Vec<&'a str>,
-    /// Every consumed queue of the deployment, with its dead-letter queue.
-    pub consumed_queues: Vec<(&'a str, Option<&'a str>)>,
 }
 
 impl ScopeGrant {
@@ -82,17 +90,29 @@ impl ScopeGrant {
                     .map(|id| crate::engine_api::d1_cell_scope(id)),
             )
             .collect();
-        let queue_relay = source
-            .consumed_queues
-            .iter()
-            .flat_map(|(queue, dead_letter)| std::iter::once(*queue).chain(*dead_letter))
-            .map(crate::engine_api::queue_cell_scope)
-            .collect();
         Self {
             script: source.script.to_string(),
             classes,
             scopes,
-            queue_relay,
+            ..Self::default()
+        }
+    }
+
+    /// The grant of the shared runtime cells' isolate: from a Queue cell's
+    /// event, every consumed queue of the deployment and its dead-letter
+    /// queue, and nothing else.
+    pub fn runtime_cells<'a>(
+        consumed_queues: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+    ) -> Self {
+        Self {
+            script: crate::deploy::RUNTIME_SCRIPT.to_string(),
+            queue_relay: consumed_queues
+                .into_iter()
+                .flat_map(|(queue, dead_letter)| std::iter::once(queue).chain(dead_letter))
+                .map(crate::engine_api::queue_cell_scope)
+                .collect(),
+            runtime: true,
+            ..Self::default()
         }
     }
 
@@ -150,7 +170,7 @@ pub struct ScriptCaller {
 }
 
 impl Caller {
-    /// Refuse a call to `target` that the caller holds no grant for.
+    /// Refuse an RPC to `target` that the caller holds no grant for.
     pub fn admit(&self, target: &str) -> anyhow::Result<()> {
         match self {
             Caller::Host => Ok(()),
@@ -164,6 +184,32 @@ impl Caller {
             }
         }
     }
+
+    /// Refuse a fetch (or WebSocket upgrade) to `target` as [`Caller::admit`]
+    /// does, and a script's fetch to a shared runtime cell: that is the
+    /// cell's operator protocol, which only celld calls.
+    pub fn admit_fetch(&self, target: &str) -> anyhow::Result<()> {
+        self.admit(target)?;
+        if let Caller::Script(_) = self {
+            anyhow::ensure!(
+                class_of(target)
+                    .is_none_or(|class| !crate::deploy::is_shared_reserved_class(class)),
+                "{}",
+                operator_refusal(target)
+            );
+        }
+        Ok(())
+    }
+
+    /// Whether the call may use a runtime cell's internal methods: celld's
+    /// own, or one the runtime cells' isolate makes. A binding's calls never
+    /// may, whatever the script's grant.
+    pub fn internal(&self) -> bool {
+        match self {
+            Caller::Host => true,
+            Caller::Script(caller) => caller.grant.runtime,
+        }
+    }
 }
 
 /// The error a call to a cell outside the caller's grant fails with.
@@ -171,6 +217,14 @@ pub fn refusal(script: &str, target: &str) -> String {
     format!(
         "Durable Object {target} is not reachable from Worker \"{script}\": the Worker holds no \
          binding to its namespace"
+    )
+}
+
+/// The error a script's fetch to a shared runtime cell fails with.
+pub fn operator_refusal(target: &str) -> String {
+    format!(
+        "Durable Object {target} is a KV, Queue or D1 cell, which answers fetch() only on \
+         celld's authenticated /runtime/ route"
     )
 }
 
@@ -194,8 +248,11 @@ mod tests {
             kv_namespaces: vec!["kv-own"],
             queues: vec!["jobs"],
             d1_databases: vec!["db-own"],
-            consumed_queues: vec![("jobs", Some("jobs-dlq")), ("other", None)],
         })
+    }
+
+    fn runtime_grant() -> ScopeGrant {
+        ScopeGrant::runtime_cells([("jobs", Some("jobs-dlq")), ("other", None)])
     }
 
     fn scope(class: &str) -> String {
@@ -244,11 +301,13 @@ mod tests {
         }
     }
 
-    /// Only a Queue cell's event reaches the catalog's other Queue cells, and
-    /// only those: the relay is what dead-letter transfers and redrives need.
+    /// Only a Queue cell's event in the runtime cells' isolate reaches the
+    /// catalog's other Queue cells, and only those: the relay is what
+    /// dead-letter transfers and redrives need. A script's own code never
+    /// runs in a Queue cell's event, so its grant has no relay.
     #[test]
     fn a_queue_cells_event_reaches_the_catalogs_queue_cells() {
-        let grant = grant();
+        let grant = runtime_grant();
         let queue_event = crate::engine_api::queue_cell_scope("jobs");
         let dlq = crate::engine_api::queue_cell_scope("jobs-dlq");
         let consumed = crate::engine_api::queue_cell_scope("other");
@@ -264,6 +323,62 @@ mod tests {
             Some(&queue_event),
             &crate::engine_api::kv_cell_scope("kv-other", 0)
         ));
+        // The runtime cells reach no class, and no cell of a binding.
+        assert!(!grant.admits(Some(&queue_event), &scope("Own")));
+        assert!(!grant.admits(None, &crate::engine_api::kv_cell_scope("kv-own", 0)));
+        assert!(!grant.admits(
+            Some(&queue_event),
+            &crate::engine_api::d1_cell_scope("db-own")
+        ));
+        // An application's grant has no relay, even from a Queue cell's event.
+        assert!(!self::grant().admits(Some(&queue_event), &dlq));
+    }
+
+    /// A script reaches a runtime cell by RPC only; its fetch is the cell's
+    /// operator protocol, which only the host calls. Other classes take a
+    /// fetch as they take an RPC.
+    #[test]
+    fn a_script_cannot_fetch_a_runtime_cell() {
+        let script = Caller::Script(ScriptCaller {
+            grant: Arc::new(grant()),
+            event: None,
+        });
+        let runtime = Caller::Script(ScriptCaller {
+            grant: Arc::new(runtime_grant()),
+            event: Some(crate::engine_api::queue_cell_scope("jobs")),
+        });
+        for target in [
+            crate::engine_api::kv_cell_scope("kv-own", 0),
+            crate::engine_api::queue_cell_scope("jobs"),
+            crate::engine_api::d1_cell_scope("db-own"),
+        ] {
+            assert!(script.admit(&target).is_ok(), "{target}");
+            assert_eq!(
+                script.admit_fetch(&target).unwrap_err().to_string(),
+                operator_refusal(&target)
+            );
+            assert!(Caller::Host.admit_fetch(&target).is_ok(), "{target}");
+        }
+        let dlq = crate::engine_api::queue_cell_scope("jobs-dlq");
+        assert!(runtime.admit(&dlq).is_ok());
+        assert!(runtime.admit_fetch(&dlq).is_err());
+        assert!(script.admit_fetch(&scope("Own")).is_ok());
+        assert!(script.admit_fetch(&scope("Other")).is_err());
+    }
+
+    /// Only celld and the runtime cells' isolate make internal calls.
+    #[test]
+    fn only_the_host_and_the_runtime_cells_call_internal_methods() {
+        assert!(Caller::Host.internal());
+        let caller = |grant| {
+            Caller::Script(ScriptCaller {
+                grant: Arc::new(grant),
+                event: Some(crate::engine_api::queue_cell_scope("jobs")),
+            })
+        };
+        assert!(caller(runtime_grant()).internal());
+        assert!(!caller(grant()).internal());
+        assert!(!caller(ScopeGrant::none(crate::deploy::RUNTIME_SCRIPT)).internal());
     }
 
     #[test]

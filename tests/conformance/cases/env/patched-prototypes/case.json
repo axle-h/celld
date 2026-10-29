@@ -1,0 +1,9 @@
+{
+  "kind": "celld-only",
+  "reason": "checks that celld's harness hands no KV, Queue, D1 or workflow cell, namespace, stub or storage object to a method a script can replace; workerd builds those bindings natively",
+  "workers": ["app"],
+  "steps": [
+    {"path": "/install"},
+    {"path": "/use"}
+  ]
+}

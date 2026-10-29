@@ -1,0 +1,9 @@
+{
+  "kind": "celld-only",
+  "reason": "checks where celld runs its KV, Queue and D1 cells, which workerd lacks: in an isolate of their own, beside no script's code",
+  "workers": ["app"],
+  "steps": [
+    {"path": "/patched"},
+    {"path": "/send"}
+  ]
+}

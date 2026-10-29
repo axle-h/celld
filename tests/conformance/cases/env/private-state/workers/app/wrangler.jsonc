@@ -1,0 +1,11 @@
+// A Durable Object namespace, its ids and stubs, and the KV and Queue
+// bindings keep their state private.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": { "bindings": [{ "name": "OBJ", "class_name": "Obj" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Obj"] }],
+  "kv_namespaces": [{ "binding": "KV", "id": "private-kv" }],
+  "queues": { "producers": [{ "binding": "QUEUE", "queue": "private-queue" }] }
+}

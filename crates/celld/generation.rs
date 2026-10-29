@@ -290,6 +290,8 @@ pub struct Generation {
     /// stateless path admits into, because an isolate is an isolate. Cells
     /// of one script share them, so cells of one class share module scope
     /// exactly when they are colocated, which is what Durable Objects do.
+    /// The KV, Queue and D1 cells have a pool of their own, under
+    /// `deploy::RUNTIME_SCRIPT`.
     pub(crate) cell_isolates: HashMap<String, Arc<crate::pool::Pool>>,
     /// The reclaim bell every cell pool shares. A cell pool has no task of
     /// its own, so the generation's maintenance loop frees a condemned cell
@@ -496,11 +498,10 @@ impl Generation {
         let DeploymentGraph { primary, cohosted } = graph;
         crate::runtime::init_engine();
 
-        // A Queue class is shared by every co-hosted script, but its broker
-        // needs the consumer script rather than whichever script happened to
-        // register `__Queue` first. Resolve one deployment-wide catalog before
-        // constructing any WorkerConfig, then install the same catalog into
-        // every isolate that could host a queue cell.
+        // A Queue class is shared by every co-hosted script, and its broker
+        // delivers to each queue's consumer script. Resolve one
+        // deployment-wide catalog for the runtime cells' isolates, which are
+        // the only ones that host a Queue cell.
         let mut queue_catalog = BTreeMap::new();
         for (script, consumers) in
             std::iter::once((&primary.script_name, &primary.options.queue_consumers)).chain(
@@ -558,23 +559,27 @@ impl Generation {
         // refused — but a *reserved* class is not an export, and the two kinds
         // behave differently:
         //
-        // `__D1Database` is deliberately shared. Its namespace is fleet-wide so
-        // that several Workers can bind one database and a rename cannot rename
-        // it, so two scripts declaring `d1_databases` address the same cells on
-        // purpose. A D1 cell runs SQL and reads no user code, binding or var,
-        // so whichever config serves it is immaterial and the first wins.
-        // Refusing the second made the node exit instead of start.
+        // KV, Queue and D1 are deliberately shared
+        // (`deploy::is_shared_reserved_class`). Their namespaces are
+        // fleet-wide so that several Workers can bind one namespace, queue or
+        // database and a rename cannot rename it, so two scripts declaring one
+        // address the same cells on purpose. Their cells run in the runtime
+        // cells' own isolates (`WorkerConfig::runtime_cells`), registered once
+        // below, and not in the isolates of whichever script named the class
+        // first: there they would run beside that script's code, which could
+        // patch the builtins they use.
         //
         // A workflow class is script-scoped (`deploy::workflow_class`), so two
-        // scripts produce two distinct names and never reach this branch. If
-        // one ever did, it would be a real collision and must still be refused.
+        // scripts produce two distinct names and never collide. If one ever
+        // did, it would be a real collision and must still be refused.
         let mut cell_configs: HashMap<String, Arc<WorkerConfig>> = HashMap::new();
+        let mut runtime_classes = BTreeSet::new();
         let mut service_pools = HashMap::new();
         let mut grants = HashMap::new();
         let mut assets = HashMap::new();
-        // Primary first: shared reserved classes retain the first script's
-        // config. Only this script owns ingress and the node's cron schedule;
-        // bindings and runtime construction follow the same path for all scripts.
+        // Primary first: only this script owns ingress and the node's cron
+        // schedule; bindings and runtime construction follow the same path for
+        // all scripts.
         for (index, deployment) in std::iter::once(primary).chain(cohosted).enumerate() {
             let is_primary = index == 0;
             let crate::fleet::LoadedDeployment {
@@ -600,7 +605,6 @@ impl Generation {
                     .with_services(services)
                     .with_asset_binding(asset_binding)
                     .with_loaders(loader_bindings)
-                    .with_queue_consumers(queue_catalog.clone())
                     .with_crons(if is_primary { crons } else { Vec::new() })
                     .with_containers(containers)
                     .with_generation(id),
@@ -615,6 +619,10 @@ impl Generation {
             }
             grants.insert(script.clone(), config.scope_grant());
             for class in classes {
+                if crate::deploy::is_shared_reserved_class(&class) {
+                    runtime_classes.insert(class);
+                    continue;
+                }
                 register_cell_class(&mut cell_configs, class, config.clone(), &|class| {
                     if is_primary {
                         anyhow!("duplicate Durable Object class {class}")
@@ -629,6 +637,28 @@ impl Generation {
             // the primary script's scheduled handler with that script's bindings.
             if !config.crons.is_empty() {
                 cell_configs.insert(celld_logic::cron::RESERVED_CLASS.to_string(), config);
+            }
+        }
+        if !runtime_classes.is_empty() {
+            let config = Arc::new(WorkerConfig::runtime_cells(
+                runtime_classes.iter().cloned().collect(),
+                queue_catalog,
+                node.to_string(),
+                id,
+            ));
+            // A deployed script name cannot be this one (`valid_script_name`),
+            // but a manifest written elsewhere is checked here, loudly.
+            if grants
+                .insert(config.script_name.clone(), config.scope_grant())
+                .is_some()
+            {
+                return Err(anyhow!(
+                    "a co-hosted Worker script is named {}, which celld reserves for its runtime cells",
+                    config.script_name
+                ));
+            }
+            for class in runtime_classes {
+                cell_configs.insert(class, config.clone());
             }
         }
         let stateless = service_pools[&primary_script].clone();
@@ -662,10 +692,10 @@ impl Generation {
 }
 /// Claim one class name in a deployment's cell registry.
 ///
-/// A duplicate is an error for a user class, because `start_cell` resolves a
-/// cell from the class its scope names and two exports of one name are
-/// genuinely ambiguous. A duplicate of a *shared* reserved class is not: see
-/// `deploy::is_shared_reserved_class`. The caller supplies the error so the
+/// A duplicate is an error, because `start_cell` resolves a cell from the
+/// class its scope names and two exports of one name are genuinely ambiguous.
+/// The shared reserved classes never come here: they are the runtime cells'
+/// (`deploy::is_shared_reserved_class`). The caller supplies the error so the
 /// message can say whether the collision was inside one script or across two.
 fn register_cell_class(
     configs: &mut HashMap<String, Arc<WorkerConfig>>,
@@ -678,7 +708,163 @@ fn register_cell_class(
             slot.insert(config);
             Ok(())
         }
-        Entry::Occupied(slot) if crate::deploy::is_shared_reserved_class(slot.key()) => Ok(()),
         Entry::Occupied(slot) => Err(duplicate(slot.key())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn deployment(script: &str, options: WorkerConfigOptions) -> LoadedDeployment {
+        LoadedDeployment {
+            options,
+            script_name: script.to_string(),
+            version: "test".to_string(),
+            prefix: format!("deployments/{script}"),
+            asset_binding: None,
+            loader_bindings: Vec::new(),
+            assets: None,
+            services: Vec::new(),
+            crons: Vec::new(),
+            containers: Vec::new(),
+            fence_image: None,
+        }
+    }
+
+    fn options(script: &str, src: &str, do_classes: &[&str]) -> WorkerConfigOptions {
+        WorkerConfigOptions {
+            src: src.to_string(),
+            script_name: script.to_string(),
+            do_classes: do_classes.iter().map(|class| class.to_string()).collect(),
+            bindings: Vec::new(),
+            r2_bindings: Vec::new(),
+            d1_bindings: Vec::new(),
+            kv_bindings: Vec::new(),
+            queue_bindings: Vec::new(),
+            queue_consumers: Vec::new(),
+            workflow_bindings: Vec::new(),
+            vars: Vec::new(),
+            node: "node".to_string(),
+            modules: Vec::new(),
+            compat: crate::engine_api::Compat::default(),
+        }
+    }
+
+    fn consumer(
+        queue: &str,
+        dead_letter_queue: Option<&str>,
+    ) -> crate::protocol::QueueConsumerConfig {
+        crate::protocol::QueueConsumerConfig {
+            queue: queue.to_string(),
+            max_batch_size: 10,
+            max_batch_timeout: 0,
+            max_retries: 0,
+            dead_letter_queue: dead_letter_queue.map(str::to_string),
+            max_concurrency: None,
+            retry_delay: None,
+        }
+    }
+
+    fn build(
+        primary: LoadedDeployment,
+        cohosted: Vec<LoadedDeployment>,
+    ) -> anyhow::Result<Generation> {
+        Generation::build(
+            FIRST_GENERATION,
+            DeploymentGraph { primary, cohosted },
+            GenerationOptions {
+                node: "node".to_string(),
+                region: "region".to_string(),
+            },
+        )
+    }
+
+    /// KV, Queue and D1 cells run in the runtime cells' isolates, which load
+    /// no script's code, whichever script names the class first; a script's
+    /// own classes stay in its isolates. Only the runtime cells' grant
+    /// reaches the consumer catalog's Queue cells, and only from a Queue
+    /// cell's event.
+    #[test]
+    fn shared_runtime_classes_run_beside_no_script() {
+        let mut app = options(
+            "app",
+            "export class Room {}\nexport default { fetch() { return new Response(); }, queue() {} };\n",
+            &["Room", crate::deploy::KV_CLASS, crate::deploy::QUEUE_CLASS],
+        );
+        app.kv_bindings = vec![("KV".into(), "app-kv".into())];
+        app.queue_consumers = vec![consumer("jobs", Some("jobs-dlq"))];
+        let mut other = options(
+            "other",
+            "export default { fetch() { return new Response(); } };\n",
+            &[crate::deploy::D1_CLASS, crate::deploy::QUEUE_CLASS],
+        );
+        other.d1_bindings = vec![("DB".into(), "db".into())];
+        let generation = build(deployment("app", app), vec![deployment("other", other)]).unwrap();
+        for class in [
+            crate::deploy::KV_CLASS,
+            crate::deploy::QUEUE_CLASS,
+            crate::deploy::D1_CLASS,
+        ] {
+            let config = generation.cell_config(class).unwrap();
+            assert_eq!(config.script_name, crate::deploy::RUNTIME_SCRIPT, "{class}");
+        }
+        assert_eq!(generation.cell_config("Room").unwrap().script_name, "app");
+        assert!(generation
+            .cell_isolates(crate::deploy::RUNTIME_SCRIPT)
+            .is_some());
+
+        let queue_event = crate::engine_api::queue_cell_scope("jobs");
+        let dlq = crate::engine_api::queue_cell_scope("jobs-dlq");
+        let runtime = generation
+            .scope_grant(crate::deploy::RUNTIME_SCRIPT)
+            .unwrap();
+        assert!(runtime.admits(Some(&queue_event), &dlq));
+        assert!(!runtime.admits(None, &dlq));
+        for script in ["app", "other"] {
+            let grant = generation.scope_grant(script).unwrap();
+            assert!(!grant.admits(Some(&queue_event), &dlq), "{script}");
+        }
+    }
+
+    /// A deployment that binds no KV, Queue or D1 has no runtime cells.
+    #[test]
+    fn a_deployment_without_runtime_classes_has_no_runtime_cells() {
+        let app = options(
+            "app",
+            "export class Room {}\nexport default { fetch() { return new Response(); } };\n",
+            &["Room"],
+        );
+        let generation = build(deployment("app", app), Vec::new()).unwrap();
+        assert!(generation
+            .cell_isolates(crate::deploy::RUNTIME_SCRIPT)
+            .is_none());
+        assert!(generation
+            .scope_grant(crate::deploy::RUNTIME_SCRIPT)
+            .is_none());
+    }
+
+    /// A manifest that names a co-hosted script as the runtime cells' is
+    /// refused, rather than given their grant.
+    #[test]
+    fn a_script_named_as_the_runtime_cells_is_refused() {
+        let app = options(
+            "app",
+            "export default { fetch() { return new Response(); } };\n",
+            &[crate::deploy::KV_CLASS],
+        );
+        let runtime = options(
+            crate::deploy::RUNTIME_SCRIPT,
+            "export default { fetch() { return new Response(); } };\n",
+            &[],
+        );
+        let error = build(
+            deployment("app", app),
+            vec![deployment(crate::deploy::RUNTIME_SCRIPT, runtime)],
+        )
+        .err()
+        .expect("the reserved name is refused")
+        .to_string();
+        assert!(error.contains("reserves for its runtime cells"), "{error}");
     }
 }

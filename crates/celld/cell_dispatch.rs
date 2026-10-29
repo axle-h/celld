@@ -236,7 +236,7 @@ pub async fn dispatch_call_attempt(
     }
     // The call site refused a script's call already; this covers every other
     // producer of a call, and a retry, which routes the same scope again.
-    if let Err(refusal) = call.caller.admit(&call.scope) {
+    if let Err(refusal) = call.caller.admit_fetch(&call.scope) {
         return CallAttempt::Unstarted(refusal);
     }
     // A disconnect before routing completes has executed no handler, so

@@ -465,9 +465,52 @@ Durable Object Vault:942a…b2eb is not reachable from Worker "front": the Worke
 The check runs again on the owner node for a call that crossed the peer
 tunnel, which names the calling script; the owner checks it against its own
 deployment. Calls celld makes itself (ingress, the operator routes, queue
-settlement, cron) are not a script's, and a Queue cell's own event may reach
-the queues the deployment's consumers name, for dead-letter transfers and
-redrives.
+settlement, cron) are not a script's.
+
+A script reaches the cell a KV, Queue or D1 binding names only through the
+binding's methods:
+
+- **No route to the cell.** A binding keeps its cell private, and so do
+  Durable Object namespaces, ids, `ctx`, `ctx.storage` and its SQL and
+  `kv` objects and cursors, and `ctx.facets`: none has an own property that
+  names a scope, a key or a host id, and `new value.constructor()` throws
+  "Illegal constructor", as in workerd. A binding calls its cell without a
+  stub, and without any method a script can replace on a prototype (a
+  namespace's `get` or `getByName`, a stub's members), so a replacement never
+  receives a namespace, id or stub of a runtime cell. RPC data shaped like
+  celld's marker for one of these cells' stubs arrives as the plain data it
+  is.
+- **Celld's cells beside a script.** A workflow instance's cell and the cron
+  schedule run in the script's isolates. Their instances and state are
+  private (no property, registry entry or prototype lookup a script can
+  intercept hands them out), their methods are called through intrinsics
+  captured before any script ran, and they use their storage through the
+  storage methods the harness defined, not the prototypes' (a script may
+  replace those). A transaction's critical section and nested transactions
+  go through private methods too.
+- **Checked again in the cell.** Each binding call is checked inside the
+  cell with the binding's own errors (key, value and metadata sizes, content
+  tags, expirations, message sizes and content types, batch sizes and
+  delays, statement shapes, a workflow create's instance, retention and
+  location), so a caller that skipped its isolate's checks gains nothing.
+  The cell uses its own clock.
+- **No operator handlers.** A script's `fetch()` or WebSocket upgrade to one
+  of these cells is refused: their `fetch` is the operator protocol (Queue
+  info, purge, pause, peek and redrive, D1 migrate and execute, the `celld
+  kv` operations), which only celld calls, from the authenticated
+  `/runtime/` route and Queue settlement:
+
+  ```text
+  Durable Object __Queue:ee61…ae21 is a KV, Queue or D1 cell, which answers fetch() only on celld's authenticated /runtime/ route
+  ```
+
+- **An isolate of their own.** The KV, Queue and D1 cells run in isolates
+  that load no script's code (the `__runtime` pool), so no script's
+  replaced builtins run in their events. That isolate's grant reaches only
+  what its cells need: from a Queue cell's event, the queues the
+  deployment's consumers name and their dead-letter queues. One Queue cell's
+  dead-letter transfer into another is an internal method, which a binding's
+  call never reaches.
 
 A Durable Object's storage, alarm, SQL and `kv.list()` cursors,
 `blockConcurrencyWhile` and `ctx.facets` act on that object only. Used during
@@ -479,8 +522,7 @@ cross-request one. A cursor is refused before it hands out even the row it
 prefetched, and closing one from another object is a no-op. Resetting or
 aborting an object (`ctx.abort()`, a failed critical section) discards its
 buffered writes, drops its instance and breaks it only for the object the
-caller actually is, decided by the instance registry rather than a writable
-scope. The host takes the object from the running event, never from a scope
-the script can write.
+caller actually is, decided by the instance registry. The host takes the
+object from the running event, never from a scope the script passes.
 
 A Worker Loader id answers only in the isolate that loaded the Worker.

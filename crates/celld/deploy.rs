@@ -120,6 +120,12 @@ pub const KV_CLASS: &str = celld_logic::kv::RESERVED_CLASS;
 /// The Durable Object class every Queue broker runs as.
 pub const QUEUE_CLASS: &str = celld_logic::queue::RESERVED_CLASS;
 
+/// The script the shared runtime classes (`is_shared_reserved_class`) run
+/// as: an isolate pool of their own, which holds no application code. A
+/// deployed script name starts with a letter or a digit
+/// (`valid_script_name`), so none can be this one.
+pub const RUNTIME_SCRIPT: &str = "__runtime";
+
 /// Every runtime-supplied Durable Object class.
 pub const RESERVED_CLASSES: &[&str] = &[D1_CLASS, WORKFLOW_CLASS, KV_CLASS, QUEUE_CLASS];
 
@@ -150,11 +156,12 @@ pub fn workflow_class(script_name: &str) -> String {
 
 /// Whether a reserved class names cells that several scripts share on purpose.
 ///
-/// Only D1. Its namespace key is fleet-wide precisely so that a database
-/// outlives the name of any one Worker that binds it, so two scripts declaring
-/// `d1_databases` mean to reach the same cells, and one registry entry serving
-/// both is correct rather than merely tolerated. A workflow class carries its
-/// script, so it is never shared and a collision there is a real one.
+/// D1, KV and Queue. Their namespace keys are fleet-wide precisely so that a
+/// database, a namespace or a queue outlives the name of any one Worker that
+/// binds it, so two scripts declaring one mean to reach the same cells. Their
+/// cells run in the runtime's own isolates (`RUNTIME_SCRIPT`), beside no
+/// script's code. A workflow class carries its script, so it is never shared
+/// and a collision there is a real one.
 pub fn is_shared_reserved_class(class: &str) -> bool {
     class == D1_CLASS || class == KV_CLASS || class == QUEUE_CLASS
 }

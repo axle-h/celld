@@ -24,6 +24,9 @@ const __MapDelete = Map.prototype.delete;
 const __JSONStringify = JSON.stringify;
 const __jsonStringify = (value) => __ReflectApply(__JSONStringify, JSON, [value]);
 const __ArrayFrom = Array.from;
+const __ArraySort = Array.prototype.sort;
+const __FunctionBind = Function.prototype.bind;
+const __ObjectDefineProperty = Object.defineProperty;
 const __ObjectHasOwn = Object.hasOwn;
 // A property of a host result only if the result has it itself, so a getter
 // a Worker put on Object.prototype never answers for a missing one.
@@ -1781,37 +1784,50 @@ const __sqlCursorFinalizer = typeof FinalizationRegistry === "function"
   ? new FinalizationRegistry((cursorId) => __sql_cursor_close(cursorId))
   : null;
 
-// A `SqlStorageCursor` over one exec's result (Cloudflare DO SQL API).
+// A `SqlStorageCursor` over one exec's result (Cloudflare DO SQL API). Its
+// state is private, the host cursor id and the row it read ahead above all,
+// and only `SqlStorage.exec` constructs one ("Illegal constructor").
 class SqlCursor {
+  #columns;
+  #rowsRead;
+  #rowsWritten;
+  #reusedCachedQuery;
+  #deferredError = null;
+  #cursorId;
+  #prefetched;
+  #finalizerToken = null;
   // `res` is what `__sql_cursor_start` returns: V8 values throughout, with the
   // first row already stepped. A failing query throws out of the op, so there
   // is no in-band error field to test here.
-  constructor(res) {
-    this.columns = res.columns;
-    this.rowsWritten = Number(res.rowsWritten || 0);
-    this.reusedCachedQueryForTest = Boolean(res.reusedCachedQuery);
-    this._deferredError = null;
-    this._cursorId = Number(res.cursorId || 0);
-    this._prefetched = res.row;
-    this.rowsRead = this._prefetched === null ? 0 : 1;
-    this._finalizerToken = null;
-    if (this._cursorId && __sqlCursorFinalizer) {
-      this._finalizerToken = {};
+  constructor(brand, res) {
+    if (brand !== __kStorage) throw new TypeError("Illegal constructor");
+    this.#columns = res.columns;
+    this.#rowsWritten = Number(res.rowsWritten || 0);
+    this.#reusedCachedQuery = Boolean(res.reusedCachedQuery);
+    this.#cursorId = Number(res.cursorId || 0);
+    this.#prefetched = res.row;
+    this.#rowsRead = this.#prefetched === null ? 0 : 1;
+    if (this.#cursorId && __sqlCursorFinalizer) {
+      this.#finalizerToken = {};
       __sqlCursorFinalizer.register(
-        this, this._cursorId, this._finalizerToken,
+        this, this.#cursorId, this.#finalizerToken,
       );
     }
   }
-  _obj(r) { const o = {}; for (let i = 0; i < this.columns.length; i++) o[this.columns[i]] = r[i]; return o; }
-  _finishNative() {
-    if (this._finalizerToken && __sqlCursorFinalizer)
-      __sqlCursorFinalizer.unregister(this._finalizerToken);
-    this._finalizerToken = null;
-    this._cursorId = 0;
+  #obj(r) {
+    const o = {};
+    for (let i = 0; i < this.#columns.length; i++) o[this.#columns[i]] = r[i];
+    return o;
   }
-  _advanceNative() {
-    if (!this._cursorId) {
-      this._prefetched = null;
+  #finishNative() {
+    if (this.#finalizerToken && __sqlCursorFinalizer)
+      __sqlCursorFinalizer.unregister(this.#finalizerToken);
+    this.#finalizerToken = null;
+    this.#cursorId = 0;
+  }
+  #advanceNative() {
+    if (!this.#cursorId) {
+      this.#prefetched = null;
       return;
     }
     // The op answers with V8 values, not JSON: an array is a row, a number is
@@ -1820,38 +1836,38 @@ class SqlCursor {
     // row -- the error belongs to the call after it, not to this one.
     let result;
     try {
-      result = __sql_cursor_next(this._cursorId);
+      result = __sql_cursor_next(this.#cursorId);
     } catch (error) {
-      this._deferredError = error;
-      this._prefetched = null;
-      this._finishNative();
+      this.#deferredError = error;
+      this.#prefetched = null;
+      this.#finishNative();
       return;
     }
     if (Array.isArray(result)) {
-      this._prefetched = result;
-      this.rowsRead++;
+      this.#prefetched = result;
+      this.#rowsRead++;
       return;
     }
-    this.rowsWritten = Number(result || this.rowsWritten);
-    this._prefetched = null;
-    this._finishNative();
+    this.#rowsWritten = Number(result || this.#rowsWritten);
+    this.#prefetched = null;
+    this.#finishNative();
   }
-  _nextRaw() {
-    if (this._deferredError) {
-      const error = this._deferredError;
-      this._deferredError = null;
+  #nextRaw() {
+    if (this.#deferredError) {
+      const error = this.#deferredError;
+      this.#deferredError = null;
       throw error;
     }
-    if (this._prefetched === null) return { done: true };
+    if (this.#prefetched === null) return { done: true };
     // Each row is prefetched one step ahead -- the row returned here was read
     // by the op during the previous step, in whichever event ran then. A
     // cursor used from another object must throw before that buffered row is
     // handed out, so ownership is checked here against the running object, for
     // every row and not only the first. A stale cursor (its final row read,
     // id now 0) owns nothing and needs no check.
-    if (this._cursorId) __sql_cursor_check(this._cursorId);
-    const value = this._prefetched;
-    this._advanceNative();
+    if (this.#cursorId) __sql_cursor_check(this.#cursorId);
+    const value = this.#prefetched;
+    this.#advanceNative();
     return { done: false, value };
   }
   toArray() {
@@ -1872,35 +1888,42 @@ class SqlCursor {
   }
   *raw() {
     while (true) {
-      const result = this._nextRaw();
+      const result = this.#nextRaw();
       if (result.done) return;
       yield result.value;
     }
   }
-  get columnNames() { return this.columns; }
+  get columnNames() { return this.#columns; }
+  get rowsRead() { return this.#rowsRead; }
+  get rowsWritten() { return this.#rowsWritten; }
+  get reusedCachedQueryForTest() { return this.#reusedCachedQuery; }
   next() {
-    const result = this._nextRaw();
-    return result.done ? result : { done: false, value: this._obj(result.value) };
+    const result = this.#nextRaw();
+    return result.done ? result : { done: false, value: this.#obj(result.value) };
   }
   [Symbol.iterator]() { return this; }
 }
+// The state is private, and only the root storage object constructs one
+// ("Illegal constructor").
 class SqlStorage {
+  #scope;
+  #storage;
   // The state is what the abort guard in `exec` reads; a storage built
   // without one would bypass the guard silently.
-  constructor(scope, state, storage) {
+  constructor(brand, scope, state, storage) {
+    if (brand !== __kStorage) throw new TypeError("Illegal constructor");
     if (!state) throw new TypeError("SqlStorage requires its DurableObjectState");
-    this._scope = scope;
-    this._state = state;
-    this._storage = storage;
+    this.#scope = scope;
+    this.#storage = storage;
   }
   prepare(query) {
-    this._storage._assertTransactionActive("sql.prepare");
+    __storageInternals.assertActive(this.#storage, "sql.prepare");
     const storage = this;
     const source = String(query);
     return (...binds) => storage.exec(source, ...binds);
   }
   exec(query, ...binds) {
-    this._storage._assertTransactionActive("sql.exec");
+    __storageInternals.assertActive(this.#storage, "sql.exec");
     const jsonBinds = [];
     const byteBinds = [];
     for (let index = 0; index < binds.length; index++) {
@@ -1924,24 +1947,24 @@ class SqlStorage {
       }
     }
     const json = JSON.stringify(jsonBinds);
-    return new SqlCursor(byteBinds.length === 0
-      ? __sql_cursor_start(this._scope, query, json)
-      : __sql_cursor_start(this._scope, query, json, byteBinds));
+    return new SqlCursor(__kStorage, byteBinds.length === 0
+      ? __sql_cursor_start(this.#scope, query, json)
+      : __sql_cursor_start(this.#scope, query, json, byteBinds));
   }
   ingest(input) {
-    this._storage._assertTransactionActive("sql.ingest");
-    const result = JSON.parse(__sql_ingest(this._scope, String(input)));
+    __storageInternals.assertActive(this.#storage, "sql.ingest");
+    const result = JSON.parse(__sql_ingest(this.#scope, String(input)));
     if (result.error) throw new Error("SQL error: " + result.error);
     return result;
   }
   get databaseSize() {
-    this._storage._assertTransactionActive("sql.databaseSize");
-    return __sql_database_size(this._scope);
+    __storageInternals.assertActive(this.#storage, "sql.databaseSize");
+    return __sql_database_size(this.#scope);
   }
   setMaxPageCountForTest(pages) {
     if (typeof __sql_set_max_page_count_for_test !== "function")
       throw new Error("setMaxPageCountForTest is only available in tests");
-    __sql_set_max_page_count_for_test(this._scope, Number(pages));
+    __sql_set_max_page_count_for_test(this.#scope, Number(pages));
   }
   setWriteFaultForTest(enabled) {
     if (typeof __sql_set_write_fault_for_test !== "function")
@@ -1951,19 +1974,19 @@ class SqlStorage {
   setCacheSizeForTest(pages) {
     if (typeof __sql_set_cache_size_for_test !== "function")
       throw new Error("setCacheSizeForTest is only available in tests");
-    __sql_set_cache_size_for_test(this._scope, Number(pages));
+    __sql_set_cache_size_for_test(this.#scope, Number(pages));
   }
   setInterruptFaultForTest(enabled) {
     if (typeof __sql_set_interrupt_fault_for_test !== "function")
       throw new Error(
         "setInterruptFaultForTest is only available in tests");
-    __sql_set_interrupt_fault_for_test(this._scope, !!enabled);
+    __sql_set_interrupt_fault_for_test(this.#scope, !!enabled);
   }
   registerNomemFunctionForTest() {
     if (typeof __sql_register_nomem_function_for_test !== "function")
       throw new Error(
         "registerNomemFunctionForTest is only available in tests");
-    __sql_register_nomem_function_for_test(this._scope);
+    __sql_register_nomem_function_for_test(this.#scope);
   }
 }
 function __readStoredValue(scope, key, read) {
@@ -1981,63 +2004,71 @@ function __readStoredValue(scope, key, read) {
     throw contextual;
   }
 }
+// kv.list()'s iterator and `storage.kv`. Their state is private and only
+// the storage object constructs them ("Illegal constructor").
 class SyncKvListIterator {
-  constructor(root, generation, cursor) {
-    this._root = root;
-    this._generation = generation;
-    this._cursor = cursor;
+  #storage;
+  #generation;
+  #cursor;
+  constructor(brand, storage, generation, cursor) {
+    if (brand !== __kStorage) throw new TypeError("Illegal constructor");
+    this.#storage = storage;
+    this.#generation = generation;
+    this.#cursor = cursor;
   }
   [Symbol.iterator]() { return this; }
   next() {
-    if (this._generation !== this._root._syncKvListGeneration) {
+    if (this.#generation !== __storageInternals.listGeneration(this.#storage)) {
       throw new Error(
         "kv.list() iterator was invalidated because a new call to kv.list() was started. " +
         "Only one kv.list() iterator can exist at a time.",
       );
     }
     const value =
-      __storage_sync_list_next(this._cursor, __storedSentinel);
+      __storage_sync_list_next(this.#cursor, __storedSentinel);
     if (value === null) return { done: true, value: undefined };
     value[1] = __unwrapStored(value[1]);
     return { done: false, value };
   }
 }
 class SyncKvStorage {
-  constructor(storage) {
-    this._storage = storage;
-    this._root = storage._transactionRoot;
+  #storage;
+  constructor(brand, storage) {
+    if (brand !== __kStorage) throw new TypeError("Illegal constructor");
+    this.#storage = storage;
   }
   get(key) {
-    this._storage._assertTransactionActive("kv.get");
+    __storageInternals.assertActive(this.#storage, "kv.get");
     key = String(key);
+    const scope = __storageInternals.scope(this.#storage);
     return __unwrapStored(__readStoredValue(
-      this._storage._scope, key,
-      () => __storage_get(this._storage._scope, key,
-                          __storedSentinel),
+      scope, key,
+      () => __storage_get(scope, key, __storedSentinel),
     ));
   }
   put(key, value) {
-    this._storage._assertTransactionActive("kv.put");
+    __storageInternals.assertActive(this.#storage, "kv.put");
     key = String(key);
+    const scope = __storageInternals.scope(this.#storage);
     try {
-      __storage_put(this._storage._scope, key, value);
+      __storage_put(scope, key, value);
     } catch (error) {
-      __storage_put_serialized(this._storage._scope, key,
-                               __storedBytes(value, error));
+      __storage_put_serialized(scope, key, __storedBytes(value, error));
     }
   }
   delete(key) {
-    this._storage._assertTransactionActive("kv.delete");
-    return __storage_delete(this._storage._scope, String(key));
+    __storageInternals.assertActive(this.#storage, "kv.delete");
+    return __storage_delete(
+      __storageInternals.scope(this.#storage), String(key));
   }
   list(options = {}) {
-    this._storage._assertTransactionActive("kv.list");
-    const generation = ++this._root._syncKvListGeneration;
+    __storageInternals.assertActive(this.#storage, "kv.list");
+    const generation = __storageInternals.nextListGeneration(this.#storage);
     const cursor = __storage_sync_list_start(
-      this._storage._scope, JSON.stringify(options),
+      __storageInternals.scope(this.#storage), JSON.stringify(options),
     );
     return new SyncKvListIterator(
-      this._root, generation, cursor,
+      __kStorage, this.#storage, generation, cursor,
     );
   }
 }
@@ -2055,44 +2086,98 @@ const __afterTurn = () => __op_timer(__timer_alloc(), 0);
 // a DurableObjectStorage, has transaction(): workerd's DurableObjectTransaction
 // (actor-state.h) has none, and a nested transaction starts through
 // `ctx.storage`, which places it inside the innermost open layer.
+//
+// Every field is private, the scope above all: a storage object a script
+// could point at another object would read and write that object's state.
+// Only the object's state and a transaction construct one; `new
+// storage.constructor()` throws "Illegal constructor", as in workerd. The
+// root's `kv` and `sql` are its own properties, as workerd's are; a
+// transaction view has none, and reaches them through the getters.
+const __kStorage = Symbol("DurableObjectStorage");
+// The harness's view of a storage object, which no script reaches.
+let __storageInternals;
 class __DurableObjectStorageBase {
+  #scope;
+  #state;
+  #sql;
+  #kv;
+  #transactionRoot;
+  #transactionDepth;
+  #transactionControl;
+  #transactionSerial = 0;
+  #transactionTail = Promise.resolve();
+  #activeTransaction = null;
+  #activeSyncTransaction = null;
+  #syncKvListGeneration = 0;
   constructor(
+    brand,
     scope,
     state = null,
     transactionRoot = null,
     transactionDepth = 0,
     transactionControl = null,
   ) {
-    this._scope = scope;
-    this._state = state;
-    this.sql = new SqlStorage(scope, state, this);
-    this._transactionRoot = transactionRoot || this;
-    this._transactionDepth = transactionDepth;
-    this._transactionControl = transactionControl;
+    if (brand !== __kStorage) throw new TypeError("Illegal constructor");
+    this.#scope = scope;
+    this.#state = state;
+    this.#transactionRoot = transactionRoot || this;
+    this.#transactionDepth = transactionDepth;
+    this.#transactionControl = transactionControl;
+    this.#kv = new SyncKvStorage(__kStorage, this);
+    this.#sql = new SqlStorage(__kStorage, scope, state, this);
     if (!transactionRoot) {
-      this._transactionSerial = 0;
-      this._transactionTail = Promise.resolve();
-      this._activeTransaction = null;
-      this._activeSyncTransaction = null;
-      this._syncKvListGeneration = 0;
+      for (const [name, value] of [["kv", this.#kv], ["sql", this.#sql]])
+        __ObjectDefineProperty(this, name, {
+          value, writable: true, enumerable: true, configurable: true,
+        });
     }
-    this._kv = new SyncKvStorage(this);
   }
-  get kv() { return this._kv; }
-  _transactionStatus() {
+  get kv() { return this.#kv; }
+  get sql() { return this.#sql; }
+  static {
+    __storageInternals = {
+      scope: (storage) => storage.#scope,
+      assertActive: (storage, operation) =>
+        storage.#assertTransactionActive(operation),
+      abandonOpenTransactions: (storage, error) =>
+        storage.#abandonOpenTransactions(error),
+      transaction: (storage, f) => {
+        storage.#assertTransactionActive("transaction");
+        const root = storage.#transactionRoot;
+        // A transaction started while another is open nests inside it,
+        // whichever event started it: the callback's own helpers reach the
+        // root handle instead of its view, and an event that was already in
+        // flight when the gate shut can resume inside the transaction.
+        // Workerd keeps one savepoint stack per object, so both join it:
+        // each sees the other's uncommitted writes, and the outer layer's
+        // rollback discards both.
+        if (root.#activeTransaction !== null)
+          return storage.#nestedTransaction(
+            root.#activeTransaction.#transactionControl, f);
+        return storage.#topLevelTransaction(f);
+      },
+      // kv.list()'s iterators: a new list invalidates the ones before it.
+      nextListGeneration: (storage) =>
+        ++storage.#transactionRoot.#syncKvListGeneration,
+      listGeneration: (storage) =>
+        storage.#transactionRoot.#syncKvListGeneration,
+    };
+  }
+  #transactionStatus() {
     let status = null;
-    for (let control = this._transactionControl; control; control = control.parent) {
+    for (let control = this.#transactionControl; control; control = control.parent) {
       if (control.rolledBack) return "rolled back";
       if (control.committed) status = "committed";
     }
     return status;
   }
-  _assertTransactionActive(operation) {
+  #assertTransactionActive(operation) {
     // A reset object's storage is closed, as a broken actor's is in workerd:
     // the replacement uses the same connection, so a write from an event of
     // the old instance would land in its state, or inside its transaction.
-    if (this._state && this._state._aborted) throw this._state._resetFailure();
-    const status = this._transactionStatus();
+    if (this.#state && __objectState.aborted(this.#state))
+      throw __objectState.resetFailure(this.#state);
+    const status = this.#transactionStatus();
     // workerd's wording, which applications match on.
     if (status === "committed")
       throw new Error(
@@ -2101,39 +2186,39 @@ class __DurableObjectStorageBase {
       );
     if (status) throw new Error("Cannot " + operation + "() on " + status + " transaction");
   }
-  _flushPendingPuts() {
+  #flushPendingPuts() {
     // An admitted put can resume after its boundary flushed and ended the
     // transaction. Its promise completes without flushing a later scope.
-    if (this._transactionStatus()) return false;
-    if (this._state && this._state._aborted) return false;
-    __storage_flush_pending_puts(this._scope);
+    if (this.#transactionStatus()) return false;
+    if (this.#state && __objectState.aborted(this.#state)) return false;
+    __storage_flush_pending_puts(this.#scope);
     return true;
   }
   async get(k) {
-    this._assertTransactionActive("get");
+    this.#assertTransactionActive("get");
     // Transaction operations reach SQLite before their caller can roll back.
-    if (!this._transactionControl) await Promise.resolve();
-    if (!this._flushPendingPuts()) return;
+    if (!this.#transactionControl) await Promise.resolve();
+    if (!this.#flushPendingPuts()) return;
     const key = Array.isArray(k) ? JSON.stringify(k) : String(k);
-    return __readStoredValue(this._scope, key, () => {
+    return __readStoredValue(this.#scope, key, () => {
       if (Array.isArray(k))
         return __unwrapStoredMap(
-          __storage_get_many(this._scope, k, __storedSentinel));
+          __storage_get_many(this.#scope, k, __storedSentinel));
       return __unwrapStored(
-        __storage_get(this._scope, k, __storedSentinel));
+        __storage_get(this.#scope, k, __storedSentinel));
     });
   }
   async put(k, val) {
-    this._assertTransactionActive("put");
+    this.#assertTransactionActive("put");
     if (typeof k === "string") {
       try {
-        __storage_queue_put(this._scope, k, val);
+        __storage_queue_put(this.#scope, k, val);
       } catch (error) {
-        __storage_queue_put_serialized(this._scope, k,
+        __storage_queue_put_serialized(this.#scope, k,
                                        __storedBytes(val, error));
       }
       await Promise.resolve();
-      this._flushPendingPuts();
+      this.#flushPendingPuts();
       return;
     }
     const source = k instanceof Map ? Array.from(k) : Object.entries(k);
@@ -2141,7 +2226,7 @@ class __DurableObjectStorageBase {
     const entries =
       source.map(([key, value]) => [String(key), value]);
     try {
-      __storage_queue_put_many(this._scope, entries);
+      __storage_queue_put_many(this.#scope, entries);
     } catch (error) {
       // A batch with a stub entry: encode every entry first (plain
       // entries keep their native clone bytes, stub entries take
@@ -2156,33 +2241,33 @@ class __DurableObjectStorageBase {
         }
       });
       for (const [key, bytes] of encoded)
-        __storage_queue_put_serialized(this._scope, key, bytes);
+        __storage_queue_put_serialized(this.#scope, key, bytes);
     }
     await Promise.resolve();
-    this._flushPendingPuts();
+    this.#flushPendingPuts();
   }
   async delete(k) {
-    this._assertTransactionActive("delete");
-    if (!this._transactionControl) await Promise.resolve();
-    if (!this._flushPendingPuts()) return;
+    this.#assertTransactionActive("delete");
+    if (!this.#transactionControl) await Promise.resolve();
+    if (!this.#flushPendingPuts()) return;
     if (Array.isArray(k)) {
       if (k.length === 0) return 0;
-      return __storage_delete_many(this._scope, k);
+      return __storage_delete_many(this.#scope, k);
     }
-    return __storage_delete(this._scope, k);
+    return __storage_delete(this.#scope, k);
   }
   async list(options = {}) {
-    this._assertTransactionActive("list");
-    if (!this._transactionControl) await Promise.resolve();
-    if (!this._flushPendingPuts()) return new Map();
+    this.#assertTransactionActive("list");
+    if (!this.#transactionControl) await Promise.resolve();
+    if (!this.#flushPendingPuts()) return new Map();
     return __unwrapStoredMap(__storage_list(
-      this._scope, JSON.stringify(options), __storedSentinel));
+      this.#scope, JSON.stringify(options), __storedSentinel));
   }
   async deleteAll() {
-    this._assertTransactionActive("deleteAll");
-    if (!this._transactionControl) await Promise.resolve();
-    if (!this._flushPendingPuts()) return;
-    __storage_delete_all(this._scope, __cell.deleteAllDeletesAlarm);
+    this.#assertTransactionActive("deleteAll");
+    if (!this.#transactionControl) await Promise.resolve();
+    if (!this.#flushPendingPuts()) return;
+    __storage_delete_all(this.#scope, __cell.deleteAllDeletesAlarm);
   }
   // Resolves once every write this cell committed before the call is
   // proven durable, by the proof the output gate requires before it releases
@@ -2191,76 +2276,78 @@ class __DurableObjectStorageBase {
   // rejects when that proof fails or times out, so an application never
   // treats a lost write as safe.
   async sync() {
-    this._assertTransactionActive("sync");
+    this.#assertTransactionActive("sync");
     await Promise.resolve();
-    const status = this._transactionStatus();
+    const status = this.#transactionStatus();
     // An admitted sync can resume after transactionSync commits or rolls
     // back. Its boundary settled the queued puts, so prove the surviving
     // state without flushing a later transaction through this handle. A
     // new call after that boundary still fails the entry guard above.
-    if (this._state?._aborted || (status === null && !this._flushPendingPuts()))
+    if ((this.#state && __objectState.aborted(this.#state)) ||
+        (status === null && !this.#flushPendingPuts()))
       throw new Error(
-        "storage.sync: " + this._scope + " was aborted; the object is no " +
+        "storage.sync: " + this.#scope + " was aborted; the object is no " +
         "longer running");
-    await __storage_sync(this._scope);
+    await __storage_sync(this.#scope);
   }
   async setAlarm(t) {
-    this._assertTransactionActive("setAlarm");
-    if (!this._transactionControl) await Promise.resolve();
-    if (!this._flushPendingPuts()) return;
-    if (this._state?._facetDepth > 0)
+    this.#assertTransactionActive("setAlarm");
+    if (!this.#transactionControl) await Promise.resolve();
+    if (!this.#flushPendingPuts()) return;
+    if (this.#state && __objectState.facetDepth(this.#state) > 0)
       throw new Error("Facets currently cannot set alarms.");
-    __alarm_set(this._scope, t instanceof Date ? t.getTime() : Number(t));
+    __alarm_set(this.#scope, t instanceof Date ? t.getTime() : Number(t));
   }
   async getAlarm() {
-    this._assertTransactionActive("getAlarm");
-    if (!this._transactionControl) await Promise.resolve();
-    if (!this._flushPendingPuts()) return null;
-    const v = __alarm_get(this._scope);
+    this.#assertTransactionActive("getAlarm");
+    if (!this.#transactionControl) await Promise.resolve();
+    if (!this.#flushPendingPuts()) return null;
+    const v = __alarm_get(this.#scope);
     return v === null ? null : v;
   }
   async deleteAlarm() {
-    this._assertTransactionActive("deleteAlarm");
-    if (!this._transactionControl) await Promise.resolve();
-    if (!this._flushPendingPuts()) return;
-    __alarm_delete(this._scope);
+    this.#assertTransactionActive("deleteAlarm");
+    if (!this.#transactionControl) await Promise.resolve();
+    if (!this.#flushPendingPuts()) return;
+    __alarm_delete(this.#scope);
   }
-  _transactionStart() {
-    const root = this._transactionRoot;
-    const savepoint = "cells_tx_" + (++root._transactionSerial);
+  #transactionStart() {
+    const root = this.#transactionRoot;
+    const savepoint = "cells_tx_" + (++root.#transactionSerial);
     __storage_transaction_control(
-      this._scope, "start", this._transactionDepth > 0, savepoint,
+      this.#scope, "start", this.#transactionDepth > 0, savepoint,
     );
     return savepoint;
   }
-  _transactionCommit(savepoint) {
+  #transactionCommit(savepoint) {
     __storage_transaction_control(
-      this._scope, "commit", this._transactionDepth > 0, savepoint,
+      this.#scope, "commit", this.#transactionDepth > 0, savepoint,
     );
   }
-  _transactionRollback(savepoint, explicit = false) {
+  #transactionRollback(savepoint, explicit = false) {
     __storage_transaction_control(
-      this._scope,
+      this.#scope,
       explicit ? "rollback_explicit" : "rollback",
-      this._transactionDepth > 0,
+      this.#transactionDepth > 0,
       savepoint,
     );
   }
-  _transactionView(transactionControl) {
+  #transactionView(transactionControl) {
     return new DurableObjectTransaction(
-      this._scope,
-      this._state,
-      this._transactionRoot,
-      this._transactionDepth + 1,
+      __kStorage,
+      this.#scope,
+      this.#state,
+      this.#transactionRoot,
+      this.#transactionDepth + 1,
       transactionControl,
     );
   }
   rollback() {
-    const control = this._transactionControl;
+    const control = this.#transactionControl;
     if (!control)
       throw new TypeError("rollback() must be called on a transaction");
     if (control.rolledBack) return;
-    this._assertTransactionActive("rollback");
+    this.#assertTransactionActive("rollback");
     // A running nested transaction holds a savepoint inside this layer's.
     // workerd's ExplicitTxn::rollback() refuses, and this layer stays open.
     if (control.hasChild) throw new Error(__NESTED_TRANSACTION_RUNNING_ROLLBACK);
@@ -2268,9 +2355,12 @@ class __DurableObjectStorageBase {
     control.rolledBack = true;
   }
   transactionSync(f) {
-    this._assertTransactionActive("transactionSync");
-    const root = this._transactionRoot;
-    if (this._transactionDepth === 0) {
+    return this.#transactionSync(f);
+  }
+  #transactionSync(f) {
+    this.#assertTransactionActive("transactionSync");
+    const root = this.#transactionRoot;
+    if (this.#transactionDepth === 0) {
       // A callback can call a helper that reaches the root `ctx.storage`
       // handle instead of the transaction view, and the helper starts its own
       // synchronous transaction. Workerd nests that one under the open
@@ -2287,18 +2377,18 @@ class __DurableObjectStorageBase {
       //
       // The synchronous transaction is preferred over an asynchronous one,
       // because it is the innermost open layer whenever both are open.
-      if (root._activeSyncTransaction !== null)
-        return root._activeSyncTransaction.transactionSync(f);
-      if (root._activeTransaction !== null)
-        return root._activeTransaction.transactionSync(f);
+      if (root.#activeSyncTransaction !== null)
+        return root.#activeSyncTransaction.#transactionSync(f);
+      if (root.#activeTransaction !== null)
+        return root.#activeTransaction.#transactionSync(f);
     }
-    const savepoint = this._transactionStart();
-    const control = this._newTransactionControl(savepoint);
-    const view = this._transactionView(control);
+    const savepoint = this.#transactionStart();
+    const control = this.#newTransactionControl(savepoint);
+    const view = this.#transactionView(control);
     // The callback below runs to its end before any other code runs, so the
     // restore below runs at exactly the point the savepoint ends.
-    const previousSync = root._activeSyncTransaction;
-    root._activeSyncTransaction = view;
+    const previousSync = root.#activeSyncTransaction;
+    root.#activeSyncTransaction = view;
     try {
       // workerd hands the callback nothing: the root's own methods write
       // inside the transaction, and a throw rolls it back.
@@ -2306,30 +2396,30 @@ class __DurableObjectStorageBase {
       // The object was reset under the callback, which rolled this back.
       if (control.failure !== null) throw control.failure;
       if (!control.rolledBack) {
-        this._transactionCommit(savepoint);
+        this.#transactionCommit(savepoint);
         control.committed = true;
       }
       return value;
     } catch (error) {
       if (!control.rolledBack) {
         try {
-          this._transactionRollback(savepoint);
+          this.#transactionRollback(savepoint);
           control.rolledBack = true;
         } catch (rollbackError) {
-          this._abortAfterFailedRollback(rollbackError, error);
+          this.#abortAfterFailedRollback(rollbackError, error);
         }
       }
       throw error;
     } finally {
-      root._activeSyncTransaction = previousSync;
+      root.#activeSyncTransaction = previousSync;
     }
   }
-  _newTransactionControl(savepoint) {
+  #newTransactionControl(savepoint) {
     const control = {
       rolledBack: false,
       rollbackPerformed: false,
       committed: false,
-      parent: this._transactionControl,
+      parent: this.#transactionControl,
       // A nested transaction has started inside this layer and not ended,
       // and the promise that resolves when it does.
       hasChild: false,
@@ -2342,22 +2432,22 @@ class __DurableObjectStorageBase {
       // Orders the nested transactions started inside this layer.
       childTail: Promise.resolve(),
       rollback: () => {
-        this._transactionRollback(savepoint, true);
+        this.#transactionRollback(savepoint, true);
         control.rollbackPerformed = true;
       },
     };
     return control;
   }
-  async _runTransactionWith(f, savepoint, control) {
-    const view = this._transactionView(control);
-    const root = this._transactionRoot;
-    const previousActive = root._activeTransaction;
-    root._activeTransaction = view;
+  async #runTransactionWith(f, savepoint, control) {
+    const view = this.#transactionView(control);
+    const root = this.#transactionRoot;
+    const previousActive = root.#activeTransaction;
+    root.#activeTransaction = view;
     try {
       const value = await f(view);
-      this._requireNoRunningChild(control);
+      this.#requireNoRunningChild(control);
       if (!control.rolledBack) {
-        this._transactionCommit(savepoint);
+        this.#transactionCommit(savepoint);
         control.committed = true;
       } else if (!control.rollbackPerformed) {
         control.rollback();
@@ -2374,32 +2464,32 @@ class __DurableObjectStorageBase {
         control.ended = (async () => {
           while (control.hasChild) await control.childEnded;
           if (control.failure === null && !control.rollbackPerformed)
-            this._rollbackLayer(savepoint, control, error);
-          if (root._activeTransaction === view)
-            root._activeTransaction = previousActive;
+            this.#rollbackLayer(savepoint, control, error);
+          if (root.#activeTransaction === view)
+            root.#activeTransaction = previousActive;
         })();
         throw error;
       }
-      if (!control.rollbackPerformed) this._rollbackLayer(savepoint, control, error);
+      if (!control.rollbackPerformed) this.#rollbackLayer(savepoint, control, error);
       throw error;
     } finally {
-      if (root._activeTransaction === view)
-        root._activeTransaction = previousActive;
+      if (root.#activeTransaction === view)
+        root.#activeTransaction = previousActive;
     }
   }
   // Rolls one layer back after its callback failed with `cause`.
-  _rollbackLayer(savepoint, control, cause) {
+  #rollbackLayer(savepoint, control, cause) {
     // The flag records a rollback that happened, not one that was attempted:
     // a rollback that fails leaves the savepoint open, and a later
     // transaction on the same connection would commit its writes. Nothing
     // can be said about the connection then, so the object is aborted
     // rather than left to serve from it.
     try {
-      this._transactionRollback(savepoint);
+      this.#transactionRollback(savepoint);
       control.rolledBack = true;
       control.rollbackPerformed = true;
     } catch (rollbackError) {
-      this._abortAfterFailedRollback(rollbackError, cause);
+      this.#abortAfterFailedRollback(rollbackError, cause);
     }
   }
   // `cause` is the failure that led to the rollback; the abort's error keeps
@@ -2407,13 +2497,13 @@ class __DurableObjectStorageBase {
   // rollback failure is reported even when the object is already aborted,
   // as it is after a block's limit: the abort then changes nothing, and the
   // log line is the only trace the failure leaves.
-  _abortAfterFailedRollback(rollbackError, cause) {
+  #abortAfterFailedRollback(rollbackError, cause) {
     // Inside a catch, so the log must not become the throw that leaves it:
     // the slot release after the caller's rethrow depends on that.
     try { console.error("transaction rollback failed", rollbackError); } catch {}
-    const state = this._transactionRoot._state;
-    if (state && !state._aborted) {
-      state._abort(
+    const state = this.#transactionRoot.#state;
+    if (state && !__objectState.aborted(state)) {
+      __objectState.abort(state,
         new Error(
           "a transaction rollback failed: " + __describeFailure(rollbackError),
           { cause },
@@ -2429,8 +2519,8 @@ class __DurableObjectStorageBase {
   // transaction started inside `transactionSync()` begins after that
   // savepoint has ended rather than inside it. Nested transactions started
   // in one layer run one after another, in call order.
-  async _nestedTransaction(parent, f) {
-    const root = this._transactionRoot;
+  async #nestedTransaction(parent, f) {
+    const root = this.#transactionRoot;
     const previous = parent.childTail;
     let release;
     parent.childTail = new Promise((resolve) => { release = resolve; });
@@ -2441,19 +2531,19 @@ class __DurableObjectStorageBase {
     try {
       await __afterTurn();
       await previous;
-      if (root._state._aborted)
+      if (__objectState.aborted(root.#state))
         throw new Error("the Durable Object was reset before the transaction started");
-      const current = root._activeTransaction;
-      if (current === null) return await this._topLevelTransaction(f);
-      const control = current._transactionControl;
+      const current = root.#activeTransaction;
+      if (current === null) return await this.#topLevelTransaction(f);
+      const control = current.#transactionControl;
       let childEnded;
       control.hasChild = true;
       control.childEnded = new Promise((resolve) => { childEnded = resolve; });
       let child = null;
       try {
-        const savepoint = current._transactionStart();
-        child = current._newTransactionControl(savepoint);
-        return await current._runTransactionWith(f, savepoint, child);
+        const savepoint = current.#transactionStart();
+        child = current.#newTransactionControl(savepoint);
+        return await current.#runTransactionWith(f, savepoint, child);
       } finally {
         const end = () => {
           control.hasChild = false;
@@ -2477,23 +2567,24 @@ class __DurableObjectStorageBase {
   // requires no child), which resets the object, so celld rolls the whole
   // transaction back and resets the object as a failed block does. The
   // transaction's block then fails with the same error.
-  _requireNoRunningChild(control) {
+  #requireNoRunningChild(control) {
     if (control.failure !== null) throw control.failure;
     if (!control.hasChild) return;
     const error = new Error(__NESTED_TRANSACTION_RUNNING_COMMIT);
-    this._abandonOpenTransactions(error);
-    this._transactionRoot._state._resetAfterConcurrencyFailure(error);
+    this.#abandonOpenTransactions(error);
+    __objectState.resetAfterConcurrencyFailure(
+      this.#transactionRoot.#state, error);
     throw error;
   }
   // Ends every open layer at once, from the innermost one up the chain of
   // its parents: the outermost rollback discards them all on the connection,
   // and each layer's runner then reports `error` instead of touching SQLite.
-  _abandonOpenTransactions(error) {
-    const root = this._transactionRoot;
+  #abandonOpenTransactions(error) {
+    const root = this.#transactionRoot;
     // A synchronous layer is the innermost whenever one is open.
-    const active = root._activeSyncTransaction ?? root._activeTransaction;
+    const active = root.#activeSyncTransaction ?? root.#activeTransaction;
     let outermost = null;
-    for (let control = active && active._transactionControl; control; control = control.parent) {
+    for (let control = active && active.#transactionControl; control; control = control.parent) {
       control.failure = error;
       if (!control.rolledBack) outermost = control;
       control.rolledBack = true;
@@ -2502,13 +2593,13 @@ class __DurableObjectStorageBase {
     try {
       outermost.rollback();
     } catch (rollbackError) {
-      this._abortAfterFailedRollback(rollbackError, error);
+      this.#abortAfterFailedRollback(rollbackError, error);
     }
-    for (let control = active._transactionControl; control; control = control.parent)
+    for (let control = active.#transactionControl; control; control = control.parent)
       control.rollbackPerformed = true;
   }
-  async _topLevelTransaction(f) {
-    const root = this._transactionRoot;
+  async #topLevelTransaction(f) {
+    const root = this.#transactionRoot;
     // Workerd runs the callback under blockConcurrencyWhile: the input gate
     // shuts, so no other event starts in the object while the transaction is
     // open. Without it another event's reads saw uncommitted rows, its
@@ -2527,9 +2618,9 @@ class __DurableObjectStorageBase {
     // outer hold as a nested block, and the outer block waits for nested
     // ones before it releases, so a slot held until the block's end would
     // wait on itself.
-    const previous = root._transactionTail;
+    const previous = root.#transactionTail;
     let release;
-    root._transactionTail = new Promise((resolve) => { release = resolve; });
+    root.#transactionTail = new Promise((resolve) => { release = resolve; });
     let control = null;
     let started = false;
     let abandoned = null;
@@ -2547,7 +2638,7 @@ class __DurableObjectStorageBase {
         // its rejection and the gate is open again, so starting the
         // transaction now would run it beside whatever the object serves.
         if (abandoned !== null) return { error: abandoned };
-        if (root._state._aborted) {
+        if (__objectState.aborted(root.#state)) {
           return { error: new Error("the Durable Object was reset before the transaction started") };
         }
         ownsTransaction = true;
@@ -2555,9 +2646,9 @@ class __DurableObjectStorageBase {
         // a failure there is the transaction's to report, not the block's:
         // a throw that escaped here would reset the object.
         try {
-          const savepoint = this._transactionStart();
-          control = this._newTransactionControl(savepoint);
-          return { value: await this._runTransactionWith(f, savepoint, control) };
+          const savepoint = this.#transactionStart();
+          control = this.#newTransactionControl(savepoint);
+          return { value: await this.#runTransactionWith(f, savepoint, control) };
         } catch (error) {
           // A layer that ended under a running nested transaction aborted
           // the object; the block fails with it, as workerd's does.
@@ -2569,13 +2660,13 @@ class __DurableObjectStorageBase {
           return { error };
         }
       } finally {
-        if (ownsTransaction) root._activeTransaction = null;
+        if (ownsTransaction) root.#activeTransaction = null;
         release();
       }
     };
     const block = (async () => {
       try {
-        return await root._state.blockConcurrencyWhile(guarded);
+        return await __objectState.blockConcurrencyWhile(root.#state, guarded);
       } catch (error) {
         // The block itself failed: its limit ended the callback while it still
         // ran, or the block ahead of it failed and this one never started. A
@@ -2593,13 +2684,13 @@ class __DurableObjectStorageBase {
         abandoned = error;
         if (control && !control.rolledBack && !control.committed) {
           if (control.hasChild) {
-            this._abandonOpenTransactions(error);
+            this.#abandonOpenTransactions(error);
           } else {
             try {
               control.rollback();
               control.rolledBack = true;
             } catch (rollbackError) {
-              this._abortAfterFailedRollback(rollbackError, error);
+              this.#abortAfterFailedRollback(rollbackError, error);
             }
           }
         }
@@ -2616,36 +2707,89 @@ class __DurableObjectStorageBase {
 }
 class DurableObjectStorage extends __DurableObjectStorageBase {
   async transaction(f) {
-    this._assertTransactionActive("transaction");
-    const root = this._transactionRoot;
-    // A transaction started while another is open nests inside it, whichever
-    // event started it: the callback's own helpers reach the root handle
-    // instead of its view, and an event that was already in flight when the
-    // gate shut can resume inside the transaction. Workerd keeps one
-    // savepoint stack per object, so both join it: each sees the other's
-    // uncommitted writes, and the outer layer's rollback discards both.
-    if (root._activeTransaction !== null)
-      return this._nestedTransaction(root._activeTransaction._transactionControl, f);
-    return this._topLevelTransaction(f);
+    return __storageInternals.transaction(this, f);
   }
 }
 // The view a transaction callback receives.
 class DurableObjectTransaction extends __DurableObjectStorageBase {}
+// The storage methods as the harness defined them, for celld's own cells that
+// run in a script's isolate (a workflow instance, the cron schedule). A
+// script can replace these methods on the prototypes, and the replacement
+// would then receive the cell's storage objects; the harness calls the ones
+// captured here instead, before any script ran. `__ownStorage(state)` is
+// that cell's storage with these methods and its scope, and `kv.list()`
+// answers an array of `{ key, value }` rows, which the cells walk with a
+// counted loop: an array iterator is a script's to replace too.
+const __ownStorage = (() => {
+  const base = __DurableObjectStorageBase.prototype;
+  const kv = SyncKvStorage.prototype;
+  const listNext = SyncKvListIterator.prototype.next;
+  const { get, put, getAlarm, setAlarm, deleteAlarm, transactionSync } = base;
+  const { get: kvGet, put: kvPut, delete: kvDelete, list: kvList } = kv;
+  return (state) => {
+    const storage = state.storage;
+    const kvStorage = storage.kv;
+    const call = (method, target) =>
+      (...args) => __ReflectApply(method, target, args);
+    const kvView = {
+      __proto__: null,
+      get: call(kvGet, kvStorage),
+      put: call(kvPut, kvStorage),
+      delete: call(kvDelete, kvStorage),
+    };
+    kvView.list = (options) => {
+      const iterator = __ReflectApply(kvList, kvStorage, [options]);
+      const rows = [];
+      for (;;) {
+        const row = __ReflectApply(listNext, iterator, []);
+        if (row.done) return rows;
+        rows[rows.length] = { __proto__: null, key: row.value[0], value: row.value[1] };
+      }
+    };
+    return {
+      __proto__: null,
+      get: call(get, storage),
+      put: call(put, storage),
+      getAlarm: call(getAlarm, storage),
+      setAlarm: call(setAlarm, storage),
+      deleteAlarm: call(deleteAlarm, storage),
+      transactionSync: call(transactionSync, storage),
+      kv: kvView,
+      scope: __storageInternals.scope(storage),
+    };
+  };
+})();
+// A Durable Object id. Its class and value are private, as workerd's are,
+// and only the harness constructs one (`__newDoId`): `new id.constructor()`
+// throws "Illegal constructor", as in workerd.
+const __kDoId = Symbol("DurableObjectId");
+let __isDoId, __doIdClass, __doIdScope;
 class DurableObjectId {
-  constructor(className, value, name = undefined) {
-    Object.defineProperties(this, {
-      _className: { value: className },
-      _value: { value },
-    });
+  #className;
+  #value;
+  // workerd's own properties, in its order, as fields: an assignment would
+  // run a setter a script put on Object.prototype.
+  jurisdiction = undefined;
+  name;
+  constructor(brand, className, value, name = undefined) {
+    if (brand !== __kDoId) throw new TypeError("Illegal constructor");
+    this.#className = className;
+    this.#value = value;
     this.name = name;
-    this.jurisdiction = undefined;
   }
-  toString() { return this._value; }
+  toString() { return this.#value; }
   equals(other) {
-    return other instanceof DurableObjectId && other._value === this._value;
+    return __isDoId(other) && other.#value === this.#value;
   }
-  _scope() { return this._className + ":" + this._value; }
+  static {
+    __isDoId = (value) =>
+      value !== null && typeof value === "object" && #value in value;
+    __doIdClass = (id) => id.#className;
+    __doIdScope = (id) => id.#className + ":" + id.#value;
+  }
 }
+const __newDoId = (className, value, name) =>
+  new DurableObjectId(__kDoId, className, value, name);
 globalThis.DurableObjectRoutingError = class DurableObjectRoutingError
   extends Error {
   constructor(detail = {}) {
@@ -2753,28 +2897,40 @@ const __makeLoopbackDurableObjectClass = (name) => {
   });
   return specialize;
 };
+// `ctx.facets`. Its state is private, the manager's object above all: a
+// manager a script could point at another object would start, abort and
+// delete that object's facets. Only the object's state constructs one
+// ("Illegal constructor", as in workerd).
+const __kFacets = Symbol("DurableObjectFacets");
+let __facetsRelease;
 class DurableObjectFacets {
-  constructor(state) {
-    this._state = state;
-    this._owner = String(__nextFacetOwner++);
-    this._next = 1;
-    this._running = new Map();
-    this._barriers = new Map();
+  #state;
+  #owner;
+  #next = 1;
+  #running = new Map();
+  #barriers = new Map();
+  constructor(brand, state) {
+    if (brand !== __kFacets) throw new TypeError("Illegal constructor");
+    this.#state = state;
+    this.#owner = String(__nextFacetOwner++);
   }
-  _validName(name) {
+  static {
+    __facetsRelease = (facets) => facets.#release();
+  }
+  #validName(name) {
     name = String(name);
     if (new TextEncoder().encode(name).length > 256)
       throw new TypeError("Facet name is too long (max 256 characters).");
     return name;
   }
   get(name, getStartupOptions) {
-    name = this._validName(name);
-    if (this._state._facetDepth >= 3)
+    name = this.#validName(name);
+    if (__objectState.facetDepth(this.#state) >= 3)
       throw new Error(
         "Facet nesting depth limit exceeded. The maximum depth including the root Durable Object is 4.");
     if (typeof getStartupOptions !== "function")
       throw new TypeError("The facet startup callback must be a function.");
-    let record = this._running.get(name);
+    let record = this.#running.get(name);
     if (record !== undefined) return record.stub;
     // Each run gets a distinct host scope. An aborted request can still have
     // a pending continuation, so reusing its scope would let that continuation
@@ -2782,11 +2938,11 @@ class DurableObjectFacets {
     record = {
       aborted: false,
       error: undefined,
-      owner: this._owner + ":" + this._next++,
+      owner: this.#owner + ":" + this.#next++,
       started: null,
       stub: null,
     };
-    const barrier = this._barriers.get(name);
+    const barrier = this.#barriers.get(name);
     const start = () => record.started ??= Promise.resolve(barrier)
       .then(getStartupOptions)
       .then(async (options) => {
@@ -2795,11 +2951,12 @@ class DurableObjectFacets {
           throw new TypeError(
             "FacetStartupOptions.class must be a DurableObjectClass.");
         const { id: loader } = await meta.loadPromise;
-        const id = options.id === undefined ? this._state.id : options.id;
+        const id = options.id === undefined
+          ? __objectState.id(this.#state) : options.id;
         // Keep the ID kind and name in one clone. A string round-trip erases
         // named IDs and turns a literal string ID into a DurableObjectId.
-        const idSc = __sc_encode(id instanceof DurableObjectId
-          ? [id._className, id.toString(), id.name] : String(id));
+        const idSc = __sc_encode(__isDoId(id)
+          ? [__doIdClass(id), id.toString(), id.name] : String(id));
         // Keep the load alive after the startup callback and class are gone.
         return [loader, meta.name, idSc, meta.propsSc, meta];
       });
@@ -2818,8 +2975,8 @@ class DurableObjectFacets {
           throw new Error(
             "Pipelined property paths on facets are not supported yet.");
         return __rpcDes(await __facet_rpc(
-          loader, className, this._state._scope, record.owner, name, id,
-          propsSc, path[0], __rpcOut(args, false)));
+          loader, className, __objectState.scope(this.#state), record.owner,
+          name, id, propsSc, path[0], __rpcOut(args, false)));
       }),
     };
     // Arrow closures retain the manager because `target.fetch`'s method
@@ -2831,8 +2988,8 @@ class DurableObjectFacets {
       const headers = JSON.stringify(req.headers.__celldHeaderList);
       const { body, streamId } = await __subrequestBody(req);
       const response = __jsonParse(await __facet_fetch(
-        loader, className, manager._state._scope, record.owner, name, id,
-        propsSc, req.url, req.method, body, headers, streamId));
+        loader, className, __objectState.scope(manager.#state), record.owner,
+        name, id, propsSc, req.url, req.method, body, headers, streamId));
       const responseBody = response.streamId !== undefined
         ? new CelldHttpBodyStream(response.streamId)
         : response.body !== undefined ? response.body
@@ -2858,53 +3015,54 @@ class DurableObjectFacets {
         return __makeNode(session, [prop], null);
       },
     });
-    this._running.set(name, record);
+    this.#running.set(name, record);
     return record.stub;
   }
-  _abort(name, reason) {
-    name = this._validName(name);
-    const record = this._running.get(name);
+  #abort(name, reason) {
+    name = this.#validName(name);
+    const record = this.#running.get(name);
     if (record === undefined) return Promise.resolve();
     record.aborted = true;
     record.error = reason;
-    this._running.delete(name);
+    this.#running.delete(name);
     const barrier = record.started === null ? Promise.resolve() : record.started
       .then(([loader, className]) =>
         __facet_abort(
-          loader, className, this._state._scope, record.owner, name), () => {});
-    this._barriers.set(name, barrier);
+          loader, className, __objectState.scope(this.#state), record.owner,
+          name), () => {});
+    this.#barriers.set(name, barrier);
     const clear = () => {
-      if (this._barriers.get(name) === barrier) this._barriers.delete(name);
+      if (this.#barriers.get(name) === barrier) this.#barriers.delete(name);
     };
     barrier.then(clear, clear);
     return barrier;
   }
   abort(name, reason) {
-    this._abort(name, reason);
+    this.#abort(name, reason);
   }
   delete(name) {
-    name = this._validName(name);
-    const barrier = this._abort(name, new Error("Facet was deleted.")).then(() =>
-      __facet_delete(this._state._scope, name));
-    this._barriers.set(name, barrier);
+    name = this.#validName(name);
+    const barrier = this.#abort(name, new Error("Facet was deleted.")).then(() =>
+      __facet_delete(__objectState.scope(this.#state), name));
+    this.#barriers.set(name, barrier);
     const clear = () => {
-      if (this._barriers.get(name) === barrier) this._barriers.delete(name);
+      if (this.#barriers.get(name) === barrier) this.#barriers.delete(name);
     };
     // Keep a failed delete as the name's barrier. Clearing it would let the
     // next get reload the image which the failed operation did not delete.
     barrier.then(clear, () => {});
   }
-  _release() {
+  #release() {
     // The host closes these facets during give-back. Queuing _abort here
     // leaves an undriven op whose promise retains the manager, its root,
     // and the loaded classes after the root has stopped.
     const reason = new Error("The parent Durable Object was released.");
-    for (const record of this._running.values()) {
+    for (const record of this.#running.values()) {
       record.aborted = true;
       record.error = reason;
     }
-    this._running.clear();
-    this._barriers.clear();
+    this.#running.clear();
+    this.#barriers.clear();
   }
 }
 // The reason a failed critical section gives its waiters. It must not throw:
@@ -3250,54 +3408,112 @@ __celld.__resetWakesPending = () => __resetWakes.size;
 __celld.__wakeResetEvents = () => {
   for (const state of __resetWakes) {
     __resetWakes.delete(state);
-    state._failRunningEvents();
+    __objectState.failRunningEvents(state);
   }
 };
+// `ctx` of a Durable Object. Its state is private, the scope above all:
+// one object's ctx a script could point at another would reset that object,
+// shut its gate or read its storage. Only `_instance` constructs one; `new
+// ctx.constructor()` throws "Illegal constructor", as in workerd. The own
+// properties are workerd's, in its order.
+const __kState = Symbol("DurableObjectState");
+// The harness's view of a DurableObjectState, which no script reaches.
+let __objectState;
 class DurableObjectState {
-  constructor(scope) {
-    this._scope = scope;
-    this._aborted = false;
-    // The error this instance was reset with. In workerd a reset breaks the
-    // actor: its storage refuses further operations, and every event still
-    // running on it fails. Storage throws `_resetError`, and each running
-    // event holds a deferred here that a reset rejects (see `_untilReset`).
-    this._resetError = null;
-    this._runningEvents = new Set();
-    this.storage = new DurableObjectStorage(scope, this);
-    this.facets = new DurableObjectFacets(this);
-    this._gate = Promise.resolve();
-    this._blockDepth = 0;
+  #scope;
+  #aborted = false;
+  // The error this instance was reset with. In workerd a reset breaks the
+  // actor: its storage refuses further operations, and every event still
+  // running on it fails. Storage throws `#resetError`, and each running
+  // event holds a deferred here that a reset rejects (see `#untilReset`).
+  #resetError = null;
+  #runningEvents = new Set();
+  #storage;
+  #facets;
+  #id;
+  #gate = Promise.resolve();
+  #blockDepth = 0;
+  #facetDepth;
+  #nestedBlocks;
+  // Workerd worker-rpc.c++ getTargetInfo(): RPC needs `extends
+  // DurableObject` unless the js_rpc compat flag is on. Decided once, by
+  // `_instance`; dispatch reads a boolean.
+  #rpcOk = false;
+  // workerd's own properties, in its order, as fields: an assignment would
+  // run a setter a script put on Object.prototype, with the object's
+  // storage or facets.
+  facets;
+  container;
+  storage;
+  id;
+  props;
+  constructor(brand, scope) {
+    if (brand !== __kState) throw new TypeError("Illegal constructor");
+    this.#scope = scope;
+    this.#storage = new DurableObjectStorage(__kStorage, scope, this);
+    this.#facets = new DurableObjectFacets(__kFacets, this);
     const facet = __cell.facetConfigs[scope];
-    this._facetDepth = facet?.depth ?? 0;
+    this.#facetDepth = facet?.depth ?? 0;
     const separator = scope.indexOf(":");
     const className = separator < 0 ? scope : scope.slice(0, separator);
-    this.id = facet === undefined
-      ? new DurableObjectId(
+    this.#id = facet === undefined
+      ? __newDoId(
         className, separator < 0 ? scope : scope.slice(separator + 1),
         __cell.idNames[scope])
-      : typeof facet.id === "string" ? facet.id : new DurableObjectId(...facet.id);
+      : typeof facet.id === "string" ? facet.id : __newDoId(...facet.id);
+    this.facets = this.#facets;
+    // A class outside `containers` has `ctx.container` undefined, which is
+    // what the `@cloudflare/containers` constructor checks.
+    this.container = __cell.containers[className]
+      ? new Container(scope) : undefined;
+    this.storage = this.#storage;
+    this.id = this.#id;
     this.props = facet?.props;
-    // A class outside `containers` has no `ctx.container`, which is what
-    // the `@cloudflare/containers` constructor checks.
-    if (__cell.containers[className]) this.container = new Container(scope);
+    // Workerd's DurableObjectState.exports (actor-state.h): the same
+    // loopback surface as ctx.exports on stateless entrypoints, built on
+    // first read.
+    __ObjectDefineProperty(this, "exports", {
+      get: () => __ctxExports(),
+      enumerable: true,
+      configurable: true,
+    });
     __withCtxRestore(this);
   }
-  // Workerd's DurableObjectState.exports (actor-state.h): the same
-  // loopback surface as ctx.exports on stateless entrypoints.
-  get exports() { return __ctxExports(); }
+  static {
+    __objectState = {
+      scope: (state) => state.#scope,
+      id: (state) => state.#id,
+      facets: (state) => state.#facets,
+      aborted: (state) => state.#aborted,
+      facetDepth: (state) => state.#facetDepth,
+      rpcOk: (state) => state.#rpcOk,
+      setRpcOk: (state, ok) => { state.#rpcOk = ok; },
+      ready: (state) => state.#ready(),
+      blockConcurrencyWhile: (state, f) =>
+        __with_input_gate_context(() => state.#blockConcurrencyWhile(f)),
+      untilReset: (state, result) => state.#untilReset(result),
+      socket: (state, id) => state.#socket(id),
+      markReset: (state, error) => state.#markReset(error),
+      failRunningEvents: (state) => state.#failRunningEvents(),
+      resetFailure: (state) => state.#resetFailure(),
+      abort: (state, error) => state.#abort(error),
+      resetAfterConcurrencyFailure: (state, error) =>
+        state.#resetAfterConcurrencyFailure(error),
+    };
+  }
   blockConcurrencyWhile(f) {
     // The native context binds the gate and its operations to one driver.
     // Its async continuations keep that driver even inside a foreign turn.
-    return __with_input_gate_context(() => this._blockConcurrencyWhile(f));
+    return __with_input_gate_context(() => this.#blockConcurrencyWhile(f));
   }
-  _blockConcurrencyWhile(f) {
+  #blockConcurrencyWhile(f) {
     if (typeof f !== "function")
       throw new TypeError("blockConcurrencyWhile() requires a function");
-    if (this._blockDepth >= 64)
+    if (this.#blockDepth >= 64)
       throw new Error(
         "blockConcurrencyWhile() calls are nested too deeply.",
       );
-    if (this._blockDepth > 0) {
+    if (this.#blockDepth > 0) {
       // A stale reaction can run while an unrelated live block makes this
       // actor's depth nonzero. It cannot ride that hold when either half of
       // its retained [origin, driver] pair has already retired.
@@ -3320,11 +3536,11 @@ class DurableObjectState {
       // critical section does in workerd: it waits for the hold the turn
       // runs under. An object reset in the meantime never runs it.
       const nested = __afterTurn().then(() => {
-        if (this._aborted)
+        if (this.#aborted)
           throw new Error("the Durable Object was reset before the block started");
-        return this._runConcurrencyBlock(f);
+        return this.#runConcurrencyBlock(f);
       });
-      (this._nestedBlocks ||= []).push(nested.then(() => null, __describeFailure));
+      (this.#nestedBlocks ||= []).push(nested.then(() => null, __describeFailure));
       return nested;
     }
     // The host owns the gate (celld_logic::gate::InputGate). It replaces a
@@ -3347,13 +3563,13 @@ class DurableObjectState {
     // queue behind the first. Calling this inside the async body instead
     // costs one microtask, and an event delivered in that window walks
     // straight into the critical section.
-    const [eventText, owner, acquired] = __gate_acquire(this._scope);
+    const [eventText, owner, acquired] = __gate_acquire(this.#scope);
     // An empty owner is an immediate refusal. Return its already-rejected
     // promise before recording the block, because no driver exists to settle
     // native work or to repair a readiness gate installed for stale work.
     if (owner === "") return acquired;
     const event = Number(eventText);
-    const { block, record } = __blockEnter(this._scope, event, owner);
+    const { block, record } = __blockEnter(this.#scope, event, owner);
     const next = (async () => {
       try {
         await acquired;
@@ -3361,7 +3577,7 @@ class DurableObjectState {
         // owns this queued acquisition. The owner still has to consume its
         // ticket, but the retired callback must not run.
         if (record.retired) {
-          __gate_release(this._scope, event, owner, null);
+          __gate_release(this.#scope, event, owner, null);
           return;
         }
         block.holder = event;
@@ -3372,7 +3588,7 @@ class DurableObjectState {
         // instead of merely woken.
         let failure = null;
         try {
-          return await this._runConcurrencyBlock(f);
+          return await this.#runConcurrencyBlock(f);
         } catch (error) {
           failure = __describeFailure(error);
           throw error;
@@ -3383,18 +3599,18 @@ class DurableObjectState {
           // delay the refusal and a transaction's rollback behind it. Each
           // nested block has its own limit, so a drain is bounded by the
           // last one started, as workerd's nested critical sections are.
-          while (failure === null && this._nestedBlocks && this._nestedBlocks.length > 0) {
-            for (const nestedFailure of await Promise.all(this._nestedBlocks.splice(0))) {
+          while (failure === null && this.#nestedBlocks && this.#nestedBlocks.length > 0) {
+            for (const nestedFailure of await Promise.all(this.#nestedBlocks.splice(0))) {
               if (nestedFailure !== null && failure === null) failure = nestedFailure;
             }
           }
-          this._nestedBlocks = undefined;
-          __gate_release(this._scope, event, owner, failure);
+          this.#nestedBlocks = undefined;
+          __gate_release(this.#scope, event, owner, failure);
         }
       } finally {
         // Also on a rejected `acquired`: the block ahead failed, this one
         // never ran, and the cell must not stay shut on its behalf.
-        __blockLeave(this._scope, block, event);
+        __blockLeave(this.#scope, block, event);
       }
     })();
     // `_ready()` awaits this. The host gate stops *other* events, but a
@@ -3402,22 +3618,22 @@ class DurableObjectState {
     // being delivered, so nothing external can hold that event back -- the
     // promise does. Concurrent blocks within one event go through
     // `_blockDepth` above and never reach here.
-    this._gate = Promise.all([this._gate, record.ready]).then(() => undefined);
+    this.#gate = Promise.all([this.#gate, record.ready]).then(() => undefined);
     // `_ready()` observes the original promise. This extra handler prevents
     // a constructor-time rejection from becoming unhandled before an event
     // reaches `_ready()`.
-    this._gate.catch(() => {});
+    this.#gate.catch(() => {});
     next.then(record.settleReady, record.rejectReady);
     return next;
   }
-  _runConcurrencyBlock(f) {
-    this._blockDepth++;
+  #runConcurrencyBlock(f) {
+    this.#blockDepth++;
     let result;
     try {
       result = f();
     } catch (error) {
-      this._blockDepth--;
-      this._resetAfterConcurrencyFailure(error);
+      this.#blockDepth--;
+      this.#resetAfterConcurrencyFailure(error);
       throw error;
     }
     const timerId = __timer_alloc();
@@ -3437,14 +3653,14 @@ class DurableObjectState {
       (value) => {
         settled = true;
         __timer_cancel(timerId);
-        this._blockDepth--;
+        this.#blockDepth--;
         return value;
       },
       (error) => {
         settled = true;
         __timer_cancel(timerId);
-        this._blockDepth--;
-        this._resetAfterConcurrencyFailure(error);
+        this.#blockDepth--;
+        this.#resetAfterConcurrencyFailure(error);
         throw error;
       },
     );
@@ -3453,31 +3669,31 @@ class DurableObjectState {
   // V8 drops the microtasks queued in it, so rejecting the running events
   // now would lose their reactions. The host rejects them once the turn has
   // ended instead (`__wakeResetEvents`).
-  _markReset(error, terminating = false) {
-    this._aborted = true;
-    this._resetError = error;
+  #markReset(error, terminating = false) {
+    this.#aborted = true;
+    this.#resetError = error;
     // A transaction still open would otherwise stay open on the connection
     // the replacement uses, and commit with its first write.
-    this.storage._abandonOpenTransactions(error);
+    __storageInternals.abandonOpenTransactions(this.#storage, error);
     if (terminating) __resetWakes.add(this);
-    else this._failRunningEvents();
+    else this.#failRunningEvents();
   }
-  _failRunningEvents() {
-    const events = this._runningEvents;
-    this._runningEvents = new Set();
-    for (const event of events) event.reject(this._resetError);
+  #failRunningEvents() {
+    const events = this.#runningEvents;
+    this.#runningEvents = new Set();
+    for (const event of events) event.reject(this.#resetError);
   }
-  _resetFailure() {
-    return this._resetError ??
+  #resetFailure() {
+    return this.#resetError ??
       new Error("the Durable Object was reset; this event's storage is closed");
   }
   // An event's result, unless the instance resets first. A reset rejects
   // the event's deferred in the resetting turn, so even the event that reset
   // the object and caught the error fails, as in workerd.
-  _untilReset(result) {
-    if (this._resetError !== null) return Promise.reject(this._resetError);
+  #untilReset(result) {
+    if (this.#resetError !== null) return Promise.reject(this.#resetError);
     const event = Promise.withResolvers();
-    const events = this._runningEvents;
+    const events = this.#runningEvents;
     events.add(event);
     Promise.resolve(result).then(
       (value) => {
@@ -3491,23 +3707,21 @@ class DurableObjectState {
     );
     return event.promise;
   }
-  // The cell this reset acts on. `_scope` is writable, so one object could
-  // set it to another's and drop that object's buffered writes, delete its
-  // instance and break it. The authority is the instance registry, which
-  // user code cannot reach: this returns the scope only when `this` is the
-  // object registered under it, so a forged `_scope` names a cell this is
-  // not and clears, deletes and breaks nothing. `__cellBlocks` is keyed by
-  // the same authentic scope (`op_gate_acquire` binds acquisition to the
-  // running event), so the host-driven retire path below passes an
-  // authentic scope too.
-  _ownScope() {
-    const scope = this._scope;
-    return __cell.instances[scope]?.__celldState === this ? scope : undefined;
+  // The cell this reset acts on: the scope only while `this` is the object
+  // registered under it, in the instance registry, which user code cannot
+  // reach. An instance that a reset already replaced names a cell it no
+  // longer is, so its late reset clears, deletes and breaks nothing of its
+  // replacement's. `__cellBlocks` is keyed by the same authentic scope
+  // (`op_gate_acquire` binds acquisition to the running event), so the
+  // host-driven retire path below passes an authentic scope too.
+  #ownScope() {
+    const scope = this.#scope;
+    return __instanceState(__cell.instances[scope]) === this ? scope : undefined;
   }
-  _resetAfterConcurrencyFailure(error) {
-    if (this._aborted) return;
-    this._markReset(error);
-    const scope = this._ownScope();
+  #resetAfterConcurrencyFailure(error) {
+    if (this.#aborted) return;
+    this.#markReset(error);
+    const scope = this.#ownScope();
     if (scope === undefined) return;
     __storage_cancel_pending_puts(scope);
     delete __cell.instances[scope];
@@ -3520,21 +3734,21 @@ class DurableObjectState {
   }
   abort(reason) {
     // workerd takes the reason as a string (DurableObjectState::abort()).
-    this._abort(new Error(reason === undefined
+    this.#abort(new Error(reason === undefined
       ? "Application called abort() to reset Durable Object."
       : String(reason)));
   }
-  _abort(error) {
-    if (this._aborted) return;
-    // See `_ownScope`: a forged `_scope` must not abort another object. An
-    // object this is not registered under aborts nothing, only itself.
-    const scope = this._ownScope();
+  #abort(error) {
+    if (this.#aborted) return;
+    // See `#ownScope`: an object this is no longer registered under aborts
+    // nothing, only itself.
+    const scope = this.#ownScope();
     if (scope === undefined) {
-      this._markReset(error);
+      this.#markReset(error);
       return;
     }
     const terminating = __currentActorScope() === scope;
-    this._markReset(error, terminating);
+    this.#markReset(error, terminating);
     __storage_cancel_pending_puts(scope);
     delete __cell.instances[scope];
     // Direct host-dispatched event on this actor: the uncatchable
@@ -3546,7 +3760,7 @@ class DurableObjectState {
     }
     __actorBreak(scope, error);
   }
-  _ready() { return this._gate; }
+  #ready() { return this.#gate; }
   // The WebSocket methods act on the running Durable Object, whichever
   // object's ctx they are called on, as in workerd: the host takes the
   // object from the running event, never from this state.
@@ -3587,7 +3801,7 @@ class DurableObjectState {
     }
     __socketSet(id, ws);
   }
-  _socket(id) {
+  #socket(id) {
     return __socketGet(Number(id)) ||
       this.getWebSockets().find((ws) => __wsState(ws).id === id) ||
       __wsStub(id);
@@ -3635,27 +3849,34 @@ class DurableObjectState {
     __registerWaitUntil(promise);
   }
 }
+// Each object's state, by its instance, which no script reaches: an
+// instance's property would have been defined through a function a script
+// can replace, with the instance (for the workflow and cron cells, celld's
+// own) as its argument.
+const __instanceStates = new __SafeWeakMap();
+const __instanceState = (inst) => inst === undefined ? undefined
+  : __ReflectApply(__WeakMapGet, __instanceStates, [inst]);
 function _instance(scope) {
   let inst = __cell.instances[scope];
   if (!inst) {
     const className = scope.split(":")[0];
     const cls = __cell.classes[className];
     if (!cls) throw new Error("no DO class " + className);
-    const state = new DurableObjectState(scope);
+    const state = new DurableObjectState(__kState, scope);
     inst = new cls(state, __cell.env);
-    Object.defineProperty(inst, "__celldState", { value: state });
+    __ReflectApply(__WeakMapSet, __instanceStates, [inst, state]);
     // Workerd worker-rpc.c++ getTargetInfo(): RPC needs `extends
     // DurableObject` unless the js_rpc compat flag is on. Decided
     // once here; dispatch reads a boolean.
-    state._rpcOk = __cell.compat.jsRpc ||
-      __cell.doExports[className] === true;
+    __objectState.setRpcOk(state, __cell.compat.jsRpc ||
+      __cell.doExports[className] === true);
     __cell.instances[scope] = inst;
   }
   return inst;
 }
 async function _readyInstance(scope) {
   const inst = _instance(scope);
-  await inst.__celldState._ready();
+  await __objectState.ready(__instanceState(inst));
   return inst;
 }
 const __actorEventStack = [];
@@ -3738,8 +3959,8 @@ __celld.__retireInputGateContext = (context) => {
       "the cell's critical section ended without releasing",
     );
     const instance = __cell.instances[scope];
-    if (instance !== undefined && !instance.__celldState._aborted) {
-      instance.__celldState._markReset(
+    if (instance !== undefined && !__objectState.aborted(__instanceState(instance))) {
+      __objectState.markReset(__instanceState(instance),
         new Error("the cell's critical section ended without releasing"),
       );
     }
@@ -4758,7 +4979,8 @@ const __actorBreak = (scope, reason) => {
 // Storage is not here -- `stop_cell` closes it host-side -- and sockets
 // live in the host registry, so a hibernated cell keeps them.
 const __cellRelease = (scope) => {
-  __cell.instances[scope]?.ctx?.facets?._release();
+  const state = __instanceState(__cell.instances[scope]);
+  if (state !== undefined) __facetsRelease(__objectState.facets(state));
   delete __cell.instances[scope];
   delete __cell.idNames[scope];
   delete __cell.facetConfigs[scope];
@@ -4837,7 +5059,7 @@ const __rpcReservedError = (prop) => new TypeError("'" + prop +
 // celld's stubs answer them locally, as workerd's do, so only a peer or the
 // test hook can ask, and the stricter refusal runs nothing for them.
 const __rpcClassMember = (target, prop) => {
-  if (prop in Object.prototype || Object.hasOwn(target, prop))
+  if (prop in Object.prototype || __ObjectHasOwn(target, prop))
     throw __rpcNoSuchMethod(prop);
   const value = target[prop];
   if (value === undefined) throw __rpcNoSuchMethod(prop);
@@ -4846,14 +5068,14 @@ const __rpcClassMember = (target, prop) => {
 // A plain object's or a function's member: its own properties only, which
 // may hold undefined.
 const __rpcOwnMember = (target, prop) => {
-  if (!Object.hasOwn(target, prop)) throw __rpcNoSuchMethod(prop);
+  if (!__ObjectHasOwn(target, prop)) throw __rpcNoSuchMethod(prop);
   return target[prop];
 };
 // Bind through the intrinsic because a callable proxy can implement `.bind`
 // as a remote property. Reading that property can turn a valid named RPC
 // method into a non-function. Keep this rule shared by every RPC binding site.
 const __rpcBindMethod = (value, receiver) =>
-  Reflect.apply(Function.prototype.bind, value, [receiver]);
+  __ReflectApply(__FunctionBind, value, [receiver]);
 // A member a property read answers with: a function stays bound to the
 // object it was read from. celld's own stubs and pipeline nodes stay
 // unwrapped because the wrapper would lose their metadata.
@@ -5187,8 +5409,8 @@ const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
       if (!allowCapabilities) return v;
       lifted = true;
       caps = true;
-      const marker = { "__celld$do": doId._className,
-                       v: doId._value, n: v.name ?? null };
+      const marker = { "__celld$do": __doIdClass(doId),
+                       v: doId.toString(), n: v.name ?? null };
       seen.set(v, marker);
       return marker;
     }
@@ -5401,11 +5623,13 @@ const __stubRevive = (value) => {
       return v.t === __stubIsolate
         ? __entrypointStub(svcName, revive(v.p))
         : __foreignStub();
+    // A runtime class's stub is never handed to a script, so none is ever
+    // lifted: a marker naming one is a script's own data (1.53), and
+    // revives as that data rather than as a stub of a runtime cell.
     const doClass = v["__celld$do"];
-    if (doClass !== undefined) {
-      const namespace = __cell.makeNamespace(doClass);
-      return namespace.get(
-        new DurableObjectId(doClass, v.v, v.n ?? undefined));
+    if (doClass !== undefined && !__isRuntimeClass(doClass)) {
+      return __namespaceGet(__cell.makeNamespace(doClass),
+        __newDoId(doClass, v.v, v.n ?? undefined));
     }
     const hdr = v["__celld$hdr"];
     if (hdr !== undefined) return new Headers(hdr);
@@ -5528,7 +5752,7 @@ const __rpcPath = (root, kind, path, args, reserved, hop, handler) => {
   if (handler !== undefined)
     return __callObjectEntrypoint(
       value, receiver, path.join("."), args, handler.props);
-  return Reflect.apply(value, receiver, args);
+  return __ReflectApply(value, receiver, args);
 };
 // Receiver-side pipeline walk at a stub's target, in the stub's owning
 // context. A stub the walk meets continues the same way at its own target.
@@ -5940,8 +6164,8 @@ const __storedLift = (value) => {
     const doId = __doStubMeta.get(v);
     if (doId !== undefined) {
       lifted = true;
-      const marker = { "__celld$do": doId._className,
-                       v: doId._value, n: v.name ?? null };
+      const marker = { "__celld$do": __doIdClass(doId),
+                       v: doId.toString(), n: v.name ?? null };
       seen.set(v, marker);
       return marker;
     }
@@ -5977,10 +6201,11 @@ const __storedRevive = (value) => {
     const svcName = v["__celld$svc"];
     if (svcName !== undefined)
       return __entrypointStub(svcName, revive(v.p));
+    // As in `__stubRevive`: never a runtime class's stub.
     const doClass = v["__celld$do"];
-    if (doClass !== undefined)
-      return __cell.makeNamespace(doClass).get(
-        new DurableObjectId(doClass, v.v, v.n ?? undefined));
+    if (doClass !== undefined && !__isRuntimeClass(doClass))
+      return __namespaceGet(__cell.makeNamespace(doClass),
+        __newDoId(doClass, v.v, v.n ?? undefined));
     if (seen.has(v)) return v;
     seen.add(v);
     if (Array.isArray(v)) {
@@ -6181,7 +6406,7 @@ function makeNamespace(className) {
   const namespaceKey = __cell.namespaceKeys[className];
   if (typeof namespaceKey !== "string")
     throw new Error("no Durable Object namespace key for " + className);
-  return new DurableObjectNamespace(className, namespaceKey);
+  return new DurableObjectNamespace(__kNamespace, className, namespaceKey);
 }
 // A named class: SDKs sniff bindings by constructor name (workers-rs
 // EnvBinding requires `constructor.name === "DurableObjectNamespace"`).
@@ -6190,73 +6415,122 @@ function makeNamespace(className) {
 const __DurableObjectStub = class DurableObject {
   get [Symbol.toStringTag]() { return "DurableObject"; }
 };
+// Emulate production: the actor recovers its name only when it is <= 1024
+// UTF-8 bytes; longer names are dropped so ctx.id.name is undefined. The
+// full name still seeds the routing hash, so dispatch is unchanged. Short
+// names skip the byte count (< 256 chars is always <= 1020 bytes) to keep
+// the hot path alloc-free.
+const __dispatchName = (name) => name === undefined ? undefined
+  : name.length < 256 || new TextEncoder().encode(name).length <= 1024
+    ? name : undefined;
+// What a failed Durable Object call throws: a routing error as the
+// DurableObjectRoutingError it names, and an object's abort or exit as the
+// reason alone, which breaks the stub (`broken`).
+const __doCallFailure = (error) => {
+  const routingError = __durableObjectRoutingError(error);
+  if (routingError !== null) return { error: routingError, broken: false };
+  const message = String(error && error.message || error);
+  const marker = ["__CELLD_ACTOR_ABORT__:", "__CELLD_PROCESS_EXIT__:"]
+    .find((candidate) => message.includes(candidate));
+  if (!marker) return { error, broken: false };
+  return {
+    error: new Error(message.slice(message.indexOf(marker) + marker.length)),
+    broken: true,
+  };
+};
+let __namespaceGet, __cellRpc;
+// The class and the namespace key are private and only `makeNamespace`
+// constructs one, as in workerd ("Illegal constructor"): a namespace a
+// script could build would name any class it liked.
+const __kNamespace = Symbol("DurableObjectNamespace");
 class DurableObjectNamespace {
-  constructor(className, namespaceKey) {
-    Object.defineProperty(this, "_className", { value: className });
-    Object.defineProperty(this, "_namespaceKey", { value: namespaceKey });
+  #className;
+  #namespaceKey;
+  constructor(brand, className, namespaceKey) {
+    if (brand !== __kNamespace) throw new TypeError("Illegal constructor");
+    this.#className = className;
+    this.#namespaceKey = namespaceKey;
   }
   idFromName(name) {
+    return this.#idFromName(name);
+  }
+  #idFromName(name) {
     name = String(name);
-    return new DurableObjectId(
-      this._className, __do_id(this._namespaceKey, "name", name), name,
+    return __newDoId(
+      this.#className, __do_id(this.#namespaceKey, "name", name), name,
     );
   }
   idFromString(value) {
-    return new DurableObjectId(
-      this._className, __do_id(this._namespaceKey, "validate", String(value)),
+    return __newDoId(
+      this.#className, __do_id(this.#namespaceKey, "validate", String(value)),
     );
   }
   newUniqueId(options = {}) {
     const jurisdiction = options == null ? undefined : options.jurisdiction;
     if (jurisdiction != null)
       throw new Error("Jurisdiction restrictions are not implemented");
-    return new DurableObjectId(
-      this._className, __do_id(this._namespaceKey, "unique", ""),
+    return __newDoId(
+      this.#className, __do_id(this.#namespaceKey, "unique", ""),
     );
   }
   jurisdiction(value) {
     if (value == null) return this;
     throw new Error("Jurisdiction restrictions are not implemented");
   }
+  // The public methods go through the private ones, so a script that
+  // replaces them on the prototype changes only its own calls: the harness
+  // never calls a method a script can reach with a namespace, an id or a
+  // stub of its own (`__namespaceGet`, `__cellRpc`).
   getByName(name, options) {
-    return this.get(this.idFromName(name), options);
+    return this.#get(this.#idFromName(name));
   }
   get(id) {
-    const className = this._className;
-    if (!(id instanceof DurableObjectId) || id._className !== className)
+    return this.#get(id);
+  }
+  static {
+    __namespaceGet = (namespace, id) => namespace.#get(id);
+    // One RPC to the cell `name` of a runtime class, for that class's
+    // binding (KV, Queue, D1, Workflow) and one runtime cell's call into
+    // another. No stub is made: a stub's members and prototype are a
+    // script's to replace, and its method would receive the stub as `this`.
+    __cellRpc = async (className, name, method, args) => {
+      name = String(name);
+      const scope = __doIdScope(makeNamespace(className).#idFromName(name));
+      const dispatchName = __dispatchName(name);
+      if (dispatchName !== undefined) __cell.idNames[scope] = dispatchName;
+      try {
+        return __rpcDes(await __rpc_call(
+          scope, dispatchName ?? null, method, __rpcOut(args, true, true)));
+      } catch (error) {
+        throw __doCallFailure(error).error;
+      }
+    };
+  }
+  #get(id) {
+    const className = this.#className;
+    if (!__isDoId(id) || __doIdClass(id) !== className)
       throw new TypeError("Durable Object ID is not valid for this namespace");
-    const scope = id._scope();
-    // Emulate production: the actor recovers its name only when it is
-    // <= 1024 UTF-8 bytes; longer names are dropped so ctx.id.name is
-    // undefined. The full name still seeds the routing hash, so
-    // dispatch is unchanged. Short names skip the byte count (< 256
-    // chars is always <= 1020 bytes) to keep the hot path alloc-free.
-    const nm = id.name;
-    const dispatchName = nm === undefined ? undefined
-      : nm.length < 256 || new TextEncoder().encode(nm).length <= 1024
-        ? nm : undefined;
+    const scope = __doIdScope(id);
+    const dispatchName = __dispatchName(id.name);
     if (dispatchName !== undefined) __cell.idNames[scope] = dispatchName;
     // Fetch and native RPC use the same host routing/activation seam.
     // Never expose `.then`: a DO stub is not itself a promise.
-    const target = Object.create(__DurableObjectStub.prototype);
-    target.id = id;
-    target.name = dispatchName;
-    const abortMarker = "__CELLD_ACTOR_ABORT__:";
-    const processExitMarker = "__CELLD_PROCESS_EXIT__:";
+    // workerd's own properties, in its order, as an object literal: an
+    // assignment would run a setter a script put on the prototypes.
+    const target = {
+      __proto__: __DurableObjectStub.prototype,
+      name: dispatchName,
+      id,
+    };
     let brokenReason = null;
     const invoke = async (operation) => {
       if (brokenReason !== null) throw new Error(brokenReason);
       try {
         return await operation();
       } catch (error) {
-        const routingError = __durableObjectRoutingError(error);
-        if (routingError !== null) throw routingError;
-        const message = String(error && error.message || error);
-        const marker = [abortMarker, processExitMarker]
-          .find((candidate) => message.includes(candidate));
-        if (!marker) throw error;
-        brokenReason = message.slice(message.indexOf(marker) + marker.length);
-        throw new Error(brokenReason);
+        const failure = __doCallFailure(error);
+        if (failure.broken) brokenReason = failure.error.message;
+        throw failure.error;
       }
     };
     const doFetch = async (input, init) =>
@@ -6445,7 +6719,7 @@ const __dispatchTo = __celld.__dispatchTo = async (
   try {
     const dispatch = (async () => {
       const inst = await _readyInstance(scope);
-      return await __ctxRun(undefined, () => inst.__celldState._untilReset(inst.fetch(
+      return await __ctxRun(undefined, () => __objectState.untilReset(__instanceState(inst), inst.fetch(
         __makeRequest(
           url,
           method,
@@ -6492,7 +6766,7 @@ const __dispatchTo = __celld.__dispatchTo = async (
 };
 const __rpcTargetInstance = async (scope) => {
   const inst = await _readyInstance(scope);
-  if (!inst.__celldState._rpcOk)
+  if (!__objectState.rpcOk(__instanceState(inst)))
     throw new TypeError(
       "The receiving Durable Object does not support RPC, because " +
       "its class was not declared with `extends DurableObject`. In " +
@@ -6517,30 +6791,45 @@ const __doRpcRequest = (method, value) => {
 // One call into a Durable Object, by workerd's rules for an entrypoint: its
 // handler names are reserved, and only class members are visible. A runtime
 // class (`__runtimeClass`) answers only the methods it names, called
-// directly, so its internal methods are not RPC.
-const __doRpcCall = (scope, inst, path, args) => {
-  const methods =
-    __runtimeRpcMethods.get(__cell.classes[scope.split(":")[0]]);
-  if (methods !== undefined &&
-      (path.length !== 1 || args === null || !methods.has(path[0])))
-    throw __rpcNoSuchMethod(path[0]);
-  return __rpcAtEntrypoint(inst, "class", path, args);
+// directly, so its other methods are not RPC. Its internal methods answer
+// only an `internal` call, which the host marks: celld's own, or one the
+// runtime cells' isolate makes (`scope_grant::Caller::internal`), never a
+// binding's.
+//
+// A runtime class's method is the one it had when the harness loaded, called
+// through captured intrinsics: the workflow cell runs beside the script's
+// code, and a lookup through its instance or a replaceable builtin would
+// hand that instance to the script.
+const __doRpcCall = (scope, inst, path, args, internal) => {
+  const runtime = __ReflectApply(__WeakMapGet, __runtimeRpcMethods,
+    [__cell.classes[scope.split(":")[0]]]);
+  if (runtime === undefined) return __rpcAtEntrypoint(inst, "class", path, args);
+  const name = path[0];
+  const method = path.length !== 1 || args === null ? undefined
+    : __ObjectHasOwn(runtime.binding, name) ? runtime.binding[name]
+    : internal && __ObjectHasOwn(runtime.internal, name) ? runtime.internal[name]
+    : undefined;
+  if (method === undefined) throw __rpcNoSuchMethod(name);
+  return __ReflectApply(method, inst, args);
 };
 // The byte path always lifts stub-able values into the reply: the
 // markers carry the isolate token, so they revive only back in this
 // isolate (same-process routed dispatch re-enters it) and fail loudly
 // on use anywhere else. Callee exceptions cross in
 // the error envelope on every flavor.
-__celld.__dispatchRpc = async (scope, method, args) => {
+__celld.__dispatchRpc = async (scope, method, args, internal) => {
   const actorEvent = __beginActorEvent(scope);
   try {
     // A string is the legacy JSON flavor; bytes are V8 structured clone.
     // Answer in kind.
     if (typeof args === "string") {
       const inst = await __rpcTargetInstance(scope);
-      const [path, callArgs] = __doRpcRequest(method, JSON.parse(args));
-      const result = await inst.__celldState._untilReset(
-        __doRpcCall(scope, inst, path, callArgs));
+      // A peer's JSON `null` is a call with no arguments, as it was before
+      // a call could name a path.
+      const value = JSON.parse(args);
+      const [path, callArgs] = __doRpcRequest(method, value === null ? [] : value);
+      const result = await __objectState.untilReset(__instanceState(inst),
+        __doRpcCall(scope, inst, path, callArgs, internal));
       return JSON.stringify(result) ?? "null";
     }
     return await __ctxRun(undefined, () => (async () => {
@@ -6555,8 +6844,8 @@ __celld.__dispatchRpc = async (scope, method, args) => {
           }
           const inst = await __rpcTargetInstance(scope);
           const [path, callArgs] = __doRpcRequest(method, decoded.args);
-          return inst.__celldState._untilReset(
-            __doRpcCall(scope, inst, path, callArgs));
+          return __objectState.untilReset(__instanceState(inst),
+            __doRpcCall(scope, inst, path, callArgs, internal));
         }, true);
       } finally {
         __disposeReceived(decoded.received);
@@ -6908,7 +7197,7 @@ __celld.__wsOpen = async (scope, wsId, protocol) => {
   const actorEvent = __beginActorEvent(scope);
   try {
     const inst = await _readyInstance(scope);
-    const socket = inst.__celldState._socket(wsId);
+    const socket = __objectState.socket(__instanceState(inst), wsId);
     if (!__wsIsSocket(socket)) return;
     const state = __wsState(socket);
     if (state.readyState !== __WS_CONNECTING) return;
@@ -6923,11 +7212,11 @@ __celld.__wsMessage = async (scope, wsId, msg) => {
   const actorEvent = __beginActorEvent(scope);
   try {
     const inst = await _readyInstance(scope);
-    const socket = inst.__celldState._socket(wsId);
+    const socket = __objectState.socket(__instanceState(inst), wsId);
     if (__wsIsSocket(socket) && !__wsState(socket).hibernatable)
       __wsDispatchMessage(socket, msg);
     else if (typeof inst.webSocketMessage === "function")
-      await inst.__celldState._untilReset(inst.webSocketMessage(socket, msg));
+      await __objectState.untilReset(__instanceState(inst), inst.webSocketMessage(socket, msg));
   } finally {
     __endActorEvent(actorEvent);
   }
@@ -6936,12 +7225,12 @@ __celld.__wsBinary = async (scope, wsId, data) => {
   const actorEvent = __beginActorEvent(scope);
   try {
     const inst = await _readyInstance(scope);
-    const socket = inst.__celldState._socket(wsId);
+    const socket = __objectState.socket(__instanceState(inst), wsId);
     const bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
     if (__wsIsSocket(socket) && !__wsState(socket).hibernatable)
       __wsDispatchMessage(socket, bytes);
     else if (typeof inst.webSocketMessage === "function")
-      await inst.__celldState._untilReset(inst.webSocketMessage(socket, bytes));
+      await __objectState.untilReset(__instanceState(inst), inst.webSocketMessage(socket, bytes));
   } finally {
     __endActorEvent(actorEvent);
   }
@@ -6950,14 +7239,14 @@ __celld.__wsClosed = async (scope, wsId, code, reason, wasClean) => {
   const actorEvent = __beginActorEvent(scope);
   try {
     const inst = await _readyInstance(scope);
-    const socket = inst.__celldState._socket(wsId);
+    const socket = __objectState.socket(__instanceState(inst), wsId);
     if (__wsIsSocket(socket) && !__wsState(socket).hibernatable)
       __wsDispatchClose(socket, code, reason, wasClean);
     else if (!wasClean && typeof inst.webSocketError === "function")
       // A hibernatable socket reports an abnormal closure through
       // webSocketError, which celld listed as a handler name and never
       // called.
-      await inst.__celldState._untilReset(inst.webSocketError(
+      await __objectState.untilReset(__instanceState(inst), inst.webSocketError(
         socket,
         new Error(reason ? `WebSocket closed abnormally: ${reason}` : "WebSocket closed abnormally"),
       ));
@@ -6965,7 +7254,7 @@ __celld.__wsClosed = async (scope, wsId, code, reason, wasClean) => {
       // The peer's Close arrived: CLOSING until the handler replies, as in
       // workerd.
       if (__wsIsSocket(socket)) __wsReceivedClose(socket);
-      await inst.__celldState._untilReset(inst.webSocketClose(socket, code, reason, wasClean));
+      await __objectState.untilReset(__instanceState(inst), inst.webSocketClose(socket, code, reason, wasClean));
     }
   } finally {
     __endActorEvent(actorEvent);
@@ -6977,7 +7266,7 @@ __celld.__fireAlarm = async (scope, scheduledTime, retryCount) => {
   try {
     const inst = await _readyInstance(scope);
     if (typeof inst.alarm !== "function") return;
-    await inst.__celldState._untilReset(
+    await __objectState.untilReset(__instanceState(inst),
       inst.alarm({ scheduledTime, retryCount, isRetry: retryCount > 0 }));
   } finally {
     __endActorEvent(actorEvent);
@@ -6992,21 +7281,27 @@ __celld.__fireAlarm = async (scope, scheduledTime, retryCount) => {
 // The schedule itself is never stored here. `__cell.crons` comes from the
 // deployment the cell is running under, so changing a cron expression takes
 // effect on the next activation and needs no migration of an armed alarm.
+// Its state is private: the cron cell runs beside the script's code.
 class CelldCronSchedule {
+  // The schedule's storage through the harness's own methods
+  // (`__ownStorage`).
+  #storage;
+  #retry;
+  #owed;
   constructor(state) {
-    this._state = state;
+    this.#storage = __ownStorage(state);
     // Failures within one occurrence. Held in memory on purpose: losing the
     // count to an eviction only makes the next retry sooner, and every retry
     // is capped at the next occurrence anyway, so it need not be durable.
-    this._retry = 0;
+    this.#retry = 0;
     // What a pending retry owes: the occurrence, the expressions of it that
     // failed, and the deadline the retry was armed for. A retry deadline is a
     // backoff instant and not an occurrence, so nothing about it can be
     // recovered from the deadline itself -- without this record the wake
     // matches no expression, runs nothing, and drops the failed tick in
-    // silence. Held in memory beside `_retry` and for the same reason: an
+    // silence. Held in memory beside `#retry` and for the same reason: an
     // eviction costs the retry, never the next occurrence.
-    this._owed = null;
+    this.#owed = null;
   }
   // celld calls this once per node after a deployment loads, because a cron
   // cell has no client to wake it. Arming is idempotent -- the same schedule
@@ -7015,12 +7310,12 @@ class CelldCronSchedule {
   async fetch() {
     // A pending retry is a deadline this cell already owes, and re-arming
     // would move it to the next occurrence and lose the tick it owes with it.
-    if (this._owed !== null) return new Response(null, { status: 204 });
-    const armed = await this._state.storage.getAlarm();
+    if (this.#owed !== null) return new Response(null, { status: 204 });
+    const armed = await this.#storage.getAlarm();
     // An alarm already due is a tick that is late, not one that is wrong.
     // Leaving it alone is what makes a fleet that was down fire the missed
     // occurrence once, instead of skipping it by re-arming into the future.
-    if (armed === null || armed > Date.now()) await this._arm(null, [], false);
+    if (armed === null || armed > Date.now()) await this.#arm(null, [], false);
     return new Response(null, { status: 204 });
   }
   async alarm(info) {
@@ -7028,8 +7323,8 @@ class CelldCronSchedule {
     // A retry wake carries the backoff instant as its deadline, so what to run
     // and what time to report both come from the record the failure left. Only
     // a deadline that is not a retry is an occurrence to match against.
-    const owed = this._owed !== null && this._owed.armedFor === info.scheduledTime
-      ? this._owed
+    const owed = this.#owed !== null && this.#owed.armedFor === info.scheduledTime
+      ? this.#owed
       : null;
     const occurrence = owed === null ? info.scheduledTime : owed.at;
     // One deadline can belong to several expressions, and each is its own
@@ -7071,49 +7366,59 @@ class CelldCronSchedule {
         if (drain !== null) await drain;
       }
     }
-    await this._arm(occurrence, failed, owed !== null);
+    await this.#arm(occurrence, failed, owed !== null);
   }
   // `occurrence` is the tick just handled, or null when the cell is only
   // arming, `failed` holds the expressions of it still owed, and `retried`
   // says the deadline just handled was a backoff rather than an occurrence.
-  async _arm(occurrence, failed, retried) {
+  async #arm(occurrence, failed, retried) {
     const crons = __cell.crons || [];
     // The count is failures within one occurrence, so a fresh occurrence
     // starts at one however the last one ended. Carrying it across would
     // spend `alarm_retry`'s ceiling once and leave every later occurrence
     // with no retry at all, which is a budget for the schedule and not for
     // the tick.
-    this._retry = failed.length ? (retried ? this._retry + 1 : 1) : 0;
+    this.#retry = failed.length ? (retried ? this.#retry + 1 : 1) : 0;
     // A negative first argument means "arming only, nothing fired".
-    const plan = __cron_plan(crons, -1, Date.now(), this._retry, failed.length > 0);
+    const plan = __cron_plan(crons, -1, Date.now(), this.#retry, failed.length > 0);
     // The next occurrence beats the backoff whenever it is sooner, and it then
     // cancels the retry rather than queueing behind it, so the record the
     // retry needed goes when the retry does.
-    this._owed = plan.armIsRetry
+    this.#owed = plan.armIsRetry
       ? { at: occurrence, indices: failed, armedFor: plan.armAt }
       : null;
     // No expression matches again and nothing is owed: the deployment dropped
     // its crons, so the cell retires rather than waking forever.
-    if (plan.armAt === null) await this._state.storage.deleteAlarm();
-    else await this._state.storage.setAlarm(plan.armAt);
+    if (plan.armAt === null) await this.#storage.deleteAlarm();
+    else await this.#storage.setAlarm(plan.armAt);
   }
 }
+// As `__runtimeClass` does for the classes it registers: a member the cron
+// schedule lacks never reaches Object.prototype with its instance.
+Object.setPrototypeOf(CelldCronSchedule.prototype, null);
+// The harness's registries are null-prototype objects (the host replaces
+// `workflows` and `containers` with null-prototype ones too): a lookup or an
+// assignment by a scope or a class name must not reach a getter or setter a
+// script put on Object.prototype, which would receive the instance, class or
+// name being registered. `env` is the script's own object.
 const __cell = __celld.__cell = {
-  entrypoints: {},
-  objectEntrypoints: {},
-  doExports: {},
-  classes: { ".cron": CelldCronSchedule },
+  __proto__: null,
+  entrypoints: { __proto__: null },
+  objectEntrypoints: { __proto__: null },
+  doExports: { __proto__: null },
+  classes: { __proto__: null, ".cron": CelldCronSchedule },
   crons: [],
-  workflows: {},
-  containers: {},
-  instances: {},
-  facetConfigs: {},
+  workflows: { __proto__: null },
+  containers: { __proto__: null },
+  instances: { __proto__: null },
+  facetConfigs: { __proto__: null },
   env: {},
-  idNames: {},
-  namespaceKeys: {},
+  idNames: { __proto__: null },
+  namespaceKeys: { __proto__: null },
   node: "",
   deleteAllDeletesAlarm: false,
   compat: {
+    __proto__: null,
     jsRpc: false, fetcherGetPutDelete: false, queueJsonMessages: false,
     allowIrrevocableStubStorage: false, rpcParamsDupStubs: false,
   },
@@ -7124,17 +7429,30 @@ const __cell = __celld.__cell = {
 // or the js_rpc flag; the class is the runtime's own, so grant it here rather
 // than make every user set a flag. It is not the application's export, so it
 // stays out of ctx.exports.
-// `methods` are the only names its stub may call: the rest of its methods
-// serve its own events, and a stub that user code reaches through its
-// binding must not call them. They are keyed by class, so a script's
-// `__Workflow.<script>` alias shares them.
+// `methods` are the only names its binding's stub may call: the rest of its
+// methods serve its own events, and a binding must not call them.
+// `internal` are the methods one runtime cell calls on another, which only
+// an internal call reaches (`__doRpcCall`). They are keyed by class, so a
+// script's `__Workflow.<script>` alias shares them.
+//
+// Runs while the harness loads, before any script: the methods are captured
+// here, and the class's prototype chain ends at null, so a member it lacks
+// never reaches a getter a script put on Object.prototype with an instance.
 const __runtimeClasses = new Set();
 const __runtimeRpcMethods = new WeakMap();
-const __runtimeClass = (name, cls, methods) => {
+const __runtimeClass = (name, cls, methods, internal = []) => {
   __cell.classes[name] = cls;
   __cell.doExports[name] = true;
   __runtimeClasses.add(name);
-  __runtimeRpcMethods.set(cls, new Set(methods));
+  const table = (names) => {
+    const out = { __proto__: null };
+    for (const method of names) out[method] = cls.prototype[method];
+    return out;
+  };
+  __runtimeRpcMethods.set(cls, { binding: table(methods), internal: table(internal) });
+  let base = cls.prototype;
+  while (Object.getPrototypeOf(base) !== Object.prototype) base = Object.getPrototypeOf(base);
+  Object.setPrototypeOf(base, null);
 };
 // Whether a class in `__cell.classes` is the runtime's rather than the
 // application's: one registered above, the cron class (`.cron`, which needs
@@ -7148,7 +7466,7 @@ const __isRuntimeClass = (name) =>
 // workerd engine runs too; this is the host they run against here.
 const {
   KvNamespaceCell: __KvNamespaceCell,
-  KvNamespace: __KvNamespace,
+  makeKvNamespace: __kvNamespace,
   cellSweepBatch: __cellSweepBatch,
 } = kvService({
   // RPC on a runtime class is granted by `__runtimeClass` below.
@@ -7176,7 +7494,8 @@ __runtimeClass("__KvNamespace", __KvNamespaceCell,
   ["__kvGet", "__kvPut", "__kvDelete", "__kvList"]);
 
 const __makeKvNamespace = __celld.__makeKvNamespace = (id, cellName) =>
-  new __KvNamespace(() => __cell.makeNamespace("__KvNamespace"), cellName);
+  __kvNamespace((method, args) =>
+    __cellRpc("__KvNamespace", cellName, method, args));
 
 // ---- Queues --------------------------------------------------------------
 // A Queue is one runtime-supplied Durable Object. The producer binding writes
@@ -7316,6 +7635,57 @@ const __queueEncode = (body, requestedType) => {
   }
   return { body: bytes, contentType, size: bytes.byteLength };
 };
+
+// A message body as the cell receives one: bytes (a producer's view, or the
+// ArrayBuffer SQLite answers a stored BLOB with), a content type the binding
+// can encode, and the size it declares, which must be the bytes'.
+const __queueContentTypes = new Set(["text", "bytes", "json", "v8"]);
+const __queueCheckBody = (entry, what) => {
+  if (!(entry.body instanceof Uint8Array || entry.body instanceof ArrayBuffer)) {
+    throw __queueError(`${what} body must be bytes`);
+  }
+  if (!__queueContentTypes.has(entry.contentType)) {
+    throw __queueError(
+      `contentType must be "text", "bytes", "json", or "v8", got ${JSON.stringify(entry.contentType)}`,
+    );
+  }
+  if (entry.size !== entry.body.byteLength) {
+    throw __queueError(`${what} declares ${entry.size} bytes, but has ${entry.body.byteLength}`);
+  }
+  if (entry.size > __queueLimits().maxMessageBytes) {
+    throw __queueError(
+      `a message is at most ${__queueLimits().maxMessageBytes} bytes, got ${entry.size}`,
+    );
+  }
+};
+
+// The entries of a send, as the binding builds them, and only their fields.
+const __queueCheckEntries = (entries, what) => {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw __queueError("sendBatch() needs at least one message");
+  }
+  if (entries.length > __queueLimits().maxBatchMessages) {
+    throw __queueError(
+      `${what} has at most ${__queueLimits().maxBatchMessages} messages`,
+    );
+  }
+  return entries.map((entry) => {
+    if (entry === null || typeof entry !== "object") {
+      throw __queueError("each batch entry needs a body");
+    }
+    __queueCheckBody(entry, "a message");
+    return {
+      body: entry.body,
+      contentType: entry.contentType,
+      size: entry.size,
+      delaySeconds: __queueDelay(entry.delaySeconds),
+    };
+  });
+};
+
+const __queueUuid = (value) =>
+  typeof value === "string" &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 
 // A lease-scoped read must seek, not walk the backlog. The plan is the only
 // evidence that says which, and it is cheap to ask for, so a gated test seam
@@ -7778,7 +8148,7 @@ class __QueueCell {
     }
     if (armAt === null) await this.ctx.storage.deleteAlarm();
     else if (waitForWake) {
-      await __queue_alarm_set_wait(this.ctx.storage._scope, armAt);
+      await __queue_alarm_set_wait(__objectState.scope(this.ctx), armAt);
     } else await this.ctx.storage.setAlarm(armAt);
   }
 
@@ -7835,8 +8205,17 @@ class __QueueCell {
     }
   }
 
-  __queueSend({ entries }) {
+  // The producer binding's call. Each entry is checked again here, with the
+  // binding's own errors: the binding encodes and bounds it in the caller's
+  // isolate, and a caller that skipped that must gain nothing by it.
+  __queueSend({ entries } = {}) {
+    entries = __queueCheckEntries(entries, "a batch");
     const bytes = entries.reduce((total, entry) => total + entry.size, 0);
+    if (bytes > __queueLimits().maxBatchBytes) {
+      throw __queueError(
+        `a batch is at most ${__queueLimits().maxBatchBytes} bytes, got ${bytes}`,
+      );
+    }
     return new Promise((resolve, reject) => {
       let group = this._producerGroup;
       if (group !== null &&
@@ -8135,16 +8514,31 @@ class __QueueCell {
   // The target deduplicates the stable transfer identity. The source can
   // therefore repeat this call after a stop between the target commit and the
   // source delete without creating a second message.
-  async __queueDlqAcceptBatch({ transfers }) {
+  //
+  // An internal method: only another Queue cell's event in the runtime
+  // cells' isolate reaches it (`__runtimeClass`), never a binding. Its
+  // transfers are still checked, as a producer's entries are, so a malformed
+  // one fails here and not as a corrupt row.
+  async __queueDlqAcceptBatch({ transfers } = {}) {
     if (!Array.isArray(transfers) || transfers.length === 0 ||
         transfers.length > __queueLimits().maxBatchMessages) {
       throw __queueError("a Queue transfer batch has an invalid size");
     }
     for (const transfer of transfers) {
+      if (transfer === null || typeof transfer !== "object" ||
+          !__queueUuid(transfer.transferId)) {
+        throw __queueError("a Queue transfer has an invalid transfer id");
+      }
       if (transfer.deadLetterSource !== null &&
-          typeof transfer.deadLetterSource !== "string") {
+          (typeof transfer.deadLetterSource !== "string" ||
+            transfer.deadLetterSource === "")) {
         throw __queueError("a Queue transfer has an invalid dead-letter source");
       }
+      const entry = transfer.entry;
+      if (entry === null || typeof entry !== "object" || !__queueUuid(entry.id)) {
+        throw __queueError("a Queue transfer has an invalid message id");
+      }
+      __queueCheckBody(entry, "a transferred message");
     }
     const now = Date.now();
     const sql = this._open();
@@ -8210,8 +8604,7 @@ class __QueueCell {
       group.push(row);
     }
     for (const [targetName, rows] of groups) {
-      const target = __cell.makeNamespace("__Queue").getByName(targetName);
-      await target.__queueDlqAcceptBatch({
+      await __cellRpc("__Queue", targetName, "__queueDlqAcceptBatch", [{
         transfers: rows.map((row) => ({
           transferId: row.dlq_transfer_id,
           // A dead-letter transfer records where redrive returns the message.
@@ -8225,7 +8618,7 @@ class __QueueCell {
             size: row.size,
           },
         })),
-      });
+      }]);
       if (typeof __test_queue_dlq_accepted === "function") {
         __test_queue_dlq_accepted();
       }
@@ -8651,31 +9044,36 @@ class __QueueCell {
 }
 
 __runtimeClass("__Queue", __QueueCell,
-  ["__queueSend", "__queueMetrics", "__queueDlqAcceptBatch"]);
+  ["__queueSend", "__queueMetrics"], ["__queueDlqAcceptBatch"]);
 
+// The producer binding. Only `__makeQueue` constructs one, as in workerd
+// ("Illegal constructor"), and its cell is private, so a script reaches the
+// Queue cell only through these methods.
+const __kQueue = Symbol("Queue");
 class Queue {
-  constructor(queue, cellName, deliveryDelay) {
-    Object.defineProperties(this, {
-      _queue: { value: queue },
-      _cellName: { value: cellName },
-      _deliveryDelay: { value: deliveryDelay },
-    });
+  #cellName;
+  #deliveryDelay;
+
+  constructor(brand, cellName, deliveryDelay) {
+    if (brand !== __kQueue) throw new TypeError("Illegal constructor");
+    this.#cellName = cellName;
+    this.#deliveryDelay = deliveryDelay;
   }
 
-  get _stub() {
-    return __cell.makeNamespace("__Queue").getByName(this._cellName);
+  #call(method, args) {
+    return __cellRpc("__Queue", this.#cellName, method, args);
   }
 
-  async _send(entries) {
-    const metrics = await this._stub.__queueSend({ entries });
+  async #send(entries) {
+    const metrics = await this.#call("__queueSend", [{ entries }]);
     return { metadata: { metrics: __queueMetricsView(metrics) } };
   }
 
   send(body, options = {}) {
     const encoded = __queueEncode(body, options.contentType);
-    return this._send([{
+    return this.#send([{
       ...encoded,
-      delaySeconds: __queueDelay(options.delaySeconds, this._deliveryDelay),
+      delaySeconds: __queueDelay(options.delaySeconds, this.#deliveryDelay),
     }]);
   }
 
@@ -8686,7 +9084,7 @@ class Queue {
     }
     const entries = [];
     let bytes = 0;
-    const batchDelay = __queueDelay(options.delaySeconds, this._deliveryDelay);
+    const batchDelay = __queueDelay(options.delaySeconds, this.#deliveryDelay);
     for (const message of messages) {
       if (entries.length >= __queueLimits().maxBatchMessages) {
         throw __queueError(
@@ -8711,16 +9109,16 @@ class Queue {
     if (entries.length === 0) {
       throw __queueError("sendBatch() needs at least one message");
     }
-    return this._send(entries);
+    return this.#send(entries);
   }
 
   async metrics() {
-    return __queueMetricsView(await this._stub.__queueMetrics());
+    return __queueMetricsView(await this.#call("__queueMetrics", []));
   }
 }
 
 __celld.__makeQueue = (queue, cellName, deliveryDelay) =>
-  new Queue(queue, cellName, deliveryDelay);
+  new Queue(__kQueue, cellName, deliveryDelay);
 
 // ---- D1 -----------------------------------------------------------------
 // A D1 database is a cell of a runtime-supplied Durable Object class, so it
@@ -8760,29 +9158,51 @@ const __d1Run = (scope, request) => {
   return response.ok;
 };
 
+// The statements of a query or a batch, as the binding sends them: SQL
+// text and an array of bind values.
+const __d1Statements = (statements) => {
+  if (!Array.isArray(statements)) throw __d1Error("a query takes an array of statements");
+  return statements.map((statement) => {
+    if (statement === null || typeof statement !== "object" ||
+        typeof statement.sql !== "string") {
+      throw __d1Error("a statement takes SQL text");
+    }
+    const params = statement.params ?? [];
+    if (!Array.isArray(params)) throw __d1Error("a statement's bind values are an array");
+    return { sql: statement.sql, params, first: statement.first };
+  });
+};
+
 class __D1DatabaseCell {
   constructor(ctx) {
     this.ctx = ctx;
   }
+  // The binding's calls, which are the cell's only RPC methods. The engine
+  // checks every bind value and every cap itself; the statements' shape is
+  // checked here, so a caller that skipped the binding's encoding gets a D1
+  // error rather than whatever a coercion made of its value.
+  //
   // Takes an array so that `batch()` can ride this same method, and the
   // same turn, when it lands.
   __d1Query(statements) {
-    const scope = this.ctx.storage.sql._scope;
+    statements = __d1Statements(statements);
+    const scope = __objectState.scope(this.ctx);
     return statements.map((statement) =>
       __d1Run(scope, {
         mode: "prepared",
-        sql: String(statement.sql),
-        params: statement.params || [],
-        first: !!statement.first,
+        sql: statement.sql,
+        params: statement.params,
+        first: statement.first === true,
       })
     );
   }
   __d1Batch(statements) {
-    return __d1Run(this.ctx.storage.sql._scope, {
+    statements = __d1Statements(statements);
+    return __d1Run(__objectState.scope(this.ctx), {
       mode: "batch",
       statements: statements.map((statement) => ({
-        sql: String(statement.sql),
-        params: statement.params || [],
+        sql: statement.sql,
+        params: statement.params,
       })),
     });
   }
@@ -8811,7 +9231,7 @@ class __D1DatabaseCell {
         );
       } else if (body.exec !== undefined) {
         // The CLI asks for rows; the Worker binding's exec() never does.
-        result = __d1Run(this.ctx.storage.sql._scope, {
+        result = __d1Run(__objectState.scope(this.ctx), {
           mode: "exec",
           sql: String(body.exec.sql),
           rows: !!body.exec.rows,
@@ -8825,9 +9245,10 @@ class __D1DatabaseCell {
     }
   }
   __d1Exec(source) {
-    const result = __d1Run(this.ctx.storage.sql._scope, {
+    if (typeof source !== "string") throw __d1Error("exec() takes SQL text");
+    const result = __d1Run(__objectState.scope(this.ctx), {
       mode: "exec",
-      sql: String(source),
+      sql: source,
       rows: false,
     });
     return { count: result.count, duration: result.duration };
@@ -8839,7 +9260,7 @@ class __D1DatabaseCell {
   // operator fixes the file and re-runs. Without the transaction the
   // statements that DID land are exactly the ones a re-run trips over.
   __d1Migrate(name, source, table) {
-    return __d1Run(this.ctx.storage.sql._scope, {
+    return __d1Run(__objectState.scope(this.ctx), {
       mode: "migrate",
       name,
       sql: source,
@@ -8894,27 +9315,42 @@ const __d1BindValue = (value) => {
   throw error;
 };
 
+// The binding's classes keep their database, statement and bookmark
+// private, and only the harness constructs them ("Illegal constructor"), so
+// a script reaches the database cell only through these methods. workerd's
+// are a JavaScript wrapper with public fields and constructors that do not
+// check (`env/d1-private-state`, xfail): celld's would name a database cell.
+const __kD1 = Symbol("D1");
+// The query and batch of a database or a session, by object, for the
+// statements that run on it.
+const __d1Runners = new WeakMap();
+let __d1StatementParts;
 class D1PreparedStatement {
-  constructor(database, sql, params) {
-    Object.defineProperty(this, "_database", { value: database });
-    Object.defineProperty(this, "_sql", { value: sql });
-    Object.defineProperty(this, "_params", { value: params });
+  #database;
+  #sql;
+  #params;
+  constructor(brand, database, sql, params) {
+    if (brand !== __kD1) throw new TypeError("Illegal constructor");
+    this.#database = database;
+    this.#sql = sql;
+    this.#params = params;
   }
   bind(...values) {
     return new D1PreparedStatement(
-      this._database,
-      this._sql,
+      __kD1,
+      this.#database,
+      this.#sql,
       values.map(__d1BindValue),
     );
   }
-  async _run(first) {
-    const results = await this._database._query([
-      { sql: this._sql, params: this._params, first },
+  async #run(first) {
+    const results = await __d1Runners.get(this.#database).query([
+      { sql: this.#sql, params: this.#params, first },
     ]);
     return results[0];
   }
   async all() {
-    const result = await this._run();
+    const result = await this.#run();
     return {
       success: true,
       meta: result.meta,
@@ -8927,7 +9363,7 @@ class D1PreparedStatement {
   async first(column) {
     // `first: true` keeps one row on the cell side, so only that row crosses
     // the isolate boundary and the row cap cannot fire for a first().
-    const result = await this._run(true);
+    const result = await this.#run(true);
     if (result.rows.length === 0) return null;
     const row = __d1Shape(result.columns, result.rows[0]);
     if (column === undefined) return row;
@@ -8943,10 +9379,18 @@ class D1PreparedStatement {
     return row[column];
   }
   async raw(options) {
-    const result = await this._run();
+    const result = await this.#run();
     return options && options.columnNames
       ? [result.columns, ...result.rows]
       : result.rows;
+  }
+  static {
+    // What `batch()` sends for a statement. Anything else crosses as an
+    // empty statement, which the cell refuses.
+    __d1StatementParts = (statement) =>
+      statement !== null && typeof statement === "object" && #sql in statement
+        ? { sql: statement.#sql, params: statement.#params }
+        : { sql: undefined, params: undefined };
   }
 }
 
@@ -8968,65 +9412,70 @@ const __d1PublicResult = (result) => ({
 const __d1PrimaryBookmark = "celld:primary";
 
 class D1DatabaseSession {
-  constructor(database, constraintOrBookmark) {
-    Object.defineProperty(this, "_database", { value: database });
+  #bookmark;
+  constructor(brand, database, constraintOrBookmark) {
+    if (brand !== __kD1) throw new TypeError("Illegal constructor");
     const value = constraintOrBookmark == null
       ? "first-unconstrained"
       : String(constraintOrBookmark).trim();
     if (!value) {
       throw new Error("D1_SESSION_ERROR: invalid bookmark or constraint");
     }
-    Object.defineProperty(this, "_bookmark", {
-      value: value === "first-primary" || value === "first-unconstrained" ? null : value,
-      writable: true,
+    this.#bookmark =
+      value === "first-primary" || value === "first-unconstrained" ? null : value;
+    const runner = __d1Runners.get(database);
+    __d1Runners.set(this, {
+      query: async (statements) => {
+        const results = await runner.query(statements);
+        this.#bookmark = __d1PrimaryBookmark;
+        return results;
+      },
+      batch: async (statements) => {
+        const results = await runner.batch(statements);
+        this.#bookmark = __d1PrimaryBookmark;
+        return results;
+      },
     });
   }
-  _advanceBookmark() {
-    this._bookmark = __d1PrimaryBookmark;
-  }
-  async _query(statements) {
-    const results = await this._database._query(statements);
-    this._advanceBookmark();
-    return results;
-  }
   prepare(sql) {
-    return new D1PreparedStatement(this, String(sql), []);
+    return new D1PreparedStatement(__kD1, this, String(sql), []);
   }
   async batch(statements) {
-    const results = await this._database._batch(statements);
-    this._advanceBookmark();
-    return results;
+    return await __d1Runners.get(this).batch(statements);
   }
   getBookmark() {
-    return this._bookmark;
+    return this.#bookmark;
   }
 }
 
 // Named so SDKs that sniff a binding by `constructor.name` recognise it.
 class D1Database {
-  constructor(databaseName) {
-    Object.defineProperty(this, "_databaseName", { value: databaseName });
+  #databaseName;
+  constructor(brand, databaseName) {
+    if (brand !== __kD1) throw new TypeError("Illegal constructor");
+    this.#databaseName = databaseName;
+    __d1Runners.set(this, {
+      query: (statements) => this.#query(statements),
+      batch: (statements) => this.#batch(statements),
+    });
   }
   // Resolved per call rather than cached: a cell can move between calls, and
   // `getByName` is the same cost the Durable Object path already pays.
-  get _stub() {
-    return __cell.makeNamespace("__D1Database").getByName(this._databaseName);
+  #call(method, args) {
+    return __cellRpc("__D1Database", this.#databaseName, method, args);
   }
-  async _query(statements) {
+  async #query(statements) {
     try {
-      return await this._stub.__d1Query(statements);
+      return await this.#call("__d1Query", [statements]);
     } catch (error) {
       if (__d1IsFamilyError(error && error.message)) throw error;
       throw __d1Error(String(error && error.message || error), error);
     }
   }
-  async _batch(statements) {
+  async #batch(statements) {
     try {
-      const encoded = statements.map((statement) => ({
-        sql: statement._sql,
-        params: statement._params,
-      }));
-      const results = await this._stub.__d1Batch(encoded);
+      const results = await this.#call(
+        "__d1Batch", [statements.map(__d1StatementParts)]);
       return results.map(__d1PublicResult);
     } catch (error) {
       if (__d1IsFamilyError(error && error.message)) throw error;
@@ -9034,21 +9483,21 @@ class D1Database {
     }
   }
   prepare(sql) {
-    return new D1PreparedStatement(this, String(sql), []);
+    return new D1PreparedStatement(__kD1, this, String(sql), []);
   }
   async exec(sql) {
     try {
-      return await this._stub.__d1Exec(String(sql));
+      return await this.#call("__d1Exec", [String(sql)]);
     } catch (error) {
       if (__d1IsFamilyError(error && error.message)) throw error;
       throw __d1Error(String(error && error.message || error), error);
     }
   }
   async batch(statements) {
-    return await this._batch(statements);
+    return await this.#batch(statements);
   }
   withSession(constraintOrBookmark) {
-    return new D1DatabaseSession(this, constraintOrBookmark);
+    return new D1DatabaseSession(__kD1, this, constraintOrBookmark);
   }
   async dump() {
     throw __d1Error(
@@ -9059,7 +9508,7 @@ class D1Database {
 }
 
 const __makeD1Database = __celld.__makeD1Database =
-  (databaseName) => new D1Database(databaseName);
+  (databaseName) => new D1Database(__kD1, databaseName);
 // ---- Workflows ----------------------------------------------------------
 // A workflow instance is one cell of the runtime-supplied `__Workflow` class,
 // named `<workflow_name>/<instance_id>` through getByName, so it inherits
@@ -9266,6 +9715,37 @@ const __wfLocationHint = (hint, what) => {
     );
   }
   return hint;
+};
+// A create as the binding sends it to the instance's cell, checked again in
+// the cell. `cellName()` answers the cell's `<workflow>/<instance>`.
+const __wfCheckCreate = (request, cellName) => {
+  if (!__wfOwnObject(request)) throw __wfError("create() needs an object");
+  const { workflowName, instanceId, params, retention, locationHint } = request;
+  if (typeof workflowName !== "string" ||
+      !Object.hasOwn(__cell.workflows, workflowName)) {
+    throw __wfError(`unknown workflow ${JSON.stringify(workflowName)}`);
+  }
+  if (!__wfValidInstanceId(instanceId)) {
+    throw __wfError(`invalid instance id ${JSON.stringify(instanceId)}`);
+  }
+  const durations = __wfOwnObject(retention)
+    ? [retention.successMs, retention.errorMs] : [];
+  if (durations.length !== 2 || !durations.every((ms) =>
+    Number.isSafeInteger(ms) && ms >= 0 && ms <= __WF_RETENTION_MAX_MS)) {
+    throw __wfError("create() option retention is invalid");
+  }
+  const checked = {
+    workflowName,
+    instanceId,
+    params,
+    retention: { successMs: retention.successMs, errorMs: retention.errorMs },
+    locationHint: __wfLocationHint(locationHint, "create()"),
+    skipExisting: request.skipExisting === true,
+  };
+  if (cellName() !== workflowName + "/" + instanceId) {
+    throw __wfError("create() names another instance than its cell");
+  }
+  return checked;
 };
 const __wfRestartOptions = (options) => {
   if (options === undefined) return {};
@@ -9485,28 +9965,29 @@ const __wfTimeout = (promise, ms, name, attempt) =>
 // rejected step promise. Record them outside the Error object, so user code
 // cannot suppress a retry or forge one by returning a marked exception.
 const __wfTrackStorageFailures = (storage, driver) => {
-  const tracked = Object.create(storage);
-  for (const name of ["get", "put", "transactionSync"]) {
-    Object.defineProperty(tracked, name, {
-      value(...args) {
-        try {
-          const result = storage[name](...args);
-          if (result !== null && typeof result === "object" &&
-            typeof result.then === "function") {
-            return result.catch((error) => {
-              driver.storageFailure ??= error;
-              throw error;
-            });
-          }
-          return result;
-        } catch (error) {
-          driver.storageFailure ??= error;
-          throw error;
-        }
-      },
-    });
-  }
-  return tracked;
+  const failed = (error) => {
+    driver.storageFailure ??= error;
+    throw error;
+  };
+  const trackSync = (method) => (...args) => {
+    try {
+      return method(...args);
+    } catch (error) {
+      failed(error);
+    }
+  };
+  // `get` and `put` are async, so they answer a native promise.
+  const trackAsync = (method) => (...args) =>
+    __ReflectApply(__PromiseThen, trackSync(method)(...args), [undefined, failed]);
+  // The instance's own storage view (`__ownStorage`) with the three methods
+  // replaced, built as a null-prototype literal: `Object.create` and
+  // `Object.defineProperty` are a script's to replace, with the storage.
+  return {
+    __proto__: storage,
+    get: trackAsync(storage.get),
+    put: trackAsync(storage.put),
+    transactionSync: trackSync(storage.transactionSync),
+  };
 };
 
 // The WorkflowStep the driver hands to run(). Each method resolves its step
@@ -9844,9 +10325,11 @@ const __wfMakeStep = (driver) => {
           if (current !== undefined && current.status === "failed") {
             throw __wfReviveError(current.error);
           }
-          for (const [eventKey, event] of storage.kv.list({
+          const events = storage.kv.list({
             prefix: __wfEventPrefix(driver.generation),
-          })) {
+          });
+          for (let index = 0; index < events.length; index++) {
+            const { key: eventKey, value: event } = events[index];
             if (event.type !== current.type) continue;
             const value = {
               payload: event.payload,
@@ -9875,23 +10358,28 @@ const __wfMakeStep = (driver) => {
 };
 
 const __WorkflowCell = (() => {
+  // Fields, not assignments: an assignment would run a setter a script put
+  // on Object.prototype, with the instance's storage.
   class StorageTransaction {
+    kv;
+    #scope;
     constructor(storage) {
       this.kv = storage.kv;
-      this._scope = storage._scope;
+      this.#scope = storage.scope;
     }
     setAlarm(t) {
-      __alarm_set(this._scope, t instanceof Date ? t.getTime() : Number(t));
+      __alarm_set(this.#scope, t instanceof Date ? t.getTime() : Number(t));
     }
     deleteAlarm() {
-      __alarm_delete(this._scope);
+      __alarm_delete(this.#scope);
     }
   }
   const transactionSync = (storage, callback) =>
     storage.transactionSync(() => callback(new StorageTransaction(storage)));
   const clearInstance = (transaction) => {
-    for (const [key] of transaction.kv.list({ prefix: "__wf." })) {
-      transaction.kv.delete(key);
+    const rows = transaction.kv.list({ prefix: "__wf." });
+    for (let index = 0; index < rows.length; index++) {
+      transaction.kv.delete(rows[index].key);
     }
     transaction.deleteAlarm();
   };
@@ -9911,19 +10399,33 @@ const __WorkflowCell = (() => {
   // alarm writes inside transactionSync(). The public async alarm API runs
   // after that commit, while a global helper would let application code
   // split metadata from its wake or invoke the raw operation after commit.
+  // The engine's state is private: the workflow cell runs beside the
+  // script's code, which must not reach its instance's storage.
   return class __WorkflowCell {
+  #state;
+  // The instance's storage through the harness's own methods
+  // (`__ownStorage`).
+  #storage;
+  #wfDriving;
+  #wfNudge;
   constructor(state) {
-    this._state = state;
+    this.#state = state;
+    this.#storage = __ownStorage(state);
   }
-  async __wfCreate({
-    workflowName,
-    instanceId,
-    params,
-    retention,
-    locationHint,
-    skipExisting = false,
-  }) {
-    const storage = this._state.storage;
+  async __wfCreate(request) {
+    // The binding validates first; the cell checks again, with its errors,
+    // because this RPC owns the durable create: the workflow and instance
+    // must be the ones this cell is, and the retention and location the
+    // binding's normalized form.
+    const {
+      workflowName,
+      instanceId,
+      params,
+      retention,
+      locationHint,
+      skipExisting,
+    } = __wfCheckCreate(request, () => __objectState.id(this.#state).name);
+    const storage = this.#storage;
     if (params !== undefined) __wfCheckValue(params, "the workflow params");
     const result = transactionSync(storage, (transaction) => {
       let meta = transaction.kv.get("__wf.meta");
@@ -9957,7 +10459,7 @@ const __WorkflowCell = (() => {
     return result;
   }
   async __wfStatus() {
-    const meta = transactionSync(this._state.storage, (transaction) => {
+    const meta = transactionSync(this.#storage, (transaction) => {
       const current = transaction.kv.get("__wf.meta");
       if (current === undefined) return undefined;
       return expireTerminal(transaction, current, Date.now()) ? undefined : current;
@@ -9972,7 +10474,7 @@ const __WorkflowCell = (() => {
     return status;
   }
   async __wfDelete() {
-    const storage = this._state.storage;
+    const storage = this.#storage;
     const deleted = transactionSync(storage, (transaction) => {
       const meta = transaction.kv.get("__wf.meta");
       if (meta === undefined) return false;
@@ -9986,10 +10488,10 @@ const __WorkflowCell = (() => {
     // A callback can still be awaiting application I/O when deletion lands.
     // Reset the object after the deletion commit so that callback cannot
     // recreate an old-generation ledger entry after delete() reports success.
-    this._state._abort(new Error("WORKFLOW_INSTANCE_DELETED"));
+    __objectState.abort(this.#state, new Error("WORKFLOW_INSTANCE_DELETED"));
   }
   async __wfPause() {
-    const storage = this._state.storage;
+    const storage = this.#storage;
     transactionSync(storage, (transaction) => {
       const meta = transaction.kv.get("__wf.meta");
       if (meta === undefined) throw __wfError("instance does not exist");
@@ -10008,7 +10510,7 @@ const __WorkflowCell = (() => {
     });
   }
   async __wfResume() {
-    const storage = this._state.storage;
+    const storage = this.#storage;
     transactionSync(storage, (transaction) => {
       const meta = transaction.kv.get("__wf.meta");
       if (meta === undefined) throw __wfError("instance does not exist");
@@ -10024,9 +10526,11 @@ const __WorkflowCell = (() => {
         );
       }
       const offset = Math.max(0, Date.now() - (meta.pausedMs ?? Date.now()));
-      for (const [key, record] of transaction.kv.list({
+      const rows = transaction.kv.list({
         prefix: __wfLedgerPrefix(meta.generation) + "step.",
-      })) {
+      });
+      for (let index = 0; index < rows.length; index++) {
+        const { key, value: record } = rows[index];
         if (record.status === "retrying") record.nextAt += offset;
         if (record.status === "sleeping" || record.status === "waiting") {
           record.deadline += offset;
@@ -10041,7 +10545,7 @@ const __WorkflowCell = (() => {
   }
   async __wfRestart(options) {
     const checked = __wfRestartOptions(options);
-    const storage = this._state.storage;
+    const storage = this.#storage;
     transactionSync(storage, (transaction) => {
       const meta = transaction.kv.get("__wf.meta");
       if (meta === undefined) throw __wfError("instance does not exist");
@@ -10052,12 +10556,19 @@ const __WorkflowCell = (() => {
           ? "event"
           : checked.from.type;
         let occurrence = 0;
-        const history = [...transaction.kv.list({ prefix: oldPrefix + "step." })]
-          .filter(([, record]) => Number.isInteger(record.ordinal))
-          .sort((left, right) => left[1].ordinal - right[1].ordinal);
+        const rows = transaction.kv.list({ prefix: oldPrefix + "step." });
+        const history = [];
+        for (let index = 0; index < rows.length; index++) {
+          if (Number.isInteger(rows[index].value.ordinal)) {
+            history[history.length] = rows[index];
+          }
+        }
+        __ReflectApply(__ArraySort, history,
+          [(left, right) => left.value.ordinal - right.value.ordinal]);
         // The ledger key is `<prefix>step.<per-name-count>.<name>`. Derive
         // the name from it because a record stores replay state, not identity.
-        for (const [key, record] of history) {
+        for (let index = 0; index < history.length; index++) {
+          const { key, value: record } = history[index];
           const marker = oldPrefix + "step.";
           const suffix = key.slice(marker.length);
           const dot = suffix.indexOf(".");
@@ -10079,14 +10590,17 @@ const __WorkflowCell = (() => {
       const generation = crypto.randomUUID();
       const newPrefix = __wfLedgerPrefix(generation);
       if (targetOrdinal !== undefined) {
-        for (const [key, record] of transaction.kv.list({ prefix: oldPrefix + "step." })) {
+        const rows = transaction.kv.list({ prefix: oldPrefix + "step." });
+        for (let index = 0; index < rows.length; index++) {
+          const { key, value: record } = rows[index];
           if (Number.isInteger(record.ordinal) && record.ordinal < targetOrdinal) {
             transaction.kv.put(newPrefix + key.slice(oldPrefix.length), record);
           }
         }
       }
-      for (const [key] of transaction.kv.list({ prefix: oldPrefix })) {
-        transaction.kv.delete(key);
+      const stale = transaction.kv.list({ prefix: oldPrefix });
+      for (let index = 0; index < stale.length; index++) {
+        transaction.kv.delete(stale[index].key);
       }
       meta.generation = generation;
       meta.status = "queued";
@@ -10098,7 +10612,7 @@ const __WorkflowCell = (() => {
     });
   }
   async __wfTerminate() {
-    const storage = this._state.storage;
+    const storage = this.#storage;
     transactionSync(storage, (transaction) => {
       const meta = transaction.kv.get("__wf.meta");
       if (meta === undefined) throw __wfError("instance does not exist");
@@ -10114,7 +10628,7 @@ const __WorkflowCell = (() => {
     });
   }
   async __wfSendEvent(options) {
-    const storage = this._state.storage;
+    const storage = this.#storage;
     // The binding validates first to avoid an unnecessary cell call. Repeat
     // the check here because this RPC owns the durable event invariant: no
     // current or future internal caller can bypass validation before storage.
@@ -10144,7 +10658,7 @@ const __WorkflowCell = (() => {
     });
   }
   async alarm() {
-    const storage = this._state.storage;
+    const storage = this.#storage;
     // One drive at a time. A sendEvent nudge (setAlarm(now)) landing
     // mid-fire replaces the firing alarm in the core, and the replacement
     // can dispatch a second alarm() into this isolate while the first drive
@@ -10153,15 +10667,15 @@ const __WorkflowCell = (() => {
     // is isolate-local and that is sufficient: every drive for a cell runs
     // in its owner's isolate, and a takeover starts a fresh isolate with no
     // drive in flight. The nudge is not lost -- the in-flight drive folds
-    // `_wfNudge` into the minimum it re-arms, and if it suspended before
+    // `#wfNudge` into the minimum it re-arms, and if it suspended before
     // seeing the flag, the re-arm below starts a fresh drive immediately.
     // A failed drive is not re-raised here: the engine already retries the
     // alarm that fired it.
-    if (this._wfDriving !== undefined) {
-      this._wfNudge = Date.now();
-      await this._wfDriving.catch(() => {});
-      if (this._wfNudge !== undefined) {
-        this._wfNudge = undefined;
+    if (this.#wfDriving !== undefined) {
+      this.#wfNudge = Date.now();
+      await this.#wfDriving.catch(() => {});
+      if (this.#wfNudge !== undefined) {
+        this.#wfNudge = undefined;
         const meta = await storage.get("__wf.meta");
         if (
           meta !== undefined && !__wfTerminal(meta.status) &&
@@ -10216,16 +10730,16 @@ const __WorkflowCell = (() => {
     // the suspend-time re-arm would strand a "running" instance with no
     // alarm and no wake entry. The suspend path re-arms explicitly, and a
     // terminal drive deletes.
-    const driving = this._drive(meta);
-    this._wfDriving = driving;
+    const driving = this.#drive(meta);
+    this.#wfDriving = driving;
     try {
       await driving;
     } finally {
-      this._wfDriving = undefined;
+      this.#wfDriving = undefined;
     }
   }
-  async _drive(meta) {
-    const storage = this._state.storage;
+  async #drive(meta) {
+    const storage = this.#storage;
     // The drive owns `status`, `output`, and `error`; every other piece of
     // instance state belongs to the RPCs (sendEvent's sequence lives in its
     // own key for the same reason). The gate is open at every await, so a
@@ -10265,6 +10779,7 @@ const __WorkflowCell = (() => {
       return;
     }
     const driver = {
+      __proto__: null,
       storage: undefined,
       storageFailure: undefined,
       generation: meta.generation,
@@ -10400,15 +10915,15 @@ const __WorkflowCell = (() => {
       let at = Math.min(...driver.blocked.map((entry) => entry.at));
       // A nudge that landed mid-drive must not wait out the pending
       // deadline. It is visible in one of two places: getAlarm(), when the
-      // nudge re-armed and no second alarm dispatched yet, or `_wfNudge`,
+      // nudge re-armed and no second alarm dispatched yet, or `#wfNudge`,
       // when a second alarm() already entered and parked on the drive
       // guard -- its dispatch consumed the armed alarm, so getAlarm()
       // alone would miss it.
       const nudge = await storage.getAlarm();
       if (nudge !== null) at = Math.min(at, nudge);
-      if (this._wfNudge !== undefined) {
-        at = Math.min(at, this._wfNudge);
-        this._wfNudge = undefined;
+      if (this.#wfNudge !== undefined) {
+        at = Math.min(at, this.#wfNudge);
+        this.#wfNudge = undefined;
       }
       settle((current, transaction) => {
         current.status = "waiting";
@@ -10497,23 +11012,39 @@ const __wfCreateOptions = (options, what, validateParams = true) => {
   return { id, params: options.params, retention, locationHint };
 };
 
+// The binding and its instances keep the workflow name, the instance id and
+// the cell private, and only the harness constructs them ("Illegal
+// constructor"): a script reaches its workflow cells through these methods,
+// which validate what they send. workerd's are a JavaScript wrapper with a
+// public `binding` (`env/d1-private-state`, xfail).
+const __kWorkflow = Symbol("Workflow");
+let __wfInstanceCall;
 // Named so SDKs that sniff a binding by `constructor.name` recognise it.
 class WorkflowInstance {
-  constructor(workflowName, id) {
-    Object.defineProperty(this, "_workflowName", { value: workflowName });
+  #workflowName;
+  #id;
+  constructor(brand, workflowName, id) {
+    if (brand !== __kWorkflow) throw new TypeError("Illegal constructor");
+    this.#workflowName = workflowName;
+    this.#id = id;
+    // workerd's own property; the cell is named by the private copy.
     this.id = id;
   }
-  // Resolved per call rather than cached: a cell can move between calls.
-  get _stub() {
-    // The reserved class is script-scoped (`deploy::workflow_class`), because
-    // a workflow instance is: two co-hosted scripts must not share one entry
-    // in the deployment's flat class registry. `__cell.script` is injected
-    // before any binding runs, so this resolves at call time.
-    return __cell.makeNamespace("__Workflow." + __cell.script)
-      .getByName(this._workflowName + "/" + this.id);
+  // One call to the instance's cell, resolved per call rather than cached: a
+  // cell can move between calls. The reserved class is script-scoped
+  // (`deploy::workflow_class`), because a workflow instance is: two co-hosted
+  // scripts must not share one entry in the deployment's flat class registry.
+  // `__cell.script` is injected before any binding runs, so this resolves at
+  // call time.
+  #call(method, args = []) {
+    return __cellRpc("__Workflow." + __cell.script,
+      this.#workflowName + "/" + this.#id, method, args);
+  }
+  static {
+    __wfInstanceCall = (instance, method, args) => instance.#call(method, args);
   }
   async status() {
-    return await this._stub.__wfStatus();
+    return await this.#call("__wfStatus");
   }
   async terminate(options) {
     if (options && options.rollback) {
@@ -10522,23 +11053,23 @@ class WorkflowInstance {
           "rollbackOptions are not implemented, so no handler could run",
       );
     }
-    await this._stub.__wfTerminate();
+    await this.#call("__wfTerminate");
   }
   async sendEvent(options) {
-    await this._stub.__wfSendEvent(__wfEventOptions(options));
+    await this.#call("__wfSendEvent", [__wfEventOptions(options)]);
   }
   async pause() {
-    await this._stub.__wfPause();
+    await this.#call("__wfPause");
   }
   async resume() {
-    await this._stub.__wfResume();
+    await this.#call("__wfResume");
   }
   async restart(options) {
-    await this._stub.__wfRestart(__wfRestartOptions(options));
+    await this.#call("__wfRestart", [__wfRestartOptions(options)]);
   }
   async delete() {
     try {
-      await this._stub.__wfDelete();
+      await this.#call("__wfDelete");
     } catch (error) {
       // The deletion commit resets an active Workflow cell so an in-flight
       // callback cannot put old ledger state back. That reset rejects this
@@ -10551,24 +11082,26 @@ class WorkflowInstance {
 }
 
 class Workflow {
-  constructor(workflowName) {
-    Object.defineProperty(this, "_workflowName", { value: workflowName });
+  #workflowName;
+  constructor(brand, workflowName) {
+    if (brand !== __kWorkflow) throw new TypeError("Illegal constructor");
+    this.#workflowName = workflowName;
   }
-  async _create(options, skipExisting) {
+  async #create(options, skipExisting) {
     const { id, params, retention, locationHint } = options;
-    const instance = new WorkflowInstance(this._workflowName, id);
-    const result = await instance._stub.__wfCreate({
-      workflowName: this._workflowName,
+    const instance = new WorkflowInstance(__kWorkflow, this.#workflowName, id);
+    const result = await __wfInstanceCall(instance, "__wfCreate", [{
+      workflowName: this.#workflowName,
       instanceId: id,
       params,
       retention,
       locationHint,
       skipExisting,
-    });
+    }]);
     return result.created ? instance : undefined;
   }
   async create(options = {}) {
-    return await this._create(__wfCreateOptions(options, "create()"), false);
+    return await this.#create(__wfCreateOptions(options, "create()"), false);
   }
   async createBatch(batch) {
     if (!Array.isArray(batch)) {
@@ -10605,7 +11138,7 @@ class Workflow {
     }
     const created = [];
     for (const options of creatable) {
-      const instance = await this._create(options, true);
+      const instance = await this.#create(options, true);
       if (instance !== undefined) created.push(instance);
     }
     return created;
@@ -10614,10 +11147,10 @@ class Workflow {
     if (!__wfValidInstanceId(id)) {
       throw __wfError(`invalid instance id ${JSON.stringify(id)}`);
     }
-    const instance = new WorkflowInstance(this._workflowName, id);
+    const instance = new WorkflowInstance(__kWorkflow, this.#workflowName, id);
     // The cell exists on first address like any cell, but get() must not
     // mint an instance for a typo: an id with no ledger rejects here.
-    await instance._stub.__wfStatus();
+    await __wfInstanceCall(instance, "__wfStatus", []);
     return instance;
   }
   async deleteBatch(instanceIds) {
@@ -10636,7 +11169,7 @@ class Workflow {
     }
     const uniqueIds = [...new Set(instanceIds)];
     const settled = await Promise.allSettled(uniqueIds.map(async (id) => {
-      const instance = new WorkflowInstance(this._workflowName, id);
+      const instance = new WorkflowInstance(__kWorkflow, this.#workflowName, id);
       await instance.delete();
     }));
     const results = new Map(uniqueIds.map((id, index) => [id, settled[index]]));
@@ -10662,7 +11195,7 @@ class Workflow {
 }
 
 const __makeWorkflow = __celld.__makeWorkflow =
-  (workflowName) => new Workflow(workflowName);
+  (workflowName) => new Workflow(__kWorkflow, workflowName);
 // A `cloudflare:workers` export celld does not implement yet. It throws on
 // first use and names itself, rather than reading as `undefined` and failing
 // far from the cause. A function stub throws when called or constructed (and
@@ -10803,7 +11336,7 @@ function __ctxRestore() {
 }
 const __withCtxRestore = (ctx) => {
   if (__cell.compat.allowIrrevocableStubStorage) {
-    Object.defineProperty(ctx, "restore", {
+    __ObjectDefineProperty(ctx, "restore", {
       value: __ctxRestore, writable: true, configurable: true,
     });
   }
@@ -12979,8 +13512,9 @@ globalThis.process.exit = (code = 0) => {
   const actorScope = __currentActorScope();
   if (actorScope) {
     const instance = __cell.instances[actorScope];
-    if (instance?.__celldState)
-      instance.__celldState._resetAfterConcurrencyFailure();
+    const state = __instanceState(instance);
+    if (state !== undefined)
+      __objectState.resetAfterConcurrencyFailure(state);
   }
   __process_exit(Number(code) || 0, actorScope);
 };

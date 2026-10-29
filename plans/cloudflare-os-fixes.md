@@ -469,10 +469,10 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 37 | 1.45 esbuild service protocol; Wrangler `alias` exactly | done | `60f09d3`, starter `ec3cf7f` |
 | 38 | 1.28 RPC method lookup on every receiver (security) | done | `8e1f06e` |
 | 39 | 1.49 part A: Durable Object scope grants on the host (security) | done | `53e6198` |
-| 39b | 1.50 TCP socket and HTMLRewriter ownership, socket cap, continuations (1.52) (security) | done | |
+| 39b | 1.50 TCP socket and HTMLRewriter ownership, socket cap, continuations (1.52) (security) | done | `fe784d8` |
 | 39c | 1.49 part B: internals out of user reach, cell re-validation (security) | next | |
 | 39d | 1.53 marker-shaped RPC data, with 1.29's forgeable-marker item (security) | queued | |
-| 40+ | Phase 1 in plan order (1.29, 1.30, 1.34, 1.36-1.44, 1.46-1.48, 1.51, 1.54), and the 1.4 props key-order follow-up | queued | |
+| 40+ | Phase 1 in plan order (1.29, 1.30, 1.34, 1.36-1.44, 1.46-1.48, 1.51, 1.54, 1.55, 1.56), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -3839,35 +3839,228 @@ used to call with no arguments. Only authenticated peers send it.
 - `rpc/rpc-refusals-internal` still passes: its `env.KV._stub` reaches its
   own KV cell, which the grant admits.
 
-**Part B (to do).**
-- Take `_stub`, `_namespace`, `_namespaceKey` and the
-  `DurableObjectNamespace` constructor out of user reach (`harness.js`
-  ~6168, ~8640, ~8987, ~10482; `kv.js`); make `DurableObjectStorage`,
-  `SqlStorage`, `DurableObjectState` and `DurableObjectFacets` state private,
-  so no scope is writable (this also covers `__storage_cancel_pending_puts`
-  and the gate ops above, and `SqlCursor._cursorId`/`_prefetched` -- the
-  prefetched row is readable as a plain property, and `__sql_cursor_close`'s
-  id is writable).
-- Refuse `fetch` on runtime classes except on the authenticated `/runtime/`
-  route (the Queue and D1 operator handlers, `kv.js` ~674-770).
-- Re-validate every limit inside the cell methods (keys, sizes, ids, content
-  types, metadata), and give `__queueDlqAcceptBatch` an internal
-  cell-to-cell path that no binding's allowlist includes (`harness.js`
-  ~8113, ~8189, ~8628).
-- Shared runtime cells run in the first script's isolates beside its code:
-  that script's patched builtins can run inside their events. Capture
-  primordials on the runtime cells' paths, or run them in an isolate with
-  no user code.
-- The JSON-null peer RPC (`__doRpcRequest`, `harness.js` ~6483).
-- Rewrite `rpc/rpc-refusals-internal`'s `/runtime` step once `_stub` is
-  gone.
-- TCP socket and HTMLRewriter ids: done in 1.50 (owner-bound on the host,
-  private in the harness). RPC-signal ids were traced there and are not
-  reachable; the other counter-keyed handles take no id from a script.
-- An end-to-end two-node test of the forwarded-caller refusal (node B 403 /
-  handler failure, node A surfaces it): part A unit-tests the frame and the
-  check, but the repo has no cheap two-node harness (the conformance runner
-  refuses `nodes > 1`), so the cross-node path is covered only by unit tests.
+**As built (part B: internals out of user reach, runtime cells apart).**
+- **What workerd shows** (probed, `env/private-state`,
+  `storage/private-state`). A namespace, a KV and a Queue binding, `ctx.sql`,
+  a cursor, `storage.kv`, a `kv.list()` iterator, `ctx.facets` and a
+  transaction have no own properties; an id has `jurisdiction` and `name`, a
+  stub `name` and `id`, `ctx.storage` `kv` and `sql`, and `ctx` `facets`,
+  `container`, `storage`, `id`, `props` and `exports` (in those orders). `new
+  value.constructor()` throws "Illegal constructor" for each. The D1 and
+  Workflow bindings are JavaScript wrappers with public fields and
+  constructors that take anything (1.55).
+- **Private state** (`harness.js`, `kv.js`). `DurableObjectNamespace`,
+  `DurableObjectId`, `DurableObjectState`, the storage base (root and
+  transaction view), `SqlStorage`, `SqlCursor`, `SyncKvStorage`, its list
+  iterator, `DurableObjectFacets`, the KV, Queue and D1 bindings (database,
+  statement, session) and the Workflow binding and instance keep every field
+  in private fields, and the methods that acted on them are private methods.
+  Each constructor takes a module-private brand and otherwise throws
+  "Illegal constructor"; the own properties are workerd's, in its order
+  (`ctx.exports` is an own getter, `ctx.container` an own `undefined`
+  outside `containers`, a transaction reaches `kv` and `sql` through
+  prototype getters). The rest of the harness reaches them through
+  accessor tables set in static blocks (`__objectState`,
+  `__storageInternals`, `__doIdScope` and friends, `__facetsRelease`,
+  `__d1Runners`), which no script reaches. So no scope, key, id, cursor id or
+  prefetched row is readable or writable: a property a script sets is its
+  own and names nothing (`rpc/scope-grants`). The runtime cells take their
+  scope from their own `ctx` the same way. `#ownScope` stays: a reset of an
+  instance that a reset already replaced must not touch the replacement.
+- **No replaceable method on the way to a cell** (review round). A script
+  could replace `getByName`/`get` on the namespace prototype (or a member
+  of the stub prototype) and receive working stubs of its own runtime cells,
+  since the clients resolved their stub that way. The clients now call
+  `__cellRpc(class, name, method, args)`, which derives the scope with the
+  namespace's private `#idFromName` and sends the RPC with no stub at all;
+  the public `get`/`getByName`/`idFromName` go through private methods, and
+  the harness's own lookups use `__namespaceGet`. Audit of every harness
+  path that hands an internal object to a method a script can replace:
+  - fixed: the KV, Queue, D1 and Workflow clients (`__cellRpc`); the Queue
+    cell's dead-letter transfer (same, though its isolate has no script);
+    the RPC and storage stub revival (`__namespaceGet`); `transactionSync`
+    delegating to the open view and a transaction's critical section
+    (`#transactionSync`, `__objectState.blockConcurrencyWhile`); the
+    workflow and cron cells, which run beside the script's code, now use
+    their storage through the methods captured at harness load
+    (`__ownStorage`: `get`, `put`, the alarm methods, `transactionSync`, and
+    `kv.get/put/delete/list`, the list answered as an array);
+  - second round: the workflow and cron cells' instances and state.
+    Objects' states are now in a module-private WeakMap (`__instanceState`)
+    rather than an `inst.__celldState` defined through
+    `Object.defineProperty`; the workflow and cron cells keep their state in
+    private fields; their prototype chains, and every runtime class's, end at
+    null, so a member they lack never reaches an `Object.prototype` getter
+    with the instance; a runtime class's RPC method is captured at load and
+    applied with the captured `Reflect.apply` (`__doRpcCall`), and the
+    general RPC walk uses the captured `Object.hasOwn`, `Reflect.apply` and
+    `bind`; the harness registries (`__cell` itself, `instances`, `classes`,
+    `idNames`, `facetConfigs`, `namespaceKeys`, `doExports`, `entrypoints`,
+    `workflows`, `containers`, `compat`, a facet's config, the Queue
+    catalog) are null-prototype objects, from the host too; `ctx`'s and an
+    id's own properties are class fields and a stub's target an object
+    literal, so no assignment runs an `Object.prototype` setter; `ctx.exports`,
+    the root storage's `kv` and `sql` and `ctx.restore` are defined with the
+    captured `Object.defineProperty`; the workflow engine's storage rows
+    (`__ownStorage`'s `kv.list`, now null-prototype `{ key, value }` rows) are
+    walked with counted loops and sorted with the captured `sort`, its
+    storage-failure tracker and driver are null-prototype literals, and its
+    transaction view's fields are fields; `__cellRpc` takes the dispatch name
+    from its own argument.
+  - left, with the reason: the KV, Queue and D1 cells' own storage calls
+    (their isolate holds no script); stubs and facets of the script's own
+    classes (its own objects, and the host checks loader owner, parent and
+    grant); builtins that only ever receive data (`JSON`, `String`, array
+    iterators, `Promise.resolve`).
+- **Marker-shaped data naming a runtime class.** A KV, Queue, D1, workflow
+  or cron cell's stub is never handed to a script, so none is ever lifted;
+  `__stubRevive` and `__storedRevive` now revive a `__celld$do` marker that
+  names one as the plain data it is (as workerd delivers it,
+  `rpc/runtime-cell-marker`). At HEAD such data, beside a Headers in an RPC,
+  revived as the cell's stub, the one route to its methods left once
+  `_stub` went. The general marker gap stays 1.53.
+- **Runtime cells in an isolate of their own** (`generation.rs`,
+  `WorkerConfig::runtime_cells`). The shared reserved classes (KV, Queue, D1)
+  are no longer registered with the first script that names them: the
+  build collects them and registers them with one config, script
+  `deploy::RUNTIME_SCRIPT` (`__runtime`, which `valid_script_name` cannot
+  produce; a co-hosted manifest that uses it is refused), whose module is
+  a bare default export and whose `WorkerOrigin::Runtime` config has no
+  binding, var or service, the deployment's consumer catalog (only these
+  isolates host a Queue cell, so user configs no longer get it) and a fixed
+  compatibility (`NEWEST_DATE`, no flags: the cells are celld's code). Its
+  cells get their own pool under `__runtime` in `cell_isolates`, so a
+  script's replaced builtins never run in their events
+  (`env/runtime-cells-isolate`: a script that zero-fills
+  `crypto.getRandomValues` and fixes `randomUUID` still gets random, distinct
+  message ids; at HEAD every id ended in that script's zeros). Workflow and
+  cron cells stay with their script, which they belong to. Cost: one more
+  isolate pool per generation that binds any KV, Queue or D1 (one isolate
+  with the harness, about what an empty Worker costs), reclaimed like any
+  cell pool; `/state` lists it as `cells.__runtime`. Cell storage is keyed by
+  scope, so no stored layout moves, and the tunnel carries the runtime
+  cells' calls as `script:__runtime`, which needs no version change (7 has
+  not shipped).
+- **Grants.** `ScopeGrant::runtime_cells(catalog)` is the runtime isolate's
+  grant: the Queue relay (every consumed queue and its dead-letter queue,
+  from a Queue cell's event) and nothing else, marked `runtime`. A script's
+  grant no longer has a relay (`GrantSource.consumed_queues` is gone): its
+  code never runs in a Queue cell's event. `Generation::grants` holds the
+  runtime grant under `__runtime`, so node B resolves a forwarded relay call
+  to it (`node_b_admits_the_runtime_cells_relay_only`).
+- **Operator handlers.** `Caller::admit_fetch` refuses a script's fetch or
+  WebSocket upgrade to a KV, Queue or D1 cell, whatever its grant ("Durable
+  Object <scope> is a KV, Queue or D1 cell, which answers fetch() only on
+  celld's authenticated /runtime/ route"): at the op (`admitted_caller(..,
+  fetch)`), in `dispatch_call_attempt` and on node B
+  (`dispatch_forwarded_fetch`). Only `Caller::Host` fetches them: the
+  `/runtime/` route and Queue settlement (`/__qSettle`).
+- **Internal cell-to-cell path.** `__runtimeClass(name, cls, binding,
+  internal)`: `__queueDlqAcceptBatch` (dead-letter transfer and redrive) is
+  internal and on no binding's list. `Caller::internal()` (the host, or the
+  runtime grant) rides `CellJob::Rpc.internal` into
+  `__dispatchRpc(scope, method, args, internal)`, and `__doRpcCall` answers
+  an internal method only to an internal call; a binding's call gets "does
+  not implement the method". The relay above is still exactly the reach that
+  path needs: a Queue cell's event, the catalog's Queue cells.
+- **Validation in the cells.** Each binding method checks again, with the
+  binding's own error text, before it touches storage:
+  - KV `__kvGet`/`__kvDelete`: an array of 1-100 string keys, each 1-512
+    bytes. `__kvPut`: 1-100 entries; key as above; value bytes up to 25 MiB;
+    tag `text` or `bytes`; metadata `null` or JSON text up to 1024 bytes;
+    expiration `null` or whole milliseconds after the cell's clock.
+    `__kvList`: string prefix and cursor, limit 1-1000. The cell's clock
+    replaces the `now` the binding sent (which a caller could set to read
+    expired keys). The operator route calls the same reads and writes
+    (`_get`, `_put`, `_delete`, `_list`) with its own checks, and now refuses
+    a tag other than `text` or `bytes` too.
+  - Queue `__queueSend`: 1-100 entries; bytes body; content type `text`,
+    `bytes`, `json` or `v8`; declared size equal to the body's, at most
+    128000; delay 0-86400; the batch at most 256000 bytes.
+    `__queueDlqAcceptBatch` (internal): 1-100 transfers, UUID transfer and
+    message ids, a string or `null` dead-letter source, and each body
+    checked as a send's (a stored body arrives as an ArrayBuffer).
+  - D1 `__d1Query`/`__d1Batch`: an array of statements with SQL text and an
+    array of binds (the engine already checks each bind and every cap);
+    `__d1Exec`: SQL text. No coercion of what a caller sent.
+  - Workflow `__wfCreate` (`__wfCheckCreate`): a bound workflow name, a
+    valid instance id, the binding's normalized retention (whole
+    milliseconds up to 30 days) and location hint, and the instance the
+    cell is (`<workflow>/<instance>`). `__wfSendEvent` and `__wfRestart`
+    already checked; the others take no arguments.
+  - Tested in `js::runtime_cell_tests::a_runtime_cell_checks_what_a_binding_sends`
+    (each refusal, and a call past the checks reaching storage), since no
+    script reaches a cell's methods any more.
+- **JSON-null peer RPC.** A peer's JSON `null` arguments call with none
+  again, as before 1.28.
+- **`rpc/rpc-refusals-internal`.** Its `/runtime` step now checks that no
+  binding, session or statement has a property its stub was once read
+  through; the runtime cells' method refusals moved to
+  `js::runtime_cell_tests::a_runtime_cell_answers_a_binding_only_its_methods`.
+- **Docs.** `docs/security.md` "Durable Object reach" (no route to a runtime
+  cell, the checks in the cell, no operator handlers, the isolate of their
+  own); `docs/README.md` `/state` (`cells.__runtime`); the D1 and Workflow
+  shape differences in `docs/services/d1.md` and `workflows.md`.
+- **Tests.**
+  - Differential: `storage/private-state` and `env/private-state` (the own
+    properties and "Illegal constructor" above, and the parts still work),
+    `rpc/runtime-cell-marker`. xfail (1.55): `env/wrapper-binding-state`,
+    `storage/cursor-rows-written` and `env/class-names`.
+  - celld-only: `rpc/scope-grants` rewritten (constructors refused, no
+    scope-shaped state, a forged property ignored, the relay's dead-letter
+    transfer still works), `env/runtime-cells-isolate`, and
+    `rpc/rpc-refusals-internal`'s `/runtime` step, and
+    `env/patched-prototypes` (a script replaces the namespace's `get`,
+    `getByName`, `idFromName` and `idFromString`, the stub prototype's cell
+    methods, and the storage, `kv` and state methods, then uses KV, Queue,
+    D1 and a workflow: no replacement sees a receiver that is not the
+    script's own; it also replaces `Object.defineProperty`, `hasOwn`,
+    `create`, `assign`, `Reflect.apply` and friends at module scope and puts
+    setters on `Object.prototype`, and none receives a workflow or cron
+    cell's instance, ctx or storage. With `_instance` defining one property
+    through `Object.defineProperty` again, the case fails). Every one of these fails at HEAD except the xfails.
+  - Unit: `scope_grant::tests` (`a_script_cannot_fetch_a_runtime_cell`,
+    `only_the_host_and_the_runtime_cells_call_internal_methods`, the relay on
+    the runtime grant only), `generation::tests` (placement, no runtime
+    cells without the classes, the reserved name refused),
+    `js::runtime_cell_tests` (the isolate holds no script; the internal
+    allowlist and JSON null; the checks above;
+    `a_scripts_op_call_reaches_the_cell_through_the_host`, which drives
+    `op_rpc_call` through the host channel, `Caller::internal`,
+    `CellJob::rpc` and `drive_cell` into the runtime cells' isolate: a
+    script's `__queueDlqAcceptBatch` and `__kvSweep` refused in the cell, an
+    oversized key refused in the cell, another shard refused at the op, the
+    operator fetch refused at the op, and the runtime cells' own transfer
+    from a Queue event reaching the method),
+    `js::scope_grant_op_tests::a_runtime_cells_operator_handler_is_refused_to_a_binding`,
+    and the peer tunnel's `node_b_admits_the_runtime_cells_relay_only`.
+- **Internal signatures changed** (for `celld_internal_tests`):
+  `CellJob::Rpc` gained `internal`; `RuntimeManager::rpc` takes the
+  `&Caller`; `__dispatchRpc` takes `internal`; `GrantSource` lost
+  `consumed_queues`; `CellJob::rpc` builds an RPC job from its caller;
+  `pool::Slot::for_test` exists under `cfg(test)` too; the harness classes
+  above take a brand first; the KV binding takes a `call(method, args)`
+  instead of a namespace thunk; the KV
+  cell's reads and writes are `_get`/`_put`/`_delete`/`_list`, and its RPC
+  methods take no `now`; `SqlCursor` has no `columns`, and `rowsRead`,
+  `rowsWritten` and `reusedCachedQueryForTest` are getters.
+- **Verification** (after the second review round). fmt, `git diff --check`,
+  clippy `-D warnings`, `cargo test --workspace` (272 lib tests, 33 and 4 in
+  the other crates) and the lab build are clean. Conformance
+  `--runtime=both` with `CONFORMANCE_REQUIRE=docker`: 160 PASS, 25 XFAIL,
+  exit 0 (was 155 and 22). Starter e2e `all --fresh --quick` matches the
+  baseline (exit 1 for the expected failures, no "dropped a frame");
+  integration exits 0, `workshop-user-directory` passes, no first error
+  changed.
+- **Remaining.**
+  - An end-to-end two-node test of the forwarded-caller refusal (node B 403
+    / handler failure, node A surfaces it): unit-tested only, as part A
+    noted; the repo has no cheap two-node harness.
+  - The harness's own code in a script's isolate still passes data (never
+    a cell, stub, namespace or storage object of celld's) through that
+    script's builtins; capturing those primordials is hardening, not
+    authority.
+  - 1.55 (the differences found here).
 
 ### 1.50 TCP socket and RPC-signal ownership (found by the 1.49 review) — security
 
@@ -4176,6 +4369,53 @@ so it is no cross-script reach; matching it means distinguishing "no CPED
 token" from "token names a gone context" and refusing new I/O from the
 latter with workerd's `SpanParent` text, on the request hot path.
 `streams/finished-continuation` (differential, xfail) records it.
+
+### 1.55 Differences found by 1.49 part B
+
+- **D1 and Workflow binding shapes.** workerd's D1 database, statement and
+  session, and its Workflow binding and instance, are JavaScript wrappers:
+  own `alwaysPrimarySession`/`fetcher`, `dbSession`/`statement`/`params`,
+  `fetcher`/`bookmarkOrConstraint`, `binding`, `id`/`binding`, and
+  constructors that take any argument. celld's keep their database and
+  workflow name private (they name a cell, not a binding) and refuse
+  construction (`env/wrapper-binding-state`, xfail). Matching means public
+  fields that hold nothing with authority.
+- **A cursor's `rowsWritten`.** celld reads the connection's change count
+  when a cursor ends, so a write made while a SELECT's cursor is still open
+  (a `kv.put` between `exec` and `toArray`) is counted for the SELECT; workerd
+  counts the statement's own writes (`storage/cursor-rows-written`, xfail).
+- **Names and tags.** celld's Queue binding is `Queue` (workerd
+  `WorkerQueue`), its cursor `SqlCursor` (`Cursor`), and its namespaces, ids,
+  bindings and storage objects have no `Symbol.toStringTag`, so
+  `Object.prototype.toString` gives `[object Object]` where workerd names the
+  class (`env/class-names`, xfail).
+
+### 1.56 Harness primordials in a script's isolate (found by the 1.49 part B review)
+
+Harness code that runs beside a script's code still passes a few internal
+objects to builtins the script can replace. Each is same-script, with no
+host authority and no cross-script reach, and each predates part B:
+- `__actorEventStack` (`harness.js` ~3882-3906) uses `Array.prototype`
+  `push`/`lastIndexOf`/`splice`, so a patched method sees and can edit the
+  frames that `__currentActorScope()` reads (abort termination, a WebSocket's
+  recorded scope, stub gating). Use captured methods or index arithmetic and
+  null-prototype frames.
+- `__cellBlocks` uses `Map.prototype.get/delete`; use captured methods.
+- `Object.hasOwn(__cell.workflows, …)` (~9725) and
+  `Object.hasOwn(__cell.namespaceKeys, …)` (~6253) use the uncaptured
+  `hasOwn`; `Math.min(...driver.blocked.map(...))` (~10915) spreads Workflow
+  driver entries. Use `__ObjectHasOwn` and a counted loop.
+- Latent: `__rpcProject` (~4797) treats any non-`Object.prototype` object as
+  unsupported, so returning one of part B's null-prototype objects over RPC
+  would fail. Nothing does today.
+
+Tests: extend `env/patched-prototypes` with patched `Array.prototype`,
+`Map.prototype` and `Object.hasOwn`, expecting no harness object captured.
+
+Also: `websocket/client-drop` reads `/seen` straight after dropping the
+client, without waiting for the 1006 close to be recorded, and failed once
+in a full run (30/30 and 20/20 on reruns, at HEAD too). Make `/seen` wait for
+the close, bounded by a timeout.
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 

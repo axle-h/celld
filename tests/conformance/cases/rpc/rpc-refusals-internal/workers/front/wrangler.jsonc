@@ -1,5 +1,5 @@
 // Refusals only, for names no workerd client sends: celld's test hook, and
-// the stubs of the runtime cells behind KV, Queue and D1 bindings.
+// the private state of the KV, Queue and D1 bindings.
 {
   "name": "front",
   "main": "index.js",

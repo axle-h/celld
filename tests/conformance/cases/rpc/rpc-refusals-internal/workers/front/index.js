@@ -6,8 +6,8 @@
 // can send them, and the receiver refuses them before any user code runs.
 //
 // A KV, Queue or D1 binding calls a runtime cell through a Durable Object
-// stub, which user code can reach. The cell answers only the methods the
-// binding calls, directly; its other methods serve its own events.
+// stub, which user code once reached as the binding's `_stub`. Now the
+// binding keeps its cell private.
 import { WorkerEntrypoint } from "cloudflare:workers";
 
 const reached = () => "REACHED";
@@ -30,6 +30,10 @@ export class Local extends WorkerEntrypoint {
     return reached();
   }
 }
+
+// The properties a binding's stub, namespace or cell name was once read
+// through.
+const STUB_ROUTES = ["_stub", "_namespace", "_cellName", "_queue", "_databaseName", "_database"];
 
 const NAMES = [
   "constructor", "fetch", "connect", "toString", "valueOf", "hasOwnProperty",
@@ -55,25 +59,16 @@ export default {
       });
     }
     if (path === "/runtime") {
-      const kv = env.KV._stub;
-      const queue = env.QUEUE._stub;
-      const db = env.DB._stub;
+      // The stubs were once a binding's `_stub`; now nothing a binding holds
+      // names its cell. The cells' own method refusals are unit tests
+      // (`js::runtime_cell_tests`), since no script reaches a stub to call.
+      const reach = (binding) => STUB_ROUTES.filter((name) => name in binding);
       return Response.json({
-        kvSweep: await refused(() => kv.__kvSweep({ now: 0, limit: 1 })),
-        kvMetrics: await refused(() => kv.__kvMetrics({ now: 0 })),
-        kvOpen: await refused(() => kv._open()),
-        kvAlarm: await refused(() => kv.alarm()),
-        // An allowed method, read rather than called, or called through a path.
-        kvGetRead: await refused(() => kv.__kvGet),
-        kvGetPath: await refused(() => kv.__kvGet.call(null, { keys: [] })),
-        queuePurge: await refused(() => queue._purge()),
-        queuePause: await refused(() => queue._setPaused(true)),
-        queuePeek: await refused(() => queue._peek(1)),
-        queueSettle: await refused(() => queue._settle({})),
-        queueAlarm: await refused(() => queue.alarm()),
-        queueCtx: await refused(() => queue.ctx),
-        dbAlarm: await refused(() => db.alarm()),
-        dbCtx: await refused(() => db.ctx),
+        kv: reach(env.KV),
+        queue: reach(env.QUEUE),
+        db: reach(env.DB),
+        session: reach(env.DB.withSession()),
+        statement: reach(env.DB.prepare("SELECT 1")),
       });
     }
     return new Response("not found", { status: 404 });

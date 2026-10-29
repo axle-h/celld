@@ -1,0 +1,10 @@
+// The class names and string tags of the runtime's objects.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": { "bindings": [{ "name": "OBJ", "class_name": "Obj" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Obj"] }],
+  "kv_namespaces": [{ "binding": "KV", "id": "names-kv" }],
+  "queues": { "producers": [{ "binding": "QUEUE", "queue": "names-queue" }] }
+}

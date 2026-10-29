@@ -260,7 +260,7 @@ function kvService(host) {
     // whenever the sweeper next runs. The read path filters and the sweep only
     // reclaims space, so the two can never disagree about which side of the
     // boundary a key is on.
-    async __kvGet({ keys, withMetadata, withExpiration = false, now }) {
+    async _get({ keys, withMetadata, withExpiration = false, now }) {
       const sql = this._open();
       const out = [];
       for (const key of keys) {
@@ -351,7 +351,7 @@ function kvService(host) {
       }
     }
 
-    async __kvPut({ entries }) {
+    async _put(entries) {
       if (
         __kvLimits().raceSweepPut &&
         entries.some((entry) =>
@@ -422,7 +422,7 @@ function kvService(host) {
       }
     }
 
-    async __kvDelete({ keys }) {
+    async _delete(keys) {
       return this._withBlobProtocol(() => this._deleteLocked(keys));
     }
 
@@ -573,7 +573,7 @@ function kvService(host) {
     // One row beyond the limit is read to decide `list_complete`, and discarded.
     // Asking the database is the only honest answer: a page that happens to fill
     // exactly is indistinguishable from a page that ended.
-    __kvList({ prefix, limit, after, now }) {
+    _list({ prefix, limit, after, now }) {
       const sql = this._open();
       // Every name a prefix can match is one contiguous run of the primary key,
       // so bound the key on both sides. The query used to carry the cursor as
@@ -621,6 +621,72 @@ function kvService(host) {
         })),
         complete,
       };
+    }
+
+    // The binding's calls, which are the cell's only RPC methods. Each is
+    // checked again here, with the binding's own errors: the binding validates
+    // in the caller's isolate, and a caller that skipped that check must gain
+    // nothing by it. The clock is the cell's, never the caller's, because it
+    // is the clock the read filter and the sweeper compare against.
+    async __kvGet({ keys, withMetadata } = {}) {
+      return this._get({
+        keys: __kvCheckKeys(keys),
+        withMetadata: withMetadata === true,
+        now: Date.now(),
+      });
+    }
+
+    async __kvPut({ entries } = {}) {
+      if (!Array.isArray(entries) || entries.length === 0 ||
+          entries.length > __kvLimits().maxBulkKeys) {
+        throw __kvError("a put has an invalid number of entries");
+      }
+      const now = Date.now();
+      return this._put(entries.map((entry) => {
+        if (entry === null || typeof entry !== "object") {
+          throw __kvError("a put entry must be an object");
+        }
+        const key = __kvCheckKeyString(entry.key);
+        if (!(entry.value instanceof Uint8Array)) {
+          throw __kvError("a put value must be bytes");
+        }
+        __kvCheckValue(entry.value.byteLength);
+        __kvCheckTag(entry.tag);
+        const metadata = entry.metadata ?? null;
+        if (metadata !== null) {
+          if (typeof metadata !== "string") throw __kvError("metadata must be JSON text");
+          __kvCheckMetadata(metadata);
+          try {
+            JSON.parse(metadata);
+          } catch {
+            throw __kvError("metadata must be JSON text");
+          }
+        }
+        const expiresAt = entry.expiresAt ?? null;
+        if (expiresAt !== null) {
+          if (!Number.isSafeInteger(expiresAt)) {
+            throw __kvError("an expiration must be a time in whole milliseconds");
+          }
+          if (expiresAt <= now) {
+            throw __kvError(`expiration ${expiresAt / 1000} is in the past`);
+          }
+        }
+        return { key, value: entry.value, tag: entry.tag, metadata, expiresAt };
+      }));
+    }
+
+    async __kvDelete({ keys } = {}) {
+      return this._delete(__kvCheckKeys(keys));
+    }
+
+    __kvList({ prefix, limit, after } = {}) {
+      if (typeof prefix !== "string") throw __kvError("a list prefix must be a string");
+      if (typeof after !== "string") throw __kvError("the list cursor is malformed");
+      if (!Number.isSafeInteger(limit) || limit <= 0 ||
+          limit > __kvLimits().maxListLimit) {
+        throw __kvError(`a list limit is from 1 to ${__kvLimits().maxListLimit}`);
+      }
+      return this._list({ prefix, limit, after, now: Date.now() });
     }
 
     // The operator's live key and byte counts. `size` stays in the row because
@@ -683,11 +749,11 @@ function kvService(host) {
         let result;
         switch (body.op) {
           case "get": {
-            // Awaited: `__kvGet` resolves a bucket-backed value, so it is
+            // Awaited: `_get` resolves a bucket-backed value, so it is
             // async. Destructuring the promise instead threw "object is not
             // iterable" on every operator read, and only here -- the binding
-            // reaches the same method over RPC, which awaits for it.
-            const [row] = await this.__kvGet({
+            // reaches the same read over RPC, which awaits for it.
+            const [row] = await this._get({
               keys: [String(body.key)],
               withMetadata: true,
               withExpiration: true,
@@ -722,25 +788,19 @@ function kvService(host) {
             // Resolved from the cell's clock, not the caller's, because that is
             // the clock the read filter and the sweeper compare against.
             const expiresAt = __kvExpiryAt(now, body.expiration, body.expirationTtl);
-            await this.__kvPut({
-              entries: [{
-                key,
-                value,
-                tag: String(body.tag ?? __KV_TAG_BYTES),
-                metadata,
-                expiresAt,
-              }],
-            });
+            const tag = String(body.tag ?? __KV_TAG_BYTES);
+            __kvCheckTag(tag);
+            await this._put([{ key, value, tag, metadata, expiresAt }]);
             result = { ok: true };
             break;
           }
           case "delete":
             for (const key of body.keys) __kvCheckKey(String(key));
-            await this.__kvDelete({ keys: body.keys.map(String) });
+            await this._delete(body.keys.map(String));
             result = { ok: true };
             break;
           case "list":
-            result = this.__kvList({
+            result = this._list({
               prefix: String(body.prefix ?? ""),
               limit: Number(body.limit),
               after: String(body.after ?? ""),
@@ -799,6 +859,26 @@ function kvService(host) {
       throw __kvError(
         `a key is at most ${__kvLimits().maxKeyBytes} bytes, got ${bytes}`,
       );
+    }
+  };
+
+  // A key the binding sends: a string, which `__kvCheckKey` bounds.
+  const __kvCheckKeyString = (key) => {
+    if (typeof key !== "string") throw __kvError("a key must be a string");
+    __kvCheckKey(key);
+    return key;
+  };
+
+  // The keys of a bulk read or delete, as the binding sends them.
+  const __kvCheckKeys = (keys) => {
+    if (!Array.isArray(keys)) throw __kvError("keys must be an array of strings");
+    __kvBulkKeys(keys);
+    return keys.map(__kvCheckKeyString);
+  };
+
+  const __kvCheckTag = (tag) => {
+    if (tag !== __KV_TAG_TEXT && tag !== __KV_TAG_BYTES) {
+      throw __kvError(`a value's content tag is "text" or "bytes", got ${JSON.stringify(tag)}`);
     }
   };
 
@@ -980,28 +1060,27 @@ function kvService(host) {
     return { type: options.type ?? "text", cacheTtl: options.cacheTtl };
   };
 
+  // Only `makeKvNamespace` constructs a binding, as in workerd ("Illegal
+  // constructor"), and its cell is private: a script reaches the cell
+  // through these methods, which validate what they send. The host makes no
+  // stub for the call, so no method a script can replace sees one.
+  const kConstruct = Symbol("KvNamespace");
+
   class KvNamespace {
-    // `namespace()` answers the namespace of KV cells, and `cellName` names this
-    // namespace's one cell (`celld_logic::kv::cell_name`).
-    constructor(namespace, cellName) {
-      Object.defineProperty(this, "_namespace", { value: namespace });
-      Object.defineProperty(this, "_cellName", { value: cellName });
+    #call;
+
+    // `call(method, args)` is one RPC to this namespace's one cell
+    // (`celld_logic::kv::cell_name`), resolved per call rather than cached: a
+    // cell can move between calls.
+    constructor(brand, call) {
+      if (brand !== kConstruct) throw new TypeError("Illegal constructor");
+      this.#call = call;
     }
 
-    // Resolved per call rather than cached: a cell can move between calls, and
-    // `getByName` costs what the Durable Object path already pays.
-    get _stub() {
-      return this._namespace().getByName(this._cellName);
-    }
-
-    async _read(keys, options, withMetadata) {
+    async #read(keys, options, withMetadata) {
       const { type } = __kvReadOptions(options);
       for (const key of keys) __kvCheckKey(key);
-      const rows = await this._stub.__kvGet({
-        keys,
-        withMetadata,
-        now: Date.now(),
-      });
+      const rows = await this.#call("__kvGet", [{ keys, withMetadata }]);
       return rows.map((row) => {
         if (!row.found) return { key: row.key, value: null, metadata: null };
         return {
@@ -1020,21 +1099,21 @@ function kvService(host) {
     // with the prototype chain.
     async get(key, options) {
       if (Array.isArray(key)) {
-        const rows = await this._read(__kvBulkKeys(key), options, false);
+        const rows = await this.#read(__kvBulkKeys(key), options, false);
         return new Map(rows.map((row) => [row.key, row.value]));
       }
-      const [row] = await this._read([String(key)], options, false);
+      const [row] = await this.#read([String(key)], options, false);
       return row.value;
     }
 
     async getWithMetadata(key, options) {
       if (Array.isArray(key)) {
-        const rows = await this._read(__kvBulkKeys(key), options, true);
+        const rows = await this.#read(__kvBulkKeys(key), options, true);
         return new Map(
           rows.map((row) => [row.key, { value: row.value, metadata: row.metadata }]),
         );
       }
-      const [row] = await this._read([String(key)], options, true);
+      const [row] = await this.#read([String(key)], options, true);
       return {
         value: row.value,
         metadata: row.metadata,
@@ -1064,15 +1143,15 @@ function kvService(host) {
         options && options.expiration,
         options && options.expirationTtl,
       );
-      await this._stub.__kvPut({
+      await this.#call("__kvPut", [{
         entries: [{ key: name, value: encoded.value, tag: encoded.tag, metadata, expiresAt }],
-      });
+      }]);
     }
 
     async delete(key) {
       const name = String(key);
       __kvCheckKey(name);
-      await this._stub.__kvDelete({ keys: [name] });
+      await this.#call("__kvDelete", [{ keys: [name] }]);
     }
 
     // Upstream takes one key or an array, and caps the array at the same 100 a
@@ -1080,14 +1159,14 @@ function kvService(host) {
     async deleteBulk(keys) {
       const names = Array.isArray(keys) ? __kvBulkKeys(keys) : [String(keys)];
       for (const name of names) __kvCheckKey(name);
-      await this._stub.__kvDelete({ keys: names });
+      await this.#call("__kvDelete", [{ keys: names }]);
     }
 
     async list(options) {
       const prefix = options && options.prefix ? String(options.prefix) : "";
       const limit = __kvListLimit(options && options.limit);
       const after = options && options.cursor ? __kvCursor.decode(String(options.cursor)) : "";
-      const page = await this._stub.__kvList({ prefix, limit, after, now: Date.now() });
+      const page = await this.#call("__kvList", [{ prefix, limit, after }]);
       const keys = page.keys.map((entry) => {
         const key = { name: entry.name };
         if (entry.metadata !== null) key.metadata = JSON.parse(entry.metadata);
@@ -1120,7 +1199,7 @@ function kvService(host) {
 
   return {
     KvNamespaceCell: __KvNamespaceCell,
-    KvNamespace,
+    makeKvNamespace: (call) => new KvNamespace(kConstruct, call),
     // Queue retention runs the same bounded transaction.
     cellSweepBatch: __cellSweepBatch,
   };

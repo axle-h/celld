@@ -379,7 +379,7 @@ impl Slot {
         self.loaded_worker
     }
 
-    #[cfg(celld_internal_tests)]
+    #[cfg(any(test, celld_internal_tests))]
     pub fn for_test(worker: js::Worker) -> Arc<Self> {
         Self::outside_pool(worker, false)
     }

@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "bytes": [0, 0, 0, 0],
+        "uuid": "00000000-0000-4000-8000-000000000000"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "delivered": 3,
+        "random": true,
+        "distinct": 3
+      }
+    }
+  ]
+}

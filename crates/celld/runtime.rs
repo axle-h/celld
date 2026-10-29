@@ -1872,7 +1872,10 @@ impl RuntimeManager {
     }
 
     /// Run a Durable Object RPC method. `parent` is the caller's trace
-    /// context, so the event's span joins the caller's trace.
+    /// context, so the event's span joins the caller's trace. `caller` is
+    /// the admitted caller, which decides whether the call may use a runtime
+    /// cell's internal methods.
+    #[allow(clippy::too_many_arguments)]
     pub async fn rpc(
         &self,
         cell: String,
@@ -1881,16 +1884,10 @@ impl RuntimeManager {
         args: js::RpcData,
         request_id: Option<js::RequestId>,
         parent: Option<crate::telemetry::TraceContext>,
+        caller: &crate::scope_grant::Caller,
     ) -> anyhow::Result<js::RpcOutcome> {
         let (reply, receive) = tokio::sync::oneshot::channel();
-        let job = CellJob::Rpc {
-            request_id,
-            scope: cell.clone(),
-            name,
-            method,
-            args,
-            reply,
-        };
+        let job = CellJob::rpc(cell.clone(), name, method, args, request_id, caller, reply);
         self.cell_event(
             &cell,
             job,

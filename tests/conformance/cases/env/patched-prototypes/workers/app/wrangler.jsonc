@@ -1,0 +1,13 @@
+// A script that replaces every prototype method its bindings could reach a
+// runtime cell through.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": { "bindings": [{ "name": "OBJ", "class_name": "Obj" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Obj"] }],
+  "kv_namespaces": [{ "binding": "KV", "id": "patched-kv" }],
+  "queues": { "producers": [{ "binding": "QUEUE", "queue": "patched-queue" }] },
+  "d1_databases": [{ "binding": "DB", "database_name": "patched-db", "database_id": "patched-db" }],
+  "workflows": [{ "name": "patched-flow", "binding": "FLOW", "class_name": "Flow" }]
+}
