@@ -371,6 +371,43 @@ of its own.
   still pending for it, so a pipe it left pumping a body stops, and its
   promise never settles, as in workerd.
 
+## TCP socket ownership
+
+A socket from `cloudflare:sockets` `connect()` (and the socket `startTls()`
+returns) is reachable only from the code that opened it, as in workerd: the
+request, or the Durable Object (or facet) whose event did. Every event of a
+Durable Object is the same owner, so an object keeps using a socket across
+its events; a request's sockets close when it ends, and an object's when its
+cell leaves memory, an operation still waiting on one included. A socket no
+object refers to any more closes, and each owner holds at most
+`CELLD_MAX_TCP_SOCKETS` ([limitations](limitations.md#tcp-sockets)).
+
+- **Socket objects.** A `Socket` keeps its state, the host id included, in
+  private fields, and cannot be constructed by a script. Its readable and
+  writable record the owner of the code that opened it. From any other
+  request, including after the opening request has ended, a read or cancel
+  fails with workerd's cross-request I/O error, `(I/O type:
+  ReadableStreamSource)`, and a write or close of the writable with
+  `(I/O type: Writable)`. From another Durable Object, reads are refused with
+  the cross-object error and writes never settle, as in workerd. `opened`,
+  `closed`, `getReader()` and `getWriter()` are not refused. Another owner's
+  `close()` resolves and leaves the socket to its owner. Its `startTls()`
+  consumes nothing: as in workerd, the owner's writable is left locked, and
+  the Socket it returns never opens and refuses every write.
+- **Host ids.** Socket ids are a process-wide counter. The host records each
+  id's owner from the running event when it allocates the id, and every
+  socket operation (read, write, shutdown, close, `startTls()`) refuses
+  another owner's id with the same error before it touches the connection.
+
+## HTMLRewriter ownership
+
+An `HTMLRewriter` transform is reachable only from the request or Durable
+Object that called `transform()`; a Durable Object's transform lives until
+it ends or the object leaves memory, so a later event can read it. The content tokens its handlers receive
+keep the transform in a private field, and the host refuses each parser
+operation on another owner's transform with the cross-request (or
+cross-object) error text, naming `HTMLRewriter` as the I/O type.
+
 ## Container ownership
 
 A Durable Object reaches only its own container. The host takes the

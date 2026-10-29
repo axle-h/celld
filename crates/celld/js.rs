@@ -5326,7 +5326,11 @@ impl Worker {
             declared_ms,
         );
         let offered = BeginningSpans::offer(spans);
+        // `begin` installs the new event's continuation token; whichever
+        // way it returns, the turn leaves CPED as it found it.
+        let before_begin = tc.get_continuation_preserved_embedder_data();
         let begun = begin(tc, realm.fetch, job);
+        tc.set_continuation_preserved_embedder_data(before_begin);
         drop(offered);
         drop(cpu_watchdog);
         let out = match begun {
@@ -5764,7 +5768,8 @@ fn begin<'s>(
     // option also applies to RPC and cell events, but those events have no
     // report to consume retained logs, so enabling capture for them only
     // holds records until their IoContext retires.
-    let context = IoContext::with_options(
+    let context = IoContext::invocation(
+        &runtime_state,
         effective_resource_limits(runtime_state.resource_limits, invocation_limits),
         tail_reporting,
     );
@@ -5773,6 +5778,7 @@ fn begin<'s>(
         context.own_body_stream(stream_id);
     }
     let guard = CurrentGuard::enter(context.clone());
+    install_io_context(tc, &context);
     context.begin_cpu_turn();
     let target = match entrypoint {
         Some(entrypoint) => FetchTarget::Entrypoint(entrypoint),
@@ -5863,12 +5869,15 @@ fn begin_entrypoint_rpc(
     invocation_limits: Option<ResourceLimits>,
     reply: tokio::sync::oneshot::Sender<Result<Vec<u8>>>,
 ) -> Begun {
-    let context = IoContext::with_resource_limits(effective_resource_limits(
-        actor_runtime_state(tc).resource_limits,
-        invocation_limits,
-    ));
+    let runtime_state = actor_runtime_state(tc);
+    let context = IoContext::invocation(
+        &runtime_state,
+        effective_resource_limits(runtime_state.resource_limits, invocation_limits),
+        false,
+    );
     adopt_user_spans(&context);
     let guard = CurrentGuard::enter(context.clone());
+    install_io_context(tc, &context);
     context.begin_cpu_turn();
     let started = (|| {
         let f = internal_function(tc, "__dispatchEntrypointRpc")?;
@@ -6123,9 +6132,11 @@ fn begin_queue(
     batch: QueueBatch,
     reply: tokio::sync::oneshot::Sender<Result<QueueDispatchResult>>,
 ) -> Begun {
-    let context = IoContext::with_resource_limits(actor_runtime_state(tc).resource_limits);
+    let runtime_state = actor_runtime_state(tc);
+    let context = IoContext::invocation(&runtime_state, runtime_state.resource_limits, false);
     adopt_user_spans(&context);
     let guard = CurrentGuard::enter(context.clone());
+    install_io_context(tc, &context);
     context.begin_cpu_turn();
     let started = (|| {
         let dispatch = internal_function(tc, "__dispatchEntrypointQueue")?;
@@ -8279,6 +8290,7 @@ ops! { OP_NAMES, install_op_functions,
         "__tcp_write" => tcp::op_tcp_write,
         "__tcp_shutdown" => tcp::op_tcp_shutdown,
         "__tcp_close" => tcp::op_tcp_close,
+        "__tcp_collect" => tcp::op_tcp_collect,
         "__tcp_starttls" => tcp::op_tcp_starttls,
         "__container_running" => container::op_container_running,
         "__container_address" => container::op_container_address,
@@ -13757,8 +13769,16 @@ impl IoContext {
     }
 
     fn with_options(limits: Option<ResourceLimits>, tail_reporting: bool) -> Arc<Self> {
+        Self::build(None, limits, tail_reporting)
+    }
+
+    fn build(
+        continuation: Option<(u64, Weak<ActorRuntimeState>)>,
+        limits: Option<ResourceLimits>,
+        tail_reporting: bool,
+    ) -> Arc<Self> {
         Arc::new(Self {
-            continuation: None,
+            continuation,
             call_chains: Mutex::new(CallChains::default()),
             events: Mutex::new(IoEventState::default()),
             vfs: OnceLock::new(),
@@ -13794,47 +13814,26 @@ impl IoContext {
     }
 
     fn tracked(runtime_state: &Arc<ActorRuntimeState>) -> Arc<Self> {
+        Self::invocation(runtime_state, runtime_state.resource_limits, false)
+    }
+
+    /// A context V8 captures with each promise reaction, registered in the
+    /// isolate under a fresh continuation id. Every event an isolate runs
+    /// gets one: a cell event, and a stateless invocation (fetch, RPC,
+    /// queue) too, so a continuation that another request's turn resumes
+    /// still runs as the request that created it, as in workerd, and
+    /// reaches that request's sockets, bodies and transforms.
+    fn invocation(
+        runtime_state: &Arc<ActorRuntimeState>,
+        limits: Option<ResourceLimits>,
+        tail_reporting: bool,
+    ) -> Arc<Self> {
         let id = allocate_io_context_id();
-        let context = Arc::new(Self {
-            continuation: Some((id, Arc::downgrade(runtime_state))),
-            call_chains: Mutex::new(CallChains::default()),
-            events: Mutex::new(IoEventState::default()),
-            vfs: OnceLock::new(),
-            sockets: Mutex::new(Vec::new()),
-            returned_sockets: Mutex::new(Vec::new()),
-            worker_handoffs: Mutex::new(Vec::new()),
-            handoff_request: next_handoff_request(),
-            ws_retired: WsCallerRetired::default(),
-            ws_owner_token: OnceLock::new(),
-            rewriters: Mutex::new(Vec::new()),
-            tcp_sockets: Mutex::new(Vec::new()),
-            input_gates: Mutex::new(InputGateClaims::default()),
-            cross_entry_gates: CrossEntryGateClaims::default(),
-            body_streams: Mutex::new(HashMap::new()),
-            ws_capture: Mutex::new(Vec::new()),
-            egress: Mutex::new(Vec::new()),
-            handed: Mutex::new(Some(Vec::new())),
-            handed_len: AtomicUsize::new(0),
-            handed_wake: tokio::sync::Notify::new(),
-            pending_events: Mutex::new(HashSet::new()),
-            subrequest_limit: runtime_state
-                .resource_limits
-                .and_then(|limits| limits.sub_requests),
-            subrequests: AtomicUsize::new(0),
-            cpu_limit_nanos: runtime_state
-                .resource_limits
-                .and_then(|limits| limits.cpu_ms)
-                .map(|milliseconds| u64::from(milliseconds).saturating_mul(1_000_000)),
-            cpu_used_nanos: AtomicU64::new(0),
-            cpu_turn: Mutex::new(None),
-            // Tracked contexts drive cell and RPC events. Dynamic Worker tail
-            // reports currently belong only to fetch jobs, whose untracked
-            // context is constructed from the report sender in `begin`.
-            tail_reporting: false,
-            tail_logs: Mutex::new(TailLogCapture::default()),
-            user_spans: OnceLock::new(),
-            identity: OnceLock::new(),
-        });
+        let context = Self::build(
+            Some((id, Arc::downgrade(runtime_state))),
+            limits,
+            tail_reporting,
+        );
         runtime_state
             .io_contexts
             .lock()

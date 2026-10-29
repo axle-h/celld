@@ -33,40 +33,42 @@
   );
 
   class Element {
+    // Private, so no handler can point a token at another rewriter.
+    #state; // { id, live, attrEpoch, deferred, endTag }
     constructor(state) {
-      this.__state = state; // { id, live, attrEpoch, deferred, endTag }
+      this.#state = state;
     }
     __check() {
-      if (!this.__state.live) throw new TypeError(kDead);
+      if (!this.#state.live) throw new TypeError(kDead);
     }
     __content(op, content, options) {
       this.__check();
       const html = !!(options && options.html);
       if (content instanceof ReadableStream || content instanceof Response) {
-        this.__state.deferred.push({ op, source: content, html });
+        this.#state.deferred.push({ op, source: content, html });
         return;
       }
-      cmd(this.__state.id, { op, content: String(content), html });
+      cmd(this.#state.id, { op, content: String(content), html });
     }
     get tagName() {
       this.__check();
-      return cmd(this.__state.id, { op: "tagName" });
+      return cmd(this.#state.id, { op: "tagName" });
     }
     set tagName(name) {
       this.__check();
-      cmd(this.__state.id, { op: "setTagName", name: String(name) });
+      cmd(this.#state.id, { op: "setTagName", name: String(name) });
     }
     get namespaceURI() {
       this.__check();
-      return cmd(this.__state.id, { op: "namespaceURI" });
+      return cmd(this.#state.id, { op: "namespaceURI" });
     }
     get removed() {
       this.__check();
-      return cmd(this.__state.id, { op: "removed" });
+      return cmd(this.#state.id, { op: "removed" });
     }
     get attributes() {
       this.__check();
-      const state = this.__state;
+      const state = this.#state;
       const epoch = state.attrEpoch;
       const inner = cmd(state.id, { op: "attributes" })[Symbol.iterator]();
       const iterator = Object.create(iterProto);
@@ -79,26 +81,26 @@
     }
     getAttribute(name) {
       this.__check();
-      return cmd(this.__state.id, { op: "getAttribute", name: String(name) });
+      return cmd(this.#state.id, { op: "getAttribute", name: String(name) });
     }
     hasAttribute(name) {
       this.__check();
-      return cmd(this.__state.id, { op: "hasAttribute", name: String(name) });
+      return cmd(this.#state.id, { op: "hasAttribute", name: String(name) });
     }
     setAttribute(name, value) {
       this.__check();
-      cmd(this.__state.id, {
+      cmd(this.#state.id, {
         op: "setAttribute",
         name: String(name),
         value: String(value),
       });
-      this.__state.attrEpoch += 1;
+      this.#state.attrEpoch += 1;
       return this;
     }
     removeAttribute(name) {
       this.__check();
-      cmd(this.__state.id, { op: "removeAttribute", name: String(name) });
-      this.__state.attrEpoch += 1;
+      cmd(this.#state.id, { op: "removeAttribute", name: String(name) });
+      this.#state.attrEpoch += 1;
       return this;
     }
     before(content, options) { this.__content("before", content, options); return this; }
@@ -112,27 +114,28 @@
     }
     remove() {
       this.__check();
-      cmd(this.__state.id, { op: "remove" });
+      cmd(this.#state.id, { op: "remove" });
       return this;
     }
     removeAndKeepContent() {
       this.__check();
-      cmd(this.__state.id, { op: "removeAndKeepContent" });
+      cmd(this.#state.id, { op: "removeAndKeepContent" });
       return this;
     }
     onEndTag(handler) {
       this.__check();
-      this.__state.endTag = handler;
+      this.#state.endTag = handler;
     }
   }
 
   class EndTag {
+    #state;
     constructor(state, name) {
-      this.__state = state;
+      this.#state = state;
       this.__name = name;
     }
     __check() {
-      if (!this.__state.live) throw new TypeError(kDead);
+      if (!this.#state.live) throw new TypeError(kDead);
     }
     get name() {
       this.__check();
@@ -140,7 +143,7 @@
     }
     before(content, options) {
       this.__check();
-      cmd(this.__state.id, {
+      cmd(this.#state.id, {
         op: "before",
         content: String(content),
         html: !!(options && options.html),
@@ -149,7 +152,7 @@
     }
     after(content, options) {
       this.__check();
-      cmd(this.__state.id, {
+      cmd(this.#state.id, {
         op: "after",
         content: String(content),
         html: !!(options && options.html),
@@ -158,18 +161,19 @@
     }
     remove() {
       this.__check();
-      cmd(this.__state.id, { op: "remove" });
+      cmd(this.#state.id, { op: "remove" });
       return this;
     }
   }
 
   class Comment {
+    #state;
     constructor(state, text) {
-      this.__state = state;
+      this.#state = state;
       this.__text = text;
     }
     __check() {
-      if (!this.__state.live) throw new TypeError(kDead);
+      if (!this.#state.live) throw new TypeError(kDead);
     }
     get text() {
       this.__check();
@@ -177,16 +181,16 @@
     }
     set text(value) {
       this.__check();
-      cmd(this.__state.id, { op: "setText", text: String(value) });
+      cmd(this.#state.id, { op: "setText", text: String(value) });
       this.__text = String(value);
     }
     get removed() {
       this.__check();
-      return cmd(this.__state.id, { op: "removed" });
+      return cmd(this.#state.id, { op: "removed" });
     }
     __content(op, content, options) {
       this.__check();
-      cmd(this.__state.id, {
+      cmd(this.#state.id, {
         op,
         content: String(content),
         html: !!(options && options.html),
@@ -197,19 +201,20 @@
     replace(content, options) { this.__content("replace", content, options); return this; }
     remove() {
       this.__check();
-      cmd(this.__state.id, { op: "remove" });
+      cmd(this.#state.id, { op: "remove" });
       return this;
     }
   }
 
   class Text {
+    #state;
     constructor(state, text, lastInTextNode) {
-      this.__state = state;
+      this.#state = state;
       this.__text = text;
       this.__last = lastInTextNode;
     }
     __check() {
-      if (!this.__state.live) throw new TypeError(kDead);
+      if (!this.#state.live) throw new TypeError(kDead);
     }
     get text() {
       this.__check();
@@ -221,11 +226,11 @@
     }
     get removed() {
       this.__check();
-      return cmd(this.__state.id, { op: "removed" });
+      return cmd(this.#state.id, { op: "removed" });
     }
     __content(op, content, options) {
       this.__check();
-      cmd(this.__state.id, {
+      cmd(this.#state.id, {
         op,
         content: String(content),
         html: !!(options && options.html),
@@ -236,20 +241,21 @@
     replace(content, options) { this.__content("replace", content, options); return this; }
     remove() {
       this.__check();
-      cmd(this.__state.id, { op: "remove" });
+      cmd(this.#state.id, { op: "remove" });
       return this;
     }
   }
 
   class Doctype {
+    #state;
     constructor(state, name, publicId, systemId) {
-      this.__state = state;
+      this.#state = state;
       this.__name = name;
       this.__publicId = publicId;
       this.__systemId = systemId;
     }
     __check() {
-      if (!this.__state.live) throw new TypeError(kDead);
+      if (!this.#state.live) throw new TypeError(kDead);
     }
     get name() { this.__check(); return this.__name; }
     get publicId() { this.__check(); return this.__publicId; }
@@ -257,10 +263,11 @@
   }
 
   class DocumentEnd {
-    constructor(state) { this.__state = state; }
+    #state;
+    constructor(state) { this.#state = state; }
     append(content, options) {
-      if (!this.__state.live) throw new TypeError(kDead);
-      cmd(this.__state.id, {
+      if (!this.#state.live) throw new TypeError(kDead);
+      cmd(this.#state.id, {
         op: "append",
         content: String(content),
         html: !!(options && options.html),
@@ -341,6 +348,10 @@
         source,
         controller: null,
         reader: null,
+        wake: null,
+        resolveWake: null,
+        credit: false,
+        hungry: false,
         cancelled: false,
         endTags: new Map(),
         nextEndTagToken: 1,
@@ -352,6 +363,11 @@
           state.controller = controller;
           __hrPump(state);
         },
+        // Each pull is the consumer asking for more, which lets the source
+        // loop read one more chunk (`__hrDemand`). Without a consumer the
+        // loop parks, so an unread transform of an endless source does not
+        // fill the isolate -- workerd's parser has the same backpressure.
+        pull: () => __hrWake(state),
         cancel: (reason) => __hrCancel(state, reason),
       });
       return new Response(readable, init);
@@ -362,6 +378,7 @@
     if (state.cancelled) return;
     state.cancelled = true;
     state.cancelReason = reason;
+    __hrWake(state);
     __hr_free(state.id);
     // The source is NOT cancelled here: Workerd's pump notices a
     // cancelled destination on its next pull, so a producer's write
@@ -372,6 +389,7 @@
   const __hrFail = (state, error) => {
     if (state.cancelled) return;
     state.cancelled = true;
+    __hrWake(state);
     state.controller.error(error);
     __hr_free(state.id);
     if (state.reader) state.reader.cancel(error).catch(() => {});
@@ -380,6 +398,51 @@
   const __hrFlush = (state) => {
     const bytes = __hr_take(state.id);
     if (bytes.byteLength > 0) state.controller.enqueue(bytes);
+  };
+
+  // Backpressure. The source loop reads the next chunk only on a credit;
+  // the parser's event loop grants one each time it has drained the ready
+  // events and is about to wait for more input -- so one source chunk is in
+  // the parser at a time -- but only while the output readable has room
+  // (`desiredSize > 0`). Without a consumer the readable fills, the grant is
+  // withheld, and the loop parks; a pull (the consumer reading) makes room
+  // and releases the held grant. So an unread transform reads nothing beyond
+  // what fills the readable, whatever the source. A cancel releases the loop
+  // so it can exit.
+  const __hrCredit = (state) => {
+    if (state.cancelled || state.credit) {
+      state.credit = false;
+      return Promise.resolve();
+    }
+    state.wake ??= new Promise((resolve) => (state.resolveWake = resolve));
+    return state.wake;
+  };
+  // Grant the source loop one read if the readable has room; otherwise
+  // remember that the parser wants input, to grant on the next pull.
+  const __hrGrant = (state) => {
+    if (state.cancelled) return;
+    state.hungry = true;
+    if ((state.controller?.desiredSize ?? 1) <= 0) return;
+    state.hungry = false;
+    if (state.resolveWake !== null) {
+      const resolve = state.resolveWake;
+      state.wake = null;
+      state.resolveWake = null;
+      resolve();
+    } else {
+      state.credit = true;
+    }
+  };
+  // The consumer read that just made room, or a cancel.
+  const __hrWake = (state) => {
+    if (state.cancelled) {
+      const resolve = state.resolveWake;
+      state.wake = null;
+      state.resolveWake = null;
+      resolve?.();
+    } else if (state.hungry) {
+      __hrGrant(state);
+    }
   };
 
   async function __hrService(state, ev) {
@@ -454,6 +517,11 @@
         const reader = state.source.getReader();
         state.reader = reader;
         for (;;) {
+          await __hrCredit(state);
+          if (state.cancelled) {
+            reader.cancel(state.cancelReason).catch(() => {});
+            return;
+          }
           const { done, value } = await reader.read();
           if (state.cancelled) {
             reader.cancel(state.cancelReason).catch(() => {});
@@ -472,6 +540,9 @@
     })();
     try {
       for (;;) {
+        // About to wait for the parser: it has drained the ready events, so
+        // it can take one more source chunk if the readable has room.
+        __hrGrant(state);
         const raw = await __hr_event(state.id);
         if (state.cancelled) return;
         const ev = JSON.parse(raw);

@@ -93,7 +93,9 @@ replies the `flags/websocket-*-reply` cases check under different flags, and
   the runner sets them, from `observability`.
 - `upstream` (default `false`) starts the runner's local HTTP server,
   `lib/upstream.mjs`, for the case's Workers to fetch as "the network". It
-  listens on two loopback ports. `/bounce` answers 302 to
+  listens on two loopback ports, and a third port is a TCP echo server for
+  `connect()`: it writes back every byte it reads, and ends its side when the
+  client ends its own. `/bounce` answers 302 to
   `/landed?from=bounce`, `/landed` answers `{"landed": <query>}`,
   `/redirect?to=<url>&status=<code>` answers that status (302 by default) to
   that URL, `/chain?n=<n>` redirects `n` times and lands, `/loop` redirects
@@ -112,8 +114,9 @@ replies the `flags/websocket-*-reply` cases check under different flags, and
   `"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}"`.
 - Placeholders name the ports the runner picks for a run, in `env` values and
   in `path` and `ws` steps:
-  - `${UPSTREAM_PORT}` and `${UPSTREAM_PORT_2}`: the upstream's two ports.
-    They need `"upstream": true`.
+  - `${UPSTREAM_PORT}` and `${UPSTREAM_PORT_2}`: the upstream's two ports,
+    and `${UPSTREAM_ECHO_PORT}`: its TCP echo port. They need
+    `"upstream": true`.
   - `${PUBLIC_PORT}`: celld's public listener, for a Worker that fetches its
     own origin and has to allow it. The runner picks a free port and passes it
     as `--port`, so another process can take it first. It needs a

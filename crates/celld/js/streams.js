@@ -46,13 +46,18 @@ const queuedReadPending = (s) => s._readRequests.length > 0;
 // cross-request error for any other. Keyed by the stream, so
 // nothing a Worker sets on a stream reaches it.
 const ioChecks = new WeakMap();
+// Thrown by a check whose refusal is an operation that never
+// settles rather than an error (`own`'s `objectPends`).
+const NEVER_SETTLES = Symbol("never settles");
 const ioCheck = (stream) => {
   const check = ioChecks.get(stream);
   if (check !== undefined) check();
 };
 const ioRefusal = (stream) => {
   try { ioCheck(stream); }
-  catch (e) { return Promise.reject(e); }
+  catch (e) {
+    return e === NEVER_SETTLES ? new Promise(() => {}) : Promise.reject(e);
+  }
   return undefined;
 };
 // A refused read also errors the stream with the refusal, as workerd's
@@ -97,13 +102,18 @@ __celld.__streamIo = Object.freeze({
     internalStreams.set(stream, hooks);
   },
   // Tie `stream` to the code running now, refusing any other
-  // with workerd's error for an I/O object of type `kind`.
-  own(stream, kind) {
+  // with workerd's error for an I/O object of type `kind`. With
+  // `objectPends`, another Durable Object's write, close and abort
+  // never settle instead, as a socket's writable's do in workerd.
+  // Only a writable takes it: its refusals are all asynchronous.
+  own(stream, kind, objectPends = false) {
     const owner = __ws_owner();
     ioChecks.set(stream, () => {
       const running = __ws_owner();
-      if (running !== owner)
-        throw crossOwnerError(running, owner, kind);
+      if (running === owner) return;
+      if (objectPends && running % 2 === 1 && owner % 2 === 1)
+        throw NEVER_SETTLES;
+      throw crossOwnerError(running, owner, kind);
     });
   },
   check: ioCheck,

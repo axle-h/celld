@@ -1,0 +1,10 @@
+{
+  "steps": [
+    {"status": 200, "body": "back"},
+    {"status": 200, "body": {"hidden": true, "write": {"ok": "forged"}, "close": {"ok": "closed"}}},
+    {"status": 200, "body": {"received": [], "ended": false}},
+    {"status": 200, "body": "back"},
+    {"status": 200, "body": {"hidden": true, "write": {"ok": "forged"}, "close": {"ok": "closed"}}},
+    {"status": 200, "body": {"received": [], "ended": false}}
+  ]
+}

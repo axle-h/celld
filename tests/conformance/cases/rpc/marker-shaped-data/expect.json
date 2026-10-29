@@ -1,0 +1,32 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "headers": {
+          "tag": "[object Object]",
+          "keys": [
+            "__celld$hdr"
+          ]
+        },
+        "blob": {
+          "tag": "[object Object]",
+          "keys": [
+            "__celld$blob",
+            "y"
+          ]
+        },
+        "signal": {
+          "tag": "[object Object]",
+          "keys": [
+            "__celld$sig",
+            "a",
+            "r"
+          ]
+        }
+      }
+    }
+  ]
+}

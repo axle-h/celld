@@ -1,0 +1,7 @@
+{
+  "steps": [
+    {"status": 200, "body": "holding"},
+    {"status": 200, "body": {"hidden": true, "text": "<p forged=\"1\">front</p>"}},
+    {"status": 200, "body": "<p>back</p>"}
+  ]
+}

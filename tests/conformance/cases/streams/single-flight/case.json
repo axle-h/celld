@@ -1,0 +1,9 @@
+{
+  "upstream": true,
+  "env": {"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}", "CELLD_MAX_STATELESS_ISOLATES": "1"},
+  "workers": ["app"],
+  "steps": [
+    {"path": "/first?http=${UPSTREAM_PORT}"},
+    {"path": "/second?echo=${UPSTREAM_ECHO_PORT}&http=${UPSTREAM_PORT}"}
+  ]
+}

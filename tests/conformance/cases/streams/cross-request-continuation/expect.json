@@ -1,0 +1,24 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": "holding"
+    },
+    {
+      "status": 200,
+      "body": {
+        "tcp": {
+          "ok": "later"
+        },
+        "http": {
+          "ok": 16384
+        },
+        "html": {
+          "ok": "<p later=\"1\">held</p>"
+        }
+      }
+    }
+  ]
+}

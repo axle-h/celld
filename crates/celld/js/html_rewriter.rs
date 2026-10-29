@@ -15,6 +15,7 @@
 //! is a backstop against a lost thread, not a protocol state.
 
 use super::*;
+use crate::ws_registry::WsOwner;
 use lol_html::html_content::ContentType;
 use lol_html::AsciiCompatibleEncoding;
 use lol_html::HtmlRewriter;
@@ -66,6 +67,10 @@ enum Input {
 }
 
 struct Rewriter {
+    /// The request or Durable Object whose `transform()` made it, taken
+    /// from the running event. Ids are a process-wide counter, so every op
+    /// answers only for this owner.
+    owner: WsOwner,
     input_tx: mpsc::Sender<Input>,
     cmd_tx: mpsc::Sender<String>,
     cmd_resp_rx: Arc<Mutex<mpsc::Receiver<String>>>,
@@ -81,6 +86,28 @@ fn registry() -> &'static Mutex<HashMap<u64, Rewriter>> {
 fn next_id() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Apply `f` to rewriter `id` if the running code owns it: `Ok(None)` for
+/// an id that names no rewriter (finished, freed or never made), and the
+/// cross-request (or cross-object) error, naming `HTMLRewriter` as the I/O
+/// type, for another owner's. Handlers cannot name an id (the tokens keep
+/// it private), so no workerd text applies.
+fn owned<T>(
+    scope: &mut v8::PinScope,
+    id: u64,
+    f: impl FnOnce(&Rewriter) -> T,
+) -> Result<Option<T>, String> {
+    let owner = websocket::owner_of(&event_context(scope));
+    let registry = registry().lock().unwrap();
+    match registry.get(&id) {
+        None => Ok(None),
+        Some(rewriter) if rewriter.owner == owner => Ok(Some(f(rewriter))),
+        Some(rewriter) => Err(crate::ws_registry::foreign_io_error(
+            matches!(owner, WsOwner::Cell(_)) && matches!(rewriter.owner, WsOwner::Cell(_)),
+            "HTMLRewriter",
+        )),
+    }
 }
 
 /// The channel ends every handler closure shares. Events go out, and
@@ -544,12 +571,22 @@ pub(super) fn op_hr_create(
     });
 
     let id = next_id();
-    // Account the rewriter to the request, the way a Worker socket is:
-    // request retirement frees an abandoned transform's parser thread.
-    current_context().rewriters.lock().unwrap().push(id);
+    // Account the rewriter to its owner, the way a TCP socket is: request
+    // retirement frees an abandoned transform's parser thread, and a Durable
+    // Object's transform, which its later events may read, goes with the
+    // cell (`release_cell`). A transform that is never read parks under
+    // backpressure -- its pump reads the source only as the output readable
+    // has room -- so it neither grows nor keeps its event running
+    // (`op_hr_event` is unrefed).
+    let context = event_context(scope);
+    let owner = websocket::owner_of(&context);
+    if matches!(owner, WsOwner::Request(_)) {
+        context.rewriters.lock().unwrap().push(id);
+    }
     registry().lock().unwrap().insert(
         id,
         Rewriter {
+            owner,
             input_tx,
             cmd_tx,
             cmd_resp_rx: Arc::new(Mutex::new(cmd_resp_rx)),
@@ -569,8 +606,10 @@ pub(super) fn op_hr_write(
     let Some(bytes) = view_bytes(args.get(1)) else {
         return;
     };
-    if let Some(rewriter) = registry().lock().unwrap().get(&id) {
+    if let Err(error) = owned(scope, id, |rewriter| {
         let _ = rewriter.input_tx.send(Input::Chunk(bytes.to_vec()));
+    }) {
+        loader_throw(scope, &error);
     }
 }
 
@@ -580,8 +619,10 @@ pub(super) fn op_hr_end(
     _rv: v8::ReturnValue<v8::Value>,
 ) {
     let id = args.get(0).integer_value(scope).unwrap_or(0) as u64;
-    if let Some(rewriter) = registry().lock().unwrap().get(&id) {
+    if let Err(error) = owned(scope, id, |rewriter| {
         let _ = rewriter.input_tx.send(Input::End);
+    }) {
+        loader_throw(scope, &error);
     }
 }
 
@@ -601,15 +642,17 @@ pub(super) fn op_hr_cmd(
         .unwrap_or(true);
     // Take what the wait needs, then drop the registry guard: the reply
     // wait must not block another isolate's rewriter ops.
-    let receiver = {
-        let registry = registry().lock().unwrap();
-        let Some(rewriter) = registry.get(&id) else {
-            return loader_throw(scope, "HTMLRewriter is gone");
-        };
-        if rewriter.cmd_tx.send(cmd).is_err() {
-            return loader_throw(scope, "HTMLRewriter thread exited");
-        }
-        expects_reply.then(|| Arc::clone(&rewriter.cmd_resp_rx))
+    let sent = owned(scope, id, |rewriter| {
+        rewriter
+            .cmd_tx
+            .send(cmd)
+            .map(|()| expects_reply.then(|| Arc::clone(&rewriter.cmd_resp_rx)))
+    });
+    let receiver = match sent {
+        Ok(Some(Ok(receiver))) => receiver,
+        Ok(Some(Err(_))) => return loader_throw(scope, "HTMLRewriter thread exited"),
+        Ok(None) => return loader_throw(scope, "HTMLRewriter is gone"),
+        Err(error) => return loader_throw(scope, &error),
     };
     let Some(receiver) = receiver else {
         return;
@@ -633,11 +676,10 @@ pub(super) fn op_hr_event(
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
     let id = args.get(0).integer_value(scope).unwrap_or(0) as u64;
-    let receiver = registry()
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|rewriter| rewriter.event_rx.clone());
+    let receiver = match owned(scope, id, |rewriter| rewriter.event_rx.clone()) {
+        Ok(receiver) => receiver,
+        Err(error) => return loader_throw(scope, &error),
+    };
     let async_id = asyncrt::enqueue(async move {
         let Some(receiver) = receiver else {
             return Err("HTMLRewriter is gone".to_string());
@@ -657,22 +699,38 @@ pub(super) fn op_hr_take(
     rv: v8::ReturnValue<v8::Value>,
 ) {
     let id = args.get(0).integer_value(scope).unwrap_or(0) as u64;
-    let bytes = registry()
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|rewriter| {
-            let mut output = rewriter.output.lock().unwrap();
-            output.drain(..).collect::<Vec<u8>>()
-        })
-        .unwrap_or_default();
+    let bytes = match owned(scope, id, |rewriter| {
+        let mut output = rewriter.output.lock().unwrap();
+        output.drain(..).collect::<Vec<u8>>()
+    }) {
+        Ok(bytes) => bytes.unwrap_or_default(),
+        Err(error) => return loader_throw(scope, &error),
+    };
     webcrypto_return_bytes(scope, rv, &bytes);
 }
 
 /// Free one rewriter: drop its channel ends so the parser thread
 /// unblocks and exits. Idempotent — every teardown path calls it.
 pub(super) fn free(id: u64) {
-    registry().lock().unwrap().remove(&id);
+    let removed = registry().lock().unwrap().remove(&id);
+    drop(removed);
+}
+
+/// Free every rewriter a Durable Object or facet made, as its cell's
+/// residency ends (`finish_cell_adoption`).
+pub(super) fn release_cell(cell: &str) {
+    let released: Vec<Rewriter> = {
+        let mut registry = registry().lock().unwrap();
+        let ids: Vec<u64> = registry
+            .iter()
+            .filter(
+                |(_, rewriter)| matches!(&rewriter.owner, WsOwner::Cell(owner) if owner == cell),
+            )
+            .map(|(id, _)| *id)
+            .collect();
+        ids.iter().filter_map(|id| registry.remove(id)).collect()
+    };
+    drop(released);
 }
 
 pub(super) fn op_hr_free(
@@ -683,5 +741,145 @@ pub(super) fn op_hr_free(
     let id = args.get(0).integer_value(scope).unwrap_or(0) as u64;
     // Dropping the senders unblocks the thread: a parked closure's
     // `recv` fails and the input loop's `recv` fails, so it exits.
-    free(id);
+    match owned(scope, id, |_| ()) {
+        Ok(Some(())) => free(id),
+        Ok(None) => {}
+        Err(error) => loader_throw(scope, &error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::cell_event_context_for_test as cell_context;
+    use super::*;
+    use crate::ws_registry::foreign_io_error;
+
+    const BYTES: &str = "<bytes>";
+
+    /// Call `op` through V8 with `id` and then `rest` (`BYTES` for a byte
+    /// array), as a script that bypassed the harness would: what it
+    /// returned, or what it threw.
+    fn call_op(
+        scope: &mut v8::PinScope,
+        op: impl v8::MapFnTo<v8::FunctionCallback>,
+        id: u64,
+        rest: Option<&str>,
+    ) -> Result<String, String> {
+        let tc = std::pin::pin!(v8::TryCatch::new(scope));
+        let tc = &mut tc.init();
+        let function = v8::Function::new(tc, op).unwrap();
+        let mut args: Vec<v8::Local<v8::Value>> = vec![v8::Number::new(tc, id as f64).into()];
+        match rest {
+            Some(BYTES) => {
+                let buffer = v8::ArrayBuffer::new(tc, 1);
+                args.push(v8::Uint8Array::new(tc, buffer, 0, 1).unwrap().into());
+            }
+            Some(rest) => args.push(v8::String::new(tc, rest).unwrap().into()),
+            None => {}
+        }
+        let recv = v8::undefined(tc).into();
+        match function.call(tc, recv, &args) {
+            Some(value) => Ok(value.to_rust_string_lossy(tc)),
+            None => Err(tc
+                .exception()
+                .map(|error| error.to_rust_string_lossy(tc))
+                .unwrap_or_default()),
+        }
+    }
+
+    fn create(scope: &mut v8::PinScope) -> u64 {
+        let tc = std::pin::pin!(v8::TryCatch::new(scope));
+        let tc = &mut tc.init();
+        let function = v8::Function::new(tc, op_hr_create).unwrap();
+        let config = v8::String::new(tc, r#"{"selectors":[]}"#).unwrap().into();
+        let recv = v8::undefined(tc).into();
+        let id = function
+            .call(tc, recv, &[config])
+            .expect("the rewriter is made");
+        id.integer_value(tc).unwrap() as u64
+    }
+
+    /// A rewriter id that a request or a Durable Object made is refused, in
+    /// every op, to another request and to another object, and the owner
+    /// still frees it.
+    #[test]
+    fn a_rewriter_id_is_refused_to_code_that_does_not_own_it() {
+        let _ = crate::asyncrt::test_host_runtime();
+        Engine::init();
+        std::thread::spawn(|| {
+            let config = Arc::new(WorkerConfig::new(WorkerConfigOptions {
+                src: "export default { fetch() { return new Response(); } };\n".into(),
+                script_name: "rewriter-owner".into(),
+                do_classes: Vec::new(),
+                bindings: Vec::new(),
+                r2_bindings: Vec::new(),
+                d1_bindings: Vec::new(),
+                kv_bindings: Vec::new(),
+                queue_bindings: Vec::new(),
+                queue_consumers: Vec::new(),
+                workflow_bindings: Vec::new(),
+                vars: Vec::new(),
+                node: String::new(),
+                modules: Vec::new(),
+                compat: Compat::default(),
+            }));
+            let mut worker = Worker::load_config(config).unwrap();
+            let _runtime = crate::asyncrt::test_host_runtime().enter();
+            let owners = [IoContext::new(), cell_context("rewriter-cell")];
+            for (index, owner) in owners.into_iter().enumerate() {
+                let id = {
+                    let _current = CurrentGuard::enter(owner.clone());
+                    worker.with_scope_for_test(create)
+                };
+                let strangers = [
+                    (false, IoContext::new()),
+                    (index == 1, cell_context("rewriter-other")),
+                ];
+                for (object, stranger) in strangers {
+                    let _current = CurrentGuard::enter(stranger);
+                    let answers = worker.with_scope_for_test(|scope| {
+                        vec![
+                            call_op(scope, op_hr_write, id, Some(BYTES)),
+                            call_op(scope, op_hr_end, id, None),
+                            call_op(scope, op_hr_cmd, id, Some(r#"{"op":"done"}"#)),
+                            call_op(scope, op_hr_event, id, None),
+                            call_op(scope, op_hr_take, id, None),
+                            call_op(scope, op_hr_free, id, None),
+                        ]
+                    });
+                    for answer in answers {
+                        let refusal = answer.unwrap_err();
+                        let expected = foreign_io_error(object, "HTMLRewriter");
+                        assert!(refusal.contains(&expected), "{refusal}");
+                    }
+                    assert!(registry().lock().unwrap().contains_key(&id));
+                }
+                let _current = CurrentGuard::enter(owner);
+                worker.with_scope_for_test(|scope| {
+                    call_op(scope, op_hr_take, id, None).unwrap();
+                    call_op(scope, op_hr_free, id, None).unwrap();
+                });
+                assert!(!registry().lock().unwrap().contains_key(&id));
+            }
+            // An object's transform outlives the event that made it, and
+            // goes when the cell is released; a request's is not the cell's.
+            let object = {
+                let _current = CurrentGuard::enter(cell_context("rewriter-cell"));
+                worker.with_scope_for_test(create)
+            };
+            let requester = IoContext::new();
+            let request = {
+                let _current = CurrentGuard::enter(requester.clone());
+                worker.with_scope_for_test(create)
+            };
+            release_cell("rewriter-cell");
+            assert!(!registry().lock().unwrap().contains_key(&object));
+            assert!(registry().lock().unwrap().contains_key(&request));
+            // The request's own retirement frees it.
+            drop(requester);
+            assert!(!registry().lock().unwrap().contains_key(&request));
+        })
+        .join()
+        .unwrap();
+    }
 }

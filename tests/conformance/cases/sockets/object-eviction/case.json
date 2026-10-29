@@ -1,0 +1,15 @@
+{
+  "kind": "celld-only",
+  "reason": "idle eviction (CELLD_IDLE_EVICT_S) and the node's connection count",
+  "upstream": true,
+  "env": {"CELLD_IDLE_EVICT_S": "1"},
+  "workers": ["app"],
+  "steps": [
+    {"sockets": "baseline"},
+    {"path": "/open?name=idle&port=${UPSTREAM_ECHO_PORT}"},
+    {"path": "/open?name=reading&read&port=${UPSTREAM_ECHO_PORT}"},
+    {"sockets": 0, "within": 15000},
+    {"path": "/used?name=idle"},
+    {"path": "/used?name=reading"}
+  ]
+}

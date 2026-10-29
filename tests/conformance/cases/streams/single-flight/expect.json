@@ -1,0 +1,25 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": "started"
+    },
+    {
+      "status": 200,
+      "body": {
+        "token": false,
+        "tcp": {
+          "ok": "own"
+        },
+        "http": {
+          "ok": 16384
+        },
+        "html": {
+          "ok": "<p later=\"1\">own</p>"
+        }
+      }
+    }
+  ]
+}

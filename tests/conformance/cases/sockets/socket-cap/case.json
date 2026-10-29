@@ -1,0 +1,25 @@
+{
+  "kind": "celld-only",
+  "reason": "CELLD_MAX_TCP_SOCKETS is celld's cap; workerd run locally has none",
+  "upstream": true,
+  "env": {
+    "CELLD_MAX_TCP_SOCKETS": "3"
+  },
+  "workers": [
+    "app"
+  ],
+  "steps": [
+    {
+      "path": "/request?port=${UPSTREAM_ECHO_PORT}"
+    },
+    {
+      "path": "/object?port=${UPSTREAM_ECHO_PORT}"
+    },
+    {
+      "path": "/cycle?port=${UPSTREAM_ECHO_PORT}"
+    },
+    {
+      "path": "/burst?port=${UPSTREAM_ECHO_PORT}"
+    }
+  ]
+}

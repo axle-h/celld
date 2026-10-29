@@ -2,13 +2,17 @@
 // redirecting server of `service-bindings/redirect-outside` and
 // `fetch/redirect-follow`, and the private address the `fetch-public/*` cases
 // try to reach. It listens on two loopback ports, so a case can allow one and
-// show that the other is still refused.
+// show that the other is still refused, and a third port is a TCP echo server
+// for `connect()` from `cloudflare:sockets`.
 
 import { createServer } from "node:http";
+import { createServer as createTcpServer } from "node:net";
 import { BINARY, CLOSE, TEXT, acceptKey, closePayload, encodeFrame, frameReader, isFragment, readClose } from "./ws-frames.mjs";
 
 /**
- * Starts the server and returns `{ ports: [first, second], close() }`.
+ * Starts the servers and returns `{ ports: [first, second, echo], close() }`.
+ * `echo` is a TCP server that writes back every byte it reads and ends its
+ * side when the client ends its own.
  *
  * - `/bounce` answers 302 to `/landed?from=bounce`.
  * - `/landed` answers JSON `{"landed": <the query string>}`.
@@ -173,6 +177,13 @@ export async function startUpstream() {
       instance.once("error", reject);
       instance.listen(0, "127.0.0.1", () => resolve(instance.address().port));
     });
+  const echoed = new Set();
+  const echoServer = createTcpServer({ allowHalfOpen: true }, (socket) => {
+    echoed.add(socket);
+    socket.on("error", () => {});
+    socket.on("close", () => echoed.delete(socket));
+    socket.pipe(socket);
+  });
   const close = (instance) =>
     new Promise((resolve) => {
       if (!instance.listening) return resolve();
@@ -180,11 +191,18 @@ export async function startUpstream() {
       instance.closeAllConnections();
       instance.close(() => resolve());
     });
+  const closeEcho = () =>
+    new Promise((resolve) => {
+      if (!echoServer.listening) return resolve();
+      for (const socket of echoed) socket.destroy();
+      echoServer.close(() => resolve());
+    });
+  const closeAll = () => Promise.all([close(server), close(second), closeEcho()]);
   try {
-    const ports = [await listen(server), await listen(second)];
-    return { ports, close: () => Promise.all([close(server), close(second)]) };
+    const ports = [await listen(server), await listen(second), await listen(echoServer)];
+    return { ports, close: closeAll };
   } catch (error) {
-    await Promise.all([close(server), close(second)]);
+    await closeAll();
     throw error;
   }
 }

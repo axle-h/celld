@@ -1,0 +1,26 @@
+{
+  "steps": [
+    {
+      "sockets": "baseline"
+    },
+    {
+      "status": 200,
+      "body": "open"
+    },
+    {
+      "status": 200,
+      "body": "open"
+    },
+    {
+      "sockets": "at most 0 more"
+    },
+    {
+      "status": 200,
+      "body": "new instance"
+    },
+    {
+      "status": 200,
+      "body": "new instance"
+    }
+  ]
+}

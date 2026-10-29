@@ -208,6 +208,7 @@ async function execute(runtime, testCase, tools) {
     const ports = {
       UPSTREAM_PORT: upstream?.ports[0],
       UPSTREAM_PORT_2: upstream?.ports[1],
+      UPSTREAM_ECHO_PORT: upstream?.ports[2],
       // celld's own listeners, for celld-only cases.
       PUBLIC_PORT: testCase.publicPort && runtime === "celld" ? await freePort() : undefined,
       INTERNAL_PORT: testCase.internalPort && runtime === "celld" ? await freePort() : undefined,

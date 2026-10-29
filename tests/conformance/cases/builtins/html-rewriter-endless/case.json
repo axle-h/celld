@@ -1,0 +1,28 @@
+{
+  "kind": "celld-only",
+  "reason": "an unread transform's memory growth is a celld resource bound; workerd run locally has no limit to observe",
+  "workers": [
+    "app"
+  ],
+  "steps": [
+    {
+      "path": "/start"
+    },
+    {
+      "rss": "baseline"
+    },
+    {
+      "path": "/ping"
+    },
+    {
+      "cpu": 900,
+      "wait": 3000
+    },
+    {
+      "path": "/ping"
+    },
+    {
+      "rss": 128
+    }
+  ]
+}

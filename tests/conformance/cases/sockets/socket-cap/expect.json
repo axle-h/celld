@@ -1,0 +1,38 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": [
+        "open",
+        "open",
+        "open",
+        "Error: celld refused connect(): this request already holds 3 open TCP sockets, the most CELLD_MAX_TCP_SOCKETS allows. Close one first.",
+        "open after a close"
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        "open",
+        "open",
+        "open",
+        "Error: celld refused connect(): this Durable Object already holds 3 open TCP sockets, the most CELLD_MAX_TCP_SOCKETS allows. Close one first.",
+        "open after a close"
+      ]
+    },
+    {
+      "status": 200,
+      "body": "40 connected, none refused"
+    },
+    {
+      "status": 200,
+      "body": {
+        "opened": 3,
+        "refused": [
+          "celld refused connect(): this request already holds 3 open TCP sockets, the most CELLD_MAX_TCP_SOCKETS allows. Close one first.",
+          "celld refused connect(): this request already holds 3 open TCP sockets, the most CELLD_MAX_TCP_SOCKETS allows. Close one first."
+        ]
+      }
+    }
+  ]
+}

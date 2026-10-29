@@ -468,10 +468,11 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 36 | 1.26 stream ownership on the host, readers and IdentityTransformStream | done | `e449d4d` |
 | 37 | 1.45 esbuild service protocol; Wrangler `alias` exactly | done | `60f09d3`, starter `ec3cf7f` |
 | 38 | 1.28 RPC method lookup on every receiver (security) | done | `8e1f06e` |
-| 39 | 1.49 part A: Durable Object scope grants on the host (security) | done | |
-| 39b | 1.50 TCP socket and RPC-signal ownership (security) | next | |
-| 39c | 1.49 part B: internals out of user reach, cell re-validation (security) | queued | |
-| 40+ | Phase 1 in plan order (1.29, 1.30, 1.34, 1.36-1.44, 1.46-1.48), and the 1.4 props key-order follow-up | queued | |
+| 39 | 1.49 part A: Durable Object scope grants on the host (security) | done | `53e6198` |
+| 39b | 1.50 TCP socket and HTMLRewriter ownership, socket cap, continuations (1.52) (security) | done | |
+| 39c | 1.49 part B: internals out of user reach, cell re-validation (security) | next | |
+| 39d | 1.53 marker-shaped RPC data, with 1.29's forgeable-marker item (security) | queued | |
+| 40+ | Phase 1 in plan order (1.29, 1.30, 1.34, 1.36-1.44, 1.46-1.48, 1.51, 1.54), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -3804,14 +3805,17 @@ used to call with no arguments. Only authenticated peers send it.
   loaded-worker facets (`LoaderOwner`). `__do_id` only derives an id, which
   the grant makes non-authorising; `__kv_blob` and `__queue_dispatch` take
   their cell from the running event's gate, not from JS. The TCP
-  socket ops (`__tcp_*`) and the RPC-signal ops (`__rpc_signal_*`) are *not*
-  bound: their ids are reachable (a writable `socket._id`) and process-wide,
-  so a forged id reaches another script's socket or signal. That is its own
-  security item, **1.50**, queued straight after part A. The remaining
-  counter-keyed compute handles -- `__zlib_stream_*`, `__timer_cancel`,
-  `__hr_*`, `__r2_mp_*` -- hold opaque per-request ids a script does not
-  expose; hardening them against a forged integer is the 1.21/1.26
-  cross-request class, if it proves reachable.
+  socket ops (`__tcp_*`) and the HTMLRewriter ops (`__hr_*`) were not bound
+  at part A: their ids were reachable (a writable `socket._id`, a writable
+  `__state` on every content token) and process-wide, so a forged id reached
+  another script's connection or parked parser. 1.50 binds both to the
+  request or object that made them (the 1.21 owner model) and makes the ids
+  private. The RPC-signal ids (`__rpc_signal_*`) are not reachable: 64
+  random bits (per process) plus a counter, held only in harness WeakMaps, never
+  shown to a script, and a forged one only subscribes to a signal (1.53 has
+  the marker-shaped-data gap that would carry one). `__zlib_stream_*` and
+  `__r2_mp_*` ids live in closures, and `__timer_cancel` is reached only
+  through the isolate's own timer map, so none takes an id a script names.
 - **Docs.** `docs/security.md` "Durable Object reach"; the upgrade note.
 - **Tests.** `rpc/scope-grants` (celld-only, `front` and `back`): own DO,
   `ctx.exports`, KV, Queue and D1 still work, a message whose consumer
@@ -3857,17 +3861,15 @@ used to call with no arguments. Only authenticated peers send it.
 - The JSON-null peer RPC (`__doRpcRequest`, `harness.js` ~6483).
 - Rewrite `rpc/rpc-refusals-internal`'s `/runtime` step once `_stub` is
   gone.
-- TCP socket ids and RPC-signal ids are reachable and process-wide
-  (`__tcp_*`, `__rpc_signal_*`); a forged id crosses scripts. Their own
-  security item **1.50**, after part A. The other counter-keyed compute
-  handles (`__zlib_stream_*`, `__timer_cancel`, `__hr_*`, `__r2_mp_*`) hold
-  opaque per-request ids; harden them as 1.21/1.26 did if reachable.
+- TCP socket and HTMLRewriter ids: done in 1.50 (owner-bound on the host,
+  private in the harness). RPC-signal ids were traced there and are not
+  reachable; the other counter-keyed handles take no id from a script.
 - An end-to-end two-node test of the forwarded-caller refusal (node B 403 /
   handler failure, node A surfaces it): part A unit-tests the frame and the
   check, but the repo has no cheap two-node harness (the conformance runner
   refuses `nodes > 1`), so the cross-node path is covered only by unit tests.
 
-### 1.50 TCP socket and RPC-signal ownership (found by the 1.49 review) — security, next
+### 1.50 TCP socket and RPC-signal ownership (found by the 1.49 review) — security
 
 **Problem.** The TCP socket registry (`js/tcp.rs` ~39-57) is process-wide
 and keyed by a global counter, and `op_tcp_read`, `write`, `shutdown`,
@@ -3889,6 +3891,291 @@ are reachable across scripts or requests.
 another request's or script's connection (using a local TCP echo upstream
 from the corpus libs), and the same for RPC signals if they prove reachable.
 Unit tests on the owner check.
+
+**As built.**
+- **What workerd does** (probed, `sockets/cross-request-socket`). A socket
+  is an I/O object of the request or Durable Object that opened it.
+  - From another request, whether the opening request still runs
+    (`waitUntil`) or has ended: a read, a reader's read or `cancel()` throw
+    the cross-request error `(I/O type: ReadableStreamSource)`; a write and
+    the writer's `close()` `(I/O type: Writable)`. `opened` resolves,
+    `closed` stays pending, `getReader()` works, `close()` resolves and
+    `startTls()` returns a Socket.
+  - From another Durable Object in the isolate: reads and `cancel()` throw
+    the cross-object error; writes and the writer's `close()` never settle.
+  - The object that opened a socket uses it in its later events (write,
+    read, echo, close all work). So the owner unit is 1.21's `WsOwner`: the
+    request (`handoff_request`), or the object or facet (`Cell(scope)`), as
+    for WebSockets and bodies. celld closed a socket at the end of the event
+    that opened it, so this is a fix as well as a refusal.
+  - `Object.keys(socket)` is empty and `new socket.constructor()` throws
+    "Illegal constructor".
+- **Host** (`js/tcp.rs`). Each `TcpSocket` records its owner, taken from
+  the running event when the id is allocated (`allocate`), before the
+  connection exists; the halves are filled in by `attach` once it does, and
+  an id freed meanwhile drops the stream. `access(id, owner)` answers
+  Owned, Unknown or Other; every op (`read`, `write`, `shutdown`, `close`,
+  `starttls`) refuses Other synchronously with `foreign_io_error` (I/O type
+  `Writable` for write and shutdown, `ReadableStreamSource` for the rest),
+  before touching the connection; `starttls` refuses before it consumes the
+  plaintext socket. Unknown answers as before ("socket is closed").
+  - **Lifetime.** A request's ids are tracked on its context and freed at
+    retirement, as before. An object's are not: `tcp::release_cell` closes
+    every socket a cell (or each of its facets) owns, called from
+    `finish_cell_adoption` on both edges of the residency, beside
+    `ws_release_grants`, before the script's release snippet and whatever
+    that returns; the facet loop releases every facet's host side even if
+    one facet's snippet fails, and answers with the first failure.
+  - **Collection.** A `Socket` the isolate collects closes its connection,
+    as in workerd: `sockets.js` registers each opened socket's id in a
+    FinalizationRegistry, whose callback calls `__tcp_collect(id)`. That op
+    checks no owner, because a finalizer runs in no event of the owner's;
+    the id comes only from the registry, which no script reaches. So an
+    object that connects in every event and drops the socket holds none.
+  - **Cancellation.** Each `TcpSocket` holds a `watch::Sender` that drops
+    with the entry; every op future (connect and its handshake, read, write,
+    shutdown, starttls) runs under `until_closed`, a `select_biased!` on its
+    receiver, so freeing an id (retirement, release, collection, close)
+    ends an op still waiting on it and the halves it held go: a read parked
+    on a silent peer no longer keeps an evicted object's connection open.
+  - **Failure.** `Unattached` frees an allocated id unless its op attached a
+    stream, so a failed or cancelled connect or handshake leaves nothing.
+  - **Cap.** A new connection is refused once its owner holds
+    `CELLD_MAX_TCP_SOCKETS` (default 32, validated at startup with the
+    other limits): "celld refused connect(): this Durable Object already
+    holds 32 open TCP sockets, the most CELLD_MAX_TCP_SOCKETS allows. Close
+    one first." (or "this request"). Because a dropped `Socket` closes only
+    when V8 collects it, a connect-and-drop-per-event loop would otherwise
+    hit the cap on sockets already unreachable (the reviewer saw 13 spurious
+    refusals after 32). The slot is reserved synchronously in the op,
+    counted and inserted under one registry lock (`try_reserve`), so the
+    connects of one turn cannot overshoot (the third review opened 100 with a
+    cap of 32 when the count and the insert were apart). At the cap the op
+    forces a collection (`sweep_for_cap`) at most once per isolate per
+    100 ms (`SWEEP_WINDOW`), and the async connect waits up to that window
+    for the end-of-turn finalizer sweep, taking a freed slot under the same
+    lock (`reserve_after_sweep`), so only as many waiters proceed as slots
+    came free. A connect that shared an earlier sweep and still found no
+    slot answers an internal `SWEEP_AGAIN`; `sockets.js` calls
+    `__tcp_connect` once more in a later turn, where a sweep of its own is
+    due, and that attempt answers the connection or the refusal. So 300
+    connects at the cap cost at most two collections, a window apart (the
+    review measured 300 back-to-back GCs before). The collection is
+    `low_memory_notification`: a critical memory-pressure notification,
+    which would keep the compilation cache, left the dropped sockets
+    uncollected (the connect-and-drop step was refused), and a plain full GC
+    needs `--expose-gc`. A refusal therefore means the cap's worth of
+    sockets are genuinely reachable. workerd run locally enforces nothing (probed: 40
+    opened at once in one request); Cloudflare documents six simultaneous
+    connections per invocation, the rest queued until one closes. A queue
+    would hold an object's events open on someone else's socket, so celld
+    refuses loudly instead, and `docs/limitations.md` notes a refusal means
+    32 are still reachable. The socket `startTls()` makes replaces one and
+    is not counted.
+- **Harness** (`js/sockets.js`). All `Socket` state is in private fields,
+  the host id included; the constructor takes a module-private brand and
+  otherwise throws "Illegal constructor". The readable is an internal
+  stream (one read in flight) and both streams are `__streamIo.own`ed, so
+  the refusals above come from 1.26's registry with workerd's text. `own`
+  gained `objectPends`: another object's write, close and abort of the
+  writable return a promise that never settles. Another owner's `close()`
+  resolves and touches nothing. Another owner's `startTls()` changes none
+  of the socket's state: as workerd does (probed), it leaves the owner's
+  writable locked and returns a Socket whose `opened` never settles and
+  whose writes reject with the readable's I/O error.
+- **HTMLRewriter** (traced as part of the sweep, and reachable). Content
+  tokens kept the rewriter id in a writable `__state`, and `__hr_*` checked
+  nothing, so a handler that set `element.__state.id` to the id before its
+  own sent commands into another script's parked parser (reproduced at
+  HEAD: back's output gained front's attribute). Now `#state` is private in
+  each token class, every `__hr_*` op checks the rewriter's owner
+  (`WsOwner`, recorded at `__hr_create`) and refuses another's with the
+  cross-request text and I/O type `HTMLRewriter` (celld's: workerd has no id
+  to forge). A request's rewriter is tracked on its `event_context` and
+  freed at retirement; a Durable Object's lives with the cell
+  (`html_rewriter::release_cell`, beside the TCP release), so a later event
+  reads a transform an earlier one made (`builtins/html-rewriter-object`,
+  differential: it said "HTMLRewriter is gone" when the event that made it
+  ended). An unread transform does not grow: the pump reads the source only
+  on a credit, which the parser's event loop grants each time it has drained
+  the ready events and wants more input, and only while the output readable
+  has room (`desiredSize > 0`). Without a consumer the readable fills and no
+  credit is granted, so the source parks -- one chunk in the parser, not the
+  whole source. This is workerd's parser backpressure; before it, a Durable
+  Object's unread transform of an endless source grew to the isolate's
+  memory limit (`builtins/html-rewriter-endless`). The creating event still
+  returns (the parked pump is background work), and a pull resumes the
+  credits when a later event reads.
+- **RPC signals and the other handles.** See 1.49's Op sweep: signal ids are
+  64 random bits (per process) plus a counter, kept in harness WeakMaps and
+  never shown to a script; a forged one could only subscribe (`wait`,
+  `poll`), and needs the 1.53 marker gap to be named at all. zlib and R2
+  multipart ids are closure-held; timers are reached only through the
+  isolate's own map. None is bound further.
+- **Continuation identity for stateless requests (1.52, done here).**
+  celld ran a stateless request's continuation that another request's turn
+  resolved as that other request: only cell events had a continuation id
+  in CPED, so `event_context` fell back to the thread's current context.
+  With the owner checks above, a module-scope single-flight promise
+  (`token ??= fetch(...)`) awaited by a later request left that request
+  refused its own socket and transform (bodies had the gap since 1.26).
+  Now every invocation context is one V8 captures: `IoContext::invocation`
+  allocates a continuation id and registers the context in the isolate's
+  `io_contexts`, for a fetch (`begin`), an entrypoint RPC and a queue batch
+  as `tracked` already did for cell events (which now builds through it).
+  Each of those `begin`s installs the id with `install_io_context` before
+  the handler runs, and `turn_begin` restores CPED after `begin` returns,
+  as every later turn (`turn_deliver`, `cancel_turn`) already did for any
+  context with an id. So a reaction V8 runs during another request's
+  checkpoint resolves to its own request, and the ops it enqueues go to
+  that request's driver through the `handed` mailbox (`adopt`), the path
+  cell events already used. A continuation whose request has retired finds
+  no context and runs as the current one, as before.
+- **Docs.** `docs/security.md` "TCP socket ownership" and "HTMLRewriter
+  ownership"; `docs/cloudflare-compat.md` TCP sockets (a socket lives
+  across a Durable Object's events and closes when collected; the 1.51
+  differences; the cap); `docs/limitations.md` "TCP sockets" (the cap, and
+  reconnecting after an eviction); `docs/README.md` `CELLD_MAX_TCP_SOCKETS`.
+- **Tests.**
+  - `sockets/cross-request-socket` (differential): the shape, each use from
+    a later request while the opener runs and after it ended, the opening
+    object's later event, and another object. At HEAD every step but the
+    openings fails.
+  - `sockets/forged-socket-id` (celld-only, `front` and `back`): asserts
+    the private state (a Socket has no `_id` and no own properties), sets an
+    `_id` anyway, and writes and closes. Front reads its own echo, and
+    back's connection (held by a request, then by a Durable Object)
+    receives nothing and stays open. At HEAD, front's `_id - 1` named back's
+    connection, which received "forged" and was closed. Now no script can
+    hand the host an id, so the host's own refusal is covered by the unit
+    tests below, not by this case.
+  - `builtins/html-rewriter-forged-token` (celld-only): the same for a
+    token's `__state` (asserted absent). At HEAD back's document gained the
+    attribute.
+  - `streams/cross-request-continuation` (differential, was the 1.52 xfail)
+    and `streams/single-flight` (differential): a later request's code
+    after awaiting a promise an earlier request settles uses its own
+    socket, fetched body and HTMLRewriter transform.
+  - `builtins/html-rewriter-object` (differential): a Durable Object reads
+    in a later event the transform an earlier one made.
+  - `sockets/object-eviction` (celld-only, `CELLD_IDLE_EVICT_S=1`): an idle
+    socket and one with a read waiting are both closed once the object is
+    evicted (the `sockets` step counts the echo connections), and the next
+    request finds a new instance. With the cancellation removed the case
+    fails (`1 more, past 0`), so it also shows `finish_cell_adoption`
+    reaching `release_cell` on eviction.
+  - `sockets/socket-cap` (celld-only, `CELLD_MAX_TCP_SOCKETS=3`): a request
+    and a Durable Object each open three, the fourth is refused with the
+    text above, and one more opens after a close; then a Durable Object that
+    connects and drops the socket in forty successive events is refused
+    none, which the sweep is what makes true; and five connects started in
+    one turn and kept open three and refuse exactly two.
+  - `builtins/html-rewriter-endless` (celld-only): a Durable Object makes a
+    transform of an endless source and never reads it; a later event still
+    answers, the node stays idle (`cpu`) and memory bounded (`rss`). Without
+    backpressure this grew to the limit.
+  - Collection is not in the corpus: no build a case runs exposes `gc()`.
+    `__tcp_collect` is unit-tested.
+  - xfail: `sockets/foreign-close` (1.51), `rpc/marker-shaped-data` (1.53).
+  - `lib/upstream.mjs` has a TCP echo server on a third port,
+    `${UPSTREAM_ECHO_PORT}`.
+  - Unit: `tcp::tests::a_socket_answers_only_its_owner` (owner, other,
+    object flag, unknown, `release_cell`) and
+    `a_socket_id_is_refused_to_code_that_does_not_own_it` (every op through
+    V8, from another request, a cell, a second isolate, and another object;
+    the owner, in any of its events, still reads and closes; a collected
+    id closes from another owner's event), `freeing_a_socket_ends_its_ops`,
+    `an_unattached_id_is_freed`, `reservations_stop_at_the_cap`,
+    `waiters_take_only_the_freed_slots` (five waiters, two freed slots: two
+    proceed), `a_burst_at_the_cap_forces_one_sweep` (300 connects through
+    V8 at the cap: one forced collection);
+    `html_rewriter::tests::a_rewriter_id_is_refused_to_code_that_does_not_own_it`
+    (also: an object's transform goes with `release_cell`, a request's with
+    its retirement).
+- **Internal signatures changed** (for `celld_internal_tests`): `tcp`
+  gained `release_cell` and the op `__tcp_collect`; `html_rewriter` gained
+  `release_cell`; `__streamIo.own(stream, kind, objectPends)`; the `Socket`
+  constructor takes a brand first; `IoContext::invocation` builds every
+  stateless invocation's context (registered in `io_contexts`), and
+  `tracked` goes through it.
+- **Verification.**
+  - `cargo fmt --check`, clippy `-D warnings` and `cargo test --workspace`
+    (262 lib tests, 32 and 4 in the other crates) are clean, and so is the
+    lab build.
+  - Conformance `--runtime=both` with `CONFORMANCE_REQUIRE=docker`: 155
+    PASS, 22 XFAIL, exit 0 (was 146 and 19). `cross-request-socket`,
+    `forged-socket-id` and `html-rewriter-forged-token` fail at HEAD;
+    `object-eviction` fails without the cancellation.
+  - Starter e2e `all --fresh --quick` matches the baseline: S0, S1, S2, S9,
+    S11, B0 and B6 pass, exit 1 for the expected failures, no "dropped a
+    frame".
+  - Integration exits 0; `workshop-user-directory` passes and no first
+    error changed.
+- **Found.** 1.51, 1.52 (done here), 1.53, 1.54.
+
+### 1.51 TCP socket follow-ups (found by 1.50)
+
+Probed in workerd; each is in `sockets/foreign-close` (xfail).
+- Another request's `close()` resolves, and then the socket's `closed`
+  rejects with the cross-request error `(I/O type: ReadableStreamSource)`
+  while the opening request runs (it never settles once that request has
+  ended). Another object's `close()` leaves the owner's `closed` rejected
+  with the cross-object error and its writable "belongs to an object that
+  is closing". celld's foreign `close()` touches nothing.
+- (Matched in 1.50: another owner's `startTls()` returns a Socket whose
+  `opened` never settles and whose writes are refused `(I/O type:
+  ReadableStreamSource)`, and leaves the owner's writable locked.)
+- The owner's own `startTls()` resolves `opened` before the handshake; a
+  peer that does not speak TLS then fails the first write with "Network
+  connection lost.". celld's `opened` waits for the handshake and rejects
+  with the rustls error.
+- `getWriter()` on a locked writable says "This WritableStream is currently
+  locked to a writer."; celld's says "WritableStream is locked".
+
+### 1.52 Continuations resolved by another request (found by 1.50) — done as part of 1.50
+
+workerd runs a request's continuation as the request that created it, even
+when another request's code resolved the promise. celld's stateless
+contexts carried no continuation id in CPED, so the continuation ran as the
+resolving request and was refused its own fetched body (1.26), TCP socket
+and HTMLRewriter transform (1.50). Done in 1.50 ("Continuation identity for
+stateless requests"): every invocation context now has one.
+`streams/cross-request-continuation` and `streams/single-flight` pass.
+
+### 1.53 Marker-shaped data in RPC payloads (found by 1.50) — security, low
+
+`__stubRevive` recognises celld's markers (`__celld$hdr`, `$blob`, `$sig`,
+`$stub`, `$svc`, `$do`, `$rs`, `$ws`, `$req`, `$res`, `$disp`) by key in any
+plain object of a lifted payload, and `__stubLift` passes a script's plain
+objects through unchanged. So data shaped like a marker revives as a
+Headers, a Blob, a signal or a stub when the payload also carries a value
+that needs the lift. workerd delivers it as the plain object
+(`rpc/marker-shaped-data`, xfail; celld's signal row fails as a corrupt
+payload). Reach: a forged `$sig` subscribes to the signal it names, but a
+signal id is 64 random bits (per process) plus a counter, never shown to a
+script (1.50); a forged `$stub` names an entry of the
+same isolate by its counter and `__stubIsolate`, a `Math.random()` token.
+Escape a script's plain objects whose keys collide with a marker in the
+lift, or carry markers out of band.
+
+### 1.54 A finished request's continuation runs as the resolver (found by 1.50) — low
+
+A continuation of a request that has already finished -- a module-scope
+promise it chained, resolved later by another request B -- runs during B's
+turn. celld (1.52) gives every invocation a continuation id, but once the
+request retires its context leaves `io_contexts`, so the CPED token names a
+gone context and `event_context` falls back to the running context, B. The
+continuation then acts as B: an I/O object is still checked against its own
+owner (so A's socket is refused, B's own is reached, as in workerd), but a
+new subrequest the continuation starts runs as B rather than being refused.
+workerd (probed) runs the synchronous continuation, lets it use B's live
+socket, and refuses a new `fetch()` with the cross-request error
+`(I/O type: SpanParent)`, because the subrequest is bound to A's finished
+context. The difference is within one script (A and B are the same Worker),
+so it is no cross-script reach; matching it means distinguishing "no CPED
+token" from "token names a gone context" and refusing new I/O from the
+latter with workerd's `SpanParent` text, on the request hot path.
+`streams/finished-continuation` (differential, xfail) records it.
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 

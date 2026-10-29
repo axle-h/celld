@@ -52,6 +52,23 @@ APIs, and Wrangler configuration.
   Worker entrypoints and Durable Object calls only within one node. A Durable
   Object on another node cannot return one.
 
+## TCP sockets
+
+- A request or Durable Object holds at most `CELLD_MAX_TCP_SOCKETS` open
+  `connect()` sockets (32 by default). One more is refused at once:
+
+  ```text
+  celld refused connect(): this Durable Object already holds 32 open TCP sockets, the most CELLD_MAX_TCP_SOCKETS allows. Close one first.
+  ```
+
+  A socket a script dropped is collected before the cap is applied, so
+  connecting and dropping a socket in each event is never refused: a refusal
+  means that many sockets are still reachable. Cloudflare limits an
+  invocation to six simultaneous connections and queues the rest until one
+  closes; celld neither queues nor counts `fetch()` against the cap.
+- A Durable Object's sockets close when the object leaves memory, even with
+  a read waiting, so the application must reconnect after an eviction.
+
 ## Isolate limits
 
 - A Worker must load within the V8 heap limit of its isolate

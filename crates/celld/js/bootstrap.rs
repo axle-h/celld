@@ -1154,27 +1154,44 @@ fn finish_cell_adoption(tc: &mut v8::PinScope, cell: &str, owned: bool) -> Resul
     if condemned && owned {
         return Err(anyhow!(super::MEMORY_EXCEEDED));
     }
-    if !condemned {
-        let source = format!("__celld.__cell.release({cell:?});");
-        run_internal_snippet(tc, &source).ok_or_else(|| anyhow!("adopt failed"))?;
-    }
-    // The grants the released residency held go with the objects that held
-    // them.
+    // The host's side first, and whatever the script's side does: the grants
+    // the released residency held go with the objects that held them, and so
+    // do the TCP sockets and HTMLRewriter transforms its objects made.
     crate::ws_registry::ws_release_grants(&crate::ws_registry::WsOwner::Cell(cell.to_string()));
+    super::tcp::release_cell(cell);
+    super::html_rewriter::release_cell(cell);
+    let released = if condemned {
+        Ok(())
+    } else {
+        let source = format!("__celld.__cell.release({cell:?});");
+        run_internal_snippet(tc, &source)
+            .map(drop)
+            .ok_or_else(|| anyhow!("adopt failed"))
+    };
     if !owned {
         // A facet of the root's own class lives in this isolate, and nothing
         // else releases it: its realm and connection would outlive the root.
+        // Every facet's host side is released even if a script release fails;
+        // the first failure is the answer.
+        let mut released = released;
         for facet in storage::embedded_facets(cell) {
             if !condemned {
                 let source = format!("__celld.__cell.release({facet:?});");
-                run_internal_snippet(tc, &source).ok_or_else(|| anyhow!("release failed"))?;
+                let facet_released = run_internal_snippet(tc, &source)
+                    .map(drop)
+                    .ok_or_else(|| anyhow!("release failed"));
+                released = released.and(facet_released);
             }
             storage::close(&facet);
             crate::ws_registry::ws_close_facet(&facet, "the parent Durable Object was released");
+            super::tcp::release_cell(&facet);
+            super::html_rewriter::release_cell(&facet);
         }
         storage::close(cell);
+        released?;
         return Ok(None);
     }
+    released?;
     let name = storage::get_actor_name(cell).context("read actor name")?;
     register_actor_name(tc, cell, name.as_deref())?;
     Ok(storage::get_alarm(cell))

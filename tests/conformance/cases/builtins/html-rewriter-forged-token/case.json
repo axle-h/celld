@@ -1,0 +1,11 @@
+{
+  "kind": "celld-only",
+  "reason": "an HTMLRewriter token's host id: workerd has no id a handler could set, so there is nothing to forge",
+  "env": {"CELLD_MAX_STATELESS_ISOLATES": "1"},
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/hold"},
+    {"path": "/forge"},
+    {"path": "/report"}
+  ]
+}

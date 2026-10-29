@@ -1,0 +1,25 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": "started"
+    },
+    {
+      "rss": "baseline"
+    },
+    {
+      "status": 200,
+      "body": "pong"
+    },
+    {
+      "cpu": "at most 900 ms in 1 s"
+    },
+    {
+      "status": 200,
+      "body": "pong"
+    },
+    {
+      "rss": "grew at most 128 MiB"
+    }
+  ]
+}

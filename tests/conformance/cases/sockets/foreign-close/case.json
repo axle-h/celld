@@ -1,0 +1,17 @@
+{
+  "xfail": "1.51",
+  "upstream": true,
+  "env": {"CELLD_MAX_STATELESS_ISOLATES": "1"},
+  "workers": ["app"],
+  "steps": [
+    {"path": "/live/open?port=${UPSTREAM_ECHO_PORT}"},
+    {"path": "/live/use"},
+    {"path": "/ended/open?port=${UPSTREAM_ECHO_PORT}"},
+    {"path": "/ended/use"},
+    {"path": "/do/open?name=own&port=${UPSTREAM_ECHO_PORT}"},
+    {"path": "/do/use"},
+    {"path": "/do/open?name=a&port=${UPSTREAM_ECHO_PORT}"},
+    {"path": "/do/leaked"},
+    {"path": "/do/after-leak"}
+  ]
+}

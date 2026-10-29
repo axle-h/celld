@@ -1,0 +1,187 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "keys": [],
+        "names": [],
+        "construct": {
+          "error": "TypeError: Illegal constructor"
+        },
+        "first": {
+          "ok": "shape"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "first": {
+          "ok": "first"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "write": {
+          "error": "Error: Cannot perform I/O on behalf of a different request. I/O objects (such as streams, request/response bodies, and others) created in the context of one request handler cannot be accessed from a different request's handler. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: Writable)"
+        },
+        "read": {
+          "error": "Error: Cannot perform I/O on behalf of a different request. I/O objects (such as streams, request/response bodies, and others) created in the context of one request handler cannot be accessed from a different request's handler. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: ReadableStreamSource)"
+        },
+        "echo": {
+          "error": "Error: Cannot perform I/O on behalf of a different request. I/O objects (such as streams, request/response bodies, and others) created in the context of one request handler cannot be accessed from a different request's handler. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: Writable)"
+        },
+        "writerClose": {
+          "error": "Error: Cannot perform I/O on behalf of a different request. I/O objects (such as streams, request/response bodies, and others) created in the context of one request handler cannot be accessed from a different request's handler. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: Writable)"
+        },
+        "readableCancel": {
+          "error": "Error: Cannot perform I/O on behalf of a different request. I/O objects (such as streams, request/response bodies, and others) created in the context of one request handler cannot be accessed from a different request's handler. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: ReadableStreamSource)"
+        },
+        "close": {
+          "ok": "closed"
+        },
+        "opened": {
+          "ok": "opened"
+        },
+        "closed": {
+          "ok": "<pending>"
+        },
+        "startTls": {
+          "ok": "upgraded:object"
+        },
+        "getReader": {
+          "ok": "reader"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "first": {
+          "ok": "first"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "write": {
+          "error": "Error: Cannot perform I/O on behalf of a different request. I/O objects (such as streams, request/response bodies, and others) created in the context of one request handler cannot be accessed from a different request's handler. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: Writable)"
+        },
+        "read": {
+          "error": "Error: Cannot perform I/O on behalf of a different request. I/O objects (such as streams, request/response bodies, and others) created in the context of one request handler cannot be accessed from a different request's handler. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: ReadableStreamSource)"
+        },
+        "echo": {
+          "error": "Error: Cannot perform I/O on behalf of a different request. I/O objects (such as streams, request/response bodies, and others) created in the context of one request handler cannot be accessed from a different request's handler. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: Writable)"
+        },
+        "writerClose": {
+          "error": "Error: Cannot perform I/O on behalf of a different request. I/O objects (such as streams, request/response bodies, and others) created in the context of one request handler cannot be accessed from a different request's handler. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: Writable)"
+        },
+        "readableCancel": {
+          "error": "Error: Cannot perform I/O on behalf of a different request. I/O objects (such as streams, request/response bodies, and others) created in the context of one request handler cannot be accessed from a different request's handler. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: ReadableStreamSource)"
+        },
+        "close": {
+          "ok": "closed"
+        },
+        "opened": {
+          "ok": "opened"
+        },
+        "closed": {
+          "ok": "<pending>"
+        },
+        "startTls": {
+          "ok": "upgraded:object"
+        },
+        "getReader": {
+          "ok": "reader"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "ok": "first"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "write": {
+          "ok": "written"
+        },
+        "read": {
+          "ok": "<pending>"
+        },
+        "echo": {
+          "ok": "later"
+        },
+        "writerClose": {
+          "ok": "closed"
+        },
+        "readableCancel": {
+          "ok": "cancelled"
+        },
+        "close": {
+          "ok": "closed"
+        },
+        "opened": {
+          "ok": "opened"
+        },
+        "closed": {
+          "ok": "<pending>"
+        },
+        "startTls": {
+          "ok": "upgraded:object"
+        },
+        "getReader": {
+          "ok": "reader"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "ok": "first"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "write": {
+          "ok": "<pending>"
+        },
+        "read": {
+          "error": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: ReadableStreamSource)"
+        },
+        "echo": {
+          "ok": "<pending>"
+        },
+        "writerClose": {
+          "ok": "<pending>"
+        },
+        "readableCancel": {
+          "error": "Error: Cannot perform I/O on behalf of a different Durable Object. I/O objects (such as streams, request/response bodies, and others) created in the context of one Durable Object cannot be accessed from a different Durable Object in the same isolate. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: ReadableStreamSource)"
+        },
+        "close": {
+          "ok": "closed"
+        },
+        "opened": {
+          "ok": "opened"
+        },
+        "closed": {
+          "ok": "<pending>"
+        },
+        "startTls": {
+          "ok": "upgraded:object"
+        },
+        "getReader": {
+          "ok": "reader"
+        }
+      }
+    }
+  ]
+}

@@ -365,8 +365,19 @@ celld provides an always-miss cache because it has no shared edge cache.
 
 ### [TCP sockets](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/)
 
-- A socket cannot outlive its event. A Durable Object must reconnect during a
-  later event.
+- A socket belongs to the request or Durable Object that opened it, and its
+  streams refuse every other one with workerd's I/O error
+  ([TCP socket ownership](security.md#tcp-socket-ownership)). A Durable
+  Object keeps using a socket across its events. A socket no object refers
+  to any more closes.
+- Another owner's `close()` resolves and leaves the socket as it was. In
+  workerd it also leaves the socket's `closed` rejected and its writable
+  closing.
+- `startTls()`'s `opened` waits for the TLS handshake, and a failed handshake
+  rejects it. In workerd it resolves first, and the first write fails with
+  "Network connection lost.".
+- A request or Durable Object holds at most `CELLD_MAX_TCP_SOCKETS` open
+  sockets; see [limitations](limitations.md#tcp-sockets).
 - celld verifies a TLS server against its bundled Mozilla root store.
 - celld does not block the destination ports that Cloudflare blocks, and
   `connect()` can reach private addresses, which the

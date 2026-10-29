@@ -1,0 +1,15 @@
+{
+  "kind": "celld-only",
+  "reason": "a socket's host id: workerd has no id a Worker could set, so there is nothing to forge",
+  "upstream": true,
+  "env": {"CELLD_MAX_STATELESS_ISOLATES": "1"},
+  "workers": ["front", "back"],
+  "steps": [
+    {"path": "/hold?port=${UPSTREAM_ECHO_PORT}&holder=request"},
+    {"path": "/forge?port=${UPSTREAM_ECHO_PORT}"},
+    {"path": "/report?holder=request"},
+    {"path": "/hold?port=${UPSTREAM_ECHO_PORT}&holder=object"},
+    {"path": "/forge?port=${UPSTREAM_ECHO_PORT}"},
+    {"path": "/report?holder=object"}
+  ]
+}

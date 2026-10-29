@@ -27,7 +27,7 @@ const RUNNER_ENV = /^(CELLD_OTEL|OTEL_)/;
 // `${NAME}`. The upstream ports need "upstream": true. The public and
 // internal ports are celld's own listeners, so they need a celld-only case.
 const PLACEHOLDER = /\$\{([^}]*)\}/g;
-const PLACEHOLDERS = new Set(["UPSTREAM_PORT", "UPSTREAM_PORT_2", "PUBLIC_PORT", "INTERNAL_PORT"]);
+const PLACEHOLDERS = new Set(["UPSTREAM_PORT", "UPSTREAM_PORT_2", "UPSTREAM_ECHO_PORT", "PUBLIC_PORT", "INTERNAL_PORT"]);
 const NORMALIZE_KEYS = new Set(["pattern", "replace", "why"]);
 
 export class CaseError extends Error {}
@@ -169,7 +169,7 @@ export function loadCase(root, id) {
     }
   }
   if (upstream && ![...placeholders].some((name) => name.startsWith("UPSTREAM_"))) {
-    fail(`"upstream": true starts a server that no \${UPSTREAM_PORT} or \${UPSTREAM_PORT_2} names`);
+    fail(`"upstream": true starts a server that no \${UPSTREAM_PORT}, \${UPSTREAM_PORT_2} or \${UPSTREAM_ECHO_PORT} names`);
   }
 
   const normalize = raw.normalize ?? [];

@@ -54,6 +54,7 @@ try {
   const { steps, normalize } = bindPlaceholders(testCase, {
     UPSTREAM_PORT: upstream?.ports[0],
     UPSTREAM_PORT_2: upstream?.ports[1],
+    UPSTREAM_ECHO_PORT: upstream?.ports[2],
   });
   // The version it came from, as a differential case's recording has.
   const require = createRequire(join(ROOT, "package.json"));

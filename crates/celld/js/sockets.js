@@ -56,46 +56,72 @@
     return value;
   };
 
-  class Socket {
-    constructor(opening, secureTransport, allowHalfOpen, startTlsInfo) {
-      this._secureTransport = secureTransport;
-      this._allowHalfOpen = allowHalfOpen;
-      this._startTlsInfo = startTlsInfo; // null once used or unusable
-      this._id = null;
-      this._closing = false;
-      this._detached = false;
-      let resolveClosed, rejectClosed;
-      this._closed = new Promise((resolve, reject) => {
-        resolveClosed = resolve;
-        rejectClosed = reject;
-      });
-      this._resolveClosed = resolveClosed;
-      this._rejectClosed = rejectClosed;
-      this._closed.catch(() => {});
+  // A socket is an I/O object of the request or Durable Object that opened
+  // it, as in workerd: its streams refuse every other owner with workerd's
+  // error (another object's writes never settle), and `close()` and
+  // `startTls()` from another owner leave it alone or are refused by the
+  // host. The host id is private, so no value a Worker sets names a
+  // connection; the host checks the owner of every id it is handed too.
+  const kConstruct = Symbol("Socket");
+  const streamIo = __celld.__streamIo;
+  // A socket no object refers to any more closes, as in workerd, so an
+  // object that opens a connection in each event and drops it holds none
+  // of them. The id is the only value held, and a script never sees it.
+  const collected = new FinalizationRegistry((id) => __tcp_collect(id));
+  const SWEEP_AGAIN = "celld: sweep again";
 
-      this._opened = opening.then((info) => {
-        this._id = info.id;
+  class Socket {
+    #secureTransport;
+    #allowHalfOpen;
+    #startTlsInfo; // null once used or unusable
+    #id = null;
+    #closing = false;
+    #detached = false;
+    #owner = __ws_owner();
+    #opened;
+    #closed;
+    #resolveClosed;
+    #rejectClosed;
+    #readable;
+    #writable;
+
+    // `refused`: the error every write of this socket rejects with, for the
+    // socket another owner's startTls() returns.
+    constructor(brand, opening, secureTransport, allowHalfOpen, startTlsInfo,
+        refused = null) {
+      if (brand !== kConstruct) throw new TypeError("Illegal constructor");
+      this.#secureTransport = secureTransport;
+      this.#allowHalfOpen = allowHalfOpen;
+      this.#startTlsInfo = startTlsInfo;
+      this.#closed = new Promise((resolve, reject) => {
+        this.#resolveClosed = resolve;
+        this.#rejectClosed = reject;
+      });
+      this.#closed.catch(() => {});
+
+      this.#opened = opening.then((info) => {
+        this.#id = info.id;
+        collected.register(this, info.id, this);
         return {
           remoteAddress: info.remoteAddress ?? undefined,
           localAddress: info.localAddress ?? undefined,
         };
       });
-      this._opened.catch(() => {});
+      this.#opened.catch(() => {});
 
-      const socket = this;
       // highWaterMark 0: the stream must never read ahead of the
       // consumer. A speculative host read parked on the connection
       // would deadlock startTls(), whose handshake cannot begin while
       // a plaintext read holds the socket -- the server speaks second.
-      this._readable = new ReadableStream({
-        async pull(controller) {
-          await socket._opened;
-          if (socket._closing || socket._detached) {
+      this.#readable = new ReadableStream({
+        pull: async (controller) => {
+          await this.#opened;
+          if (this.#closing || this.#detached) {
             controller.close();
             return;
           }
-          const bytes = await __tcp_read(socket._id);
-          if (socket._closing || socket._detached) {
+          const bytes = await __tcp_read(this.#id);
+          if (this.#closing || this.#detached) {
             controller.close();
             return;
           }
@@ -103,110 +129,137 @@
             controller.close();
             // EOF closes the write side too unless the application
             // asked for a half-open socket.
-            if (!socket._allowHalfOpen) await socket._eofClose();
+            if (!this.#allowHalfOpen) await this.#eofClose();
             return;
           }
           controller.enqueue(bytes);
         },
         cancel() {},
       }, { highWaterMark: 0 });
-      this._writable = new WritableStream({
-        async write(chunk) {
-          await socket._opened;
-          if (socket._detached) throw new TypeError("This socket was upgraded.");
+      this.#writable = new WritableStream({
+        write: async (chunk) => {
+          if (refused !== null) throw refused;
+          await this.#opened;
+          if (this.#detached) throw new TypeError("This socket was upgraded.");
           const bytes = chunk instanceof Uint8Array
             ? chunk
             : ArrayBuffer.isView(chunk)
               ? new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
               : new Uint8Array(chunk);
-          await __tcp_write(socket._id, bytes);
+          await __tcp_write(this.#id, bytes);
         },
-        async close() {
-          await socket._opened;
-          if (!socket._detached) await __tcp_shutdown(socket._id);
+        close: async () => {
+          await this.#opened;
+          if (!this.#detached) await __tcp_shutdown(this.#id);
         },
         abort() {},
       });
+      // An internal stream, as workerd's socket readable is: one read in
+      // flight, and every read checked against the owner first.
+      streamIo.internal(this.#readable);
+      streamIo.own(this.#readable, "ReadableStreamSource");
+      streamIo.own(this.#writable, "Writable", true);
 
       // A failed connection fails everything the socket exposes.
       opening.catch((error) => {
-        this._closing = true;
-        this._rejectClosed(error);
+        this.#closing = true;
+        this.#rejectClosed(error);
       });
     }
 
-    get readable() { return this._readable; }
-    get writable() { return this._writable; }
-    get opened() { return this._opened; }
-    get closed() { return this._closed; }
-    get secureTransport() { return this._secureTransport; }
+    get readable() { return this.#readable; }
+    get writable() { return this.#writable; }
+    get opened() { return this.#opened; }
+    get closed() { return this.#closed; }
+    get secureTransport() { return this.#secureTransport; }
 
-    async _eofClose() {
+    async #eofClose() {
       try {
-        const writer = this._writable.getWriter();
+        const writer = this.#writable.getWriter();
         await writer.close();
         writer.releaseLock();
       } catch { /* already closed or locked; closing wins either way */ }
-      this._finishClose();
+      this.#finishClose();
     }
 
-    _finishClose() {
-      if (this._closing) return;
-      this._closing = true;
-      if (this._id !== null) __tcp_close(this._id);
-      this._resolveClosed(undefined);
+    #finishClose() {
+      if (this.#closing) return;
+      this.#closing = true;
+      if (this.#id !== null) {
+        collected.unregister(this);
+        __tcp_close(this.#id);
+      }
+      this.#resolveClosed(undefined);
     }
 
     async close() {
-      if (this._closing) return this._closed;
-      this._closing = true;
+      // workerd resolves another owner's close() and the socket stays
+      // its owner's.
+      if (__ws_owner() !== this.#owner) return;
+      if (this.#closing) return this.#closed;
+      this.#closing = true;
       try {
-        await this._opened;
+        await this.#opened;
       } catch {
-        return this._closed;
+        return this.#closed;
       }
       try {
-        const writer = this._writable.getWriter();
+        const writer = this.#writable.getWriter();
         await writer.close();
       } catch { /* stream already closed, errored, or locked */ }
       try {
-        await this._readable.cancel();
+        await this.#readable.cancel();
       } catch { /* reader may hold the lock; the close below still wins */ }
-      __tcp_close(this._id);
-      this._resolveClosed(undefined);
-      return this._closed;
+      collected.unregister(this);
+      __tcp_close(this.#id);
+      this.#resolveClosed(undefined);
+      return this.#closed;
     }
 
     startTls(options = undefined) {
-      if (this._secureTransport === "on") {
+      if (this.#secureTransport === "on") {
         throw new TypeError("Cannot startTls on a TLS socket.");
       }
-      if (this._secureTransport !== "starttls") {
+      if (this.#secureTransport !== "starttls") {
         throw new TypeError(
           "The `secureTransport` socket option must be set to 'starttls' " +
             "for startTls to be used.");
       }
-      if (this._closing) {
+      if (this.#closing) {
         throw new TypeError(
           "The connection was closed before startTls could be started.");
       }
-      if (this._startTlsInfo === null) {
+      if (this.#startTlsInfo === null) {
         throw new TypeError("startTls can only be called once.");
       }
-      const info = this._startTlsInfo;
-      this._startTlsInfo = null;
-      this._detached = true;
-      const upgrading = this._opened.then(async () => {
+      if (__ws_owner() !== this.#owner) {
+        // Nothing of the owner's socket is consumed. As in workerd, its
+        // writable is left locked, and the Socket this returns never opens
+        // and refuses every write with the readable's I/O error.
+        try { this.#writable.getWriter(); } catch { /* already locked */ }
+        let refusal;
+        try {
+          streamIo.check(this.#readable);
+        } catch (error) {
+          refusal = error;
+        }
+        return new Socket(kConstruct, new Promise(() => {}), "on",
+          this.#allowHalfOpen, null, refusal);
+      }
+      const info = this.#startTlsInfo;
+      this.#startTlsInfo = null;
+      this.#detached = true;
+      const upgrading = this.#opened.then(async () => {
         const raw = await __tcp_starttls(JSON.stringify({
-          id: this._id,
+          id: this.#id,
           host: String(options?.expectedServerHostname ?? info.hostname),
         }));
         // The plaintext socket is consumed; its id now fails every op.
-        this._resolveClosed(undefined);
+        this.#resolveClosed(undefined);
         const parsed = JSON.parse(raw);
         return { id: parsed.id };
       });
-      return new Socket(upgrading, "on", this._allowHalfOpen, null);
+      return new Socket(kConstruct, upgrading, "on", this.#allowHalfOpen, null);
     }
   }
 
@@ -214,12 +267,22 @@
     const { hostname, port } = parseAddress(address);
     const secureTransport = parseSecureTransport(options);
     const allowHalfOpen = !!(options && options.allowHalfOpen);
-    const opening = __tcp_connect(JSON.stringify({
+    const request = JSON.stringify({
       hostname,
       port,
       secure: secureTransport === "on",
-    })).then((raw) => JSON.parse(raw));
+    });
+    // At the socket cap, the host may ask for one more attempt in a later
+    // turn, when it can sweep collected sockets again (tcp.rs SWEEP_AGAIN);
+    // the second attempt answers the connection or the refusal.
+    const opening = __tcp_connect(request, false)
+      .catch((error) => {
+        if (error?.message !== SWEEP_AGAIN) throw error;
+        return __tcp_connect(request, true);
+      })
+      .then((raw) => JSON.parse(raw));
     return new Socket(
+      kConstruct,
       opening,
       secureTransport,
       allowHalfOpen,
