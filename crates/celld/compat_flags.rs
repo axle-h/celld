@@ -223,6 +223,7 @@ fn field_index(field: &str) -> usize {
         .unwrap_or_else(|| panic!("no compatibility flag field {field}"))
 }
 
+pub const ABORTSIGNAL_RPC: FlagId = id("enable_abortsignal_rpc");
 pub const ALLOW_IRREVOCABLE_STUB_STORAGE: FlagId = id("allow_irrevocable_stub_storage");
 pub const ASSETS_NAVIGATION_PREFERS_ASSET_SERVING: FlagId =
     id("assets_navigation_prefers_asset_serving");
@@ -1243,7 +1244,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: None,
         experimental: true,
-        support: Experimental,
+        support: Honoured,
     },
     Flag {
         field: "allowEvalDuringStartup",
@@ -2624,12 +2625,34 @@ mod tests {
             &[
                 "js_rpc",
                 "service_binding_extra_handlers",
+                "enable_abortsignal_rpc",
                 "sqlite_vec",
                 "no_precise_timers",
             ],
         );
         assert!(flags.get(JS_RPC) && flags.get(SERVICE_BINDING_EXTRA_HANDLERS));
-        assert!(flags.get(SQLITE_VEC));
+        assert!(flags.get(ABORTSIGNAL_RPC) && flags.get(SQLITE_VEC));
+    }
+
+    /// Every switch with both an enable and a disable name refuses the two
+    /// together, with workerd's message, whatever each name's class.
+    #[test]
+    fn every_contradictory_pair_is_refused() {
+        let mut pairs = 0;
+        for flag in FLAGS {
+            let (Some(enable), Some(disable)) = (flag.enable, flag.disable) else {
+                continue;
+            };
+            pairs += 1;
+            let contradiction =
+                format!("Compatibility flags are mutually contradictory: {enable} vs {disable}");
+            for context in [Context::Deploy, Context::Loader] {
+                let errors = compile_at(Some("2026-01-01"), &[enable, disable], context, TODAY)
+                    .expect_err(enable);
+                assert_eq!(errors[0], contradiction, "{context:?}");
+            }
+        }
+        assert!(pairs > 100, "{pairs} switches");
     }
 
     #[test]
@@ -2641,7 +2664,12 @@ mod tests {
                  the command line."
             )
         };
-        for flag in ["experimental", "js_rpc", "service_binding_extra_handlers"] {
+        for flag in [
+            "experimental",
+            "js_rpc",
+            "service_binding_extra_handlers",
+            "enable_abortsignal_rpc",
+        ] {
             assert_eq!(
                 compile_at(Some("2026-01-01"), &[flag], Context::Loader, TODAY).unwrap_err(),
                 [refused(flag)]
@@ -2684,6 +2712,7 @@ mod tests {
         assert_eq!(reported.get("nodejs_compat"), Some(&true));
         assert_eq!(reported.get("websocket_standard_binary_type"), Some(&true));
         assert_eq!(reported.get("js_rpc"), Some(&false));
+        assert_eq!(reported.get("enable_abortsignal_rpc"), Some(&false));
         assert_eq!(reported.get("sqlite_vec"), Some(&false));
         assert_eq!(reported.get("url_standard"), Some(&true));
         assert_eq!(reported.get("enhanced_error_serialization"), None);

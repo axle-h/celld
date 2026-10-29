@@ -614,10 +614,11 @@ release, so keep operator tooling and celld releases together.
   Builds from between the two halves of this change (each call naming its
   caller, then the KV, Queue and D1 cells moving to their own isolates) do
   not interoperate on the tunnel either, nor do builds from before celld
-  escaped a script's `__celld$` keys in RPC payloads; stop-all covers them
-  too. A Durable Object value that holds a stub (a `ctx.exports` service
-  stub or a Durable Object stub) is stored in a new form for the same
-  escape, and this version does not read one an earlier build stored: the
+  escaped a script's `__celld$` keys in RPC payloads, or before a call's
+  params carried what the caller releases when the call ends; stop-all
+  covers them too. A Durable Object value that holds a stub (a
+  `ctx.exports` service stub or a Durable Object stub) is stored in a new
+  form for the same escape, and this version does not read one an earlier build stored: the
   read throws `storage: this value holds a stub and was stored by an older
   celld build`. Start from fresh storage, or delete such values before the
   upgrade. Values without a stub read as before.

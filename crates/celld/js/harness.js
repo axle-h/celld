@@ -5008,8 +5008,15 @@ const __headerPairsOf = (headers) => {
 const __streamOnlyForRpc = (kind) => new DOMException(
   (kind === "writable" ? "WritableStream" : "ReadableStream") +
   " can only be serialized for RPC.", "DataCloneError");
+// workerd checks enable_abortsignal_rpc before the transport, so without the
+// flag every serialization of a signal fails the same way
+// (AbortSignal::serialize).
 const __signalNotEnabled = () => new DOMException(
   "AbortSignal serialization is not enabled.", "DataCloneError");
+const __signalOutsideRpc = () => __cell.compat.abortSignalRpc
+  ? new DOMException(
+      "AbortSignal can only be serialized for RPC.", "DataCloneError")
+  : __signalNotEnabled();
 const __streamAcrossIsolates = () => new DOMException(
   "RPC streams cannot cross isolate boundaries yet.", "DataCloneError");
 // The marker a host value crosses as by value, as workerd serializes it on
@@ -5083,7 +5090,7 @@ const __hostBody = (v, body) => {
 const __hostValueOutsideRpc = (v, kind) => {
   if (kind === "readable" || kind === "writable")
     throw __streamOnlyForRpc(kind);
-  if (kind === "signal") throw __signalNotEnabled();
+  if (kind === "signal") throw __signalOutsideRpc();
   return __hostValueMarker(v, kind, null);
 };
 // What a by-value host marker revives as, or undefined for another kind.
@@ -5151,8 +5158,11 @@ const __isUint8Array = (v) => v !== null && typeof v === "object" &&
 // the lift throws its error where it meets it: serialization fails in order,
 // so whatever the lift took before it is released, as in workerd.
 // `unsupported` maps each placeholder to its error, in projection order.
+// `lift` says the plain clone cannot take the payload, so it goes straight
+// to the lift: it holds a host instance (whose marker the lift builds from
+// its state), a capability or a Proxy, any of which V8 refuses.
 const __rpcProject = (value) => {
-  let host = false;
+  let lift = false;
   const seen = new Map();
   const originals = new WeakMap();
   const unsupported = new Map();
@@ -5165,9 +5175,15 @@ const __rpcProject = (value) => {
     if (typeof v === "function" ||
         __ReflectApply(__WeakMapHas, __stubMeta, [v]) ||
         __ReflectApply(__WeakMapHas, __svcMeta, [v]) ||
-        __ReflectApply(__WeakMapHas, __doStubMeta, [v])) return v;
+        __ReflectApply(__WeakMapHas, __doStubMeta, [v])) {
+      lift = true;
+      return v;
+    }
     const flags = __util_type_flags(v);
-    if ((flags & __TYPE_PROXY) !== 0) return v;
+    if ((flags & __TYPE_PROXY) !== 0) {
+      lift = true;
+      return v;
+    }
     if (__ArrayIsArray(v)) {
       const out = new Array(v.length);
       seen.set(v, out);
@@ -5193,7 +5209,7 @@ const __rpcProject = (value) => {
     // A host instance goes to the lift, which builds its marker from its
     // state: the plain clone would write a stripped one as a plain object.
     if (__hostKind(v) !== undefined) {
-      host = true;
+      lift = true;
       return v;
     }
     if ((flags & __TYPE_MAP) !== 0) {
@@ -5217,7 +5233,7 @@ const __rpcProject = (value) => {
     return placeholder;
   };
   const tree = project(value);
-  return { tree, originals, unsupported, host };
+  return { tree, originals, unsupported, lift };
 };
 const __tagged = (tag, sc) => {
   const out = new Uint8Array(sc.length + 1);
@@ -5253,6 +5269,16 @@ const __ctxRun = (id, fn) => {
     __als_set(prior);
   }
 };
+// Run `fn` in a stub entry's context `id`: the request context its target
+// was made in. An entry made outside any (a stateless Worker's handler runs
+// without one) runs outside any too when called from outside any, so its
+// target can use, return and pass on the stubs of the handler's request,
+// which workerd's one IoContext per request allows. Called from a context,
+// it runs in a fresh one: celld cannot tell one stateless request from
+// another (plan 1.57), so what such a call hands the target must not become
+// every stateless request's.
+const __ctxRunIn = (id, fn) =>
+  id === undefined && __ctxNow() === undefined ? fn() : __ctxRun(id, fn);
 const __ctxError = (kind) => new Error(
   "Cannot perform I/O on behalf of a different request. I/O " +
   "objects (such as streams, request/response bodies, and others) " +
@@ -5678,49 +5704,52 @@ const __rpcSignalRefresh = () => {
       __rpcSignalReceivers.set(id, live);
   }
 };
+// What `new RpcStub()` wraps, or a Proxy stands for, by the prototype chain
+// it presents (workerd's checkStubType): "object" -- a plain object, or a
+// callable other than an RPC promise or property -- whose own properties are
+// its members, "target" -- an RpcTarget -- or null.
+const __rpcStubType = (v) => {
+  let proto = __ObjectGetPrototypeOf(v);
+  if (proto === __ObjectPrototype) return "object";
+  while (proto !== null) {
+    if (proto === __RpcTargetPrototype) return "target";
+    proto = __ObjectGetPrototypeOf(proto);
+  }
+  return typeof v === "function" && !__isRpcNode(v) ? "object" : null;
+};
 // What a call's param crosses as under rpc_params_dup_stubs, when it
-// is an RpcTarget, a function, or a Proxy of either: what its own
-// dup() returns, which must be the same kind, or else the value
-// itself (workerd's JsRpcTarget::serialize, serializeFunction and
-// serializeProxy). The call then owns, and later disposes, that.
+// is an RpcTarget, a function, or a Proxy (of `proxyType`, its
+// `__rpcStubType`): what its own dup() returns, which must be the same
+// kind, or else the value itself (workerd's JsRpcTarget::serialize,
+// serializeFunction and serializeProxy). The call then owns, and later
+// disposes, that.
 //
-// A Proxy's kind is the stub it presents (workerd's checkStubType):
-// an RpcTarget by its prototype chain, or else a plain object or a
-// callable other than an RPC promise or property; its dup() may
-// return either a Proxy or not, of that kind.
-// An RpcTarget that is not a Proxy must dup() to another such
-// RpcTarget, and a function to a function.
-const __rpcProxyKind = (v) =>
-  v instanceof __cf.RpcTarget ? "target"
-    : Object.getPrototypeOf(v) === Object.prototype ||
-        (typeof v === "function" && !(v instanceof __cf.RpcPromise) &&
-          !(v instanceof __cf.RpcProperty)) ? "object"
-    : null;
-const __rpcParamDup = (v) => {
+// A Proxy's dup() may return a Proxy or not, of the type the Proxy
+// presents: a plain object or a callable for one presenting either, an
+// RpcTarget for one presenting that. An RpcTarget that is not a Proxy
+// must dup() to another such RpcTarget, and a function to a function.
+const __rpcParamDup = (v, proxyType) => {
   const dup = v.dup;
   if (typeof dup !== "function") return v;
-  const replacement = Reflect.apply(dup, v, []);
+  const replacement = __ReflectApply(dup, v, []);
   const object = replacement !== null &&
     (typeof replacement === "object" || typeof replacement === "function");
   let message;
-  if (__util_proxy_details(v) !== undefined) {
-    if (object && __rpcProxyKind(replacement) === __rpcProxyKind(v))
-      return replacement;
+  if (proxyType !== undefined) {
+    if (object && __rpcStubType(replacement) === proxyType) return replacement;
     message = "Couldn't create a stub for the Proxy because it has a " +
       "dup() method which did not return the same underlying type " +
       "(RpcTarget or Function) as the Proxy itself represents. Either " +
       "remove the dup() method or make sure it returns an RpcTarget.";
   } else if (typeof v === "function") {
-    if (typeof replacement === "function" &&
-        !(replacement instanceof __cf.RpcPromise) &&
-        !(replacement instanceof __cf.RpcProperty))
+    if (typeof replacement === "function" && !__isRpcNode(replacement))
       return replacement;
     message = "Couldn't create a stub for the function because it has " +
       "a dup() method which did not return another function. Either " +
       "remove the dup() method or make sure it returns a function.";
   } else {
     if (object && __isRpcTarget(replacement) &&
-        __util_proxy_details(replacement) === undefined)
+        (__util_type_flags(replacement) & __TYPE_PROXY) === 0)
       return replacement;
     // "RcpTarget" is workerd's spelling.
     message = "Couldn't create a stub for the RcpTarget because it has " +
@@ -5746,7 +5775,7 @@ const __rpcParamDup = (v) => {
 // instead, onto a null-prototype object, with that key escaped (see
 // "Marker keys"). Markers are object literals, their marker key first
 // and every field own.
-const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
+const __stubLift = (projected, allowCapabilities, refs, params, dupStubs) => {
   const { originals, unsupported } = projected;
   let lifted = false;
   // Capabilities (stubs, disposers) root the callee context;
@@ -5806,26 +5835,46 @@ const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
       if (svc.props !== undefined) marker.p = lift(svc.props);
       return marker;
     }
+    // A Durable Object stub, a Proxy of celld's own, crosses by its id.
+    const doId = __ReflectApply(__WeakMapGet, __doStubMeta, [v]);
+    if (doId !== undefined) {
+      if (!allowCapabilities) return v;
+      lifted = true;
+      caps = true;
+      const marker = { "__celld$do": __doIdClass(doId),
+                       v: doId.toString(), n: v.name ?? null };
+      cache(v, marker);
+      return marker;
+    }
     // The projection's own plain objects and arrays are data: walk them.
     const copy = __ReflectApply(__WeakMapGet, originals, [v]);
     if (copy !== undefined) return walk(v, copy, __ArrayIsArray(v));
     // Workerd refuses to serialize its promise/property handles.
-    if (v instanceof __cf.RpcPromise || v instanceof __cf.RpcProperty)
+    const node = __rpcNodeType(v);
+    if (node !== undefined)
       throw new DOMException(
-        'Could not serialize object of type "' +
-        (v instanceof __cf.RpcPromise ? "RpcPromise" : "RpcProperty") +
+        'Could not serialize object of type "' + node +
         '". This type does not support serialization.',
         "DataCloneError");
     // Classified by brand (`__hostKind`); only a Proxy is classified by
-    // the prototype chain it presents, as workerd does.
+    // the prototype chain it presents, as workerd does (serializeProxy):
+    // one presenting a plain object, a callable or an RpcTarget crosses as
+    // a stub, so its traps keep answering each member as it is used, and
+    // any other is refused.
     const proxy = (__util_type_flags(v) & __TYPE_PROXY) !== 0;
     const kind = proxy ? undefined : __hostKind(v);
-    if (typeof v === "function" || kind === "target" ||
-        (proxy && v instanceof __cf.RpcTarget)) {
+    const proxyType = proxy ? __rpcStubType(v) : undefined;
+    if (proxyType === null)
+      throw new DOMException(
+        "Proxy could not be serialized because it is not a " +
+        "valid RPC receiver type. The Proxy must emulate either " +
+        "a plain object or an RpcTarget, as indicated by the " +
+        "Proxy's prototype chain.", "DataCloneError");
+    if (proxy || typeof v === "function" || kind === "target") {
       if (!allowCapabilities) return v;
       lifted = true;
       caps = true;
-      const target = dupStubs ? __rpcParamDup(v) : v;
+      const target = dupStubs ? __rpcParamDup(v, proxyType) : v;
       const entry = __newEntry(target);
       ref(entry);
       // A Proxy that claims to be an RpcTarget crosses as a stub, but a
@@ -5836,18 +5885,8 @@ const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
       const marker = { "__celld$stub": entry.id,
                        t: __stubIsolate,
                        c: typeof target === "function",
-                       np: typeof target !== "function" &&
-                         __util_proxy_details(target) !== undefined };
-      cache(v, marker);
-      return marker;
-    }
-    const doId = __ReflectApply(__WeakMapGet, __doStubMeta, [v]);
-    if (doId !== undefined) {
-      if (!allowCapabilities) return v;
-      lifted = true;
-      caps = true;
-      const marker = { "__celld$do": __doIdClass(doId),
-                       v: doId.toString(), n: v.name ?? null };
+                       np: proxyType === "target" &&
+                         (__util_type_flags(target) & __TYPE_PROXY) !== 0 };
       cache(v, marker);
       return marker;
     }
@@ -5867,6 +5906,7 @@ const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
       caps = true;
       marker = __liftStream(v, kind === "readable");
     } else if (kind === "signal") {
+      if (!__cell.compat.abortSignalRpc) throw __signalNotEnabled();
       marker = __liftSignal(v);
     } else if (kind !== undefined) {
       marker = __hostValueMarker(v, kind, liftBody);
@@ -5877,35 +5917,23 @@ const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
       return marker;
     }
     // What is left is a value V8 writes as itself (a Date, a RegExp, an
-    // ArrayBuffer, a Map or Set: their contents stay the clone's), a Proxy,
-    // or an object read through a Proxy, which the projection did not walk
-    // and which is classified here as it would have been.
-    if (!proxy) {
-      if ((__util_type_flags(v) &
-          (__TYPE_CLONED | __TYPE_MAP | __TYPE_SET)) !== 0) return v;
-      const array = __ArrayIsArray(v);
-      if (array || __ObjectGetPrototypeOf(v) === __ObjectPrototype)
-        return walk(v, v, array);
-      throw __rpcUnsupportedType(v);
-    }
-    // A Proxy emulating neither a plain object nor an RpcTarget is
-    // Workerd's canonical proxy serialization error. One emulating a
-    // plain object is copied through its traps, never written to.
+    // ArrayBuffer, a Map or Set: their contents stay the clone's), or a
+    // loopback stub's props, which the projection did not walk and which
+    // are classified here as they would have been.
+    if ((__util_type_flags(v) &
+        (__TYPE_CLONED | __TYPE_MAP | __TYPE_SET)) !== 0) return v;
     const array = __ArrayIsArray(v);
-    if (!array && __ObjectGetPrototypeOf(v) !== __ObjectPrototype)
-      throw new DOMException(
-        "Proxy could not be serialized because it is not a " +
-        "valid RPC receiver type. The Proxy must emulate either " +
-        "a plain object or an RpcTarget, as indicated by the " +
-        "Proxy's prototype chain.", "DataCloneError");
-    return walk(v, v, array);
+    if (array || __ObjectGetPrototypeOf(v) === __ObjectPrototype)
+      return walk(v, v, array);
+    throw __rpcUnsupportedType(v);
   };
   // Lift the keys of a plain object or array `v`: in place when it is the
   // projection's own copy and needs no escape, otherwise onto a copy.
   // `source` is the script's object, whose disposer it carries.
   const walk = (v, source, array) => {
     const keys = __ObjectKeys(v);
-    // The projection's copy is not the script's object; a Proxy is.
+    // The projection's copy is not the script's object; a stub's props
+    // are the stub's own.
     let inPlace = source !== v;
     for (let i = 0; inPlace && !array && i < keys.length; i++)
       if (__isMarkerKey(keys[i])) inPlace = false;
@@ -5917,7 +5945,9 @@ const __stubLift = (projected, allowCapabilities, refs, dupStubs) => {
       else if (array) __defineData(out, key, lift(v[key]));
       else out[__isMarkerKey(key) ? __escapeKey(key) : key] = lift(v[key]);
     }
-    const disposer = source[Symbol.dispose];
+    // A result's disposer crosses with it (workerd's
+    // serializeJsValueWithPipeline); a param's is not serialized at all.
+    const disposer = params ? undefined : source[Symbol.dispose];
     if (allowCapabilities && !array &&
         typeof disposer === "function" && disposer !== __rpcNoDisposer) {
       lifted = true;
@@ -6084,17 +6114,20 @@ const __reviveLifted = (value, reviveMarker, disposers) => {
 };
 // The inverse of `__stubLift`: markers become live handles. `handles`
 // collects the revived stubs (for call-end param disposal or result-tree
-// disposal); `disposers` collects remote Symbol.dispose entries.
-const __stubRevive = (value) => {
+// disposal); `disposers` collects remote Symbol.dispose entries. A payload
+// that is not `live` adopts nothing: its references were released, so its
+// stubs revive as released ones.
+const __stubRevive = (value, live = true) => {
   const handles = [];
   const disposers = [];
   const reviveMarker = (v, kind, revive) => {
     switch (kind) {
       case "__celld$stub": {
+        if (!live) return __foreignStub(__stubDisposedError);
         const entry = v.t === __stubIsolate
           ? __ReflectApply(__MapGet, __stubEntries, [v[kind]]) : undefined;
         const stub = entry === undefined
-          ? __foreignStub()
+          ? __foreignStub(__foreignStubError)
           : __makeStub(entry, v.c);
         const meta = __ReflectApply(__WeakMapGet, __stubMeta, [stub]);
         if (meta) {
@@ -6106,7 +6139,7 @@ const __stubRevive = (value) => {
       case "__celld$svc":
         return v.t === __stubIsolate
           ? __entrypointStub(v[kind], revive(v.p))
-          : __foreignStub();
+          : __foreignStub(__foreignStubError);
       case "__celld$do":
         return __namespaceGet(__cell.makeNamespace(v[kind]),
           __newDoId(v[kind], v.v, v.n ?? undefined));
@@ -6120,22 +6153,26 @@ const __stubRevive = (value) => {
     value: __reviveLifted(value, reviveMarker, disposers), handles, disposers,
   };
 };
-// A marker that crossed an isolate boundary: fail on use, loudly. A
-// pipelined path through one fails too (`__walkLocal`).
+// A marker that crossed an isolate boundary: fail on use, loudly, with
+// `error()`. A pipelined path through one fails too (`__walkLocal`). A
+// late revival of params whose call already released them fails the same
+// way, as a disposed stub.
 const __foreignStubError = () =>
   new Error("RPC stubs cannot cross isolate boundaries yet.");
-const __foreignStubs = new WeakSet();
-const __foreignStub = () => {
+const __foreignStubs = new WeakMap();
+const __foreignStub = (error) => {
   const stub = new Proxy(function () {}, {
     get: (_b, prop) => {
       if (prop === "then" || typeof prop !== "string") return undefined;
-      return () => Promise.reject(__foreignStubError());
+      return () => Promise.reject(error());
     },
-    apply: () => Promise.reject(__foreignStubError()),
+    apply: () => Promise.reject(error()),
   });
-  __foreignStubs.add(stub);
+  __ReflectApply(__WeakMapSet, __foreignStubs, [stub, error]);
   return stub;
 };
+const __foreignStubFailure = (stub) =>
+  __ReflectApply(__WeakMapGet, __foreignStubs, [stub])();
 // The kind of receiver a pipelined path reaches, by workerd's
 // tryGetProperty(): "own" (a plain object or a function), "class" (an
 // RpcTarget, or a Proxy whose prototype chain claims to be one), "stub" (one
@@ -6149,7 +6186,7 @@ const __rpcReceiverKind = (v, inFetcher) => {
   if (v === null || (typeof v !== "object" && typeof v !== "function"))
     return null;
   if (__stubMeta.has(v)) return "stub";
-  if (__foreignStubs.has(v)) return "foreign";
+  if (__ReflectApply(__WeakMapHas, __foreignStubs, [v])) return "foreign";
   if (__doStubMeta.has(v) || __outboundMeta.has(v)) return "fetcher";
   if (v instanceof __cf.RpcPromise || v instanceof __cf.RpcProperty)
     return inFetcher ? "node" : null;
@@ -6178,7 +6215,7 @@ const __rpcPath = (root, kind, path, args, reserved, hop, handler) => {
       if (meta.disposed) throw __stubDisposedError();
       return hop(meta, path.slice(i));
     }
-    if (kind === "foreign") throw __foreignStubError();
+    if (kind === "foreign") throw __foreignStubFailure(value);
     const prop = path[i];
     if (reserved.has(prop)) throw __rpcReservedError(prop);
     receiver = value;
@@ -6194,7 +6231,7 @@ const __rpcPath = (root, kind, path, args, reserved, hop, handler) => {
   if (path.length === 0) {
     if (args === null) return value;
     if (typeof value !== "function")
-      throw new TypeError("The RPC stub is not callable.");
+      throw new TypeError('"(this)" is not a function.');
     return value(...args);
   }
   if (args === null) return __rpcBindMember(value, receiver);
@@ -6209,14 +6246,14 @@ const __rpcPath = (root, kind, path, args, reserved, hop, handler) => {
 // context. A stub the walk meets continues the same way at its own target.
 const __rpcAtTarget = (target, path, args, reserved) => __rpcPath(
   target, __rpcTargetKind(target), path, args, reserved,
-  (meta, rest) => __ctxRun(meta.entry.ctx,
+  (meta, rest) => __ctxRunIn(meta.entry.ctx,
     () => __rpcAtTarget(meta.entry.target, rest, args, reserved)));
 // A call into an entrypoint or a Durable Object instance (`kind` "class"),
 // or a plain-object entrypoint (`kind` "own", with `handler`). `scheduled`
 // is not reserved: it is an ordinary method over RPC.
 const __rpcAtEntrypoint = (root, kind, path, args, handler) => __rpcPath(
   root, kind, path, args, __entrypointReserved,
-  (meta, rest) => __ctxRun(meta.entry.ctx,
+  (meta, rest) => __ctxRunIn(meta.entry.ctx,
     () => __rpcAtTarget(meta.entry.target, rest, args,
       __entrypointReserved)),
   handler);
@@ -6243,45 +6280,51 @@ const __stubOp = (meta, path, args) => {
     if (aborted !== undefined)
       return Promise.reject(__postAbortError(aborted));
   }
-  const argsSc = args === null ? null : __rpcOut(args, true, true);
+  const transit = __rpcTransit(true);
+  const argsSc = args === null ? null : __rpcOut(args, true, true, transit);
   const dispatch = (async () => {
-    // Workerd delivers RPC asynchronously: the callee must not run
-    // before the caller's synchronous code. A call made just after
-    // a not-yet-delivered ctx.abort counts as in flight (rejects
-    // with the reason, not the post-abort message). Bodies queue
-    // in call order, so e-order holds.
-    await null;
-    // The cell that minted this stub gates it like any other event.
-    // The op is dispatched inside the isolate and never becomes a
-    // drive, so it is the one delivery point that has to ask here
-    // rather than in Rust. A stub carrying the running critical
-    // section re-enters it; everything else queues, and a section
-    // that failed refuses what queued.
-    const cell = entry.scope;
-    if (cell !== undefined) {
-      const block = __cellBlocks.get(cell);
-      if (block !== undefined && (entry.section === null ||
-          entry.section !== block.holder))
-        await __gate_wait(cell);
+    try {
+      // Workerd delivers RPC asynchronously: the callee must not run
+      // before the caller's synchronous code. A call made just after
+      // a not-yet-delivered ctx.abort counts as in flight (rejects
+      // with the reason, not the post-abort message). Bodies queue
+      // in call order, so e-order holds.
+      await null;
+      // The cell that minted this stub gates it like any other event.
+      // The op is dispatched inside the isolate and never becomes a
+      // drive, so it is the one delivery point that has to ask here
+      // rather than in Rust. A stub carrying the running critical
+      // section re-enters it; everything else queues, and a section
+      // that failed refuses what queued.
+      const cell = entry.scope;
+      if (cell !== undefined) {
+        const block = __cellBlocks.get(cell);
+        if (block !== undefined && (entry.section === null ||
+            entry.section !== block.holder))
+          await __gate_wait(cell);
+      }
+      const reply = await __ctxRunIn(entry.ctx,
+        () => __rpcRun(async () => {
+          __rpcTransitClaim(transit);
+          const decoded =
+            argsSc === null ? null : __rpcDesArgs(argsSc);
+          try {
+            return await __rpcAtTarget(entry.target, path,
+              decoded === null ? null : decoded.args, __transientReserved);
+          } finally {
+            if (decoded !== null) __disposeReceived(decoded.received);
+          }
+        }, true));
+      if (__abortedCtxs.size !== 0) {
+        const aborted = __abortedCtxs.get(entry.ctx);
+        if (aborted !== undefined)
+          throw aborted instanceof __ActorAbort
+            ? aborted.reason : aborted;
+      }
+      return __rpcDes(reply);
+    } finally {
+      __rpcTransitEnd(transit);
     }
-    const reply = await __ctxRun(entry.ctx,
-      () => __rpcRun(async () => {
-        const decoded =
-          argsSc === null ? null : __rpcDesArgs(argsSc);
-        try {
-          return await __rpcAtTarget(entry.target, path,
-            decoded === null ? null : decoded.args, __transientReserved);
-        } finally {
-          if (decoded !== null) __disposeReceived(decoded.received);
-        }
-      }, true));
-    if (__abortedCtxs.size !== 0) {
-      const aborted = __abortedCtxs.get(entry.ctx);
-      if (aborted !== undefined)
-        throw aborted instanceof __ActorAbort
-          ? aborted.reason : aborted;
-    }
-    return __rpcDes(reply);
   })();
   if (entry.ctx === undefined) return dispatch;
   // Race the op against its hosting context's abort: a hung callee
@@ -6308,7 +6351,8 @@ const __walkLocal = (root, path, args) => {
       throw __rpcNoSuchMethod(path[0]);
     return __stubOp(meta, path, args);
   }
-  if (__foreignStubs.has(root)) throw __foreignStubError();
+  if (__ReflectApply(__WeakMapHas, __foreignStubs, [root]))
+    throw __foreignStubFailure(root);
   if (path.length === 0) {
     if (args === null) return root;
     if (typeof root !== "function")
@@ -6394,6 +6438,12 @@ const __valueSession = (call) => {
 // RpcPromise -> its call's session, for the disposer every RpcPromise
 // shares from RpcPromise.prototype, as in workerd.
 const __rpcPromiseSessions = new WeakMap();
+// Every pipeline node -> "RpcPromise" or "RpcProperty": the brand that
+// workerd's JsRpcPromise and JsRpcProperty carry, which a prototype chain a
+// script presents cannot claim.
+const __rpcNodes = new WeakMap();
+const __rpcNodeType = (v) => __ReflectApply(__WeakMapGet, __rpcNodes, [v]);
+const __isRpcNode = (v) => __ReflectApply(__WeakMapHas, __rpcNodes, [v]);
 // workerd's text for a method called on the wrong kind of object.
 const __illegalInvocation = () => new TypeError(
   "Illegal invocation: function called with incorrect `this` " +
@@ -6491,6 +6541,8 @@ const __makeNode = (session, path, ctx) => {
     },
   });
   if (path.length === 0) __rpcPromiseSessions.set(node, session);
+  __ReflectApply(__WeakMapSet, __rpcNodes,
+    [node, path.length === 0 ? "RpcPromise" : "RpcProperty"]);
   return node;
 };
 const __makeStub = (entry, callable) => {
@@ -6752,16 +6804,57 @@ const __ctxExports = () => __ctxExportsCache ??= (() => {
   }
   return out;
 })();
+// ---- params in flight ------------------------------------------
+// The entry references a call's lifted params took, from the lift until
+// the callee revives them in this isolate, which claims them
+// (`__rpcDesArgs`). A call that settles with its params unclaimed
+// releases them, newest first, as workerd drops the capabilities of a
+// message nobody received: the call failed before its callee decoded
+// it (the target's input gate refused it, or `__rpc_call` rejected), or
+// the callee ran in another isolate, where its markers revive as
+// foreign stubs that fail on use. (Phase 3 makes those work across
+// isolates; 3.2 gives them a lifetime there.) A callee that decodes
+// after its caller settled finds the transit gone and adopts nothing.
+//
+// A transit is `{ local, id, refs }`. A local one (a stub op, whose callee
+// decodes in the same dispatch, before the dispatch's end releases what is
+// left) keeps its references in `refs` until the callee claims them
+// (`__rpcTransitClaim`), and its params cross in the ordinary envelope. Any
+// other is registered by id here once `__rpcOut` lifts a reference, and its
+// params cross as a tag 3 envelope, `[isolate token, id, tree]`.
+const __rpcTransits = new __SafeMap();
+let __nextTransitId = 1;
+const __rpcTransit = (local) => ({ local, id: 0, refs: null });
+const __rpcTransitEnd = (transit) => {
+  let refs = transit.refs;
+  if (transit.local) {
+    if (refs === null) return;
+    transit.refs = null;
+  } else {
+    if (transit.id === 0) return;
+    refs = __ReflectApply(__MapGet, __rpcTransits, [transit.id]);
+    if (refs === undefined) return;
+    __ReflectApply(__MapDelete, __rpcTransits, [transit.id]);
+  }
+  for (let i = refs.length - 1; i >= 0; i--) __releaseEntry(refs[i]);
+};
+// A local transit's callee takes its references.
+const __rpcTransitClaim = (transit) => {
+  transit.refs = null;
+};
 // ---- RPC envelope ----------------------------------------------
 // Serialize one payload. `lift` marks a same-isolate transport,
 // where stub-able values may cross as markers; elsewhere they stay
 // a DataCloneError, exactly as before stubs existed. `params` marks
 // a call's arguments, whose stubs rpc_params_dup_stubs duplicates.
-const __rpcOut = (value, lift, params = false) => {
+// `transit`, for params whose callee may decode them later or in
+// another isolate, records the entry references they carry (see
+// "Params in flight").
+const __rpcOut = (value, lift, params = false, transit = undefined) => {
   const projected = __rpcProject(value);
-  // A payload with a host instance skips the plain clone (`__rpcProject`).
+  // A payload the plain clone cannot take skips it (`__rpcProject`).
   let error = null;
-  if (!projected.host) {
+  if (!projected.lift) {
     try {
       return __sc_encode(projected.tree);
     } catch (error_) {
@@ -6781,15 +6874,40 @@ const __rpcOut = (value, lift, params = false) => {
     const refusal = (cloneError) =>
       projected.unsupported.values().next().value ??
       __dataCloneError(cloneError);
-    const lifted = __stubLift(projected, lift, refs,
+    const lifted = __stubLift(projected, lift, refs, params,
       params && __cell.compat.rpcParamsDupStubs);
-    if (lifted === null) throw refusal(error);
+    if (lifted === null) {
+      // Nothing to lift here (a capability across isolates, or one in a Map
+      // or Set, which the clone keeps): the clone's own error, as before.
+      if (error === null) {
+        try {
+          return __sc_encode(projected.tree);
+        } catch (error_) {
+          error = error_;
+        }
+      }
+      throw refusal(error);
+    }
+    if (transit !== undefined && !transit.local && refs.length !== 0) {
+      const id = __nextTransitId++;
+      let sc;
+      try {
+        sc = __sc_encode([__stubIsolate, id, lifted.tree]);
+      } catch (error_) {
+        throw refusal(error_);
+      }
+      transit.id = id;
+      __ReflectApply(__MapSet, __rpcTransits, [id, refs]);
+      return __tagged(3, sc);
+    }
+    let sc;
     try {
-      return __tagged(
-        lifted.caps ? 1 : 2, __sc_encode(lifted.tree));
+      sc = __sc_encode(lifted.tree);
     } catch (error_) {
       throw refusal(error_);
     }
+    if (transit !== undefined && refs.length !== 0) transit.refs = refs;
+    return __tagged(lifted.caps ? 1 : 2, sc);
   } catch (failure) {
     for (let i = refs.length - 1; i >= 0; i--) __releaseEntry(refs[i]);
     throw failure;
@@ -6819,10 +6937,22 @@ const __rpcRun = async (body, lift) => {
     return __rpcErrOut(error);
   }
 };
+// A call's params, revived by its callee. Params in flight (tag 3) are
+// claimed here, in the isolate that sent them; a transit already gone (the
+// call settled first) revives as released stubs.
 const __rpcDesArgs = (bytes) => {
   if (bytes[0] === 0xff)
     return { args: __sc_decode(bytes), received: [] };
-  const revived = __stubRevive(__sc_decode(bytes.subarray(1)));
+  let tree = __sc_decode(bytes.subarray(1));
+  let live = true;
+  if (bytes[0] === 3) {
+    // Another isolate's params revive as foreign stubs (their markers
+    // name that isolate); only this isolate's transits are claimed.
+    live = tree[0] !== __stubIsolate ||
+      __ReflectApply(__MapDelete, __rpcTransits, [tree[1]]);
+    tree = tree[2];
+  }
+  const revived = __stubRevive(tree, live);
   return { args: revived.value, received: revived.handles };
 };
 // The caller half: decode a reply, rebuilding stubs and rethrowing
@@ -7003,11 +7133,15 @@ class DurableObjectNamespace {
       const scope = __doIdScope(makeNamespace(className).#idFromName(name));
       const dispatchName = __dispatchName(name);
       if (dispatchName !== undefined) __cell.idNames[scope] = dispatchName;
+      const transit = __rpcTransit(false);
       try {
         return __rpcDes(await __rpc_call(
-          scope, dispatchName ?? null, method, __rpcOut(args, true, true)));
+          scope, dispatchName ?? null, method,
+          __rpcOut(args, true, true, transit)));
       } catch (error) {
         throw __doCallFailure(error).error;
+      } finally {
+        __rpcTransitEnd(transit);
       }
     };
   }
@@ -7120,12 +7254,19 @@ class DurableObjectNamespace {
     // abort and exit markers revive; bytes that land elsewhere revive as
     // loud foreign stubs. The first name is the method; the rest of a path,
     // or a property read, rides with the arguments (`__doRpcRequest`).
-    const call = (path, args) => invoke(async () => __rpcDes(await __rpc_call(
-      scope, dispatchName ?? null, path[0], __rpcOut(
+    const call = (path, args) => invoke(async () => {
+      const transit = __rpcTransit(false);
+      const argsSc = __rpcOut(
         path.length === 1 && args !== null
           ? args : { path: path.slice(1), args },
-        true, true),
-    )));
+        true, true, transit);
+      try {
+        return __rpcDes(await __rpc_call(
+          scope, dispatchName ?? null, path[0], argsSc));
+      } finally {
+        __rpcTransitEnd(transit);
+      }
+    });
     const session = { get: (path) => call(path, null), call };
     // A member is an RpcProperty, as on workerd's Fetcher: calling it returns
     // an RpcPromise, so a caller can pipeline through its result before
@@ -7926,6 +8067,7 @@ const __cell = __celld.__cell = {
     __proto__: null,
     jsRpc: false, fetcherGetPutDelete: false, queueJsonMessages: false,
     allowIrrevocableStubStorage: false, rpcParamsDupStubs: false,
+    abortSignalRpc: false,
   },
   makeNamespace,
   release: __cellRelease,
@@ -8122,11 +8264,8 @@ const __queueEncode = (body, requestedType) => {
       break;
     }
     case "v8":
-      try {
-        bytes = __sc_encode(body);
-      } catch (error) {
-        throw __queueError("the message body cannot be cloned", error);
-      }
+      // V8's DataCloneError, as workerd throws it.
+      bytes = __sc_encode(body);
       break;
     default:
       throw __queueError(
@@ -11815,6 +11954,8 @@ const __cf = __celld.__cf = {
   withEnvAndExports: __cfUnimplementedFunction("withEnvAndExports"),
   withExports: __cfUnimplementedFunction("withExports"),
 };
+// What `__rpcStubType` looks for in a presented prototype chain.
+const __RpcTargetPrototype = __cf.RpcTarget.prototype;
 // `import { env, exports } from "cloudflare:workers"`. Under
 // disallow_importable_env workerd has no Worker env or exports to give them
 // (modules.c++ EnvModule::getCurrentEnv and getCurrentExports), so its
@@ -13846,6 +13987,14 @@ if (!globalThis.scheduler) {
     },
   };
 }
+// V8's refusal of a value it cannot clone, as workerd throws it: the
+// serializer delegate (`storage_ops.rs`) throws what this makes, wherever a
+// value is cloned.
+{
+  const DOMExceptionClass = DOMException;
+  __celld.__dataCloneError = (message) =>
+    new DOMExceptionClass(message, "DataCloneError");
+}
 if (!globalThis.structuredClone) {
   const hostBrand = Symbol("Cells.structuredCloneHost");
   const deserializers = {
@@ -13886,6 +14035,11 @@ if (!globalThis.structuredClone) {
       mimeType: this.type, name: this.name,
       lastModified: this.lastModified,
     };
+  });
+  // A signal serializes only over RPC, as workerd's AbortSignal::serialize
+  // says, whose check of its flag comes first.
+  defineHostType(AbortSignal.prototype, function() {
+    throw __signalOutsideRpc();
   });
   defineHostType(DOMException.prototype, function() {
     return {
@@ -13933,14 +14087,7 @@ if (!globalThis.structuredClone) {
       typeof MessagePort === "function" ? MessagePort : undefined,
     ]) defineUnsupportedType(constructor);
 
-    let result;
-    try {
-      result = __structured_clone(value, hostBrand, deserializers);
-    } catch (error) {
-      if (error instanceof TypeError)
-        throw new DOMException(error.message, "DataCloneError");
-      throw error;
-    }
+    const result = __structured_clone(value, hostBrand, deserializers);
     // A clone of a resizable buffer commits outside the allocator, so the
     // clone is kept only if the isolate's memory still fits, as a buffer the
     // allocator refused would not be.

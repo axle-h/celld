@@ -4,7 +4,16 @@
   "steps": [
     {
       "status": 200,
-      "body": "DataCloneError: AbortSignal serialization is not enabled."
+      "body": {
+        "flag": false,
+        "params": "DataCloneError: AbortSignal serialization is not enabled.",
+        "durableObject": "DataCloneError: AbortSignal serialization is not enabled.",
+        "result": "DataCloneError: AbortSignal serialization is not enabled.",
+        "loaderParams": "DataCloneError: AbortSignal serialization is not enabled.",
+        "storage": "DataCloneError: AbortSignal serialization is not enabled.",
+        "loaderEnv": "DataCloneError: AbortSignal serialization is not enabled.",
+        "structuredClone": "DataCloneError: AbortSignal serialization is not enabled."
+      }
     }
   ]
 }

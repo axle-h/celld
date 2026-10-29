@@ -1,0 +1,10 @@
+// enable_abortsignal_rpc (experimental): an AbortSignal crosses RPC.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["enable_abortsignal_rpc"],
+  "durable_objects": { "bindings": [{ "name": "OBJ", "class_name": "Obj" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Obj"] }],
+  "worker_loaders": [{ "binding": "LOADER" }]
+}

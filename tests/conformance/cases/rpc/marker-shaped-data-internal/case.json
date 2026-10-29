@@ -1,10 +1,9 @@
 {
   "kind": "celld-only",
-  "reason": "workerd here neither stores a stub (allow_irrevocable_stub_storage refuses this one) nor passes an AbortSignal over RPC without the experimental enable_abortsignal_rpc, the two values beside which celld lifts a stored row and a cross-isolate call; the paths workerd runs are rpc/marker-shaped-data and rpc/marker-shaped-objects",
-  "workers": ["app", "other"],
+  "reason": "workerd stores no stub here (allow_irrevocable_stub_storage refuses this one), the value beside which celld lifts a stored row; the paths workerd runs are rpc/marker-shaped-data, rpc/marker-shaped-objects and rpc/marker-shaped-signal",
+  "workers": ["app"],
   "steps": [
     {"path": "/storage"},
-    {"path": "/signal"},
     {"path": "/objects"}
   ]
 }

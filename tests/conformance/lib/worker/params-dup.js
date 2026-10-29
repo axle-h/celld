@@ -106,6 +106,27 @@ function targetProxy(name, make) {
   );
 }
 
+// A Proxy that presents a plain object, as a Cap'n Web stub does: it crosses
+// as a stub over its own properties (`name`), with a `dup` from its `get`
+// trap.
+function plainProxy(name, make) {
+  const base = {
+    name: () => name,
+    [Symbol.dispose]: () => log.push(`dispose ${name}`),
+  };
+  return new Proxy(base, {
+    get(target, prop) {
+      if (prop === "dup" && make !== undefined) {
+        return () => {
+          log.push(`dup ${name}`);
+          return make();
+        };
+      }
+      return Reflect.get(target, prop);
+    },
+  });
+}
+
 // A Proxy over a function, with a `dup` from its `get` trap.
 function functionProxy(name, make) {
   const base = (x) => `${name}(${x})`;
@@ -363,6 +384,20 @@ async function dupOverride(ctx) {
         [Symbol.dispose]: () => log.push("dispose plain'"),
       })),
     ),
+    plainProxy: await run(() => plainProxy("pproxy", () => plainProxy("pproxy'"))),
+    noDupPlainProxy: await run(() => plainProxy("pproxy")),
+    // A Proxy presenting a plain object may dup() to a plain object or a
+    // function: the same type to workerd.
+    plainProxyToPlain: await run(() =>
+      plainProxy("pproxy", () => ({
+        name: () => "plain'",
+        [Symbol.dispose]: () => log.push("dispose plain'"),
+      })),
+    ),
+    plainProxyToFunction: await run(
+      () => plainProxy("pproxy", () => disposableFunction("fn'")),
+      true,
+    ),
     // A `dup` that is not a function is not called.
     notFunction: await run(() => {
       const target = new Counter("value-dup");
@@ -400,6 +435,8 @@ async function dupWrong() {
     targetToPrimitive: await run(() => new Duplicable("target", () => "string")),
     functionToTarget: await run(() => duplicableFunction("fn", () => new Duplicable("target'"))),
     targetProxyToFunction: await run(() => targetProxy("proxy", () => disposableFunction("fn'"))),
+    plainProxyToTarget: await run(() => plainProxy("pproxy", () => new Duplicable("target'"))),
+    targetProxyToPlainProxy: await run(() => targetProxy("proxy", () => plainProxy("pproxy'"))),
     functionProxyToTarget: await run(() =>
       functionProxy("fproxy", () => new Duplicable("target'")),
     ),

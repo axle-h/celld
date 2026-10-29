@@ -1,0 +1,51 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "function": {
+          "put": "DOMException DataCloneError: () => 1 could not be cloned.",
+          "putMany": "DOMException DataCloneError: () => 1 could not be cloned.",
+          "kvPut": "DOMException DataCloneError: () => 1 could not be cloned.",
+          "send": "DOMException DataCloneError: () => 1 could not be cloned.",
+          "sendBatch": "DOMException DataCloneError: () => 1 could not be cloned.",
+          "structuredClone": "DOMException DataCloneError: () => 1 could not be cloned."
+        },
+        "symbol": {
+          "put": "DOMException DataCloneError: Symbol(s) could not be cloned.",
+          "putMany": "DOMException DataCloneError: Symbol(s) could not be cloned.",
+          "kvPut": "DOMException DataCloneError: Symbol(s) could not be cloned.",
+          "send": "DOMException DataCloneError: Symbol(s) could not be cloned.",
+          "sendBatch": "DOMException DataCloneError: Symbol(s) could not be cloned.",
+          "structuredClone": "DOMException DataCloneError: Symbol(s) could not be cloned."
+        },
+        "proxy": {
+          "put": "DOMException DataCloneError: #<Object> could not be cloned.",
+          "putMany": "DOMException DataCloneError: #<Object> could not be cloned.",
+          "kvPut": "DOMException DataCloneError: #<Object> could not be cloned.",
+          "send": "DOMException DataCloneError: #<Object> could not be cloned.",
+          "sendBatch": "DOMException DataCloneError: #<Object> could not be cloned.",
+          "structuredClone": "DOMException DataCloneError: #<Object> could not be cloned."
+        },
+        "nested": {
+          "put": "DOMException DataCloneError: () => 2 could not be cloned.",
+          "putMany": "DOMException DataCloneError: () => 2 could not be cloned.",
+          "kvPut": "DOMException DataCloneError: () => 2 could not be cloned.",
+          "send": "DOMException DataCloneError: () => 2 could not be cloned.",
+          "sendBatch": "DOMException DataCloneError: () => 2 could not be cloned.",
+          "structuredClone": "DOMException DataCloneError: () => 2 could not be cloned."
+        },
+        "weakMap": {
+          "put": "DOMException DataCloneError: #<WeakMap> could not be cloned.",
+          "putMany": "DOMException DataCloneError: #<WeakMap> could not be cloned.",
+          "kvPut": "DOMException DataCloneError: #<WeakMap> could not be cloned.",
+          "send": "DOMException DataCloneError: #<WeakMap> could not be cloned.",
+          "sendBatch": "DOMException DataCloneError: #<WeakMap> could not be cloned.",
+          "structuredClone": "DOMException DataCloneError: #<WeakMap> could not be cloned."
+        }
+      }
+    }
+  ]
+}

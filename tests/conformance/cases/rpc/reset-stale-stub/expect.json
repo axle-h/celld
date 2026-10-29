@@ -1,0 +1,26 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "failed": "Error: block failed",
+        "oldStub": "Error: block failed",
+        "freshStub": 1,
+        "oldStubAgain": "Error: block failed"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "before": 1,
+        "failed": "Error: block failed",
+        "oldStub": "Error: block failed",
+        "freshStub": 1,
+        "oldStubAgain": "Error: block failed"
+      }
+    }
+  ]
+}

@@ -294,6 +294,11 @@ pub struct Compat {
     /// what `dup()` returns (Workerd worker-rpc.c++ RpcSerializerExternalHandler
     /// DUPLICATE). Return values transfer either way.
     pub rpc_params_dup_stubs: bool,
+    /// `enable_abortsignal_rpc`, an experimental flag: an AbortSignal crosses
+    /// RPC, and its abort follows it. Without it, serializing one throws
+    /// "AbortSignal serialization is not enabled." (Workerd basics.c++
+    /// AbortSignal::serialize).
+    pub abort_signal_rpc: bool,
     /// Node.js compatibility as workerd computes it: `nodejs_compat` (off =
     /// `no_nodejs_compat`, default on for dates >= 2026-08-04), or
     /// `nodejs_compat_v2`, which the same date or `nodejs_compat` from
@@ -325,6 +330,7 @@ impl Compat {
             allow_irrevocable_stub_storage: flags.get(f::ALLOW_IRREVOCABLE_STUB_STORAGE),
             disallow_importable_env: flags.get(f::DISALLOW_IMPORTABLE_ENV),
             rpc_params_dup_stubs: flags.get(f::RPC_PARAMS_DUP_STUBS),
+            abort_signal_rpc: flags.get(f::ABORTSIGNAL_RPC),
             nodejs_compat: flags.get(f::NODEJS_COMPAT) || flags.get(f::NODEJS_COMPAT_V2),
             populate_process_env: flags.get(f::NODEJS_COMPAT_POPULATE_PROCESS_ENV),
         }

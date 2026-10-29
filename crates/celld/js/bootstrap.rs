@@ -294,9 +294,10 @@ pub(super) fn install_prelude<'s>(
 #[cfg(test)]
 const LIFTED_TEST_HOOK_MARK: &str = "/*__CELLD_TEST_LIFTED_HOOK__*/";
 
-/// The lifted RPC and storage encodings, for `js::marker_key_tests`: the key
-/// escape, the brand classification, an RPC payload and a stored row out and
-/// back in, and the revival of a tree given as is. Only a test build has it.
+/// The lifted RPC and storage encodings, for `js::marker_key_tests` and
+/// `js::rpc_params_tests`: the key escape, the brand classification, an RPC
+/// payload and a stored row out and back in, the revival of a tree given as
+/// is, and a call's params in flight. Only a test build has it.
 #[cfg(test)]
 const LIFTED_TEST_HOOK: &str = r#"__celld.__liftedForTest = {
   escape: (key) => __isMarkerKey(key) ? __escapeKey(key) : key,
@@ -310,6 +311,26 @@ const LIFTED_TEST_HOOK: &str = r#"__celld.__liftedForTest = {
   storedRevive: __storedRevive,
   service: () => __entrypointStub("default", undefined),
   bodyBytes: __bodyBytesOf,
+  // A call's params out with a transit, and in as its callee takes them.
+  params: (value) => {
+    const transit = __rpcTransit(false);
+    const bytes = __rpcOut(value, true, true, transit);
+    return { bytes, end: () => __rpcTransitEnd(transit) };
+  },
+  // A stub op's params, whose transit stays in the isolate.
+  localParams: (value) => {
+    const transit = __rpcTransit(true);
+    const bytes = __rpcOut(value, true, true, transit);
+    return { bytes, claim: () => __rpcTransitClaim(transit),
+             end: () => __rpcTransitEnd(transit) };
+  },
+  receive: (bytes) => __rpcDesArgs(bytes),
+  disposeReceived: __disposeReceived,
+  entries: () => __stubEntries.size,
+  foreign: (stub) => __foreignStubs.has(stub),
+  open: (bytes) => __sc_decode(bytes.subarray(1)),
+  envelope: (tag, value) => __tagged(tag, __sc_encode(value)),
+  isolate: __stubIsolate,
 };"#;
 
 pub(super) fn install_harness<'s>(
@@ -1255,7 +1276,8 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
          c.compat.allowIrrevocableStubStorage = {};\n\
          c.compat.disallowImportableEnv = {};\n\
          c.compat.serviceBindingExtraHandlers = {};\n\
-         c.compat.rpcParamsDupStubs = {};",
+         c.compat.rpcParamsDupStubs = {};\n\
+         c.compat.abortSignalRpc = {};",
         compat.delete_all_deletes_alarm,
         compat.js_rpc,
         compat.fetcher_get_put_delete,
@@ -1266,6 +1288,7 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
         compat.disallow_importable_env,
         compat.service_binding_extra_handlers,
         compat.rpc_params_dup_stubs,
+        compat.abort_signal_rpc,
     );
     run_internal_snippet(scope, &source).ok_or_else(|| anyhow!("compatibility install failed"))?;
     Ok(())

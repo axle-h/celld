@@ -976,12 +976,26 @@ pub(super) fn op_storage_sync_list_next(
     }
 }
 
+/// V8's refusal of a value it cannot clone, thrown as the DataCloneError
+/// workerd throws, with V8's text: storage, a Queue body, RPC and
+/// `structuredClone()` all refuse one so. The harness makes the exception
+/// (`__celld.__dataCloneError`); before it is installed nothing serializes.
+fn throw_data_clone_error(scope: &mut v8::PinScope, message: v8::Local<v8::String>) {
+    let exception = internal_function(scope, "__dataCloneError")
+        .ok()
+        .and_then(|make| {
+            let recv = v8::undefined(scope).into();
+            make.call(scope, recv, &[message.into()])
+        })
+        .unwrap_or_else(|| v8::Exception::type_error(scope, message));
+    scope.throw_exception(exception);
+}
+
 struct StorageValueDelegate;
 
 impl v8::ValueSerializerImpl for StorageValueDelegate {
     fn throw_data_clone_error(&self, scope: &mut v8::PinScope, message: v8::Local<v8::String>) {
-        let exception = v8::Exception::type_error(scope, message);
-        scope.throw_exception(exception);
+        throw_data_clone_error(scope, message);
     }
 }
 
@@ -997,8 +1011,7 @@ struct TransientCloneDelegate<'a> {
 
 impl v8::ValueSerializerImpl for TransientCloneDelegate<'_> {
     fn throw_data_clone_error(&self, scope: &mut v8::PinScope, message: v8::Local<v8::String>) {
-        let exception = v8::Exception::type_error(scope, message);
-        scope.throw_exception(exception);
+        throw_data_clone_error(scope, message);
     }
 
     fn get_shared_array_buffer_id<'s>(

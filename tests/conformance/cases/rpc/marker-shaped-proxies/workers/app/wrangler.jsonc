@@ -2,7 +2,6 @@
   "name": "app",
   "main": "index.js",
   "compatibility_date": "2026-01-01",
-  "services": [{ "binding": "OTHER", "service": "other" }],
   "durable_objects": { "bindings": [{ "name": "OBJ", "class_name": "Obj" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Obj"] }],
   "queues": { "producers": [{ "binding": "QUEUE", "queue": "marker-shaped-proxies" }] },

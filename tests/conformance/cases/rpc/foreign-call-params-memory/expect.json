@@ -1,0 +1,50 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "calls": 200,
+        "released": 400,
+        "stub": 1
+      }
+    },
+    {
+      "rss": "baseline"
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 1000,
+        "released": 2000,
+        "stub": 1
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 1000,
+        "released": 2000,
+        "stub": 1
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 1000,
+        "released": 2000,
+        "stub": 1
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 1000,
+        "released": 2000,
+        "stub": 1
+      }
+    },
+    {
+      "rss": "grew at most 64 MiB"
+    }
+  ]
+}

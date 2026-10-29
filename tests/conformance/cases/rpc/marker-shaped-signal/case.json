@@ -1,0 +1,4 @@
+{
+  "workers": ["app", "other"],
+  "steps": [{"path": "/"}]
+}

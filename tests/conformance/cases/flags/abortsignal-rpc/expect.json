@@ -1,0 +1,33 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "flag": true,
+        "params": {
+          "isSignal": true,
+          "before": false,
+          "after": true,
+          "reason": "late"
+        },
+        "durableObject": {
+          "isSignal": true,
+          "before": false,
+          "after": true,
+          "reason": "late"
+        },
+        "result": {
+          "isSignal": true,
+          "aborted": true,
+          "reason": "given"
+        },
+        "loaderParams": true,
+        "storage": "DataCloneError: AbortSignal can only be serialized for RPC.",
+        "loaderEnv": "DataCloneError: AbortSignal can only be serialized for RPC.",
+        "structuredClone": "DataCloneError: AbortSignal can only be serialized for RPC."
+      }
+    }
+  ]
+}

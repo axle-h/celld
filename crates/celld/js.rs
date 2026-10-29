@@ -11925,7 +11925,7 @@ mod marker_key_tests {
 
     /// Run `body` with `__celld` bound in a fresh Worker's isolate, and
     /// answer what it returned as text, or the message it threw.
-    fn eval(body: &'static str) -> Result<String, String> {
+    pub(super) fn eval(body: &'static str) -> Result<String, String> {
         let _ = crate::asyncrt::test_host_runtime();
         Engine::init();
         // On a thread started after V8, as `runtime::init_v8` requires.
@@ -12280,6 +12280,182 @@ mod marker_key_tests {
         })
         .join()
         .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod rpc_params_tests {
+    //! A call's lifted params in flight (plan 1.29): the references they carry
+    //! are released when the call ends unless its callee revived them in
+    //! this isolate, and a revival after the release adopts nothing. Also
+    //! what a Proxy crosses as.
+    use super::marker_key_tests::eval;
+
+    /// A function, an RpcTarget and a stub of the caller's, sent as a call's
+    /// params, with the stub duplicated (rpc_params_dup_stubs) or not.
+    fn params(dup: bool) -> String {
+        format!(
+            r#"const t = __celld.__liftedForTest;
+            __celld.__cell.compat.rpcParamsDupStubs = {dup};
+            const {{ RpcStub, RpcTarget }} = __celld.__cf;
+            const stub = new RpcStub(new RpcTarget());
+            const before = t.entries();
+            const sent = t.params([() => 1, new RpcTarget(), stub]);"#
+        )
+    }
+
+    fn run(rest: &str) -> String {
+        run_with(true, rest)
+    }
+
+    fn run_with(dup: bool, rest: &str) -> String {
+        let body: &'static str = Box::leak(format!("{}\n{rest}", params(dup)).into_boxed_str());
+        eval(body).unwrap()
+    }
+
+    #[test]
+    fn params_nobody_revived_are_released_when_the_call_ends() {
+        assert_eq!(
+            run(r#"const taken = t.entries() - before;
+                sent.end();
+                sent.end();
+                return JSON.stringify({ tag: sent.bytes[0], taken, left: t.entries() - before });"#),
+            // The function and the target are new entries; the stub's entry
+            // gained a reference, which the end gave back.
+            r#"{"tag":3,"taken":2,"left":0}"#
+        );
+        // A transferred stub's reference went with the call, so the end
+        // releases its target too.
+        assert_eq!(
+            run_with(
+                false,
+                r#"sent.end();
+                return JSON.stringify({ left: t.entries() - before });"#
+            ),
+            r#"{"left":-1}"#
+        );
+    }
+
+    #[test]
+    fn params_revived_here_belong_to_the_callee() {
+        assert_eq!(
+            run(r#"const received = t.receive(sent.bytes);
+                sent.end();
+                const kept = t.entries() - before;
+                t.disposeReceived(received.received);
+                return JSON.stringify({ handles: received.received.length, kept,
+                  left: t.entries() - before });"#),
+            r#"{"handles":3,"kept":2,"left":0}"#
+        );
+    }
+
+    #[test]
+    fn a_revival_after_the_call_ended_adopts_nothing() {
+        assert_eq!(
+            run(r#"sent.end();
+                const received = t.receive(sent.bytes);
+                return JSON.stringify({ handles: received.received.length,
+                  dead: received.args.every(t.foreign), left: t.entries() - before });"#),
+            r#"{"handles":0,"dead":true,"left":0}"#
+        );
+    }
+
+    #[test]
+    fn another_isolates_params_claim_nothing_here() {
+        // The same params as another isolate's lift writes them: its token on
+        // the envelope and on each marker.
+        assert_eq!(
+            run(r#"const tree = t.open(sent.bytes);
+                tree[0] = "other";
+                for (const marker of tree[2]) marker.t = "other";
+                const received = t.receive(t.envelope(3, tree));
+                const pending = t.entries() - before;
+                sent.end();
+                return JSON.stringify({ handles: received.received.length,
+                  foreign: received.args.every(t.foreign), pending,
+                  left: t.entries() - before });"#),
+            r#"{"handles":0,"foreign":true,"pending":2,"left":0}"#
+        );
+    }
+
+    #[test]
+    fn a_stub_ops_params_are_claimed_in_the_isolate() {
+        let local = |rest: &str| {
+            let body = format!(
+                r#"{}
+                const op = t.localParams([() => 1, new RpcTarget(), stub]);
+                {rest}"#,
+                params(true)
+            );
+            eval(Box::leak(body.into_boxed_str())).unwrap()
+        };
+        // The ordinary envelope; once the callee claims, the end is a no-op
+        // and the callee's disposal releases what it received. (`sent`, from
+        // the shared prelude, still holds its own two entries.)
+        assert_eq!(
+            local(
+                r#"op.claim();
+                const received = t.receive(op.bytes);
+                op.end();
+                const kept = t.entries() - before - 2;
+                t.disposeReceived(received.received);
+                return JSON.stringify({ tag: op.bytes[0], kept, left: t.entries() - before - 2 });"#
+            ),
+            r#"{"tag":1,"kept":2,"left":0}"#
+        );
+        // Unclaimed (the call failed before its callee decoded), the end
+        // releases them.
+        assert_eq!(
+            local(r#"op.end(); return JSON.stringify({ left: t.entries() - before - 2 });"#),
+            r#"{"left":0}"#
+        );
+    }
+
+    #[test]
+    fn a_params_disposer_is_not_lifted() {
+        // workerd serializes no Symbol.dispose of a param, so only the
+        // function beside it takes an entry.
+        assert_eq!(
+            eval(
+                r#"const t = __celld.__liftedForTest;
+                const before = t.entries();
+                const sent = t.params([{ [Symbol.dispose]() {}, f: () => 1 }]);
+                const taken = t.entries() - before;
+                sent.end();
+                return JSON.stringify({ taken, left: t.entries() - before });"#
+            )
+            .unwrap(),
+            r#"{"taken":1,"left":0}"#
+        );
+    }
+
+    #[test]
+    fn a_proxy_crosses_as_the_stub_its_prototype_chain_presents() {
+        assert_eq!(
+            eval(
+                r#"const t = __celld.__liftedForTest;
+                const { RpcTarget } = __celld.__cf;
+                const out = {};
+                for (const [name, proxy] of [
+                    ["plain", new Proxy({ a: 1 }, {})],
+                    ["target", new Proxy({}, { getPrototypeOf: () => RpcTarget.prototype })],
+                    ["callable", new Proxy(function () {}, { getPrototypeOf: () => Date.prototype })],
+                    ["array", new Proxy([1], {})],
+                    ["class", new Proxy({}, { getPrototypeOf: () => Date.prototype })],
+                    ["null", new Proxy({}, { getPrototypeOf: () => null })]]) {
+                  try {
+                    const sent = t.params([proxy]);
+                    out[name] = typeof t.receive(sent.bytes).args[0];
+                    sent.end();
+                  } catch (error) {
+                    out[name] = error.name;
+                  }
+                }
+                return JSON.stringify(out);"#
+            )
+            .unwrap(),
+            r#"{"plain":"function","target":"function","callable":"function","array":"DataCloneError","class":"DataCloneError","null":"DataCloneError"}"#
+        );
     }
 }
 

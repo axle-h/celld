@@ -1,0 +1,8 @@
+// enable_abortsignal_rpc (experimental) lets an AbortSignal cross RPC.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["enable_abortsignal_rpc"],
+  "services": [{ "binding": "OTHER", "service": "other" }]
+}

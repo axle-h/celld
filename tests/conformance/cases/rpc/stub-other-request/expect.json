@@ -1,0 +1,39 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": "hi"
+    },
+    {
+      "status": 200,
+      "body": "Error: Cannot perform I/O on behalf of a different request. I/O objects (such as streams, request/response bodies, and others) created in the context of one request handler cannot be accessed from a different request's handler. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: Client)"
+    },
+    {
+      "status": 200,
+      "body": "Error: Cannot perform I/O on behalf of a different request. I/O objects (such as streams, request/response bodies, and others) created in the context of one request handler cannot be accessed from a different request's handler. This is a limitation of Cloudflare Workers which allows us to improve overall performance. (I/O type: Client)"
+    },
+    {
+      "status": 200,
+      "body": {
+        "give": "kept",
+        "call": "hi given",
+        "pass": "hi given",
+        "throughTarget": "hi given"
+      }
+    },
+    {
+      "status": 200,
+      "body": "kept"
+    },
+    {
+      "status": 200,
+      "body": {
+        "call": "hi object",
+        "pass": "hi object",
+        "throughTarget": "hi object"
+      }
+    }
+  ]
+}

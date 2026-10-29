@@ -219,6 +219,45 @@
             "dispose plain'"
           ]
         },
+        "plainProxy": {
+          "result": {
+            "type": "string",
+            "value": "pproxy'"
+          },
+          "log": [
+            "dup pproxy",
+            "dispose pproxy'"
+          ]
+        },
+        "noDupPlainProxy": {
+          "result": {
+            "type": "string",
+            "value": "pproxy"
+          },
+          "log": [
+            "dispose pproxy"
+          ]
+        },
+        "plainProxyToPlain": {
+          "result": {
+            "type": "string",
+            "value": "plain'"
+          },
+          "log": [
+            "dup pproxy",
+            "dispose plain'"
+          ]
+        },
+        "plainProxyToFunction": {
+          "result": {
+            "type": "string",
+            "value": "fn'(x)"
+          },
+          "log": [
+            "dup pproxy",
+            "dispose fn'"
+          ]
+        },
         "notFunction": {
           "result": {
             "type": "string",
@@ -296,6 +335,22 @@
           ]
         },
         "targetProxyToFunction": {
+          "result": {
+            "error": "DataCloneError: Couldn't create a stub for the Proxy because it has a dup() method which did not return the same underlying type (RpcTarget or Function) as the Proxy itself represents. Either remove the dup() method or make sure it returns an RpcTarget."
+          },
+          "log": [
+            "dup proxy"
+          ]
+        },
+        "plainProxyToTarget": {
+          "result": {
+            "error": "DataCloneError: Couldn't create a stub for the Proxy because it has a dup() method which did not return the same underlying type (RpcTarget or Function) as the Proxy itself represents. Either remove the dup() method or make sure it returns an RpcTarget."
+          },
+          "log": [
+            "dup pproxy"
+          ]
+        },
+        "targetProxyToPlainProxy": {
           "result": {
             "error": "DataCloneError: Couldn't create a stub for the Proxy because it has a dup() method which did not return the same underlying type (RpcTarget or Function) as the Proxy itself represents. Either remove the dup() method or make sure it returns an RpcTarget."
           },

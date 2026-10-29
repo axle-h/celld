@@ -7,6 +7,7 @@
     "node": ">=24.19.0"
   },
   "imports": {
+    "#abortsignal-rpc": "./lib/worker/abortsignal-rpc.js",
     "#byob": "./lib/worker/byob.js",
     "#clone": "./lib/worker/clone.js",
     "#marker-shaped": "./lib/worker/marker-shaped.js",

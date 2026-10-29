@@ -205,6 +205,41 @@
             "dispose fproxy"
           ]
         },
+        "plainProxy": {
+          "result": {
+            "type": "string",
+            "value": "pproxy"
+          },
+          "log": [
+            "dispose pproxy"
+          ]
+        },
+        "noDupPlainProxy": {
+          "result": {
+            "type": "string",
+            "value": "pproxy"
+          },
+          "log": [
+            "dispose pproxy"
+          ]
+        },
+        "plainProxyToPlain": {
+          "result": {
+            "type": "string",
+            "value": "pproxy"
+          },
+          "log": [
+            "dispose pproxy"
+          ]
+        },
+        "plainProxyToFunction": {
+          "result": {
+            "error": "TypeError: \"(this)\" is not a function."
+          },
+          "log": [
+            "dispose pproxy"
+          ]
+        },
         "notFunction": {
           "result": {
             "type": "string",
@@ -285,6 +320,24 @@
           ]
         },
         "targetProxyToFunction": {
+          "result": {
+            "type": "string",
+            "value": "proxy"
+          },
+          "log": [
+            "dispose proxy"
+          ]
+        },
+        "plainProxyToTarget": {
+          "result": {
+            "type": "string",
+            "value": "pproxy"
+          },
+          "log": [
+            "dispose pproxy"
+          ]
+        },
+        "targetProxyToPlainProxy": {
           "result": {
             "type": "string",
             "value": "proxy"

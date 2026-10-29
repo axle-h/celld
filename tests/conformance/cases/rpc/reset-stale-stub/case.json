@@ -1,0 +1,8 @@
+{
+  "xfail": "1.30",
+  "workers": ["app"],
+  "steps": [
+    {"path": "/stateless"},
+    {"path": "/object"}
+  ]
+}

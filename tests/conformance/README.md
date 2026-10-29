@@ -65,7 +65,10 @@ replies the `flags/websocket-*-reply` cases check under different flags,
 `#clone` is `lib/worker/clone.js`, the `Response.clone()` and
 `Request.clone()` checks the `fetch/*-clone*` cases run on each source, and
 `#marker-shaped` is `lib/worker/marker-shaped.js`, the plain data shaped like
-celld's markers that the `rpc/marker-shaped-*` cases send on each path.
+celld's markers that the `rpc/marker-shaped-*` cases send on each path, and
+`#abortsignal-rpc` is `lib/worker/abortsignal-rpc.js`, the AbortSignal checks
+`flags/abortsignal-rpc` and `rpc/abortsignal-without-flag` run with and
+without the experimental `enable_abortsignal_rpc` flag.
 
 ```json
 {

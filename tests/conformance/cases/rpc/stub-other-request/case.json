@@ -1,0 +1,12 @@
+{
+  "xfail": "1.57",
+  "workers": ["app"],
+  "steps": [
+    {"path": "/make"},
+    {"path": "/use"},
+    {"path": "/pass"},
+    {"path": "/keep"},
+    {"path": "/object-keep"},
+    {"path": "/object-use"}
+  ]
+}

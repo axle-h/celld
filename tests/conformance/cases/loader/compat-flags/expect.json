@@ -18,6 +18,7 @@
         "shortDay": "Error: Invalid compatibility date: 2026-02-1",
         "experimental": "Error: The compatibility flag experimental is experimental and may break or be removed in a future version of workerd. To use this flag, you must pass --experimental on the command line.",
         "extraHandlers": "Error: The compatibility flag service_binding_extra_handlers is experimental and may break or be removed in a future version of workerd. To use this flag, you must pass --experimental on the command line.",
+        "abortSignalRpc": "Error: The compatibility flag enable_abortsignal_rpc is experimental and may break or be removed in a future version of workerd. To use this flag, you must pass --experimental on the command line.",
         "symbolFlag": "TypeError: Cannot convert a Symbol value to a string",
         "symbolDate": "TypeError: Cannot convert a Symbol value to a string",
         "hole": "Error: No such compatibility flag: undefined",

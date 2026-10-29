@@ -1,0 +1,46 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "taken": [
+          [
+            "function"
+          ],
+          [
+            "function"
+          ],
+          [
+            "function"
+          ],
+          [
+            "function"
+          ],
+          [
+            "function",
+            "function"
+          ]
+        ],
+        "released": [
+          "dispose target",
+          "dispose function",
+          "dup proxy",
+          "dispose proxy'",
+          "dispose second",
+          "dispose first"
+        ],
+        "afterCaller": [
+          "dispose target",
+          "dispose function",
+          "dup proxy",
+          "dispose proxy'",
+          "dispose second",
+          "dispose first",
+          "dispose stub"
+        ]
+      }
+    }
+  ]
+}

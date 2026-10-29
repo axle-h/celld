@@ -2,9 +2,8 @@
 // serialises a script's values. workerd treats a Proxy by the prototype
 // chain it presents: over RPC one presenting a plain object crosses as a
 // stub and any other is refused; storage, a Queue and a Worker Loader env
-// refuse every Proxy with V8's DataCloneError. celld copies one presenting a
-// plain object by value over RPC (plan 1.29), and its storage and Queue
-// refusals are a TypeError and QUEUE_ERROR.
+// refuse every Proxy with V8's DataCloneError. (A service binding to another
+// Worker is rpc/marker-shaped-proxies-service.)
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { PROXY_NAMES, object, plainVerdict } from "#marker-shaped";
 
@@ -39,7 +38,6 @@ export default {
     return Response.json({
       params: await each((name) => ctx.exports.Echo.probe({ v: object(name) })),
       paramsLift: await each((name) => ctx.exports.Echo.probe({ lift: new Headers(), v: object(name) })),
-      service: await each((name) => env.OTHER.probe({ v: object(name) })),
       storage: await each((name) => env.OBJ.getByName("a").put(name)),
       queue: await each(async (name) => {
         await env.QUEUE.send({ v: object(name) }, { contentType: "v8" });

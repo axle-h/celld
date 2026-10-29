@@ -1,0 +1,178 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "rss": "baseline"
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": 300,
+        "refused": 300,
+        "released": 300
+      }
+    },
+    {
+      "rss": "grew at most 144 MiB"
+    }
+  ]
+}

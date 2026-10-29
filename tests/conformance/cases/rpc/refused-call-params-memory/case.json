@@ -1,0 +1,78 @@
+{
+  "kind": "celld-only",
+  "reason": "memory over many refused calls is a celld resource bound; workerd run locally shows the releases themselves, which rpc/refused-call-params diffs",
+  "workers": [
+    "app"
+  ],
+  "steps": [
+    {
+      "path": "/?round=0&n=150"
+    },
+    {
+      "rss": "baseline"
+    },
+    {
+      "path": "/?round=1&n=150"
+    },
+    {
+      "path": "/?round=2&n=150"
+    },
+    {
+      "path": "/?round=3&n=150"
+    },
+    {
+      "path": "/?round=4&n=150"
+    },
+    {
+      "path": "/?round=5&n=150"
+    },
+    {
+      "path": "/?round=6&n=150"
+    },
+    {
+      "path": "/?round=7&n=150"
+    },
+    {
+      "path": "/?round=8&n=150"
+    },
+    {
+      "path": "/?round=9&n=150"
+    },
+    {
+      "path": "/?round=10&n=150"
+    },
+    {
+      "path": "/?round=11&n=150"
+    },
+    {
+      "path": "/?round=12&n=150"
+    },
+    {
+      "path": "/?round=13&n=150"
+    },
+    {
+      "path": "/?round=14&n=150"
+    },
+    {
+      "path": "/?round=15&n=150"
+    },
+    {
+      "path": "/?round=16&n=150"
+    },
+    {
+      "path": "/?round=17&n=150"
+    },
+    {
+      "path": "/?round=18&n=150"
+    },
+    {
+      "path": "/?round=19&n=150"
+    },
+    {
+      "path": "/?round=20&n=150"
+    },
+    {
+      "rss": 144
+    }
+  ]
+}

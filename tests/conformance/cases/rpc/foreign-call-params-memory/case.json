@@ -1,0 +1,30 @@
+{
+  "kind": "celld-only",
+  "reason": "a caller's memory over many calls is a celld resource bound; workerd run locally shows the releases themselves, which rpc/foreign-call-params diffs",
+  "workers": [
+    "app"
+  ],
+  "steps": [
+    {
+      "path": "/?n=200"
+    },
+    {
+      "rss": "baseline"
+    },
+    {
+      "path": "/?n=1000"
+    },
+    {
+      "path": "/?n=1000"
+    },
+    {
+      "path": "/?n=1000"
+    },
+    {
+      "path": "/?n=1000"
+    },
+    {
+      "rss": 64
+    }
+  ]
+}

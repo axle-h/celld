@@ -471,7 +471,7 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 39 | 1.49 part A: Durable Object scope grants on the host (security) | done | `53e6198` |
 | 39b | 1.50 TCP socket and HTMLRewriter ownership, socket cap, continuations (1.52) (security) | done | `fe784d8` |
 | 39c | 1.49 part B: internals out of user reach, cell re-validation (security) | done | `1e8ac01` |
-| 39d | 1.53 marker-shaped RPC data, with 1.29's forgeable-marker item (security) | next | |
+| 39d | 1.53 marker-shaped RPC data, with 1.29's forgeable-marker item (security) | done | `278cb9d` |
 | 40+ | Phase 1 in plan order (1.29, 1.30, 1.34, 1.36-1.44, 1.46-1.48, 1.51, 1.54, 1.55, 1.56), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
@@ -4725,6 +4725,35 @@ client, without waiting for the 1006 close to be recorded, and failed once
 in a full run (30/30 and 20/20 on reruns, at HEAD too). Make `/seen` wait for
 the close, bounded by a timeout.
 
+### 1.57 Stateless requests share one context (found by 1.29)
+
+celld runs every stateless Worker request outside any request context
+(`__ctxNow()` is undefined), so a stub one request made, kept in module
+state, can be called and passed on by a later request. workerd refuses both
+with "Cannot perform I/O on behalf of a different request ... (I/O type:
+Client)". Same script only, so no cross-script reach. Matching it means a
+context id per stateless request (the CPED frame the Durable Object events
+already get), ended with the request so the stubs it holds are disposed,
+without slowing the plain fetch path. Because celld cannot tell the
+requests apart, an op on a stub such a request made, called from another
+context (an entrypoint's call, say), runs in a fresh context (1.29), so a
+param it keeps belongs to no stateless request: the request that made the
+stub cannot pass it on either, which workerd allows. Also, workerd lets a
+Durable Object pass on, in a later event, a param one event kept with
+`dup()`; celld refuses it as another request's. `rpc/stub-other-request`
+(xfail) has all three.
+
+### 1.58 RPC param gaps found by the 1.29 review
+
+- A service binding (`env.SELF`) passed as an RPC param, to an RpcTarget or
+  a Durable Object, is refused ("Proxy could not be serialized because it
+  is not a valid RPC receiver type ..."); workerd delivers a Fetcher that
+  works (`rpc/service-binding-param`, xfail).
+- `new Proxy(stub, {})` passed as a param and called reaches the target;
+  workerd throws "TypeError: Illegal invocation: function called with
+  incorrect `this` reference ..." (`rpc/proxied-stub-param`, xfail). Called
+  directly, the Proxy works on both.
+
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 
 - **Security: forgeable markers (done, 1.53).** The lift copies user keys
@@ -4755,6 +4784,152 @@ the close, bounded by a timeout.
   accepted, with the enable flag winning; workerd refuses them. 1.16 should
   refuse them for every switch.
 
+**As built (done).**
+- **Params in flight** (the two leak items). `__rpcOut` registers the entry
+  references a call's lifted params carry as a *transit* when the call site
+  passes one: same-isolate stub ops (`__stubOp`), Durable Object calls and
+  runtime-cell calls (`__cellRpc`). Such params go out as a tag-3 envelope,
+  `[isolate token, transit id, tree]`. The callee's `__rpcDesArgs` claims
+  the transit when it revives them in the sending isolate; when the call
+  settles (`__rpcTransitEnd`: the dispatch's end, or `__rpc_call`
+  settling), an unclaimed transit is released newest first, as workerd
+  drops a message's capabilities. A stub op's transit stays in the
+  isolate (`local`): it keeps the references itself, the dispatch claims
+  them just before it decodes (so only an op that never decodes releases
+  them, at its end), and the params cross in the ordinary envelope. That
+  covers a call refused before decoding (a failed `blockConcurrencyWhile()`
+  refusing what queued, through a returned stub or the object's stub) and a
+  callee in another isolate, whose markers revive as foreign stubs (for
+  example every stateless Worker -> Durable Object call). A callee that
+  decodes after its caller settled finds the transit gone and revives
+  those stubs as released ones ("RPC stub used after being disposed."),
+  adopting nothing. Another isolate's tag-3 params claim nothing here.
+  Service-binding and loader calls lift no capabilities, and same-isolate
+  `ctx.exports` calls decode synchronously, so they need no transit.
+- **No failed clone first.** The projection marks a payload that holds a
+  capability, a Proxy or a host instance (`lift`), and such a payload goes
+  straight to the lift instead of failing V8's clone first, which made a
+  DataCloneError (a stack trace) per call; the clone runs only to give the
+  refusal when nothing was liftable.
+- **A param's disposer is not lifted.** The lift gave a param object's
+  `Symbol.dispose` an entry that no callee ever released; workerd
+  serializes no param disposer (probed), so only results carry one now.
+- **Stopgap for 3.2.** Under 1.13 a dup()ed param (a Cap'n Web import) now
+  goes when the call to a foreign object ends, so a long-running caller
+  stays flat. Left for 3.2: a stub a foreign callee *returns* leaks its entry
+  in the callee's isolate (the callee cannot tell that its reply went to
+  another isolate); a stream bridge in a refused or foreign call is not
+  released (streams across isolates are refused, 7.1; same-isolate refusals
+  leave the origin locked); and the stubs themselves still fail on use
+  across isolates (3.1).
+- **Stubs without a request context.** A stub entry made outside any
+  request context (a stateless Worker's top-level handler) runs its ops, and
+  pipeline hops into it, outside any context too when called from outside
+  any (`__ctxRunIn`), instead of a fresh one each, so its target can return,
+  pass on and use stubs made in the handler or in its earlier calls, as
+  workerd's one IoContext allows. Called from a context (an entrypoint's
+  call, say), it still runs in a fresh one: celld cannot tell stateless
+  requests apart (1.57), so a param such a call hands the target, kept with
+  `dup()`, must not become every stateless request's (the review found the
+  first version let a later request pass it on; workerd refuses that with
+  "different request", `/pass-kept`).
+- **Proxies.** A Proxy is classified by the prototype chain it presents, as
+  workerd's checkStubType (`__rpcStubType`, captured `getPrototypeOf` and
+  `RpcTarget.prototype`): a plain object or a callable crosses as a stub over
+  its own properties, an RpcTarget as a class stub, anything else (an array
+  included, which celld used to copy) is workerd's proxy refusal. Under 1.13
+  a Proxy's dup() must return an object of the same stub type (a plain
+  object or function for a plain-object Proxy). A returned plain-object
+  Proxy keeps its pipeline; only an RpcTarget Proxy has none. Durable Object
+  stubs (celld's own Proxies) lift before the classification. RPC promise
+  and property nodes carry a brand (`__rpcNodes`), which the lift's refusal
+  and the dup rules read instead of `instanceof`. Calling a stub whose
+  target is not callable throws workerd's `"(this)" is not a function.`
+- **DataCloneError.** V8's refusal of a value it cannot clone is the
+  DataCloneError workerd throws, with V8's text, wherever celld clones:
+  the serializer delegates (`storage_ops.rs`) throw what
+  `__celld.__dataCloneError` makes, for storage `put`, `kv.put`, a Queue's
+  `send`/`sendBatch` (which threw `QUEUE_ERROR` before) and
+  `structuredClone()` (which converted every TypeError, a getter's own
+  included).
+- **AbortSignal.** `enable_abortsignal_rpc` is honoured (experimental, so
+  deploy accepts it and the Worker Loader refuses it) and reported.
+  Without it every serialization of a signal throws "AbortSignal
+  serialization is not enabled." (RPC params and results, Durable Object
+  and loader calls, storage, a Loader env, `structuredClone()`); with it a
+  signal crosses RPC as before, and storage, a Loader env and
+  `structuredClone()` refuse it with "AbortSignal can only be serialized
+  for RPC.", as workerd checks the flag first. No case or starter Worker
+  sent a signal over RPC except `rpc/marker-shaped-data-internal`, whose
+  signal step moved to the differential `rpc/marker-shaped-signal`, which
+  sets the flag.
+- **Contradictory flags** were already refused for every switch by 1.16
+  (deploy, `celld dev` and the Loader, with workerd's text, probed again
+  with wrangler). A unit test now checks every switch.
+- **Wire.** Tag 3 is new; the stop-all upgrade note says so.
+- **Memory** (lab build, local, peak RSS growth over the baseline step):
+  4,000 stateless -> Durable Object calls, each passing an RpcTarget and a
+  function holding 32 KiB and a duplicated stub: HEAD grows 121 MiB and then
+  fails the Worker with "Array buffer allocation failed"; now 32-41 MiB
+  (garbage awaiting GC), every param disposed. Twenty rounds of 300 calls
+  refused by a failed `blockConcurrencyWhile()`, each holding 32 KiB and
+  each round with a new callee: HEAD fails with "Array buffer allocation
+  failed"; now 69-90 MiB (garbage, and twenty new objects). HEAD's peak,
+  capped by that failure, is 139-141 MiB, under the case's 144 MiB bound,
+  so what fails HEAD there is the transcript (its `released` counts, and
+  the failed rounds), not the RSS step.
+- **Cost** (lab build, `celld dev`, wall time of one request; 15 runs each,
+  HEAD rebuilt from `git archive`, interleaved; medians): 20,000 same-isolate
+  stub calls passing a function, from a stateless Worker 211 -> 139 ms and
+  from a Durable Object 210 -> 164 ms; the same calls passing a number
+  78 -> 67 ms; 5,000 stateless -> Durable Object calls passing a function
+  484 -> 401 ms. The first version of this change cost the Durable Object
+  case 15% (194 -> 223 ms in the review): a tag-3 envelope, a map entry and
+  an abort closure per stub op; stub ops now keep their transit local, and
+  the failed clone each lifted call paid at HEAD is gone.
+- **Tests.**
+  - Differential: `rpc/refused-call-params` (through a returned stub and the
+    object's stub: the RpcTarget and function are disposed, the caller's
+    duplicated stub only by its caller), `rpc/foreign-call-params` (to a
+    Durable Object in another isolate: RpcTarget, function, a plain-object
+    Proxy's dup() and its disposal, a duplicated stub, two params disposed
+    last first), `rpc/stub-without-request-context`, `storage/clone-refusals`
+    (functions, symbols, Proxies, nested values and WeakMaps in storage, a
+    Queue and `structuredClone()`), `flags/abortsignal-rpc` and
+    `rpc/abortsignal-without-flag` (shared `#abortsignal-rpc`: params with a
+    late abort, a Durable Object call, a result, loader params, storage, a
+    Loader env, `structuredClone()`), `rpc/marker-shaped-signal`;
+    `rpc/marker-shaped-proxies` is no longer xfail; `rpc/params-dup*` gained
+    plain-object Proxy rows (dup to a Proxy, a plain object and a function;
+    no dup; a dup of the wrong type, both ways); `loader/compat-flags`
+    gained the Loader's refusal of `enable_abortsignal_rpc`.
+    `rpc/stub-without-request-context` `/keep` and `/pass-kept`: a param an
+    entrypoint's call hands a top-level stub's target, kept with `dup()`,
+    which a later request cannot pass on (fails with the first version of
+    this change). The refused-call cases arm the block with a call that
+    returns once the input gate is closed, rather than a wait.
+  - xfail: `rpc/marker-shaped-proxies-service` (3.1: the service-binding row,
+    split out), `rpc/stub-other-request` (1.57, with the kept-param and
+    Durable Object rows), `rpc/service-binding-param` and
+    `rpc/proxied-stub-param` (1.58).
+  - celld-only: `rpc/foreign-call-params-memory` (64 MiB bound) and
+    `rpc/refused-call-params-memory` (144 MiB), whose transcripts also pin
+    that every param is released.
+  - Unit: `js::rpc_params_tests` (released when unrevived, in both stub
+    modes; the callee's once revived; nothing adopted by a late revival;
+    a stub op's local transit claimed or released;
+    another isolate's params claim nothing; no param disposer; what each
+    Proxy shape crosses as), and `compat_flags` (every contradictory pair,
+    in both contexts; the signal flag accepted at deploy, refused by the
+    Loader, reported).
+  - At HEAD: the two leak cases fail (no param is disposed), both memory
+    cases fail (their transcripts, and the foreign one with 500s),
+    `rpc/stub-without-request-context` fails ("different request"),
+    `storage/clone-refusals` fails (TypeError, `QUEUE_ERROR`),
+    `rpc/abortsignal-without-flag` and `rpc/marker-shaped-proxies` fail,
+    `flags/abortsignal-rpc` and `rpc/marker-shaped-signal` do not deploy
+    (the flag was refused), and the new `rpc/params-dup*` rows fail.
+
 ### 1.30 Durable Object reset follow-ups (found by 1.14)
 
 - **A DO caller never gets a callee's reset.** DO "caller" awaits
@@ -4768,6 +4943,13 @@ the close, bounded by a timeout.
   transaction discards it. This predates 1.14.
 - Transaction views still have `transactionSync`, `sql`, `kv` and `sync`,
   which workerd's `DurableObjectTransaction` lacks.
+- **A stub that saw a reset keeps reaching the object** (found by the 1.29
+  review). After a failed `blockConcurrencyWhile()`, workerd resets the
+  object, and a fresh `getByName()` stub reaches a new instance (celld's
+  too); the stub that saw the reset stays broken, its later calls (200 ms on
+  as well) throwing the block's error. celld's old stub silently reaches the
+  new instance. From a stateless Worker and from another Durable Object
+  alike: `rpc/reset-stale-stub` (xfail).
 
 ### 1.31 Isolate heap limit during module load (found by 1.15) — security
 
@@ -5183,6 +5365,9 @@ All isolates on a node share one process, so the host brokers capabilities.
   `Symbol.dispose` runs.
 - Implicit disposal is unchanged: received params at call end, handles at
   `__ctxEnd`, and a result's dispose.
+- 1.29's stopgap releases a call's params when a call to a foreign target
+  settles (transits); importer redemption replaces it. It does not cover a
+  stub a foreign callee returns, whose entry stays in the callee.
 - **Breakage** marks a CapId `Broken` and notifies importers, who watch it
   with `__cap_watch`. Causes:
   - the exporting context ends or aborts
@@ -5223,6 +5408,10 @@ Each is refused loudly.
 | 3.1 | Calls, args and returns for RpcTargets, functions, callable Proxies, re-passed stubs and `new RpcStub(obj)`. Covers stateless↔own DO, DO↔DO, script↔script, **and facet and Dynamic Worker call args (N3, boundaries E and F)**. | J1 subscribers, J3 `overseer.open`/`newChat`, trial failure 6 | 2-3 weeks |
 | 3.2 | Lifetime: release, dup (including N1's param duplication across isolates), implicit disposal, break notices, importer death, the eviction pin, and `Symbol.dispose` callbacks across isolates. | J1 unsubscribe, `notifyClosed`, trial failure 8 | 1.5-2 weeks |
 | 3.3 | Pipelining: a call on an RpcPromise or RpcProperty whose root is remote waits for the root, then forwards, keeping e-order. Wildcard-get Proxies (`GatekeeperLoopback`, `overseer.ts:10815`). | J5, J6 env calls; `observer-tracker.ts:258` | 3-5 days |
+
+3.1 also: a Durable Object in another isolate that calls `dup()` on a stub
+param gets a rejected Promise ("RPC stubs cannot cross isolate boundaries
+yet."), where workerd hands it a stub that outlives the call.
 
 In each milestone, remove the corresponding "cannot cross isolate boundaries
 yet" refusal in `harness.js`.

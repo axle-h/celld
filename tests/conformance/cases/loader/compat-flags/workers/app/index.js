@@ -12,6 +12,7 @@ const CASES = {
   shortDay: { compatibilityDate: "2026-02-1" },
   experimental: { compatibilityDate: "2026-02-01", compatibilityFlags: ["experimental"] },
   extraHandlers: { compatibilityDate: "2026-02-01", compatibilityFlags: ["service_binding_extra_handlers"] },
+  abortSignalRpc: { compatibilityDate: "2026-02-01", compatibilityFlags: ["enable_abortsignal_rpc"] },
   symbolFlag: { compatibilityDate: "2026-02-01", compatibilityFlags: [Symbol("flag")] },
   symbolDate: { compatibilityDate: Symbol("date") },
   hole: { compatibilityDate: "2026-02-01", compatibilityFlags: [, "nodejs_als"] },

@@ -1,0 +1,46 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "blocked": "blocked",
+        "results": [
+          "Error: block failed",
+          "Error: block failed",
+          "Error: block failed"
+        ],
+        "released": [
+          "dispose function",
+          "dispose target"
+        ],
+        "afterCaller": [
+          "dispose function",
+          "dispose stub",
+          "dispose target"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "blocked": "blocked",
+        "results": [
+          "Error: block failed",
+          "Error: block failed",
+          "Error: block failed"
+        ],
+        "released": [
+          "dispose function",
+          "dispose target"
+        ],
+        "afterCaller": [
+          "dispose function",
+          "dispose stub",
+          "dispose target"
+        ]
+      }
+    }
+  ]
+}

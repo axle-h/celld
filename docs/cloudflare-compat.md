@@ -149,9 +149,21 @@ The `tail` and `email` handlers are unavailable.
   Nor can a Request or Response whose body is a stream not yet read into
   memory. A Headers, Blob, Request or Response crosses by value everywhere
   workerd serializes one, Durable Object storage and a Worker Loader env
-  included, and a File or CryptoKey is refused, as in workerd.
-- An `AbortSignal` crosses RPC without the experimental
-  `enable_abortsignal_rpc` flag, which workerd needs to serialize one.
+  included, and a File or CryptoKey is refused, as in workerd. A stub that a
+  call to a Durable Object in another isolate carries, such as one from a
+  stateless Worker, arrives as a stub that fails on use, and the caller
+  releases what it passed when the call ends, as workerd does when the
+  callee's call ends, except a param that a callee in another isolate keeps
+  with `dup()`: workerd keeps it alive, and in celld the `dup()` fails (see
+  plan item 3.2).
+- A Proxy that presents a plain object or an RpcTarget crosses RPC as a stub,
+  as in workerd, within an isolate only.
+- A stub that a stateless Worker's request made can be used from another
+  request. workerd refuses it with "Cannot perform I/O on behalf of a
+  different request". A Durable Object cannot pass on, in a later event, a
+  stub param it kept with `dup()`, which workerd allows.
+- A service binding passed as an RPC param is refused as a Proxy that is no
+  RPC receiver type. workerd delivers a Fetcher.
 - A Durable Object stub's `connect()` throws "Fetcher.connect() is not
   implemented in celld". workerd hands the object's `connect` handler a
   socket.
@@ -416,7 +428,8 @@ It also refuses:
 - a date after 2026-09-04, the newest date celld models, with workerd's
   message for a date newer than the binary supports
 - an experimental flag in a Worker's configuration, which Cloudflare refuses
-  too, except `js_rpc` and `service_binding_extra_handlers`
+  too, except `js_rpc`, `service_binding_extra_handlers` and
+  `enable_abortsignal_rpc`
 - a flag from the [refused flags](#refused-flags) list, which would select a
   behaviour that celld lacks
 
@@ -465,6 +478,11 @@ celld follows these flags and the dates that turn them on:
   `get()`, `put()`, and `delete()` helpers.
 - `js_rpc`, an experimental flag: RPC to a Durable Object class that does not
   extend `DurableObject`.
+- `enable_abortsignal_rpc`, an experimental flag: an `AbortSignal` crosses
+  RPC, and its abort reaches the receiver. Without it, serializing one throws
+  "AbortSignal serialization is not enabled.", as in workerd, and with it
+  storage, a Worker Loader env and `structuredClone()` refuse one as "only
+  serialized for RPC".
 - `queues_json_messages` and `no_queues_json_messages` (on from 2024-03-18):
   a queue message's default content type is `json`, otherwise `v8`.
 - `delete_all_deletes_alarm` and `delete_all_preserves_alarm` (on from
