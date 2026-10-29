@@ -710,7 +710,7 @@ The accepted top-level keys:
 - `$schema`, `name`, `main`, and `no_bundle`
 - `compatibility_date` and `compatibility_flags`
 - `durable_objects` and `migrations`
-- `assets`, `services`, `triggers`, and `vars`
+- `assets`, `services`, `triggers`, `limits`, and `vars`
 - `d1_databases`, `kv_namespaces`, `queues`, `workflows`, and
   `r2_buckets`
 - `worker_loaders` and `containers`
@@ -817,6 +817,13 @@ API ignores it: an import that only `NODE_PATH` finds fails to resolve.
 (celld ran esbuild's CLI before, which reads it.)
 `no_bundle` skips esbuild, so `no_bundle` with `define`, `alias` or `rules`
 stops the deployment.
+
+`limits` accepts `cpu_ms`, a whole number of milliseconds from 1 to 300,000:
+the CPU time each invocation of the Worker gets, its Durable Objects' events
+included. Without it an invocation gets 30 seconds, Cloudflare's default. A
+`limits.subrequests` stops the deployment, because celld counts no
+subrequests of a deployed Worker. See
+[Limitations](limitations.md#isolate-limits).
 
 An asset-only project can omit `main`. `celld deploy` refuses an unsafe asset
 path, and `.assetsignore` requires Wrangler.

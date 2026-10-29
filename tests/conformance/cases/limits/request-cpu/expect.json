@@ -1,0 +1,231 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "Worker exceeded CPU time limit."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "status": 200,
+        "body": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "fetch threw: [object Object]"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "Worker exceeded CPU time limit."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "result": {
+          "error": "Error",
+          "message": "Worker exceeded CPU time limit."
+        },
+        "withinSeconds": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "spin": {
+          "error": "Error",
+          "message": "Worker exceeded CPU time limit."
+        },
+        "wait": {
+          "status": 200,
+          "body": "waited"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "status": 200,
+        "body": "other ok"
+      }
+    },
+    {
+      "status": 500,
+      "body": "Worker failed: Worker exceeded CPU time limit."
+    },
+    {
+      "status": 200,
+      "body": {
+        "status": 200,
+        "body": "other ok"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "Worker exceeded CPU time limit."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "alive": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "Worker exceeded CPU time limit."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "worker loader: limits.cpuMs is 300001, past the most an invocation can have (300000 ms)"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "Error",
+        "message": "worker loader: limits.cpuMs is 300001, past the most an invocation can have (300000 ms)"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "burned": 60
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "spin": {
+          "error": "Error",
+          "message": "Worker exceeded CPU time limit."
+        },
+        "wait": {
+          "error": "Error",
+          "message": "Worker exceeded CPU time limit."
+        },
+        "stale": {
+          "error": "Error",
+          "message": "Worker exceeded CPU time limit."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "value": {
+          "instanceSpun": false,
+          "before": "kept",
+          "doomed": null,
+          "late": null
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "spin": {
+          "error": "Error",
+          "message": "Worker exceeded CPU time limit."
+        },
+        "wait": {
+          "error": "Error",
+          "message": "Worker exceeded CPU time limit."
+        },
+        "stale": {
+          "error": "Error",
+          "message": "Worker exceeded CPU time limit."
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "value": {
+          "instanceSpun": false,
+          "before": "kept",
+          "doomed": null,
+          "late": null
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "stale": {
+          "error": "Error",
+          "message": "Worker exceeded CPU time limit."
+        },
+        "run": {
+          "retryCount": 1,
+          "instanceSpun": false
+        },
+        "check": {
+          "instanceSpun": false,
+          "before": null,
+          "doomed": null,
+          "late": null
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "spun": {
+          "error": "Error",
+          "message": "Worker exceeded CPU time limit."
+        },
+        "stale": {
+          "error": "Error",
+          "message": "Worker exceeded CPU time limit."
+        },
+        "fresh": {
+          "value": {
+            "instanceSpun": false,
+            "before": "kept",
+            "doomed": null,
+            "late": null
+          }
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "waiter": {
+          "error": "Error",
+          "message": "Worker exceeded CPU time limit."
+        },
+        "opener": {
+          "error": "Error",
+          "message": "Worker exceeded CPU time limit."
+        }
+      }
+    },
+    {
+      "cpu": "at most 300 ms in 1 s"
+    }
+  ]
+}

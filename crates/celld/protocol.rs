@@ -32,6 +32,11 @@ pub struct Manifest {
     /// needs no migration of an already-armed alarm.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crons: Vec<String>,
+    /// The config's `limits.cpu_ms`: the CPU time each invocation of the
+    /// Worker gets, from 1 to 300 000 ms. `None` gives Cloudflare's default
+    /// of 30 s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_ms: Option<u32>,
     /// Push consumers attached to this Worker deployment. Producer bindings
     /// remain in `raw_metadata.bindings`, because they become values in `env`;
     /// consumers drive the broker and have no environment binding.
@@ -74,9 +79,14 @@ pub const SUPPORTED_DEPLOYMENT_FEATURES: &[&str] = &[
     FEATURE_WASM_V1,
     FEATURE_WORKFLOWS_V1,
     FEATURE_PYTHON_WORKERS_V1,
+    FEATURE_LIMITS_V1,
 ];
 
 pub const FEATURE_ASSETS_V1: &str = "assets-v1";
+/// A deployment that sets `limits.cpu_ms`. Required because a build that
+/// does not read it would run the Worker under the default limit instead of
+/// the one its config asks for.
+pub const FEATURE_LIMITS_V1: &str = "limits-v1";
 /// A deployment with `containers`. Required because a build without the
 /// container engine would load the manifest, build a `ctx` with no
 /// `container`, and fail only when the object first touches it.

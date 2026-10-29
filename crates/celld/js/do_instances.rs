@@ -41,8 +41,9 @@ enum Reset {
     Thrown(Vec<u8>),
     /// A reset whose envelope was over [`MAX_ENVELOPE`].
     Unencoded,
-    /// Its isolate reached the heap limit ([`MEMORY_EXCEEDED`]).
-    Condemned,
+    /// Its isolate was condemned, with the error its events failed with
+    /// ([`MEMORY_EXCEEDED`] or [`CPU_EXCEEDED`]).
+    Condemned(&'static str),
     /// Its storage failed to commit a turn's writes, with the error the
     /// failure was reported with (`storage::failed_commit_error`).
     CommitFailed(String),
@@ -103,14 +104,14 @@ impl Registry {
         script: &str,
         scope: &str,
         heap: Option<celld_logic::isolate::HeapId>,
-        condemned: bool,
+        condemned: Option<&'static str>,
     ) {
         let Some(current) = self.current.get(scope).filter(|c| c.heap == heap).cloned() else {
             return;
         };
         self.current.remove(scope);
-        if condemned {
-            self.reset(script, scope, current.token, Reset::Condemned);
+        if let Some(error) = condemned {
+            self.reset(script, scope, current.token, Reset::Condemned(error));
         }
     }
 
@@ -208,7 +209,7 @@ fn current_heap() -> Option<celld_logic::isolate::HeapId> {
 
 /// The cell `scope` of `script` leaves the isolate this turn runs in
 /// (`finish_cell_adoption`).
-pub(super) fn release(script: &str, scope: &str, condemned: bool) {
+pub(super) fn release(script: &str, scope: &str, condemned: Option<&'static str>) {
     registry()
         .lock()
         .unwrap()
@@ -277,7 +278,7 @@ pub(super) fn op_do_instance_stale(
         Some(Reset::Unencoded) => {
             rv.set(v8::String::new(scope, RESET_WITHOUT_ERROR).unwrap().into())
         }
-        Some(Reset::Condemned) => rv.set(v8::String::new(scope, MEMORY_EXCEEDED).unwrap().into()),
+        Some(Reset::Condemned(error)) => rv.set(v8::String::new(scope, error).unwrap().into()),
         Some(Reset::CommitFailed(error)) => rv.set(v8::String::new(scope, &error).unwrap().into()),
         None => {}
     }
@@ -340,7 +341,7 @@ mod tests {
         let heap = |id| Some(celld_logic::isolate::HeapId::new(id));
         let mut registry = Registry::default();
         registry.begin("A:1", current(1));
-        registry.release("app", "A:1", None, false);
+        registry.release("app", "A:1", None, None);
         assert!(registry.current.is_empty() && registry.resets.is_empty());
         registry.begin(
             "A:1",
@@ -350,13 +351,16 @@ mod tests {
             },
         );
         // Another isolate's give-back leaves this instance alone.
-        registry.release("app", "A:1", heap(2), true);
+        registry.release("app", "A:1", heap(2), Some(MEMORY_EXCEEDED));
         assert_eq!(registry.stale("A:1", 2), None);
-        registry.release("app", "A:1", heap(1), true);
-        assert_eq!(registry.stale("A:1", 2), Some(&Reset::Condemned));
+        registry.release("app", "A:1", heap(1), Some(MEMORY_EXCEEDED));
+        assert_eq!(
+            registry.stale("A:1", 2),
+            Some(&Reset::Condemned(MEMORY_EXCEEDED))
+        );
         // A give-back with no instance resident changes nothing.
-        registry.release("app", "A:1", heap(1), true);
-        registry.release("app", "B:1", None, true);
+        registry.release("app", "A:1", heap(1), Some(MEMORY_EXCEEDED));
+        registry.release("app", "B:1", None, Some(MEMORY_EXCEEDED));
         assert_eq!(registry.resets.len(), 1);
     }
 

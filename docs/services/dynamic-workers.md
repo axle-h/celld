@@ -134,6 +134,11 @@ syntax error, a throw at module scope, or the startup memory limit. A first
 load that runs past the startup CPU limit, which a busy node can cause, is
 retried with the same backoff.
 
+A Worker that failed for good no longer counts as a loaded Worker, and celld
+keeps only its error, cut to 4 KiB, until the stub is collected: a script can
+hold 256 of them, and the process 1,024, and past that a load fails with
+`worker loader: too many failed loads … are still referenced`.
+
 celld drops every loaded Worker when its host isolate retires, after in-flight
 calls finish. A loaded Worker never outlives its loader, and a redeploy
 compiles the code again.
@@ -162,6 +167,9 @@ compiles the code again.
 - celld enforces `cpuMs` and `subRequests` in `WorkerCode.limits` and in a
   `getEntrypoint()` call. It rejects `allowExperimental`. `cpuMs` applies to
   each invocation, not to the load, which has its own limit of 1 second.
+  Without one, an invocation gets 30 seconds, the plan's default. A `cpuMs`
+  over 5 minutes, the plan's maximum, is refused with an error. An
+  invocation past its limit fails with `Worker exceeded CPU time limit.`
 - `WorkerCode.env` accepts structured-clone values and Service Binding
   capabilities. The encoded values and the capability props can total 1 MiB.
 - A loaded Worker can import a `node:` module without the flag that provides

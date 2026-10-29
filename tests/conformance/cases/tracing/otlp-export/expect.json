@@ -30,7 +30,7 @@
                     "attributes": {
                       "exception.type": "TypeError",
                       "exception.message": "boom",
-                      "exception.stacktrace": "TypeError: boom\n    at fetch (worker.js:<line>:<column>)"
+                      "exception.stacktrace": "TypeError: boom\n    at Object.fetch (worker.js:<line>:<column>)"
                     }
                   },
                   {

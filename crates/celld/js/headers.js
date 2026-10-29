@@ -20,9 +20,8 @@ function _checkName(name) {
     _nameCacheSize++;
     _nameCache[name] = valid;
   }
-  if (!valid)
-    throw new TypeError(
-      "Invalid header name: " + name);
+  // workerd's text, which does not repeat the name.
+  if (!valid) throw new TypeError("Invalid header name.");
   // The name is returned as written. Lower-casing here would put celld's
   // spelling on the wire instead of the author's, which anything that
   // canonicalizes over the received bytes can see -- an AWS SigV4 signer

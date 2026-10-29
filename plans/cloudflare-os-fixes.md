@@ -474,7 +474,9 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 39d | 1.53 marker-shaped RPC data, with 1.29's forgeable-marker item (security) | done | `278cb9d` |
 | 40 | 1.29 RPC serialisation follow-ups (leaks, Proxies, signals, flags) | done | `6b09eee` |
 | 41 | 1.30 Durable Object reset follow-ups (hang, stale stubs, discarded writes, storage surface) | done | `a7272a7` |
-| 42+ | Phase 1 in plan order (1.34, 1.36-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.59), and the 1.4 props key-order follow-up | queued | |
+| 42 | 1.34 Isolate limit follow-ups (per-request CPU limit, D1 query limit, stack frames, `bytes()`) | done | (this commit) |
+| 43 | 1.61 A stuck isolate must not starve the node (security) | next | |
+| 44+ | Phase 1 in plan order (1.36-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -4810,6 +4812,99 @@ Durable Object pass on, in a later event, a param one event kept with
   `onNextSessionRestoreBookmark`), and neither storage class carries
   `Symbol.toStringTag` (`storage/storage-surface`, xfail).
 
+### 1.60 Limit gaps found by 1.34
+
+- **No subrequest limit for a deployed Worker.** Cloudflare allows 10 000 per
+  invocation by default (`limits.subrequests`, up to 10 million), counting
+  calls to its own services and each redirect. celld counts only a Dynamic
+  Worker's `fetch()` and WebSocket subrequests (`subRequests`), so `celld
+  deploy` refuses `limits.subrequests`. Counting needs the same charge at
+  KV, R2, D1, Queue, Durable Object and service-binding calls.
+- **An hourly cron's CPU limit.** Cloudflare gives a Cron Trigger whose
+  interval is an hour or more 15 minutes by default; celld gives every cron
+  run the Worker's limit (30 s by default).
+- **The public listener's answer to a limit.** A request past its CPU or
+  memory limit answers 500 with `Worker failed: <error>`; Cloudflare answers
+  error 1102 ("Worker exceeded resource limits"), documented without its
+  status code. Not observable on workerd run locally.
+- **A cut turn's other continuations.** The termination that stops a turn at
+  its limit also drops the microtasks V8 had queued in it, which can belong
+  to other events of the isolate (as with `ctx.abort()`). The turn's event,
+  the event whose code was running and the objects with an open transaction
+  in the turn fail or reset; another event whose queued continuation was
+  dropped fails only when its driver finds it waiting on nothing.
+- **A facet past its CPU limit** fails closed until its root moves, as a
+  facet's failed commit does (1.59), rather than resetting alone.
+- **Stack depth.** V8 captures `Error.stackTraceLimit` frames before celld's
+  are dropped, so a deep stack through celld's APIs shows fewer of the
+  Worker's frames than workerd's.
+- **A Durable Object caller's startup text** has no end-to-end case: nothing
+  fails a cell isolate's start without failing the stateless pool's.
+- **A builtin that holds its turn.** A termination V8 drops (only `JSON.parse`
+  and `JSON.stringify` are known, and wrapped) condemns the isolate after
+  the grace, but its thread stays in the call until the call returns: a call
+  that never returns would hold a runtime thread for good. A worker thread per
+  turn, or a turn timeout that abandons the thread, would bound it.
+- **The per-turn CPU clock.** Each limited turn reads the thread's CPU
+  clock three times, each a system call (about 400 ns), which a SELECT per
+  DO call measured at about 4% (1.34's third round). A cheaper clock, such as
+  per-thread `rusage` batched per turn or the TSC calibrated against the
+  thread clock at turn ends, would cut it.
+- **The cut turn's owner fails too.** When another event's code spent the
+  limit in a turn, the turn's own event fails with the CPU error as well,
+  since its queued work was dropped with the turn; Cloudflare would charge
+  only the spender.
+
+### 1.61 A stuck isolate must not starve the node (found by the 1.34 review) — security
+
+**Problem.** Isolate turns run inline on the Tokio worker threads that also
+serve the public and internal listeners. A turn that holds its thread holds
+a worker: a long CPU limit (up to 5 minutes), a builtin that does not stop
+for a termination (1.34 condemns its isolate after the grace, but the
+thread stays in the call), or, at HEAD before 1.34, any `for (;;)` with no
+limit. Enough of them take every worker, and the node answers nothing, its
+`/ping` included.
+
+**Repro (review, 1.34 tree).** `for (...) new Array(1e6).fill(1)` with
+`cpu_ms: 1000`, 48 requests 200 ms apart: requests ran 45–78 s,
+condemnation fired at about 2 s, every worker wedged, `/ping` timed out,
+about 1.5 GB RSS leaked, and the node did not recover. Not reproduced on
+the 1.34 author's machine (24 cores, and 4 cores with `taskset`): the same
+48 requests ended in 1.0–6.1 s, `/ping` answered in 2–8 ms throughout, and
+a bare isolate with a 128 MiB or 1 GiB heap stopped the loop at the limit
+exactly. The review's final check, on the third-round tree, used a sync
+`fetch` returning an async IIFE that runs
+`for (i < 1e9) c += new Array(1e6).fill(1).length` under `cpu_ms: 1000`
+(`celld dev`): one request failed after 9.3–9.6 s, all on the isolate's
+thread (so the termination lands late, not GC helpers), and 48 requests
+200 ms apart all failed after 65–83 s while every `/ping` timed out; the
+node then recovered on its own. The wedge itself follows from the design whatever triggers the
+long turns, so it is recorded here.
+
+**Design.**
+- **Turns off the Tokio workers.** Run every isolate turn on a dedicated
+  pool of isolate threads, bounded by the node's isolate concurrency (for
+  example the CPU count). A turn is a job sent to the slot's thread and
+  awaited through a oneshot, so a stuck turn holds an isolate thread, never
+  a worker. `Slot::turn` keeps its signature; its body changes.
+- **Listeners on threads isolates cannot take.** The public and internal
+  listeners, `/ping`, the actor and the peer tunnel stay on the Tokio
+  runtime, which then runs no JavaScript.
+- **A bound on stuck isolates.** Count, per script, isolates condemned but
+  still in a turn. Past a cap (for example 2), the pool refuses to build
+  another isolate for the script and fails its requests at once with the
+  CPU error, until one of them returns; the node-wide count of stuck
+  isolate threads has a cap too, past which every script's growth is
+  refused. Report both in `/state`.
+- **Memory.** A condemned isolate that is still in a turn keeps its heap;
+  the caps above bound how many exist. Measure RSS under the repro.
+
+**Tests.** A celld-only case that sends more long-running requests than the
+node has workers (a builtin loop under a long `cpu_ms`) and checks that
+`/ping` and another Worker keep answering within a bound, and that the
+script's further requests are refused once its stuck isolates reach the
+cap; unit tests for the caps.
+
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 
 - **Security: forgeable markers (done, 1.53).** The lift copies user keys
@@ -5375,6 +5470,227 @@ node stays healthy.
   the callee's cell isolate, because `RequestError::RuntimeFailed` carries no
   text. Carry a startup-failure kind and message through
   `Event::RuntimeStarted`, `RequestError`, the shell and peer errors.
+
+**As built (done).**
+- **CPU limit.** workerd's open source enforces none: `server.c++` gives
+  every isolate a `NullIsolateLimitEnforcer` and every request a no-op
+  `LimitEnforcer`, and Wrangler's `limits` (`UserLimits`: `cpu_ms`,
+  `subrequests`) reaches only Cloudflare's upload metadata. Probed: a spin
+  never ends on workerd run locally, so the cases are celld-only. On
+  Cloudflare an actor has one IoContext, which its limit enforcer aborts when
+  an event runs out (`io-context.c++`, `abortWhen(onLimitsExceeded())`),
+  resetting the object, and each new event tops the actor up (`topUpActor`).
+  Cloudflare documents 30 s by default, 5 min at most, error 1102 ("Worker
+  exceeded resource limits") and the outcome `exceededCpu`; no in-Worker
+  text, so celld uses "Worker exceeded CPU time limit." (the JS form of
+  workerd's "Python Worker exceeded CPU time limit"), now also for a Dynamic
+  Worker's `cpuMs` (was "Worker exceeded CPU limit of N ms").
+  - `celld deploy` and `celld dev` accept `limits.cpu_ms` (whole ms, 1 to
+    300 000) into `Manifest::cpu_ms` and Wrangler's `metadata.limits` (so a
+    limit change is a new version), required feature `limits-v1`, and the
+    node checks the range again. `limits.subrequests` stops the deploy (no
+    subrequest counting for deployed Workers; 1.60).
+  - Every Worker's config now carries a limit: the plan's 30 s unless
+    `cpu_ms` sets one, and a Dynamic Worker's `cpuMs` within the plan's
+    (default 30 s, at most 5 min). Only the runtime cells (no application
+    code) have none. Each invocation (request, RPC, queue batch, cron run, a
+    Durable Object's request, RPC, alarm or WebSocket message) gets its own
+    budget, through the Dynamic Worker machinery (`IoContext` budget, exact
+    accounting per turn, the process CPU watchdog for a turn that never
+    returns).
+  - A Durable Object event past its limit resets the object: the turn's
+    implicit transactions and its queued puts roll back before the event
+    samples its gate positions, then `record_critical_error` breaks the
+    object (`do_instances::cell_broken`), so its other events fail, its
+    stub keeps throwing, and the next call reaches a new instance. Any other
+    object with a transaction open in the cut turn resets too (its
+    continuation was cut). An alarm that runs out is retried in the new
+    instance. A stateless invocation only fails; the isolate lives on.
+  - User code runs under a watchdog at every turn entry; the host entries
+    outside events (adoption, release) run only celld's code, and what they
+    queue for a Worker runs at a later watched checkpoint.
+  - Hot path: the watchdog wakes its thread only for a watch due sooner than
+    its next wake, and not at a watch's end; a turn's watchdog covers its
+    settle (one registration per turn, not two); a turn's first sample and
+    the end of its first half seed the next (3 thread-CPU reads per turn,
+    not 6).
+- **Failed Loader loads.** A load that failed for good drops its config (the
+  modules) and no longer counts against the 255/256 live limits; a script
+  can keep 256 failed loads referenced, past which a load fails with
+  "too many failed loads … still referenced".
+- **`bytes()`.** On `Response` and `Request`, as workerd's `Body::bytes`
+  (probed: a Uint8Array over a buffer of its own, `length` 0, the body
+  used). The used-body text is now workerd's ("read it twice").
+- **`celld:internal` frames.** A `PrepareStackTraceCallback` drops celld's
+  call sites, and a builtin celld's code called (`String`, `JSON.parse`),
+  then calls the realm's `Error.prepareStackTrace` with the rest, or formats
+  them as V8 does. Probing showed two more differences, both fixed: the
+  default export's `fetch` and `scheduled` ran with `this` undefined, and
+  through a self-targeted service binding or a cron trigger with `this` the
+  harness's `__cell` (now bound to the exported object, as workerd calls
+  them; `tracing/otlp-export`'s stack now reads `at Object.fetch`); and
+  `Invalid header name: <name>` is workerd's `Invalid header name.`.
+- **DOMException subclass frame.** The constructor re-captures its stack
+  from itself (`Error.captureStackTrace(this, DOMException)`), so a
+  subclass's constructor frame stays; `loader/startup-errors-dom-subclass`
+  passes.
+- **Facet close.** Already holds: a give-back closes the database before the
+  isolate's release can fail (`finish_cell_adoption`), and the facet record
+  is taken first. Pinned by a unit test.
+- **Facet of a Dynamic Worker class.** `loader/startup-memory` now loads a
+  facet whose class's module scope passes the limit, gradually and as one
+  400 MB string, and the root's next facet works; its single-allocation
+  children use 1.32's margins (480 MB array, 400 MB string).
+- **Startup text for a Durable Object caller.** A cell start that fails
+  while loading the Worker records the loader-form text
+  (`js::startup_failure_text`), kept per cell (at most 4096) until the cell
+  next starts, and `RoutedRequestError::for_cell` reports it for
+  `RuntimeFailed`, locally and in the peer replies. Other start failures
+  keep "route failed: RuntimeFailed". No case: no deterministic way to fail
+  only a cell isolate's start (unit tests instead).
+- Cases: `limits/request-cpu` (celld-only), `loader/failed-load-slots`
+  (celld-only), `fetch/body-bytes`, `builtins/stack-frames`,
+  `exports/handler-this`, `loader/startup-memory` (extended),
+  `loader/startup-errors-dom-subclass` (flipped). Unit tests for the limits,
+  the deploy key, the give-back and the startup text.
+- Measured (lab, `ab -n 20000 -c 16`, medians of 9 interleaved rounds):
+  plain fetch 19569 → 19353 req/s (−1.1%), Durable Object RPC 16759 →
+  16575 (−1.1%); before the hot-path changes above, −2.8% and −3.2%.
+
+**As built, review round.** An independent review found eight things; each
+is fixed with a test:
+- **User code after the watchdog.** A thrown value was formatted with its
+  own `toString` after the turn's watchdog ended (`exc!`), so `throw {
+  toString() { for (;;); } }` pinned a thread. Thrown values are now
+  described with V8's side-effect-free conversion (`thrown_text`, from
+  `Exception::create_message`). Audited: the other conversions of a Worker's
+  values run in ops or under the turn's watchdog; startup reports run under
+  the startup watchdog. Case step `throw-spinning`.
+- **SQL.** Every cell connection has a progress handler (every 10 000
+  steps) that interrupts the statement once the watchdog has ended the turn
+  (`Cells::cpu_abort`, cleared when the turn takes the termination or the
+  watch ends). An interrupted statement resets the object with the CPU
+  error. Case step `do-sql` (a recursive CTE without a bound). Cost
+  measured against the same build without the handler: within noise
+  (+0.6% on a SELECT per call).
+- **Builtins.** V8 15.2 drops a termination requested while `JSON.parse`
+  (and `JSON.stringify`) works on a large value; reproduced in a bare
+  isolate with a 128 MiB heap, where a loop of them ran to its end (8 s and
+  38 s). `--interrupt-budget` (8192, 1024) and `--no-sparkplug
+  --no-maglev` changed nothing. Both are now native-looking JavaScript
+  wrappers (`replaceMethod`), whose entry checks for interrupts: the
+  38 s loop stops at about 150 ms. The stack filter keeps the builtin's frame
+  when the Worker called the wrapper. Other loops measured (`fill`, `sort`,
+  `Array.from`, `split`, a backtracking regex) stopped near the limit on
+  the author's machine; the review saw a loop of `new Array(1e6).fill(1)` run
+  about 9 s past a 1 s limit (see 1.61). The
+  watchdog now asks again every 10 ms (`request_interrupt`, ignored once the
+  watch has ended, so a late request stops no later turn), and condemns the
+  isolate after `max(100 ms, limit)` past the limit, as the memory limit
+  does (`HeapLimitState::cpu_condemned`, `Slot::condemned_text`, the DO
+  reset carries the CPU error). Unit test for the escalation; case step
+  `stateless-json`.
+- **The wrong object charged.** The watchdog's interrupt runs on the isolate's
+  thread and reads the running code's context from its continuation data
+  (`running_context_id`); that event fails too
+  (`IoContext::fail_past_cpu_limit`, at its driver's next poll), with the
+  turn's own. Case step `do-cross` (a continuation of one object run in
+  another's turn): both fail at once, where the waiter hung before.
+- **A stateless turn's writes.** Every CPU failure rolls the turn back,
+  whatever its event (`roll_back_stateless_past_cpu_limit`). Unit test.
+- **Sizes.** Startup-failure texts and a failed load's error keep at most
+  4 KiB (`bounded_failure_text`); failed loads are also capped process-wide
+  (1024). Unit tests.
+- **Stale or wide startup text.** A cell's entry is cleared at every start
+  attempt, and only a failure to load the Worker (`pool::WorkerLoadFailed`)
+  is reported as one. Unit test.
+- **Nits.** `cpu_ms` accepts an integral float (`100.0`); a Dynamic
+  Worker's `cpuMs` over 300 000 is refused, in `WorkerCode.limits` and in
+  `getEntrypoint()` (no Cloudflare text found); the docs say `celld dev`
+  keeps the limits and `wrangler dev` has none.
+- Measured after the round (lab, `ab -n 20000 -c 16`, medians of 11
+  interleaved rounds against HEAD, over four runs): plain fetch −0.4% to
+  −1.6%, DO RPC −1.0% to −1.6%, a DO call running one SELECT over 1 000
+  rows −2.6% to −4.9%. Against the same build without each change, the
+  progress handler measured +0.6% and the JSON wrappers +0.5% on that path
+  (noise), so the SELECT path's extra cost is not either of them; not yet
+  found.
+
+**As built, second round.**
+- **D1 query limit.** Cloudflare documents a 30 s "Maximum SQL query
+  duration", which covers a whole batch, and lists "D1 DB exceeded its CPU
+  time limit and was reset." among D1_ERROR messages (no text for the
+  duration limit itself). Each D1 call now runs under a wall-time deadline
+  (`with_d1_deadline`, `CELLD_D1_QUERY_LIMIT_MS`, default 30 000); the
+  progress handler interrupts a statement past it. The interrupt records
+  no critical error, the transaction bracket (BEGIN, COMMIT, ROLLBACK) runs
+  outside the deadline, and the call fails with `D1_ERROR: D1 DB exceeded
+  its CPU time limit and was reset.`, its writes rolled back. Case
+  `storage/d1-query-limit` (celld-only, 300 ms): a prepared statement, a
+  batch and an `exec()` with a recursive CTE fail, their writes do not land,
+  and the next query succeeds.
+- **`storage/reset-alarm-write-cursor`.** The alarm fired 20 ms after
+  `arm()`, so a slow `arm()` was cancelled by the reset it caused ("The
+  client has disconnected"). The alarm is now set 500 ms out, and `/check`
+  waits, bounded, for the second run and then 1 s more, well before the
+  third (4 s after). Re-recorded on workerd, unchanged.
+
+**As built, third round.**
+- **The builtin loop.** Investigated before 1.61: a bare isolate with a 128 MiB
+  or 1 GiB heap stops `new Array(1e6).fill(1)` in a loop at the limit
+  exactly (1.000 s for a 1 s limit), and so does celld (1.006 s with
+  `cpu_ms: 1000`). 48 such requests 200 ms apart ended in 1.0–1.7 s on 24
+  cores and 1.0–6.1 s pinned to 4 (`taskset`), with `/ping` answering in
+  2–8 ms throughout; I could not reproduce the review's 45–78 s. A loop
+  that allocates large holey arrays (`new Array(1e6)`) ends at about 2.3 s
+  wall for a 1 s limit: the limit counts the isolate thread's CPU time, and
+  the parallel GC's helper threads make up the rest. No V8 deferral was
+  found to fix. The structural hole (turns on the Tokio workers) is 1.61;
+  `limitations.md` says so.
+- **Stack formatter.** It reads V8's call sites once into a `Vec`, hands a
+  Worker's `Error.prepareStackTrace` an array made by
+  `Array::new_with_elements` (data properties, which no `Array.prototype`
+  setter sees), and formats from the `Vec`. A wrapper is known by where its
+  function starts in the harness (`TransparentWrappers`, recorded from
+  `__transparentWrappers`), not by its name, so an aliased `JSON.parse`
+  keeps its frame; the wrappers pass their own receiver, so the frame
+  reads `parse` as workerd's does. Case `builtins/stack-frames` gains
+  `parseAliased` and `prototypeSetter`.
+- **Spent watches.** A termination records the watch that asked for it,
+  and taking it marks the watch spent: the service no longer asks again or
+  condemns for it, and its interrupt does nothing. A watch's end clears the
+  isolate's `cpu_abort` only when no other live watch of the isolate fired.
+  Unit test: after the take, the same turn runs more JavaScript with the
+  watch still registered.
+- **Fair caps.** At the process-wide caps (1024 failed loads, 256 live
+  Workers) only a script holding at least its fair share (the cap over the
+  scripts holding entries) is refused, so the process holds at most the cap
+  and one entry per script. Unit tests.
+- **Condemnations outside the lock.** The watchdog collects the slots to
+  condemn and condemns them after releasing its lock, upgrading the slot's
+  weak reference only on the turn's runtime. Unit test where the interrupt
+  lands in running JavaScript (`running_context_id`). The earlier test
+  segfault: the escalation test built its isolate on a blocking-pool thread
+  and dropped it from the runtime's thread; on one thread of its own it is
+  stable (V8 isolates must be disposed where nothing else is entered). The
+  exact fault was not pinned down further.
+- **D1.** `with_d1_deadline` disarms the deadline in a drop guard, and the
+  limit's error is reported only when the progress handler interrupted a
+  statement for the deadline (`D1_INTERRUPTED`), not for any failure after
+  it. Unit test.
+- **Nits.** `Slot::condemn` keeps the first reason atomically (one `AtomicU8`
+  for memory or CPU); `WorkerLoadFailed` displays only the load's error and
+  keeps the host's context in its source chain, for the log.
+- **SELECT path.** With the DO cells' limits off (`IoContext::tracked`
+  without limits) a SELECT per call costs −1.8% against HEAD, and −6.2% with
+  them; a DO call without SQL −0.8% and −1.6%. User-space `perf` profiles of
+  the two builds are alike (the CPU-limit code under 0.3%, mutex unlock 0.52%
+  against 0.61%), so no watchdog contention shows; the difference is in
+  kernel time, which `perf_event_paranoid=2` hides: each limited turn makes
+  three thread-CPU-clock system calls (about 400 ns each). Not fixed; 1.60.
+- Measured after the round (lab, `ab -n 20000 -c 16`, medians of 11
+  interleaved rounds against HEAD): plain fetch −0.4%, DO RPC −1.2%, a
+  SELECT per DO call −3.9%.
 
 ### Phase 1 gate
 

@@ -167,10 +167,26 @@ fn test_host_services() -> Arc<crate::host_services::HostServices> {
 /// bound on the crate-private scope traits).
 macro_rules! exc {
     ($tc:expr) => {
-        $tc.exception()
-            .map(|e| e.to_rust_string_lossy(&*$tc))
-            .unwrap_or_else(|| "<none>".into())
+        match $tc.exception() {
+            Some(exception) => thrown_text(&mut *$tc, exception),
+            None => "<none>".to_string(),
+        }
     };
+}
+
+/// A thrown value as text, without running any of the Worker's code: V8's
+/// side-effect-free conversion (an `Error`'s own `name` and `message` data,
+/// `#<Object>` for an object, the value of a primitive), as V8 writes it in
+/// an uncaught exception's message. Calling the value's `toString` would run
+/// the Worker's code where no CPU limit watches it.
+pub(crate) fn thrown_text(scope: &mut v8::PinScope, exception: v8::Local<v8::Value>) -> String {
+    let message = v8::Exception::create_message(scope, exception)
+        .get(scope)
+        .to_rust_string_lossy(scope);
+    match message.strip_prefix("Uncaught ") {
+        Some(text) => text.to_string(),
+        None => message,
+    }
 }
 
 /// A Worker's startup failure from the exception a TryCatch scope caught,
@@ -1997,6 +2013,222 @@ fn effective_resource_limits(
     (limits.cpu_ms.is_some() || limits.sub_requests.is_some()).then_some(limits)
 }
 
+/// `limits` within the plan's, as Cloudflare applies a Worker's plan limits
+/// unless its config or its loader sets lower ones: an invocation gets
+/// [`DEFAULT_CPU_LIMIT_MS`] of CPU time by default, and at most
+/// [`MAX_CPU_LIMIT_MS`].
+fn plan_resource_limits(limits: Option<ResourceLimits>) -> ResourceLimits {
+    let limits = limits.unwrap_or_default();
+    ResourceLimits {
+        cpu_ms: Some(
+            limits
+                .cpu_ms
+                .unwrap_or(DEFAULT_CPU_LIMIT_MS)
+                .min(MAX_CPU_LIMIT_MS),
+        ),
+        sub_requests: limits.sub_requests,
+    }
+}
+
+#[cfg(test)]
+mod resource_limit_tests {
+    use super::*;
+
+    fn cpu(cpu_ms: Option<u32>) -> Option<ResourceLimits> {
+        Some(ResourceLimits {
+            cpu_ms,
+            sub_requests: None,
+        })
+    }
+
+    #[test]
+    fn an_invocation_gets_the_plan_default_unless_a_lower_limit_is_set() {
+        assert_eq!(
+            plan_resource_limits(None).cpu_ms,
+            Some(DEFAULT_CPU_LIMIT_MS)
+        );
+        assert_eq!(
+            plan_resource_limits(cpu(None)).cpu_ms,
+            Some(DEFAULT_CPU_LIMIT_MS)
+        );
+        assert_eq!(plan_resource_limits(cpu(Some(50))).cpu_ms, Some(50));
+        assert_eq!(
+            plan_resource_limits(cpu(Some(u32::MAX))).cpu_ms,
+            Some(MAX_CPU_LIMIT_MS)
+        );
+        // A call's limit lowers the Worker's, and never raises it.
+        let worker = Some(plan_resource_limits(cpu(Some(100))));
+        assert_eq!(
+            effective_resource_limits(worker, cpu(Some(50))).and_then(|l| l.cpu_ms),
+            Some(50)
+        );
+        assert_eq!(
+            effective_resource_limits(worker, cpu(Some(60_000))).and_then(|l| l.cpu_ms),
+            Some(100)
+        );
+    }
+
+    #[test]
+    fn every_config_has_a_cpu_limit_but_the_runtime_cells() {
+        let options = || WorkerConfigOptions {
+            src: String::new(),
+            script_name: "app".into(),
+            do_classes: Vec::new(),
+            bindings: Vec::new(),
+            r2_bindings: Vec::new(),
+            d1_bindings: Vec::new(),
+            kv_bindings: Vec::new(),
+            queue_bindings: Vec::new(),
+            queue_consumers: Vec::new(),
+            workflow_bindings: Vec::new(),
+            vars: Vec::new(),
+            node: String::new(),
+            modules: Vec::new(),
+            compat: Compat::default(),
+        };
+        let cpu_ms = |config: &WorkerConfig| config.resource_limits.and_then(|l| l.cpu_ms);
+        assert_eq!(
+            cpu_ms(&WorkerConfig::new(options())),
+            Some(DEFAULT_CPU_LIMIT_MS)
+        );
+        assert_eq!(
+            cpu_ms(&WorkerConfig::new(options()).with_cpu_limit_ms(Some(250))),
+            Some(250)
+        );
+        assert_eq!(
+            cpu_ms(&WorkerConfig::new(options()).with_resource_limits(None)),
+            Some(DEFAULT_CPU_LIMIT_MS)
+        );
+        let runtime = WorkerConfig::runtime_cells(Vec::new(), Vec::new(), String::new(), 1);
+        assert_eq!(runtime.resource_limits, None);
+    }
+
+    /// A turn the termination does not stop, as in a builtin V8 does not
+    /// interrupt, condemns its isolate after the grace, with the CPU limit's
+    /// error; and a request the watchdog made for the ended turn stops
+    /// nothing later.
+    #[test]
+    fn a_turn_that_runs_on_past_its_cpu_limit_condemns_its_isolate() {
+        Engine::init();
+        let config = Arc::new(WorkerConfig::new(WorkerConfigOptions {
+            src: "export default { fetch() { return new Response(); } };".into(),
+            script_name: "spinner".into(),
+            do_classes: Vec::new(),
+            bindings: Vec::new(),
+            r2_bindings: Vec::new(),
+            d1_bindings: Vec::new(),
+            kv_bindings: Vec::new(),
+            queue_bindings: Vec::new(),
+            queue_consumers: Vec::new(),
+            workflow_bindings: Vec::new(),
+            vars: Vec::new(),
+            node: String::new(),
+            modules: Vec::new(),
+            compat: Compat::default(),
+        }));
+        std::thread::spawn(move || {
+            let worker = Worker::load_config(config).unwrap();
+            let slot = crate::pool::Slot::for_test(worker);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(condemned_past_the_grace(&slot));
+            drop(runtime);
+            drop(slot);
+        })
+        .join()
+        .expect("the condemnation thread panicked");
+    }
+
+    /// The watchdog's interrupt lands in running JavaScript, reads whose code
+    /// runs, and stops it with a termination the turn can take.
+    #[test]
+    fn the_cpu_interrupt_stops_running_javascript() {
+        Engine::init();
+        let config = Arc::new(WorkerConfig::new(WorkerConfigOptions {
+            src: "export default { fetch() { return new Response(); } };".into(),
+            script_name: "looper".into(),
+            do_classes: Vec::new(),
+            bindings: Vec::new(),
+            r2_bindings: Vec::new(),
+            d1_bindings: Vec::new(),
+            kv_bindings: Vec::new(),
+            queue_bindings: Vec::new(),
+            queue_consumers: Vec::new(),
+            workflow_bindings: Vec::new(),
+            vars: Vec::new(),
+            node: String::new(),
+            modules: Vec::new(),
+            compat: Compat::default(),
+        }));
+        std::thread::spawn(move || {
+            let mut worker = Worker::load_config(config).unwrap();
+            let started = Instant::now();
+            let (ran, taken, again) = {
+                let _watch = worker.cpu_watchdog(Some(Duration::from_millis(20)), None);
+                worker.with_scope_for_test(|scope| {
+                    let code = v8::String::new(scope, "let i = 0; for (;;) i++;").unwrap();
+                    let script = v8::Script::compile(scope, code, None).unwrap();
+                    let ran = script.run(scope).is_some();
+                    let taken = take_execution_termination(scope)
+                        .map(|error| error.is::<CpuLimitExceeded>());
+                    // The watch is spent once its termination is taken: while
+                    // it is still registered, it stops nothing more.
+                    std::thread::sleep(Duration::from_millis(50));
+                    let code =
+                        v8::String::new(scope, "let j = 0; for (let k = 0; k < 1e6; k++) j++; j")
+                            .unwrap();
+                    let again = v8::Script::compile(scope, code, None)
+                        .unwrap()
+                        .run(scope)
+                        .is_some();
+                    (ran, taken, again)
+                })
+            };
+            assert!(!ran);
+            assert_eq!(taken, Some(true));
+            assert!(again, "a spent watch stopped the turn again");
+            assert!(started.elapsed() < Duration::from_secs(5));
+        })
+        .join()
+        .expect("the interrupt thread panicked");
+    }
+
+    async fn condemned_past_the_grace(slot: &Arc<crate::pool::Slot>) {
+        {
+            slot.turn(|worker| {
+                let _watch = worker.cpu_watchdog(Some(Duration::from_millis(5)), None);
+                // Host work that holds the turn, as a builtin would: it burns
+                // the thread's CPU time past the grace.
+                let end = Instant::now() + Duration::from_millis(400);
+                while Instant::now() < end {
+                    std::hint::spin_loop();
+                }
+            })
+            .await;
+            for _ in 0..200 {
+                if slot.is_condemned() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert!(slot.is_condemned());
+            assert_eq!(slot.condemned_text(), CPU_EXCEEDED);
+            let ran = slot
+                .turn(|worker| {
+                    worker.with_scope_for_test(|scope| {
+                        let code = v8::String::new(scope, "1 + 1").unwrap();
+                        let script = v8::Script::compile(scope, code, None).unwrap();
+                        script.run(scope).map(|value| value.int32_value(scope))
+                    })
+                })
+                .await;
+            assert_eq!(ran, Some(Some(2)), "a stale request stopped a later turn");
+        }
+    }
+}
+
 struct CpuTurnStart {
     thread_nanos: Option<u64>,
     wall: Instant,
@@ -2064,8 +2296,10 @@ pub struct WorkerConfig {
     /// Structured-clone values and host-minted service routes that a loaded
     /// worker receives. Loader-only; empty for a normal worker.
     loader_env: Option<LoaderEnv>,
-    /// Per-invocation limits supplied with a dynamically loaded Worker.
-    /// Deployment Workers leave this empty.
+    /// The limits every invocation of this Worker owns: a deployment's
+    /// `limits.cpu_ms`, or a Dynamic Worker's `WorkerCode.limits`, each within
+    /// the plan's ([`plan_resource_limits`]). Only the runtime cells, which
+    /// run no application code, have none.
     resource_limits: Option<ResourceLimits>,
     /// Whether a Dynamic Worker can receive a tail report sender on a fetch.
     tail_reporting: bool,
@@ -2211,7 +2445,7 @@ impl WorkerConfig {
             loader_bindings: Vec::new(),
             egress: EgressPolicy::Allow,
             loader_env: None,
-            resource_limits: None,
+            resource_limits: Some(plan_resource_limits(None)),
             tail_reporting: false,
             crons: Vec::new(),
             containers: Vec::new(),
@@ -2260,6 +2494,8 @@ impl WorkerConfig {
         .with_queue_consumers(queue_consumers)
         .with_generation(generation);
         config.origin = WorkerOrigin::Runtime;
+        // Their events run celld's own code, never a Worker's.
+        config.resource_limits = None;
         config
     }
 
@@ -2373,9 +2609,21 @@ impl WorkerConfig {
         self
     }
 
-    /// Install the limits that every invocation of this Dynamic Worker owns.
+    /// Install the limits that every invocation of this Dynamic Worker owns,
+    /// within the plan's.
     fn with_resource_limits(mut self, limits: Option<ResourceLimits>) -> Self {
-        self.resource_limits = limits;
+        self.resource_limits = Some(plan_resource_limits(limits));
+        self
+    }
+
+    /// The CPU time each invocation of this deployed Worker gets, from its
+    /// config's `limits.cpu_ms` (checked at deploy to be within the plan's).
+    /// `None` keeps the plan's default.
+    pub(crate) fn with_cpu_limit_ms(mut self, cpu_ms: Option<u32>) -> Self {
+        self.resource_limits = Some(plan_resource_limits(Some(ResourceLimits {
+            cpu_ms,
+            sub_requests: None,
+        })));
         self
     }
 
@@ -2480,11 +2728,11 @@ impl WorkerIsolate {
     fn cpu_watchdog(
         &self,
         remaining: Option<Duration>,
-        declared_ms: Option<u32>,
+        started: Option<u64>,
     ) -> Option<CpuWatchdog> {
         CpuWatchdog::start(
             remaining,
-            declared_ms,
+            started,
             self.isolate.thread_safe_handle(),
             self.runtime_state.clone(),
         )
@@ -2568,6 +2816,37 @@ const STARTUP_CPU_EXCEEDED: &str = "Script startup exceeded CPU time limit.";
 /// Cloudflare's error for a Worker whose load reaches the heap limit.
 const STARTUP_MEMORY_EXCEEDED: &str = "Script startup exceeded memory limits.";
 
+/// The CPU time an invocation gets when nothing sets a lower limit:
+/// Cloudflare's default for the Standard usage model, for a deployed
+/// Worker's request or a Durable Object's event, and the plan limit a
+/// Dynamic Worker inherits ("Workers plan limits").
+pub(crate) const DEFAULT_CPU_LIMIT_MS: u32 = 30_000;
+
+/// The most CPU time `limits.cpu_ms` (or a Dynamic Worker's `cpuMs`) can
+/// grant one invocation: Cloudflare's maximum, 5 minutes.
+pub(crate) const MAX_CPU_LIMIT_MS: u32 = 300_000;
+
+/// What an invocation that ran past its CPU limit fails with. Cloudflare
+/// answers such a request with error 1102 ("Worker exceeded resource
+/// limits") and records the outcome `exceededCpu`; workerd's open source
+/// enforces no CPU limit and has no text for it, and names the Python
+/// counterpart "Python Worker exceeded CPU time limit".
+pub(crate) const CPU_EXCEEDED: &str = "Worker exceeded CPU time limit.";
+
+/// An invocation's CPU limit ran out: typed, so a Durable Object's event can
+/// tell it from an error the object threw, and reset the object
+/// (`reset_object_past_cpu_limit`).
+#[derive(Debug)]
+pub(crate) struct CpuLimitExceeded;
+
+impl std::fmt::Display for CpuLimitExceeded {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(CPU_EXCEEDED)
+    }
+}
+
+impl std::error::Error for CpuLimitExceeded {}
+
 /// Share of the heap limit past which an isolate takes on no more retained
 /// state. It sits below the near-limit callback on purpose: this refuses one
 /// hibernatable socket while the isolate still works, where the callback
@@ -2594,6 +2873,12 @@ struct HeapLimitState {
     /// fails (`take_one_execution_termination`). Named after workerd's
     /// `hasExcessivelyExceededHeapLimit`.
     excessively_exceeded: AtomicBool,
+    /// Whether the CPU watchdog condemned the isolate: a turn kept running
+    /// well past its CPU limit and the termination did not stop it, as in a
+    /// long builtin that V8 does not interrupt. It condemns the isolate as
+    /// the heap limit does, with the CPU limit's error. Shared with
+    /// `ActorRuntimeState::cpu_condemned`, which the watchdog sets.
+    cpu_condemned: Arc<AtomicBool>,
     /// Whether the condemnation has been carried out: the slot condemned and
     /// the Durable Objects reset. Once, by the first turn that sees it.
     condemnation_handled: AtomicBool,
@@ -2636,6 +2921,26 @@ impl HeapLimitState {
             self.load_exceeded.store(true, Ordering::Relaxed);
         }
         self.excessively_exceeded.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether the isolate is condemned, for its memory or its CPU time.
+    fn condemned(&self) -> bool {
+        self.excessively_exceeded.load(Ordering::Relaxed)
+            || self.cpu_condemned.load(Ordering::Relaxed)
+    }
+
+    /// Condemned by the CPU watchdog, and not for memory first.
+    fn condemned_for_cpu(&self) -> bool {
+        self.cpu_condemned.load(Ordering::Relaxed)
+            && !self.excessively_exceeded.load(Ordering::Relaxed)
+    }
+
+    fn condemned_text(&self) -> &'static str {
+        if self.condemned_for_cpu() {
+            CPU_EXCEEDED
+        } else {
+            MEMORY_EXCEEDED
+        }
     }
 }
 
@@ -3464,6 +3769,13 @@ enum EgressPolicy {
 struct ActorRuntimeState {
     promises: std::sync::Mutex<PromiseMap>,
     termination: std::sync::Mutex<Option<ExecutionTermination>>,
+    /// The flag the CPU watchdog sets with a termination at an invocation's
+    /// limit, which the isolate's SQLite statements watch
+    /// (`storage::Cells::with_cpu_abort`).
+    cpu_abort: Arc<AtomicBool>,
+    /// Set by the CPU watchdog when a turn ran on past its limit despite the
+    /// termination; shared with `HeapLimitState::cpu_condemned`.
+    cpu_condemned: Arc<AtomicBool>,
     pending_puts: std::sync::Mutex<PendingPuts>,
     io_contexts: std::sync::Mutex<HashMap<u64, Weak<IoContext>>>,
     /// WebSocket captures that received a frame in the current isolate turn.
@@ -3563,6 +3875,17 @@ struct ExecutionTermination {
     error: String,
     actor_scope: Option<String>,
     context_id: Option<u64>,
+    /// The CPU watchdog ended the turn because an invocation's CPU limit ran
+    /// out, which is taken as [`CpuLimitExceeded`].
+    cpu_limit: bool,
+    /// The event whose code was running when the CPU watchdog stopped the
+    /// turn, by its context id. A turn's checkpoint runs other events'
+    /// continuations, so this can be another event than the turn's own; it
+    /// fails too ([`IoContext::fail_past_cpu_limit`]).
+    spender: Option<u64>,
+    /// The CPU watch that ended the turn, which is spent once the turn takes
+    /// this: it asks no more.
+    watch: Option<u64>,
 }
 
 #[cfg(all(test, celld_internal_tests))]
@@ -3584,7 +3907,7 @@ fn terminate_on_cpu_finish_for_test(runtime_state: &Arc<ActorRuntimeState>, fini
 fn inject_cpu_finish_termination_for_test(
     tc: &mut v8::PinScope,
     entry: &InFlight,
-) -> Option<String> {
+) -> Option<CpuLimitExceeded> {
     let mut armed = CPU_FINISH_TERMINATION_FOR_TEST.lock().unwrap();
     let (runtime_state, remaining) = armed.as_mut()?;
     if *runtime_state != Arc::as_ptr(&entry.runtime_state) as usize {
@@ -3595,26 +3918,31 @@ fn inject_cpu_finish_termination_for_test(
         return None;
     }
     armed.take();
-    let error = "Worker exceeded CPU limit of 10 ms".to_string();
     *entry
         .runtime_state
         .termination
         .lock()
         .expect("termination lock poisoned") = Some(ExecutionTermination {
-        error: error.clone(),
+        error: CPU_EXCEEDED.to_string(),
         actor_scope: None,
         context_id: None,
+        cpu_limit: true,
+        spender: None,
+        watch: None,
     });
     tc.terminate_execution();
-    Some(error)
+    Some(CpuLimitExceeded)
 }
 
-fn finish_cpu_turn(_tc: &mut v8::PinScope, entry: &InFlight) -> Result<(), String> {
+fn finish_cpu_turn(
+    _tc: &mut v8::PinScope,
+    entry: &InFlight,
+) -> (Result<(), CpuLimitExceeded>, Option<u64>) {
     #[cfg(all(test, celld_internal_tests))]
     if let Some(error) = inject_cpu_finish_termination_for_test(_tc, entry) {
-        return Err(error);
+        return (Err(error), None);
     }
-    entry.context.finish_cpu_turn()
+    entry.context.finish_cpu_turn_sampled()
 }
 
 /// A backstop for JavaScript that never returns to the host's exact CPU
@@ -3631,17 +3959,48 @@ struct CpuWatch {
     limit: Duration,
     /// The termination error, which names the limit that ran out.
     error: String,
+    /// Whether the limit is an invocation's ([`CpuLimitExceeded`]) rather
+    /// than a load's.
+    cpu_limit: bool,
     target_clock: Option<TargetThreadCpuClock>,
     target_started: Option<u64>,
     next_check: Instant,
     isolate: v8::IsolateHandle,
     runtime_state: Arc<ActorRuntimeState>,
+    /// When the limit ran out and the watchdog asked the turn to stop. It
+    /// asks again every [`CPU_TERMINATION_RETRY`] until the turn ends: V8
+    /// acts on a termination only where JavaScript checks for interrupts,
+    /// and a builtin such as `JSON.parse` can drop one.
+    fired_at: Option<Instant>,
+    /// The isolate's slot, which a turn that runs on past
+    /// [`cpu_termination_grace`] condemns.
+    slot: Option<std::sync::Weak<crate::pool::Slot>>,
+    /// The runtime the turn runs under, where a condemnation's hooks run.
+    tokio: Option<tokio::runtime::Handle>,
+    condemned: bool,
+    /// The turn took this watch's termination: the watch asks nothing more,
+    /// though it stays registered until its turn drops it.
+    spent: bool,
+}
+
+/// How often the watchdog asks a turn past its limit to stop again.
+const CPU_TERMINATION_RETRY: Duration = Duration::from_millis(10);
+
+/// How long a turn may run on after its limit before the watchdog condemns
+/// its isolate: the larger of 100 ms and the limit itself.
+fn cpu_termination_grace(limit: Duration) -> Duration {
+    limit.max(Duration::from_millis(100))
 }
 
 #[derive(Default)]
 struct CpuWatchdogState {
     next_id: u64,
     watches: HashMap<u64, CpuWatch>,
+    /// When the service thread next wakes on its own, `None` while it waits
+    /// for a watch to arrive. Every turn of every Worker registers a watch,
+    /// so a watch due no sooner than that does not wake the thread, and a
+    /// watch that ends never does: the thread finds it gone when it wakes.
+    wake_at: Option<Instant>,
 }
 
 struct CpuWatchdogService {
@@ -3663,17 +4022,20 @@ fn cpu_watchdog_remaining(
 }
 
 impl CpuWatchdog {
+    /// Watch an invocation's turn, which began at `started` (the thread CPU
+    /// time the turn sampled as it began, which saves sampling it again).
     fn start(
         limit: Option<Duration>,
-        declared_ms: Option<u32>,
+        started: Option<u64>,
         isolate: v8::IsolateHandle,
         runtime_state: Arc<ActorRuntimeState>,
     ) -> Option<Self> {
         let limit = limit?;
-        let declared_ms = declared_ms?;
         Some(Self::watch(
             limit,
-            format!("Worker exceeded CPU limit of {declared_ms} ms"),
+            CPU_EXCEEDED.to_string(),
+            true,
+            started,
             isolate,
             runtime_state,
         ))
@@ -3687,6 +4049,8 @@ impl CpuWatchdog {
         Self::watch(
             STARTUP_CPU_LIMIT,
             STARTUP_CPU_EXCEEDED.to_string(),
+            false,
+            None,
             isolate,
             runtime_state,
         )
@@ -3696,6 +4060,8 @@ impl CpuWatchdog {
     fn watch(
         limit: Duration,
         error: String,
+        cpu_limit: bool,
+        started: Option<u64>,
         isolate: v8::IsolateHandle,
         runtime_state: Arc<ActorRuntimeState>,
     ) -> Self {
@@ -3704,19 +4070,31 @@ impl CpuWatchdog {
         let watch = CpuWatch {
             limit,
             error,
+            cpu_limit,
             target_clock,
-            target_started: target_clock.and_then(TargetThreadCpuClock::nanos),
+            // The calling thread's clock, the one `thread_cpu_nanos` reads.
+            target_started: started.or_else(|| target_clock.and_then(TargetThreadCpuClock::nanos)),
             next_check: Instant::now() + limit,
             isolate,
             runtime_state,
+            fired_at: None,
+            slot: crate::pool::current_slot_weak(),
+            tokio: tokio::runtime::Handle::try_current().ok(),
+            condemned: false,
+            spent: false,
         };
         let (state, wake) = &*service.shared;
         let mut state = state.lock().unwrap();
         let id = state.next_id;
         state.next_id = state.next_id.wrapping_add(1);
+        let sooner = state
+            .wake_at
+            .is_none_or(|wake_at| watch.next_check < wake_at);
         state.watches.insert(id, watch);
         drop(state);
-        wake.notify_one();
+        if sooner {
+            wake.notify_one();
+        }
         Self { id }
     }
 
@@ -3734,9 +4112,34 @@ impl CpuWatchdog {
 
 impl Drop for CpuWatchdog {
     fn drop(&mut self) {
-        let (state, wake) = &*cpu_watchdog_service().shared;
-        state.lock().unwrap().watches.remove(&self.id);
-        wake.notify_one();
+        let (state, _) = &*cpu_watchdog_service().shared;
+        let mut state = state.lock().unwrap();
+        let watch = state.watches.remove(&self.id);
+        // The turn's JavaScript is over, and what the host does next, such as
+        // rolling the turn back, must not be interrupted; unless another
+        // watch of the isolate, still running, fired too.
+        if let Some(watch) = watch.filter(|watch| watch.fired_at.is_some()) {
+            let other_fired = state.watches.values().any(|other| {
+                other.fired_at.is_some()
+                    && !other.spent
+                    && Arc::ptr_eq(&other.runtime_state, &watch.runtime_state)
+            });
+            if !other_fired {
+                watch
+                    .runtime_state
+                    .cpu_abort
+                    .store(false, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+/// The turn took the termination the watch `id` asked for: the watch is
+/// spent.
+fn spend_cpu_watch(id: u64) {
+    let (state, _) = &*cpu_watchdog_service().shared;
+    if let Some(watch) = state.lock().unwrap().watches.get_mut(&id) {
+        watch.spent = true;
     }
 }
 
@@ -3759,12 +4162,20 @@ fn run_cpu_watchdog_service(shared: &Arc<(Mutex<CpuWatchdogState>, std::sync::Co
     let (state, wake) = &**shared;
     let mut state = state.lock().unwrap();
     loop {
-        let Some(next_check) = state.watches.values().map(|watch| watch.next_check).min() else {
+        let Some(next_check) = state
+            .watches
+            .values()
+            .filter(|watch| !watch.spent)
+            .map(|watch| watch.next_check)
+            .min()
+        else {
+            state.wake_at = None;
             state = wake.wait(state).unwrap();
             continue;
         };
         let now = Instant::now();
         if now < next_check {
+            state.wake_at = Some(next_check);
             let (next_state, _) = wake.wait_timeout(state, next_check - now).unwrap();
             state = next_state;
             continue;
@@ -3773,47 +4184,180 @@ fn run_cpu_watchdog_service(shared: &Arc<(Mutex<CpuWatchdogState>, std::sync::Co
         let due = state
             .watches
             .iter()
-            .filter_map(|(id, watch)| (watch.next_check <= now).then_some(*id))
+            .filter_map(|(id, watch)| (!watch.spent && watch.next_check <= now).then_some(*id))
             .collect::<Vec<_>>();
+        let mut condemned = Vec::new();
         for id in due {
             let Some(watch) = state.watches.get_mut(&id) else {
                 continue;
             };
-            if let Some(remaining) = cpu_watchdog_remaining(
-                watch.limit,
-                watch.target_started,
-                watch.target_clock.and_then(TargetThreadCpuClock::nanos),
-            ) {
-                watch.next_check = Instant::now() + remaining;
-                continue;
+            if watch.fired_at.is_none() {
+                if let Some(remaining) = cpu_watchdog_remaining(
+                    watch.limit,
+                    watch.target_started,
+                    watch.target_clock.and_then(TargetThreadCpuClock::nanos),
+                ) {
+                    watch.next_check = Instant::now() + remaining;
+                    continue;
+                }
             }
-            let watch = state.watches.remove(&id).unwrap();
-            let mut termination = watch
-                .runtime_state
-                .termination
-                .lock()
-                .expect("termination lock poisoned");
-            if termination.is_none() {
-                *termination = Some(ExecutionTermination {
-                    error: watch.error,
-                    actor_scope: None,
-                    context_id: None,
+            let now = Instant::now();
+            let fired_at = *watch.fired_at.get_or_insert(now);
+            if watch.cpu_limit
+                && !watch.condemned
+                && now.duration_since(fired_at) >= cpu_termination_grace(watch.limit)
+            {
+                watch.condemned = true;
+                condemned.push(condemnation_past_cpu_limit(watch));
+            }
+            // A statement in progress stops at its next progress check, and
+            // JavaScript at its next interrupt check (`cpu_limit_interrupt`).
+            watch.runtime_state.cpu_abort.store(true, Ordering::Relaxed);
+            watch
+                .isolate
+                .request_interrupt(cpu_limit_interrupt, id as usize as *mut std::ffi::c_void);
+            watch.next_check = now + CPU_TERMINATION_RETRY;
+        }
+        // A condemnation runs the slot's hooks, which take locks of their
+        // own: never under this one.
+        if !condemned.is_empty() {
+            drop(state);
+            for condemnation in condemned {
+                condemnation.carry_out();
+            }
+            state = shared.0.lock().unwrap();
+        }
+    }
+}
+
+/// A turn ran on past its CPU limit for [`cpu_termination_grace`], inside
+/// something that does not stop for a termination. Condemn its isolate as
+/// the heap limit does: no new request or object is placed there, its
+/// objects move to a new isolate, and once the turn returns, no JavaScript
+/// runs in it again and its events fail with the CPU limit's error. The
+/// thread stays in the turn until the builtin returns; the node serves on
+/// its other isolates meanwhile.
+fn condemnation_past_cpu_limit(watch: &CpuWatch) -> CpuCondemnation {
+    watch
+        .runtime_state
+        .cpu_condemned
+        .store(true, Ordering::Relaxed);
+    tracing::warn!(
+        event = "isolate_cpu_exceeded",
+        limit_ms = watch.limit.as_millis() as u64,
+        "a turn runs on past its CPU limit; its isolate is condemned"
+    );
+    CpuCondemnation {
+        slot: watch.slot.clone(),
+        tokio: watch.tokio.clone(),
+    }
+}
+
+/// A slot to condemn for a turn past its CPU limit, which the watchdog
+/// carries out once it has let its lock go.
+struct CpuCondemnation {
+    slot: Option<std::sync::Weak<crate::pool::Slot>>,
+    tokio: Option<tokio::runtime::Handle>,
+}
+
+impl CpuCondemnation {
+    fn carry_out(self) {
+        let Some(slot) = self.slot else {
+            return;
+        };
+        // On the turn's runtime: a condemnation's hooks expect Tokio, and the
+        // slot's last reference, which owns its isolate, must not drop on
+        // this thread.
+        match self.tokio {
+            Some(handle) => {
+                handle.spawn(async move {
+                    if let Some(slot) = slot.upgrade() {
+                        slot.condemn(CPU_EXCEEDED);
+                    }
                 });
-                drop(termination);
-                watch.isolate.terminate_execution();
+            }
+            None => {
+                if let Some(slot) = slot.upgrade() {
+                    slot.condemn(CPU_EXCEEDED);
+                }
             }
         }
     }
 }
 
+/// The watchdog's interrupt, on the isolate's thread inside the turn: stop
+/// it, if the watch `data` names still watches it, and note whose code was
+/// running.
+unsafe extern "C" fn cpu_limit_interrupt(
+    mut isolate: v8::UnsafeRawIsolatePtr,
+    data: *mut std::ffi::c_void,
+) {
+    let id = data as usize as u64;
+    let watched = {
+        let (state, _) = &*cpu_watchdog_service().shared;
+        let state = state.lock().unwrap();
+        state
+            .watches
+            .get(&id)
+            .filter(|watch| !watch.spent)
+            .map(|watch| (watch.error.clone(), watch.cpu_limit))
+    };
+    // A watch that ended belongs to a turn that is over: this interrupt runs
+    // in a later one, which it must not stop.
+    let Some((error, cpu_limit)) = watched else {
+        return;
+    };
+    // SAFETY: V8 runs an interrupt on the isolate's thread, inside a turn
+    // that holds its lock, with the isolate it was requested for.
+    let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut isolate) };
+    let Some(runtime_state) = isolate.get_slot::<Arc<ActorRuntimeState>>().cloned() else {
+        isolate.terminate_execution();
+        return;
+    };
+    let unrecorded = runtime_state
+        .termination
+        .lock()
+        .expect("termination lock poisoned")
+        .is_none();
+    if unrecorded {
+        let spender = if cpu_limit {
+            running_context_id(isolate)
+        } else {
+            None
+        };
+        let mut termination = runtime_state
+            .termination
+            .lock()
+            .expect("termination lock poisoned");
+        if termination.is_none() {
+            *termination = Some(ExecutionTermination {
+                error,
+                actor_scope: None,
+                context_id: None,
+                cpu_limit,
+                spender,
+                watch: Some(id),
+            });
+        }
+    }
+    isolate.terminate_execution();
+}
+
+/// The context id of the code running now, read from the continuation data
+/// V8 carries with it.
+fn running_context_id(isolate: &mut v8::Isolate) -> Option<u64> {
+    let realm = isolate.get_slot::<Arc<bootstrap::RealmContext>>()?.clone();
+    v8::scope!(let hs, isolate);
+    let context = v8::Local::new(hs, &realm.0);
+    let cs = &mut v8::ContextScope::new(hs, context);
+    reaction_continuation_id(cs)
+}
+
 fn cpu_watchdog_for_context(scope: &mut v8::PinScope, context: &IoContext) -> Option<CpuWatchdog> {
     let runtime_state = actor_runtime_state(scope);
-    let declared_ms = context
-        .cpu_limit_nanos
-        .and_then(|limit| u32::try_from(limit / 1_000_000).ok());
     CpuWatchdog::start(
         context.remaining_cpu_budget(),
-        declared_ms,
+        context.cpu_turn_started(),
         scope.thread_safe_handle(),
         runtime_state,
     )
@@ -3901,6 +4445,11 @@ fn take_one_execution_termination(
     if termination.is_some() || is_terminating {
         scope.cancel_terminate_execution();
     }
+    // The statements of the next turn run again. The turn that took this
+    // termination has rolled back nothing yet, and needs no more statements.
+    if let Some(state) = &state {
+        state.cpu_abort.store(false, Ordering::Relaxed);
+    }
     let termination = termination.map(|termination| {
         if termination.actor_scope.is_some() {
             if let Some(context_id) = termination.context_id {
@@ -3916,12 +4465,27 @@ fn take_one_execution_termination(
                 finish_terminated_actor_event(scope, &current_context());
             }
         }
-        anyhow!(termination.error)
+        if let Some(watch) = termination.watch {
+            spend_cpu_watch(watch);
+        }
+        if termination.cpu_limit {
+            // The event whose code ran out fails too, when it is another
+            // than the turn's own: its continuations were cut with the turn.
+            let owner = context.and_then(IoContext::continuation_id);
+            if let Some(spender) = termination.spender.filter(|id| Some(*id) != owner) {
+                if let Some(spender) = state.as_ref().and_then(|state| state.io_context(spender)) {
+                    spender.fail_past_cpu_limit();
+                }
+            }
+            anyhow::Error::new(CpuLimitExceeded)
+        } else {
+            anyhow!(termination.error)
+        }
     });
     // The heap limit outranks any other termination, and fails every turn
     // of a condemned isolate whether or not it was terminated itself.
     if over_memory_limit(scope) {
-        return Some(anyhow!(MEMORY_EXCEEDED));
+        return Some(condemned_error(scope));
     }
     termination.or_else(|| is_terminating.then(|| anyhow!("JavaScript execution was terminated")))
 }
@@ -3936,7 +4500,7 @@ fn heap_limit_reached(isolate: &mut v8::Isolate) -> bool {
     let Some(heap) = isolate.get_slot::<Arc<HeapLimitState>>().cloned() else {
         return false;
     };
-    if !heap.excessively_exceeded.load(Ordering::Relaxed) || heap.loading.load(Ordering::Relaxed) {
+    if !heap.condemned() || heap.loading.load(Ordering::Relaxed) {
         return false;
     }
     // The first to see it carries the condemnation out, whichever entry
@@ -3946,18 +4510,45 @@ fn heap_limit_reached(isolate: &mut v8::Isolate) -> bool {
         // The callback's termination can still be pending. Nothing runs here
         // again, but the isolate is still entered to release its cells.
         isolate.cancel_terminate_execution();
-        let used = isolate.get_heap_statistics().used_heap_size();
-        tracing::warn!(
-            event = "isolate_memory_exceeded",
-            limit_bytes = heap.limit,
-            used_bytes = used,
-            "isolate reached its memory limit; its events fail and it is replaced"
-        );
+        if heap.condemned_for_cpu() {
+            tracing::warn!(
+                event = "isolate_cpu_exceeded",
+                "a turn ran on past its CPU limit; the isolate's events fail and it is replaced"
+            );
+        } else {
+            let used = isolate.get_heap_statistics().used_heap_size();
+            tracing::warn!(
+                event = "isolate_memory_exceeded",
+                limit_bytes = heap.limit,
+                used_bytes = used,
+                "isolate reached its memory limit; its events fail and it is replaced"
+            );
+        }
         if let Some(slot) = crate::pool::current_slot() {
-            slot.condemn(MEMORY_EXCEEDED);
+            slot.condemn(heap.condemned_text());
         }
     }
     true
+}
+
+/// The text of [`condemned_error`].
+pub(super) fn condemned_text(isolate: &v8::Isolate) -> &'static str {
+    isolate
+        .get_slot::<Arc<HeapLimitState>>()
+        .map_or(MEMORY_EXCEEDED, |heap| heap.condemned_text())
+}
+
+/// What the events of a condemned isolate fail with: the heap limit's
+/// error, or the CPU limit's when the CPU watchdog condemned it.
+fn condemned_error(isolate: &v8::Isolate) -> anyhow::Error {
+    let cpu = isolate
+        .get_slot::<Arc<HeapLimitState>>()
+        .is_some_and(|heap| heap.condemned_for_cpu());
+    if cpu {
+        anyhow::Error::new(CpuLimitExceeded)
+    } else {
+        anyhow!(MEMORY_EXCEEDED)
+    }
 }
 
 /// Count backing stores held past the budget as the heap limit reached: the
@@ -4017,7 +4608,7 @@ fn over_memory_limit(scope: &mut v8::PinScope) -> bool {
     let Some(heap) = scope.get_slot::<Arc<HeapLimitState>>().cloned() else {
         return false;
     };
-    if !heap.excessively_exceeded.load(Ordering::Relaxed) {
+    if !heap.condemned() {
         return false;
     }
     // A load that reaches the limit fails as a whole and has no slot.
@@ -4028,7 +4619,11 @@ fn over_memory_limit(scope: &mut v8::PinScope) -> bool {
 /// response, its `waitUntil` work, and the frames it captured for its
 /// hibernatable sockets all go.
 fn fail_condemned(entry: &mut InFlight, runtime_state: &ActorRuntimeState) {
-    entry.fail_in_turn(anyhow!(MEMORY_EXCEEDED));
+    entry.fail_in_turn(if runtime_state.cpu_condemned.load(Ordering::Relaxed) {
+        anyhow::Error::new(CpuLimitExceeded)
+    } else {
+        anyhow!(MEMORY_EXCEEDED)
+    });
     entry.background = None;
     entry.abandon();
     ws_capture_discard_touched(runtime_state);
@@ -4765,10 +5360,17 @@ impl InFlight {
     /// other way still owes that record, and `turn_finish_alarm` samples again
     /// after writing it.
     fn fail_in_turn(&mut self, error: anyhow::Error) {
+        // Whatever the event, a turn the limit cut can hold other objects'
+        // writes: a stateless event's turn runs a facet's continuation in a
+        // Dynamic Worker's isolate, for one.
+        let reset = roll_back_past_cpu_limit(&self.runtime_state, self.scope.as_deref(), &error);
         let error = match self.gate_positions() {
             Ok(positions) => fail_in_turn_error(error, positions),
             Err(sample) => sample,
         };
+        if let Some(objects) = reset {
+            reset_objects_past_cpu_limit(&objects);
+        }
         self.fail(error);
     }
 
@@ -5414,7 +6016,7 @@ impl Worker {
         };
         let (mut locker, _cells) = inner.lock();
         if heap_limit_reached(&mut locker) {
-            job.fail(anyhow!(MEMORY_EXCEEDED));
+            job.fail(condemned_error(&locker));
             return (None, Vec::new());
         }
         v8::scope!(let hs, &mut *locker);
@@ -5437,10 +6039,11 @@ impl Worker {
         };
         let initial_limits =
             effective_resource_limits(inner.runtime_state.resource_limits, invocation_limits);
-        let declared_ms = initial_limits.and_then(|limits| limits.cpu_ms);
         let cpu_watchdog = inner.cpu_watchdog(
-            declared_ms.map(|milliseconds| Duration::from_millis(u64::from(milliseconds))),
-            declared_ms,
+            initial_limits
+                .and_then(|limits| limits.cpu_ms)
+                .map(|milliseconds| Duration::from_millis(u64::from(milliseconds))),
+            None,
         );
         let offered = BeginningSpans::offer(spans);
         // `begin` installs the new event's continuation token; whichever
@@ -5449,25 +6052,26 @@ impl Worker {
         let begun = begin(tc, realm.fetch, job);
         tc.set_continuation_preserved_embedder_data(before_begin);
         drop(offered);
-        drop(cpu_watchdog);
         let out = match begun {
             Begun::Running(mut entry) => {
                 entry.trace = trace;
                 // A handler that returned an already-resolved promise is
                 // finished before it ever suspends, and must not wait for an
                 // op it will never start.
-                let ops = finish_turn(tc, &mut entry);
+                let ops = finish_turn(tc, &mut entry, cpu_watchdog);
                 (Some(*entry), ops)
             }
             Begun::Threw(failure) => {
+                drop(cpu_watchdog);
                 let BegunFailure {
                     answer,
                     cpu_error,
                     tail_report,
                 } = *failure;
                 let error = take_execution_termination(tc)
-                    .or_else(|| cpu_error.map(anyhow::Error::msg))
+                    .or_else(|| cpu_error.map(anyhow::Error::new))
                     .unwrap_or_else(|| anyhow!("fetch threw: {}", exc!(tc)));
+                roll_back_stateless_past_cpu_limit(tc, &error);
                 if let Some((mut report, context)) = tail_report {
                     report.record_failure(format!("{error:#}"));
                     report.finish(&context);
@@ -5521,11 +6125,10 @@ impl Worker {
         entry.context.begin_cpu_turn();
         let cpu_watchdog = inner.cpu_watchdog(
             entry.context.remaining_cpu_budget(),
-            entry.context.cpu_limit_ms(),
+            entry.context.cpu_turn_started(),
         );
         cancel(tc, entry, shutdown);
-        drop(cpu_watchdog);
-        let ops = finish_turn(tc, entry);
+        let ops = finish_turn(tc, entry, cpu_watchdog);
         restore_trace(tc, previous);
         restore_io_context(tc, previous_io_context);
         ops
@@ -5598,12 +6201,11 @@ impl Worker {
         entry.context.begin_cpu_turn();
         let cpu_watchdog = inner.cpu_watchdog(
             entry.context.remaining_cpu_budget(),
-            entry.context.cpu_limit_ms(),
+            entry.context.cpu_turn_started(),
         );
         deliver(tc, entry, op, res);
         cancelled(tc, entry);
-        drop(cpu_watchdog);
-        let ops = finish_turn(tc, entry);
+        let ops = finish_turn(tc, entry, cpu_watchdog);
         restore_trace(tc, previous);
         restore_io_context(tc, previous_io_context);
         ops
@@ -5642,28 +6244,54 @@ impl Worker {
 /// record rather than in a separate op-id tag: a tag can outlive a failed
 /// turn, and the spawn and its classification drain together. Such an op
 /// does not defer retirement: see `retired`.
-fn finish_turn(tc: &mut v8::PinScope, entry: &mut InFlight) -> Vec<Op> {
+///
+/// `watchdog` is the CPU watchdog the turn ran its JavaScript under, which
+/// goes on watching the settle; a turn that ran none gets one for it. Either
+/// ends before the last look for a termination, so none lands after it.
+fn finish_turn(
+    tc: &mut v8::PinScope,
+    entry: &mut InFlight,
+    watchdog: Option<CpuWatchdog>,
+) -> Vec<Op> {
     // Before anything settles: the turn that reached the heap limit, and any
     // later one, must not answer.
     check_backing_stores(tc);
     if heap_limit_reached(tc) {
+        drop(watchdog);
         let _ = take_execution_termination_in_context(tc, Some(&entry.context));
         let runtime_state = entry.runtime_state.clone();
         fail_condemned(entry, &runtime_state);
         return Vec::new();
     }
-    if let Err(error) = finish_cpu_turn(tc, entry) {
+    // Its code ran out of another event's CPU limit there, and the rest of
+    // its turn was dropped with that event's.
+    if entry.context.cpu_failed.swap(false, Ordering::AcqRel) {
+        drop(watchdog);
         let error = take_execution_termination_in_context(tc, Some(&entry.context))
-            .unwrap_or_else(|| anyhow!(error));
+            .unwrap_or_else(|| anyhow::Error::new(CpuLimitExceeded));
         entry.fail_in_turn(error);
         entry.background = None;
         entry.abandon();
         ws_capture_flush_touched(tc, &entry.runtime_state);
         return Vec::new();
     }
-    entry.context.begin_cpu_turn();
+    let (finished, sample) = finish_cpu_turn(tc, entry);
+    if let Err(error) = finished {
+        drop(watchdog);
+        let error = take_execution_termination_in_context(tc, Some(&entry.context))
+            .unwrap_or_else(|| anyhow::Error::new(error));
+        entry.fail_in_turn(error);
+        entry.background = None;
+        entry.abandon();
+        ws_capture_flush_touched(tc, &entry.runtime_state);
+        return Vec::new();
+    }
+    entry.context.begin_cpu_turn_at(sample);
     {
-        let _cpu_watchdog = cpu_watchdog_for_context(tc, &entry.context);
+        // The turn's own watchdog covers what it ran so far and this, which
+        // continues the same turn. Registering another costs a lock that
+        // every turn of the process takes.
+        let _cpu_watchdog = watchdog.or_else(|| cpu_watchdog_for_context(tc, &entry.context));
         settle(tc, entry);
         tc.perform_microtask_checkpoint();
         // V8 schedules FinalizationRegistry cleanup as a foreground task,
@@ -5674,9 +6302,9 @@ fn finish_turn(tc: &mut v8::PinScope, entry: &mut InFlight) -> Vec<Op> {
         v8::Platform::pump_message_loop(&v8::V8::get_current_platform(), tc, false);
         tc.perform_microtask_checkpoint();
     }
-    if let Err(error) = finish_cpu_turn(tc, entry) {
+    if let (Err(error), _) = finish_cpu_turn(tc, entry) {
         let error = take_execution_termination_in_context(tc, Some(&entry.context))
-            .unwrap_or_else(|| anyhow!(error));
+            .unwrap_or_else(|| anyhow::Error::new(error));
         entry.fail_in_turn(error);
         entry.background = None;
         entry.abandon();
@@ -5823,7 +6451,7 @@ enum Begun {
 
 struct BegunFailure {
     answer: Answer,
-    cpu_error: Option<String>,
+    cpu_error: Option<CpuLimitExceeded>,
     tail_report: Option<(TailReportState, Arc<IoContext>)>,
 }
 
@@ -5957,10 +6585,11 @@ fn begin<'s>(
             Begun::Running(Box::new(entry))
         }
         Err(error) => {
-            let cpu_error = context.finish_cpu_turn().err().map(anyhow::Error::msg);
+            let cpu_error = context.finish_cpu_turn().err().map(anyhow::Error::new);
             let error = take_execution_termination(tc)
                 .or(cpu_error)
                 .unwrap_or(error);
+            roll_back_stateless_past_cpu_limit(tc, &error);
             if let Some(mut report) = tail_report.take() {
                 report.record_failure(format!("{error:#}"));
                 report.finish(&context);
@@ -6056,10 +6685,11 @@ fn begin_entrypoint_rpc(
         }
         Err(error) => {
             let _ = end_event_context(tc);
-            let cpu_error = context.finish_cpu_turn().err().map(anyhow::Error::msg);
+            let cpu_error = context.finish_cpu_turn().err().map(anyhow::Error::new);
             let error = take_execution_termination(tc)
                 .or(cpu_error)
                 .unwrap_or(error);
+            roll_back_stateless_past_cpu_limit(tc, &error);
             drop(guard);
             let _ = reply.send(Err(error));
             Begun::Nothing
@@ -6298,10 +6928,11 @@ fn begin_queue(
         }
         Err(error) => {
             let _ = end_event_context(tc);
-            let cpu_error = context.finish_cpu_turn().err().map(anyhow::Error::msg);
+            let cpu_error = context.finish_cpu_turn().err().map(anyhow::Error::new);
             let error = take_execution_termination(tc)
                 .or(cpu_error)
                 .unwrap_or(error);
+            roll_back_stateless_past_cpu_limit(tc, &error);
             drop(guard);
             let _ = reply.send(Err(error));
             Begun::Nothing
@@ -6374,6 +7005,54 @@ fn gate_positions(scope: &str, writes_before: Option<u64>) -> Result<(Option<u64
         None
     };
     Ok((write, observed))
+}
+
+/// A Durable Object event that ran past its CPU limit resets its object, as
+/// workerd aborts an actor's IoContext when its limit enforcer reports the
+/// limit exceeded: the object's in-flight and later calls fail, its stubs
+/// throw, and the next call reaches a new instance. The terminated turn left
+/// the object's JavaScript state wherever it stopped, so the object cannot
+/// go on serving from it. This rolls back what the turn wrote, before the
+/// failing event samples its gate positions, which would commit it; and
+/// answers the objects to reset once the sample is taken
+/// ([`reset_objects_past_cpu_limit`]). `None` for any other failure.
+fn roll_back_past_cpu_limit(
+    runtime_state: &ActorRuntimeState,
+    scope: Option<&str>,
+    error: &anyhow::Error,
+) -> Option<Vec<String>> {
+    if !error.is::<CpuLimitExceeded>() {
+        return None;
+    }
+    let mut objects = storage::roll_back_cpu_limited_turn(scope);
+    if let Some(scope) = scope {
+        objects.insert(0, scope.to_string());
+    }
+    // A put the turn queued and never flushed is the turn's write too, and
+    // would otherwise reach the object's next instance.
+    let mut pending = runtime_state
+        .pending_puts
+        .lock()
+        .expect("pending puts lock poisoned");
+    for object in &objects {
+        pending.remove(object);
+    }
+    Some(objects)
+}
+
+/// [`roll_back_past_cpu_limit`] for an event of no object: the objects the
+/// cut turn wrote to reset at once, as no gate sample comes between.
+fn roll_back_stateless_past_cpu_limit(scope: &mut v8::PinScope, error: &anyhow::Error) {
+    let runtime_state = actor_runtime_state(scope);
+    if let Some(objects) = roll_back_past_cpu_limit(&runtime_state, None, error) {
+        reset_objects_past_cpu_limit(&objects);
+    }
+}
+
+fn reset_objects_past_cpu_limit(objects: &[String]) {
+    for object in objects {
+        storage::reset_past_cpu_limit(object, CPU_EXCEEDED);
+    }
 }
 
 /// A committed-write position only counts when the handler advanced it; celld's
@@ -6486,10 +7165,11 @@ fn start_cell_event<'s>(
             // A V8 termination has a concrete stored cause. The dispatcher
             // wrapper can only report that its call returned no value, so do
             // not replace process.exit or actor-abort with that generic seam.
-            let cpu_error = context.finish_cpu_turn().err().map(anyhow::Error::msg);
+            let cpu_error = context.finish_cpu_turn().err().map(anyhow::Error::new);
             let error = take_execution_termination(tc)
                 .or(cpu_error)
                 .unwrap_or(error);
+            let reset = roll_back_past_cpu_limit(&runtime_state, Some(scope), &error);
             // The handler ran synchronously before it threw, and a
             // synchronous storage call both commits and reads, so the error
             // carries the positions it reached like a rejection does.
@@ -6497,6 +7177,9 @@ fn start_cell_event<'s>(
                 Ok(positions) => fail_in_turn_error(error, positions),
                 Err(sample) => sample,
             };
+            if let Some(objects) = reset {
+                reset_objects_past_cpu_limit(&objects);
+            }
             let background = end_event_context(tc)
                 .ok()
                 .flatten()
@@ -6786,6 +7469,9 @@ fn begin_cell(tc: &mut v8::PinScope, job: CellJob, event_time: i64) -> Begun {
                         error: "synchronous V8 termination sentinel".to_string(),
                         actor_scope: None,
                         context_id: None,
+                        cpu_limit: false,
+                        spender: None,
+                        watch: None,
                     });
                 tc.terminate_execution();
                 Err(anyhow!("generic synchronous dispatch failure"))
@@ -6953,7 +7639,7 @@ fn cancel(tc: &mut v8::PinScope, entry: &mut InFlight, shutdown: bool) {
     // The Actor cancels what a condemned isolate still runs when it moves the
     // isolate's Durable Objects out; those events fail for the heap limit.
     entry.fail_cancelled(if heap_limit_reached(tc) {
-        anyhow!(MEMORY_EXCEEDED)
+        condemned_error(tc)
     } else {
         anyhow!("The client has disconnected")
     });
@@ -7165,6 +7851,15 @@ fn startup_error(error: anyhow::Error) -> anyhow::Error {
     }
 }
 
+/// What a Durable Object's caller is told when the object's isolate failed
+/// to load its Worker: the startup error, as a Worker Loader reports one.
+pub(crate) fn startup_failure_text(error: &anyhow::Error) -> String {
+    if error.to_string() == STARTUP_CPU_EXCEEDED {
+        return failed_to_start(&anyhow::Error::new(StartupCpuExceeded));
+    }
+    failed_to_start(error)
+}
+
 /// How a Worker Loader reports a Worker that failed to start, as workerd's
 /// `DynamicErrorReporter` does. A startup limit is reported by its
 /// description, which workerd types as an `Error`.
@@ -7287,6 +7982,19 @@ fn dom_exception_description(
     ))
 }
 
+/// A handler of the default export, bound to it (`__exportedHandler`).
+fn exported_handler<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    handler: v8::Local<'s, v8::Value>,
+    exported: v8::Local<'s, v8::Object>,
+) -> Result<v8::Local<'s, v8::Function>> {
+    let bind = internal_function(scope, "__exportedHandler")?;
+    let recv = v8::undefined(scope).into();
+    bind.call(scope, recv, &[handler, exported.into()])
+        .and_then(|bound| v8::Local::<v8::Function>::try_from(bound).ok())
+        .ok_or_else(|| anyhow!("binding the exported handler failed"))
+}
+
 /// The frames a startup error reports, as V8's default for workerd.
 const STARTUP_FRAME_LIMIT: usize = 10;
 
@@ -7398,8 +8106,10 @@ impl Worker {
         // Dynamic `import()` of builtin specifiers; per-import()-call only.
         isolate.set_host_import_module_dynamically_callback(host_import_module_dynamically);
         let original_heap_limit = isolate.get_heap_statistics().heap_size_limit();
+        let cpu_condemned = Arc::new(AtomicBool::new(false));
         let heap_limit_state = Arc::new(HeapLimitState {
             excessively_exceeded: AtomicBool::new(false),
+            cpu_condemned: cpu_condemned.clone(),
             condemnation_handled: AtomicBool::new(false),
             limit: original_heap_limit,
             loading: AtomicBool::new(true),
@@ -7409,8 +8119,11 @@ impl Worker {
             raw_isolate: RawIsolate(unsafe { isolate.as_raw_isolate_ptr() }),
             backing_stores: backing_stores.clone(),
         });
+        let cpu_abort = Arc::new(AtomicBool::new(false));
         let runtime_state = Arc::new(ActorRuntimeState {
             promises: std::sync::Mutex::new(PromiseMap::new()),
+            cpu_abort: cpu_abort.clone(),
+            cpu_condemned,
             egress: config.egress.clone(),
             resource_limits: config.resource_limits,
             tail_reporting: config.tail_reporting,
@@ -7493,7 +8206,7 @@ impl Worker {
                 original_heap_limit,
                 compat,
                 loader_owner,
-                cells: storage::Cells::default(),
+                cells: storage::Cells::with_cpu_abort(cpu_abort),
                 backing_stores,
             }),
         })
@@ -7519,9 +8232,11 @@ impl Worker {
         let tc = std::pin::pin!(v8::TryCatch::new(cs));
         let scope = &mut tc.init();
 
+        bootstrap::install_stack_trace_formatter(scope);
         let arguments = install_ops(scope);
         install_prelude(scope, &arguments)?; // Web Platform APIs
         install_harness(scope, &arguments)?; // DO object model + minimal Response
+        bootstrap::record_transparent_wrappers(scope);
         install_lazy_globals(scope)?;
         // A global, so it must exist before the module evaluates: bundles
         // read Cloudflare.compatibilityFlags at module scope.
@@ -7675,8 +8390,12 @@ impl Worker {
             !config.declares_queue_consumer || has_queue_handler,
             "queue consumer has no queue handler"
         );
+        // The exported object's own handler, bound to it, as workerd calls
+        // it as a method: through the realm's `fetch` and a self-targeted
+        // service binding alike, and never with the harness's state as
+        // `this`.
         let f: v8::Local<v8::Function> = if fetch_value.is_function() {
-            fetch_value.try_into().expect("function casts to Function")
+            exported_handler(scope, fetch_value, default)?
         } else if default_is_entrypoint && class_fetch {
             // A class-based default entrypoint (extends WorkerEntrypoint)
             // keeps fetch on the prototype, so route through the
@@ -7728,7 +8447,8 @@ impl Worker {
                     .get(scope, sk.into())
                     .filter(|handler| handler.is_function());
                 if let Some(handler) = own {
-                    cell.set(scope, key_.into(), handler);
+                    let handler = exported_handler(scope, handler, default)?;
+                    cell.set(scope, key_.into(), handler.into());
                 } else if default_is_entrypoint {
                     // A class-based default entrypoint keeps scheduled on
                     // the prototype; dispatch through an invocation instance
@@ -7808,7 +8528,7 @@ impl Worker {
             return Ok(opening);
         }
         if heap_limit_reached(&mut locker) {
-            return Err(anyhow!(MEMORY_EXCEEDED));
+            return Err(condemned_error(&locker));
         }
         v8::scope!(let hs, &mut *locker);
         let realm = self.realm(hs);
@@ -7909,7 +8629,7 @@ impl Worker {
     pub fn set_id_name(&mut self, scope: &str, name: &str) -> Result<()> {
         let (mut locker, _cells) = self.lock();
         if heap_limit_reached(&mut locker) {
-            return Err(anyhow!(MEMORY_EXCEEDED));
+            return Err(condemned_error(&locker));
         }
         v8::scope!(let hs, &mut *locker);
         let realm = self.realm(hs);
@@ -7934,7 +8654,7 @@ impl Worker {
         };
         let (mut locker, _cells) = inner.lock();
         if heap_limit_reached(&mut locker) {
-            job.fail(anyhow!(MEMORY_EXCEEDED));
+            job.fail(condemned_error(&locker));
             return (None, Vec::new());
         }
         v8::scope!(let hs, &mut *locker);
@@ -7946,32 +8666,26 @@ impl Worker {
 
         let event_time = advance_io_time(tc);
         let previous = install_trace(tc, trace.as_ref());
-        let cpu_watchdog = inner.cpu_watchdog(
-            inner.initial_cpu_budget(),
-            inner
-                .runtime_state
-                .resource_limits
-                .and_then(|limits| limits.cpu_ms),
-        );
+        let cpu_watchdog = inner.cpu_watchdog(inner.initial_cpu_budget(), None);
         let offered = BeginningSpans::offer(spans);
         let begun = begin_cell(tc, job, event_time);
         drop(offered);
-        drop(cpu_watchdog);
         let out = match begun {
             Begun::Running(mut entry) => {
                 entry.trace = trace;
                 let previous_io_context = install_io_context(tc, &entry.context);
-                let ops = finish_turn(tc, &mut entry);
+                let ops = finish_turn(tc, &mut entry, cpu_watchdog);
                 restore_io_context(tc, previous_io_context);
                 (Some(*entry), ops)
             }
             Begun::Threw(failure) => {
+                drop(cpu_watchdog);
                 let BegunFailure {
                     answer, cpu_error, ..
                 } = *failure;
                 answer.fail(
                     take_execution_termination(tc)
-                        .or_else(|| cpu_error.map(anyhow::Error::msg))
+                        .or_else(|| cpu_error.map(anyhow::Error::new))
                         .unwrap_or_else(|| anyhow!("cell event threw: {}", exc!(tc))),
                 );
                 (None, Vec::new())
@@ -8008,7 +8722,7 @@ impl Worker {
         let previous_io_context = install_io_context(tc, &entry.context);
         let previous = install_trace(tc, entry.trace.as_ref());
         entry.context.begin_cpu_turn();
-        let ops = finish_turn(tc, entry);
+        let ops = finish_turn(tc, entry, None);
         restore_trace(tc, previous);
         restore_io_context(tc, previous_io_context);
         ops
@@ -8038,7 +8752,7 @@ impl Worker {
         entry.context.begin_cpu_turn();
         let cpu_watchdog = inner.cpu_watchdog(
             entry.context.remaining_cpu_budget(),
-            entry.context.cpu_limit_ms(),
+            entry.context.cpu_turn_started(),
         );
         let ids = entry.context.take_pending_events();
         let called = (|| {
@@ -8054,8 +8768,7 @@ impl Worker {
         if called.is_none() {
             entry.fail_in_turn(anyhow!("pending-event cancellation threw"));
         }
-        drop(cpu_watchdog);
-        let ops = finish_turn(tc, entry);
+        let ops = finish_turn(tc, entry, cpu_watchdog);
         restore_trace(tc, previous);
         restore_io_context(tc, previous_io_context);
         ops
@@ -9098,7 +9811,10 @@ struct LoadedWorker {
 /// state, and how soon it may load again.
 struct LoaderReload {
     state: tokio::sync::watch::Sender<LoaderState>,
-    config: Arc<WorkerConfig>,
+    /// What the Worker loads from: its modules, which can be megabytes. A
+    /// load that failed for good drops it, since it never loads again, and
+    /// its registry entry outlives it until the stub is collected.
+    config: Mutex<Option<Arc<WorkerConfig>>>,
     pacing: Mutex<LoaderPacing>,
 }
 
@@ -9195,7 +9911,12 @@ impl LoaderReload {
     fn spawn_load(self: &Arc<Self>, handle: &tokio::runtime::Handle, reloading: bool) {
         let reload = self.clone();
         handle.spawn(async move {
-            let config = reload.config.clone();
+            let Some(config) = reload.config.lock().unwrap().clone() else {
+                reload.state.send_replace(LoaderState::Failed(Arc::from(
+                    "worker loader: the Worker failed to load before",
+                )));
+                return;
+            };
             let (error, transient) =
                 match tokio::task::spawn_blocking(move || Worker::load_config(config)).await {
                     Ok(Ok(worker)) => {
@@ -9228,6 +9949,9 @@ impl LoaderReload {
                     .state
                     .send_replace(LoaderState::Retry(RetryCause::LoadFailed(error)));
             } else {
+                reload.config.lock().unwrap().take();
+                // Kept until the stub is collected, so bounded in size too.
+                let error = Arc::from(bounded_failure_text(&error));
                 reload.state.send_replace(LoaderState::Failed(error));
             }
         });
@@ -9343,25 +10067,85 @@ const MAX_LOADED_WORKERS: usize = 256;
 // Reserve only the final process slot. A fixed fraction needlessly reduces
 // single-script capacity without giving every competing principal a share.
 const MAX_LOADED_WORKERS_PER_PRINCIPAL: usize = MAX_LOADED_WORKERS - 1;
+// A load that failed for good keeps its entry, holding only its error, until
+// its stub is collected, which can be long after: it no longer counts as a
+// loaded Worker, so failures cannot use up the live limits above, but a
+// script can hold only this many of them.
+const MAX_FAILED_LOADS_PER_PRINCIPAL: usize = MAX_LOADED_WORKERS;
+// And all scripts together, so the process holds at most this many errors of
+// at most `MAX_FAILURE_TEXT_BYTES` each.
+const MAX_FAILED_LOADS: usize = 4 * MAX_LOADED_WORKERS;
 
-/// Check both limits and install the live state under one registry lock. A
-/// separate check and insert lets concurrent isolates exceed either limit.
+/// The most of a startup error celld keeps for later callers.
+pub(crate) const MAX_FAILURE_TEXT_BYTES: usize = 4096;
+
+/// `text` within [`MAX_FAILURE_TEXT_BYTES`], cut at a character boundary.
+pub(crate) fn bounded_failure_text(text: &str) -> String {
+    if text.len() <= MAX_FAILURE_TEXT_BYTES {
+        return text.to_string();
+    }
+    let mut end = MAX_FAILURE_TEXT_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+
+/// Check the limits and install the live state under one registry lock. A
+/// separate check and insert lets concurrent isolates exceed a limit.
 fn admit_loaded_worker(owner: LoaderOwner, id: u64, loaded: LoadedWorker) -> Result<(), String> {
     let mut registry = loader_registry().lock().unwrap();
+    let failed =
+        |entry: &LoaderEntry| matches!(*entry.loaded.state.borrow(), LoaderState::Failed(_));
     let principal_limit = MAX_LOADED_WORKERS_PER_PRINCIPAL;
-    let principal_count = registry
+    let (principal_count, principal_failed) = registry
         .values()
         .filter(|entry| entry.owner.principal == owner.principal)
-        .count();
+        .fold((0, 0), |(live, dead), entry| {
+            if failed(entry) {
+                (live, dead + 1)
+            } else {
+                (live + 1, dead)
+            }
+        });
     if principal_count >= principal_limit {
         return Err(format!(
             "worker loader: too many loaded workers for script \"{}\" in generation {} (limit {principal_limit})",
             owner.principal.script, owner.principal.generation
         ));
     }
-    if registry.len() >= MAX_LOADED_WORKERS {
+    if principal_failed >= MAX_FAILED_LOADS_PER_PRINCIPAL {
         return Err(format!(
-            "worker loader: too many loaded workers (limit {MAX_LOADED_WORKERS})"
+            "worker loader: too many failed loads for script \"{}\" in generation {} are \
+             still referenced (limit {MAX_FAILED_LOADS_PER_PRINCIPAL})",
+            owner.principal.script, owner.principal.generation
+        ));
+    }
+    // At a process-wide cap, only a script holding at least its fair share
+    // (the cap over the scripts holding entries, its own included) is
+    // refused: one script cannot use the cap up for the others. So the
+    // process holds at most the cap and one entry for each script.
+    let mut principals = vec![&owner.principal];
+    for entry in registry.values() {
+        if !principals.contains(&&entry.owner.principal) {
+            principals.push(&entry.owner.principal);
+        }
+    }
+    let fair_share = |cap: usize| (cap / principals.len()).max(1);
+    let failed_total = registry.values().filter(|entry| failed(entry)).count();
+    if failed_total >= MAX_FAILED_LOADS && principal_failed >= fair_share(MAX_FAILED_LOADS) {
+        return Err(format!(
+            "worker loader: too many failed loads are still referenced (limit {MAX_FAILED_LOADS}, \
+             of which this script's share is {})",
+            fair_share(MAX_FAILED_LOADS)
+        ));
+    }
+    let live_total = registry.len() - failed_total;
+    if live_total >= MAX_LOADED_WORKERS && principal_count >= fair_share(MAX_LOADED_WORKERS) {
+        return Err(format!(
+            "worker loader: too many loaded workers (limit {MAX_LOADED_WORKERS}, of which this \
+             script's share is {})",
+            fair_share(MAX_LOADED_WORKERS)
         ));
     }
 
@@ -9384,8 +10168,22 @@ fn loader_invocation_limits(
     value: v8::Local<v8::Value>,
 ) -> Result<Option<ResourceLimits>, String> {
     let json = value.to_rust_string_lossy(scope);
-    serde_json::from_str(&json)
-        .map_err(|error| format!("worker loader: invalid invocation limits: {error}"))
+    let limits = serde_json::from_str(&json)
+        .map_err(|error| format!("worker loader: invalid invocation limits: {error}"))?;
+    within_plan_limits(limits)?;
+    Ok(limits)
+}
+
+/// Refuse a `cpuMs` the plan cannot grant, rather than run with less than
+/// the code asked for without saying so.
+fn within_plan_limits(limits: Option<ResourceLimits>) -> Result<(), String> {
+    match limits.and_then(|limits| limits.cpu_ms) {
+        Some(cpu_ms) if cpu_ms > MAX_CPU_LIMIT_MS => Err(format!(
+            "worker loader: limits.cpuMs is {cpu_ms}, past the most an invocation can have \
+             ({MAX_CPU_LIMIT_MS} ms)"
+        )),
+        _ => Ok(()),
+    }
 }
 
 async fn loaded_worker_slot(loaded: LoadedWorker) -> Result<Arc<crate::pool::Slot>, String> {
@@ -9445,6 +10243,9 @@ fn op_loader_load(
         },
         None => None,
     };
+    if let Err(error) = within_plan_limits(limits) {
+        return loader_throw(scope, &error);
+    }
     let tail_reporting = args.get(6).boolean_value(scope);
     let Some(main) = code.get("mainModule").and_then(|v| v.as_str()) else {
         return loader_throw(scope, "worker loader: missing mainModule");
@@ -9715,7 +10516,7 @@ fn op_loader_load(
     let (sender, state) = tokio::sync::watch::channel(LoaderState::Loading);
     let reload = Arc::new(LoaderReload {
         state: sender,
-        config,
+        config: Mutex::new(Some(config)),
         pacing: Mutex::new(LoaderPacing::default()),
     });
     let loaded = LoadedWorker {
@@ -12787,7 +13588,7 @@ mod scope_grant_op_tests {
             state: receiver,
             reload: Arc::new(LoaderReload {
                 state,
-                config,
+                config: Mutex::new(Some(config)),
                 pacing: Mutex::new(LoaderPacing::default()),
             }),
         };
@@ -12802,6 +13603,80 @@ mod scope_grant_op_tests {
         );
         drop(take_loader_owner(&owner));
         assert!(loaded_worker_of(&owner, id).is_none());
+    }
+
+    fn loaded_in(state: LoaderState) -> LoadedWorker {
+        let (sender, receiver) = tokio::sync::watch::channel(state);
+        LoadedWorker {
+            state: receiver,
+            reload: Arc::new(LoaderReload {
+                state: sender,
+                config: Mutex::new(None),
+                pacing: Mutex::new(LoaderPacing::default()),
+            }),
+        }
+    }
+
+    /// A failed load does not use a live slot, and a script holds a bounded
+    /// number of them; a failure's text is bounded too.
+    #[test]
+    fn failed_loads_hold_no_live_slot_and_are_bounded() {
+        let owner = LoaderOwner::fresh("failed-loads", 0);
+        let failed = || loaded_in(LoaderState::Failed(Arc::from("Failed to start Worker:")));
+        for _ in 0..MAX_FAILED_LOADS_PER_PRINCIPAL {
+            let id = LOADER_NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            admit_loaded_worker(owner.clone(), id, failed()).unwrap();
+        }
+        let id = LOADER_NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let refused = admit_loaded_worker(owner.clone(), id, loaded_in(LoaderState::Loading));
+        assert!(refused.unwrap_err().contains("too many failed loads"));
+        // Another script's loads are not held back by these failures.
+        let other = LoaderOwner::fresh("failed-loads-other", 0);
+        let id = LOADER_NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        admit_loaded_worker(other.clone(), id, loaded_in(LoaderState::Loading)).unwrap();
+        drop(take_loader_owner(&owner));
+        drop(take_loader_owner(&other));
+
+        // A process-wide cap refuses only a script at its fair share: four
+        // scripts that fill the failed loads' cap leave room for a fifth,
+        // and one that holds nearly all live slots leaves room for another.
+        let fillers: Vec<LoaderOwner> = (0..4)
+            .map(|index| LoaderOwner::fresh(&format!("failed-filler-{index}"), 0))
+            .collect();
+        for filler in &fillers {
+            for _ in 0..MAX_FAILED_LOADS_PER_PRINCIPAL {
+                let id = LOADER_NEXT_ID.fetch_add(1, Ordering::Relaxed);
+                admit_loaded_worker(filler.clone(), id, failed()).unwrap();
+            }
+        }
+        let fifth = LoaderOwner::fresh("failed-fifth", 0);
+        let id = LOADER_NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        admit_loaded_worker(fifth.clone(), id, failed()).unwrap();
+        for filler in &fillers {
+            drop(take_loader_owner(filler));
+        }
+        drop(take_loader_owner(&fifth));
+        let greedy = LoaderOwner::fresh("live-greedy", 0);
+        let modest = LoaderOwner::fresh("live-modest", 0);
+        let live = || loaded_in(LoaderState::Loading);
+        for _ in 0..MAX_LOADED_WORKERS_PER_PRINCIPAL {
+            let id = LOADER_NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            admit_loaded_worker(greedy.clone(), id, live()).unwrap();
+        }
+        for _ in 0..3 {
+            let id = LOADER_NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            admit_loaded_worker(modest.clone(), id, live()).unwrap();
+        }
+        let id = LOADER_NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        assert!(admit_loaded_worker(greedy.clone(), id, live()).is_err());
+        drop(take_loader_owner(&greedy));
+        drop(take_loader_owner(&modest));
+
+        let long = "é".repeat(MAX_FAILURE_TEXT_BYTES);
+        let bounded = bounded_failure_text(&long);
+        assert!(bounded.len() <= MAX_FAILURE_TEXT_BYTES + "…".len());
+        assert!(bounded.ends_with('…'));
+        assert_eq!(bounded_failure_text("short"), "short");
     }
 }
 
@@ -13939,6 +14814,9 @@ fn op_actor_abort(
         error: format!("__CELLD_ACTOR_ABORT__:{reason}"),
         actor_scope: Some(cell),
         context_id: context.continuation_id(),
+        cpu_limit: false,
+        spender: None,
+        watch: None,
     });
     scope.terminate_execution();
 }
@@ -13977,6 +14855,9 @@ fn op_process_exit(
         error: format!("__CELLD_PROCESS_EXIT__:The Node.js process.exit({code}) API was called."),
         actor_scope,
         context_id: context.continuation_id(),
+        cpu_limit: false,
+        spender: None,
+        watch: None,
     });
     scope.terminate_execution();
 }
@@ -14965,6 +15846,10 @@ pub struct IoContext {
     cpu_limit_nanos: Option<u64>,
     cpu_used_nanos: AtomicU64,
     cpu_turn: Mutex<Option<CpuTurnStart>>,
+    /// Set when another event's turn was stopped at the CPU limit while this
+    /// event's code ran in it: this event fails with the limit's error at its
+    /// driver's next look (`finish_turn`).
+    cpu_failed: AtomicBool,
     /// Whether this event records console calls for a Dynamic Worker tail.
     tail_reporting: bool,
     tail_logs: Mutex<TailLogCapture>,
@@ -15078,11 +15963,6 @@ impl IoContext {
         self.continuation.as_ref().map(|(id, _)| *id)
     }
 
-    fn cpu_limit_ms(&self) -> Option<u32> {
-        self.cpu_limit_nanos
-            .and_then(|limit| u32::try_from(limit / 1_000_000).ok())
-    }
-
     /// Spend one subrequest from this invocation before the operation leaves
     /// the isolate. The failed attempt is counted too, so repeated catches
     /// cannot retry an operation that already exhausted the budget.
@@ -15098,13 +15978,29 @@ impl IoContext {
     }
 
     fn begin_cpu_turn(&self) {
+        self.begin_cpu_turn_at(None);
+    }
+
+    /// Begin a turn whose thread CPU time is `thread_nanos`, as sampled just
+    /// now (the end of the previous turn of this context), or read here. A
+    /// sample is a system call, and every turn takes several.
+    fn begin_cpu_turn_at(&self, thread_nanos: Option<u64>) {
         if self.cpu_limit_nanos.is_none() {
             return;
         }
         *self.cpu_turn.lock().unwrap() = Some(CpuTurnStart {
-            thread_nanos: thread_cpu_nanos(),
+            thread_nanos: thread_nanos.or_else(thread_cpu_nanos),
             wall: Instant::now(),
         });
+    }
+
+    /// The thread CPU time the running turn began at.
+    fn cpu_turn_started(&self) -> Option<u64> {
+        self.cpu_turn
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|turn| turn.thread_nanos)
     }
 
     fn remaining_cpu_budget(&self) -> Option<Duration> {
@@ -15113,26 +16009,30 @@ impl IoContext {
         })
     }
 
-    fn finish_cpu_turn(&self) -> Result<(), String> {
+    fn finish_cpu_turn(&self) -> Result<(), CpuLimitExceeded> {
+        self.finish_cpu_turn_sampled().0
+    }
+
+    /// [`finish_cpu_turn`](Self::finish_cpu_turn), with the thread CPU time
+    /// it finished at, for a turn that begins at once.
+    fn finish_cpu_turn_sampled(&self) -> (Result<(), CpuLimitExceeded>, Option<u64>) {
         let Some(limit) = self.cpu_limit_nanos else {
-            return Ok(());
+            return (Ok(()), None);
         };
         let Some(started) = self.cpu_turn.lock().unwrap().take() else {
-            return Ok(());
+            return (Ok(()), None);
         };
+        let finished = thread_cpu_nanos();
         let elapsed = started
             .thread_nanos
-            .zip(thread_cpu_nanos())
+            .zip(finished)
             .map(|(started, finished)| finished.saturating_sub(started))
             .unwrap_or_else(|| started.wall.elapsed().as_nanos() as u64);
         let used = self.cpu_used_nanos.fetch_add(elapsed, Ordering::Relaxed) + elapsed;
         if used > limit {
-            return Err(format!(
-                "Worker exceeded CPU limit of {} ms",
-                limit / 1_000_000
-            ));
+            return (Err(CpuLimitExceeded), finished);
         }
-        Ok(())
+        (Ok(()), finished)
     }
 
     #[allow(clippy::new_ret_no_self, clippy::new_without_default)]
@@ -15189,6 +16089,7 @@ impl IoContext {
                 .map(|milliseconds| u64::from(milliseconds).saturating_mul(1_000_000)),
             cpu_used_nanos: AtomicU64::new(0),
             cpu_turn: Mutex::new(None),
+            cpu_failed: AtomicBool::new(false),
             tail_reporting,
             tail_logs: Mutex::new(TailLogCapture::default()),
             user_spans: OnceLock::new(),
@@ -15295,6 +16196,13 @@ impl IoContext {
     /// state has to stay consistent with the queue.
     pub(crate) async fn handed_ready(&self) {
         self.handed_wake.notified().await;
+    }
+
+    /// Fail this event for the CPU limit, which another event's turn ran out
+    /// of while this event's code was running in it.
+    fn fail_past_cpu_limit(&self) {
+        self.cpu_failed.store(true, Ordering::Release);
+        self.request_poll();
     }
 
     /// Ask this event's driver to look at its promise, which another turn

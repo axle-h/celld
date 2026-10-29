@@ -22,8 +22,8 @@ use crate::protocol::{
     asset_blob_key, AssetConfig, AssetEntry, AssetIndex, AssetManifestRef, DeployPointer, Manifest,
     ModuleKind, ModuleRef, QueueConsumerAttachment, QueueConsumerConfig, QueueConsumerDeployment,
     Rollout, RunWorkerFirst, FEATURE_ASSETS_V1, FEATURE_CONTAINERS_V1, FEATURE_CRON_V1,
-    FEATURE_D1_V1, FEATURE_KV_V1, FEATURE_PYTHON_WORKERS_V1, FEATURE_QUEUES_V1, FEATURE_R2_V1,
-    FEATURE_SQLITE_VEC_V1, FEATURE_WASM_V1, FEATURE_WORKFLOWS_V1,
+    FEATURE_D1_V1, FEATURE_KV_V1, FEATURE_LIMITS_V1, FEATURE_PYTHON_WORKERS_V1, FEATURE_QUEUES_V1,
+    FEATURE_R2_V1, FEATURE_SQLITE_VEC_V1, FEATURE_WASM_V1, FEATURE_WORKFLOWS_V1,
     QUEUE_CONSUMER_ATTACHMENT_SCHEMA_VERSION,
 };
 use anyhow::{anyhow, bail, Context};
@@ -56,6 +56,7 @@ const SUPPORTED_KEYS: &[&str] = &[
     "assets",
     "services",
     "triggers",
+    "limits",
     "vars",
     "d1_databases",
     "kv_namespaces",
@@ -375,6 +376,8 @@ struct Project {
     do_classes: Vec<String>,
     sqlite_classes: Vec<String>,
     crons: Vec<String>,
+    /// `limits.cpu_ms`.
+    cpu_ms: Option<u32>,
     has_workflows: bool,
     has_kv: bool,
     queue_consumers: Vec<QueueConsumerConfig>,
@@ -756,6 +759,7 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
             .collect(),
         assets: asset_reference,
         crons: project.crons.clone(),
+        cpu_ms: project.cpu_ms,
         containers: container_specs.clone(),
         fence_image: fence_image.clone(),
         queue_consumers: project.queue_consumers,
@@ -769,6 +773,9 @@ pub fn build(options: &Options) -> anyhow::Result<Built> {
             }
             if !project.crons.is_empty() {
                 features.push(FEATURE_CRON_V1.to_string());
+            }
+            if project.cpu_ms.is_some() {
+                features.push(FEATURE_LIMITS_V1.to_string());
             }
             if !container_specs.is_empty() {
                 features.push(FEATURE_CONTAINERS_V1.to_string());
@@ -1593,6 +1600,10 @@ fn read_project(
     if !crons.is_empty() && main.is_none() {
         bail!("config sets `triggers.crons` without `main`; a cron trigger needs a `scheduled` handler to call");
     }
+    let cpu_ms = read_cpu_limit(object)?;
+    if cpu_ms.is_some() && main.is_none() {
+        bail!("config sets `limits` without `main`; an asset-only project runs no Worker to limit");
+    }
 
     // Wrangler-shaped upload metadata, so a manifest written here and one
     // written by the control plane describe a deployment the same way.
@@ -2270,6 +2281,12 @@ fn read_project(
         // deploy from reusing the previous code-and-bindings version.
         metadata.insert("queue_consumers".into(), json!(queue_consumers));
     }
+    if let Some(cpu_ms) = cpu_ms {
+        // Wrangler's upload metadata carries the config's `limits`, and so
+        // does this, so a change of limit alone is a new version. The node
+        // reads it from `Manifest::cpu_ms`.
+        metadata.insert("limits".into(), json!({ "cpu_ms": cpu_ms }));
+    }
     if !crons.is_empty() {
         // The same for cron triggers, which reach the node only through
         // `Manifest::crons`. Without this copy a schedule-only change kept
@@ -2295,6 +2312,7 @@ fn read_project(
         do_classes,
         sqlite_classes,
         crons,
+        cpu_ms,
         has_workflows: !workflows.is_empty(),
         has_kv: !kv_namespaces.is_empty(),
         has_queues: !queue_producers.is_empty() || !queue_consumers.is_empty(),
@@ -3435,6 +3453,39 @@ fn read_crons(project: &Map<String, Value>) -> anyhow::Result<Vec<String>> {
     Ok(crons)
 }
 
+/// `limits`, Wrangler's `UserLimits`: `cpu_ms`, the CPU time each invocation
+/// gets, which Cloudflare takes from 1 ms up to its 5 minute maximum. Its
+/// `subrequests` is refused: celld counts no subrequests of a deployed
+/// Worker, so a limit there would not hold.
+fn read_cpu_limit(project: &Map<String, Value>) -> anyhow::Result<Option<u32>> {
+    let Some(value) = project.get("limits") else {
+        return Ok(None);
+    };
+    let limits = value
+        .as_object()
+        .ok_or_else(|| anyhow!("config `limits` must be an object"))?;
+    for key in limits.keys() {
+        match key.as_str() {
+            "cpu_ms" => {}
+            "subrequests" => bail!(
+                "`celld deploy` does not support `limits.subrequests`: celld enforces no \
+                 subrequest limit on a deployed Worker. Remove it to deploy with celld."
+            ),
+            other => bail!("config `limits.{other}` is not a Wrangler limit"),
+        }
+    }
+    let Some(value) = limits.get("cpu_ms") else {
+        return Ok(None);
+    };
+    let max = crate::js::MAX_CPU_LIMIT_MS;
+    // A JSON number, which Wrangler takes as written: `100.0` is 100.
+    value
+        .as_f64()
+        .filter(|cpu_ms| cpu_ms.fract() == 0.0 && (1.0..=f64::from(max)).contains(cpu_ms))
+        .map(|cpu_ms| Some(cpu_ms as u32))
+        .ok_or_else(|| anyhow!("config `limits.cpu_ms` must be a whole number from 1 to {max}"))
+}
+
 fn read_sqlite_classes(project: &Map<String, Value>) -> anyhow::Result<Vec<String>> {
     let Some(value) = project.get("migrations") else {
         return Ok(Vec::new());
@@ -4281,6 +4332,32 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn limits_take_cpu_ms_within_the_plan_and_refuse_subrequests() {
+        let read = |limits: Value| read_cpu_limit(&object(json!({ "limits": limits })));
+        assert_eq!(read_cpu_limit(&object(json!({}))).unwrap(), None);
+        assert_eq!(read(json!({})).unwrap(), None);
+        assert_eq!(read(json!({ "cpu_ms": 1 })).unwrap(), Some(1));
+        assert_eq!(read(json!({ "cpu_ms": 300_000 })).unwrap(), Some(300_000));
+        assert_eq!(read(json!({ "cpu_ms": 100.0 })).unwrap(), Some(100));
+        for cpu_ms in [json!(0), json!(300_001), json!(1.5), json!(-5), json!("50")] {
+            assert_eq!(
+                refusal(read(json!({ "cpu_ms": cpu_ms }))),
+                "config `limits.cpu_ms` must be a whole number from 1 to 300000"
+            );
+        }
+        assert!(refusal(read(json!({ "cpu_ms": 50, "subrequests": 10 })))
+            .contains("does not support `limits.subrequests`"));
+        assert_eq!(
+            refusal(read(json!({ "memory_mb": 128 }))),
+            "config `limits.memory_mb` is not a Wrangler limit"
+        );
+        assert_eq!(
+            refusal(read(json!(50))),
+            "config `limits` must be an object"
+        );
     }
 
     #[test]

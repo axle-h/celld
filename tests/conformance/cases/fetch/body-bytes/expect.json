@@ -1,0 +1,79 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "responseMethod": {
+          "type": "function",
+          "length": 0,
+          "name": "bytes",
+          "sameAsArrayBuffersOwner": true
+        },
+        "requestMethod": {
+          "type": "function",
+          "length": 0,
+          "name": "bytes",
+          "sameAsArrayBuffersOwner": true
+        },
+        "text": {
+          "type": "[object Uint8Array]",
+          "bytes": [
+            104,
+            195,
+            169,
+            108,
+            108,
+            111
+          ],
+          "offset": 0,
+          "bufferLength": 6,
+          "bodyUsed": true
+        },
+        "stream": {
+          "type": "[object Uint8Array]",
+          "bytes": [
+            1,
+            2,
+            3
+          ],
+          "offset": 0,
+          "bufferLength": 3,
+          "bodyUsed": true,
+          "again": "TypeError: Body has already been used. It can only be used once. Use tee() first if you need to read it twice."
+        },
+        "empty": {
+          "type": "[object Uint8Array]",
+          "bytes": [],
+          "offset": 0,
+          "bufferLength": 0,
+          "bodyUsed": false
+        },
+        "request": {
+          "type": "[object Uint8Array]",
+          "bytes": [
+            114,
+            101,
+            113
+          ],
+          "offset": 0,
+          "bufferLength": 3,
+          "bodyUsed": true
+        },
+        "received": {
+          "type": "[object Uint8Array]",
+          "bytes": [
+            115,
+            101,
+            110,
+            116
+          ],
+          "offset": 0,
+          "bufferLength": 4,
+          "bodyUsed": true
+        }
+      }
+    }
+  ]
+}

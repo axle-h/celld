@@ -1,0 +1,6 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/", "method": "POST", "body": "sent"}
+  ]
+}

@@ -208,7 +208,10 @@ pub struct Slot {
     /// The guest can no longer run here (see [`Slot::condemn`]). Unlike
     /// `retiring`, which an idle isolate also reaches, this says the cells
     /// it holds must move.
-    condemned: AtomicBool,
+    /// Why the slot was condemned, the first reason only: [`NOT_CONDEMNED`],
+    /// [`CONDEMNED`], or [`CONDEMNED_FOR_CPU`] for a turn that ran on past
+    /// its CPU limit ([`condemn`](Self::condemn) with `js::CPU_EXCEEDED`).
+    condemned: std::sync::atomic::AtomicU8,
     /// Run once when the slot is condemned, by the owner of a slot outside a
     /// pool (`on_condemn`).
     condemn_hook: OnceLock<CondemnHook>,
@@ -251,6 +254,34 @@ thread_local! {
 
 /// The slot whose turn this thread runs, for an op that must reach its own
 /// isolate again after the turn.
+const NOT_CONDEMNED: u8 = 0;
+const CONDEMNED: u8 = 1;
+const CONDEMNED_FOR_CPU: u8 = 2;
+
+/// Building an isolate failed: its Worker did not load. Typed so a caller can
+/// tell a startup error from a failure of placement itself.
+#[derive(Debug)]
+pub(crate) struct WorkerLoadFailed(pub(crate) anyhow::Error);
+
+impl std::fmt::Display for WorkerLoadFailed {
+    /// The load's own error, without the host's context below it.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+/// The host's context stays in the chain, for the node log.
+impl std::error::Error for WorkerLoadFailed {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
+
+/// The slot of the isolate this thread runs a turn of, without keeping it.
+pub(crate) fn current_slot_weak() -> Option<std::sync::Weak<Slot>> {
+    CURRENT_SLOT.with_borrow(Option::clone)
+}
+
 pub(crate) fn current_slot() -> Option<Arc<Slot>> {
     CURRENT_SLOT.with_borrow(|slot| slot.as_ref().and_then(std::sync::Weak::upgrade))
 }
@@ -378,7 +409,7 @@ impl Slot {
             cells: AtomicUsize::new(0),
             adopted_cells: AtomicUsize::new(0),
             retiring: AtomicBool::new(false),
-            condemned: AtomicBool::new(false),
+            condemned: std::sync::atomic::AtomicU8::new(NOT_CONDEMNED),
             condemn_hook: OnceLock::new(),
             condemned_wake: tokio::sync::Notify::new(),
             broken_cells: std::sync::Mutex::new(Vec::new()),
@@ -414,7 +445,7 @@ impl Slot {
             cells: AtomicUsize::new(0),
             adopted_cells: AtomicUsize::new(0),
             retiring: AtomicBool::new(false),
-            condemned: AtomicBool::new(false),
+            condemned: std::sync::atomic::AtomicU8::new(NOT_CONDEMNED),
             condemn_hook: OnceLock::new(),
             condemned_wake: tokio::sync::Notify::new(),
             broken_cells: std::sync::Mutex::new(Vec::new()),
@@ -486,7 +517,21 @@ impl Slot {
     /// A Worker Loader's slot has no pool either: the loader replaces it at
     /// the next call (`loaded_worker_slot`).
     pub(crate) fn condemn(&self, reason: &str) -> bool {
-        if !self.condemned.swap(true, Ordering::Relaxed) {
+        let condemned = if reason == crate::js::CPU_EXCEEDED {
+            CONDEMNED_FOR_CPU
+        } else {
+            CONDEMNED
+        };
+        if self
+            .condemned
+            .compare_exchange(
+                NOT_CONDEMNED,
+                condemned,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
             self.retiring.store(true, Ordering::Relaxed);
             CONDEMNATIONS.fetch_add(1, Ordering::Release);
             tracing::warn!(isolate = %self.heap_id, slot = self.id, reason, "isolate condemned");
@@ -554,7 +599,16 @@ impl Slot {
 
     /// Whether [`condemn`](Self::condemn) ran.
     pub(crate) fn is_condemned(&self) -> bool {
-        self.condemned.load(Ordering::Relaxed)
+        self.condemned.load(Ordering::Relaxed) != NOT_CONDEMNED
+    }
+
+    /// What this slot's events fail with once it is condemned.
+    pub(crate) fn condemned_text(&self) -> &'static str {
+        if self.condemned.load(Ordering::Relaxed) == CONDEMNED_FOR_CPU {
+            crate::js::CPU_EXCEEDED
+        } else {
+            crate::js::MEMORY_EXCEEDED
+        }
     }
 
     /// The node-wide identity of this slot's currently installed V8 heap.
@@ -733,7 +787,8 @@ impl Pool {
     /// produced sixteen isolates under load — the breach scaled with offered
     /// concurrency, and the configured limit was met only when serialised.
     fn grow(&self, cap: Option<usize>) -> Result<Arc<Slot>> {
-        let worker = (self.build)()?;
+        let worker =
+            (self.build)().map_err(|source| anyhow::Error::new(WorkerLoadFailed(source)))?;
         let mut slots = self.slots.write().expect("pool poisoned");
         let live = slots.iter().filter(|slot| !slot.is_retiring()).count();
         if cap.is_some_and(|cap| live >= cap) {
@@ -762,7 +817,7 @@ impl Pool {
             cells: AtomicUsize::new(0),
             adopted_cells: AtomicUsize::new(0),
             retiring: AtomicBool::new(self.retired.load(Ordering::Relaxed)),
-            condemned: AtomicBool::new(false),
+            condemned: std::sync::atomic::AtomicU8::new(NOT_CONDEMNED),
             condemn_hook: OnceLock::new(),
             condemned_wake: tokio::sync::Notify::new(),
             broken_cells: std::sync::Mutex::new(Vec::new()),
@@ -1057,3 +1112,27 @@ const _: fn() = || {
     assert_send_sync::<Slot>();
     assert_send_sync::<Affiliation>();
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A Worker that does not load fails its placement with the load's own
+    /// error, typed, so only that error reaches a caller as a startup error.
+    #[test]
+    fn a_failed_build_is_a_worker_load_failure() {
+        let pool = Pool::new(
+            crate::runtime::pool_limits(),
+            std::time::Duration::from_millis(1),
+            Box::new(|| {
+                Err(anyhow::anyhow!("internal detail").context("Uncaught Error: never starts"))
+            }),
+        );
+        let error = pool.place_cell().err().expect("the build fails");
+        let load = error
+            .downcast_ref::<WorkerLoadFailed>()
+            .expect("a load failure");
+        assert_eq!(load.0.to_string(), "Uncaught Error: never starts");
+        assert_eq!(error.to_string(), "Uncaught Error: never starts");
+    }
+}

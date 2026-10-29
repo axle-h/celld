@@ -2146,7 +2146,7 @@ pub(crate) async fn dispatch_forwarded_fetch(
                 let reason = match failure {
                     LocalRequestFailure::Handler(error) => error.to_string(),
                     LocalRequestFailure::OutputGate { verdict, .. } => {
-                        RoutedRequestError(*verdict).to_string()
+                        RoutedRequestError::new(*verdict).to_string()
                     }
                 };
                 websocket::reject_accepted_websocket(&app, target, &reason).await;
@@ -2237,7 +2237,7 @@ pub(crate) async fn dispatch_forwarded_fetch(
         }
         Err(error) => response(
             StatusCode::SERVICE_UNAVAILABLE,
-            format!("route failed: {error:?}"),
+            RoutedRequestError::for_cell(error, &scope).to_string(),
         ),
     };
     ForwardedFetchOutcome::Reply(peer_response(result))
@@ -2385,7 +2385,9 @@ pub(crate) async fn dispatch_forwarded_rpc(app: AppHandle, call: ForwardedRpc) -
             );
             return peer_response(stale);
         }
-        Err(error) => Err(anyhow::anyhow!("route failed: {error:?}")),
+        Err(error) => Err(anyhow::Error::new(RoutedRequestError::for_cell(
+            error, &scope,
+        ))),
     };
     match result {
         Ok(celld::js::RpcData::Json(json)) => peer_response(
@@ -4179,6 +4181,7 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
                     assets: None,
                     services: Vec::new(),
                     crons,
+                    cpu_ms: None,
                     containers: Vec::new(),
                     fence_image: None,
                 }),

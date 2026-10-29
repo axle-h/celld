@@ -26,6 +26,7 @@ const __jsonStringify = (value) => __ReflectApply(__JSONStringify, JSON, [value]
 const __ArrayFrom = Array.from;
 const __ArraySort = Array.prototype.sort;
 const __FunctionBind = Function.prototype.bind;
+const __ErrorCaptureStackTrace = Error.captureStackTrace;
 const __ObjectDefineProperty = Object.defineProperty;
 const __ObjectHasOwn = Object.hasOwn;
 const __ObjectKeys = Object.keys;
@@ -256,7 +257,7 @@ const __ownedBodies = new WeakSet();
 const __handedOverBodies = new WeakSet();
 const __BODY_USED =
   "Body has already been used. It can only be used once. " +
-  "Use tee() first if you need to read it multiple times.";
+  "Use tee() first if you need to read it twice.";
 // The drained body as an ArrayBuffer the caller may keep, without a copy
 // when nothing else holds it, so a whole-body read holds the body once.
 const __handOverBody = (target, bytes) => {
@@ -748,7 +749,7 @@ globalThis.Response = class Response {
       if (this.body !== null && this.body._cancelled)
         throw new TypeError(
           "Body has already been used. It can only be used once. " +
-          "Use tee() first if you need to read it multiple times.");
+          "Use tee() first if you need to read it twice.");
       return __bodyBytesOf(this);
     }
     return __drainBody(this);
@@ -769,6 +770,12 @@ globalThis.Response = class Response {
   async arrayBuffer() {
     __markBodyRead(this);
     return __handOverBody(this, await this._consume());
+  }
+  // workerd's `Body::bytes`: the body as a Uint8Array over a buffer of its
+  // own, which `arrayBuffer()` hands over.
+  async bytes() {
+    __markBodyRead(this);
+    return new __Uint8Array(__handOverBody(this, await this._consume()));
   }
   async blob() {
     return __celld.__blobOf(await this.arrayBuffer(),
@@ -972,6 +979,12 @@ globalThis.Request = class Request {
   async arrayBuffer() {
     __markBodyRead(this);
     return __handOverBody(this, await this._consume());
+  }
+  // workerd's `Body::bytes`: the body as a Uint8Array over a buffer of its
+  // own, which `arrayBuffer()` hands over.
+  async bytes() {
+    __markBodyRead(this);
+    return new __Uint8Array(__handOverBody(this, await this._consume()));
   }
   async blob() {
     return __celld.__blobOf(await this.arrayBuffer(),
@@ -7800,6 +7813,10 @@ const __dispatchEntrypointMethodInCurrentEvent = async (name, method, arg) => {
     throw __noHandler(name, method);
   return await __ctxRun(undefined, () => inst[method](arg));
 };
+// A handler of the default export, called as its method: workerd calls
+// `fetch` and `scheduled` on the exported object, so `this` is that object.
+__celld.__exportedHandler = (handler, exported) =>
+  __ReflectApply(__FunctionBind, handler, [exported]);
 const __dispatchEntrypointFetch = __celld.__dispatchEntrypointFetch =
   (name, request, propsSc = null) =>
   __dispatchEntrypointMethod(
@@ -12477,6 +12494,11 @@ if (!globalThis.DOMException) {
   globalThis.DOMException = class DOMException extends Error {
     constructor(message = "", name = "Error") {
       super(message);
+      // V8 starts an Error subclass's stack below the constructor that
+      // `new` named, which hides a subclass's constructor frame. workerd's
+      // DOMException is C++, so the stack starts where it is constructed:
+      // in a subclass's constructor, the `super()` call.
+      __ErrorCaptureStackTrace(this, DOMException);
       this.name = name;
       // What a startup error reports, whatever the properties become.
       __dom_exception_brand(this, `${name}`, `${message}`);
@@ -12856,6 +12878,30 @@ __celld.__blobOf = (buffer, type) => {
       "use strict";
       return body(this, arguments, new.target);
     });
+  // V8 can drop a termination requested while `JSON.parse` or
+  // `JSON.stringify` works on a large value, so a loop of such calls ran on
+  // past its CPU limit until it ended. A call through a JavaScript function
+  // checks for interrupts as it enters, which takes the next request.
+  // The stack formatter keeps the builtin's frame under these, as if the
+  // Worker had called it (`TransparentWrappers`).
+  const transparent = [];
+  replaceMethod(JSON, "parse", (original) => transparent[transparent.length] = ({
+    parse(text, reviver) {
+      return reviver === undefined
+        ? apply(original, this, [text])
+        : apply(original, this, [text, reviver]);
+    },
+  }).parse);
+  replaceMethod(JSON, "stringify", (original) => transparent[transparent.length] = ({
+    stringify(value, replacer, space) {
+      return replacer === undefined && space === undefined
+        ? apply(original, this, [value])
+        : apply(original, this, [value, replacer, space]);
+    },
+  }).stringify);
+  defineProperty(__celld, "__transparentWrappers", {
+    __proto__: null, value: transparent, writable: false, enumerable: false, configurable: false,
+  });
   replaceMethod(ArrayBuffer.prototype, "resize", (original, self) => ({
     resize(newLength) {
       if (!isResizable(this)) return apply(original, this, [newLength]);

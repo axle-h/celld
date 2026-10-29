@@ -3725,6 +3725,9 @@ impl Actor {
                         .and_then(|timing| timing.fresh)
                         .unwrap_or(false);
                     let timing_cell = cell.clone();
+                    // A new attempt: an earlier start's failure no longer
+                    // explains what this one's callers see.
+                    crate::cell_dispatch::forget_startup_failure(&cell);
                     out.spawn_scoped(async move {
                         let started = crate::asyncrt::mono_ms();
                         let placed = runtime
@@ -3732,6 +3735,12 @@ impl Actor {
                             .await
                             .map_err(|error| {
                                 eprintln!("celld runtime start failed for {cell}: {error:#}");
+                                // The requests this start fails see why.
+                                if let Some(failure) =
+                                    error.downcast_ref::<crate::cell_dispatch::CellStartupFailed>()
+                                {
+                                    crate::cell_dispatch::record_startup_failure(&cell, &failure.0);
+                                }
                                 Failure::Definite
                             });
                         let isolate = placed.as_ref().ok().map(|(isolate, _)| *isolate);

@@ -1360,7 +1360,12 @@ impl RuntimeManager {
             Ok(residency) => residency,
             Err(error) => {
                 startup_timing.emit("error", "worker_load");
-                return Err(error);
+                // Only the Worker's own startup error is its callers' to see.
+                let Some(load) = error.downcast_ref::<crate::pool::WorkerLoadFailed>() else {
+                    return Err(error);
+                };
+                let failure = crate::js::startup_failure_text(&load.0);
+                return Err(error.context(crate::cell_dispatch::CellStartupFailed(failure)));
             }
         };
         let placed_in = residency.slot().heap_id();

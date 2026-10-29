@@ -590,6 +590,7 @@ impl Generation {
                 assets: resolver,
                 services,
                 crons,
+                cpu_ms,
                 containers,
                 fence_image: fence,
                 ..
@@ -606,6 +607,7 @@ impl Generation {
                     .with_asset_binding(asset_binding)
                     .with_loaders(loader_bindings)
                     .with_crons(if is_primary { crons } else { Vec::new() })
+                    .with_cpu_limit_ms(cpu_ms)
                     .with_containers(containers)
                     .with_generation(id),
             );
@@ -727,6 +729,7 @@ mod tests {
             assets: None,
             services: Vec::new(),
             crons: Vec::new(),
+            cpu_ms: None,
             containers: Vec::new(),
             fence_image: None,
         }

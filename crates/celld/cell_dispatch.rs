@@ -11,10 +11,75 @@ use crate::telemetry::TraceContext;
 use anyhow::Context as _;
 use celld_logic::{Epoch, NodeId, RequestError, Route, WebSocketKind};
 use futures_util::StreamExt as _;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::oneshot;
 
 #[derive(Debug)]
-pub struct RoutedRequestError(pub RequestError);
+pub struct RoutedRequestError(pub RequestError, Option<Arc<str>>);
+
+impl RoutedRequestError {
+    pub fn new(error: RequestError) -> Self {
+        Self(error, None)
+    }
+
+    /// The route to `cell` failed with `error`. A cell whose isolate failed
+    /// to start on this node fails with what the start reported, as a
+    /// Dynamic Worker's call does, rather than with the bare kind.
+    pub fn for_cell(error: RequestError, cell: &str) -> Self {
+        let detail = (error == RequestError::RuntimeFailed)
+            .then(|| startup_failure(cell))
+            .flatten();
+        Self(error, detail)
+    }
+}
+
+/// A cell isolate's start that failed while loading the Worker, with the
+/// startup error it reported (`js::startup_failure_text`).
+#[derive(Debug)]
+pub struct CellStartupFailed(pub String);
+
+impl std::fmt::Display for CellStartupFailed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CellStartupFailed {}
+
+/// The most cells whose last start failure is kept. A start that succeeds
+/// forgets its cell's, so this bounds only cells that keep failing.
+const MAX_STARTUP_FAILURES: usize = 4096;
+
+fn startup_failures() -> std::sync::MutexGuard<'static, HashMap<String, Arc<str>>> {
+    static FAILURES: OnceLock<Mutex<HashMap<String, Arc<str>>>> = OnceLock::new();
+    FAILURES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Keep why `cell`'s isolate failed to start, for the requests that start
+/// fails (`RequestError::RuntimeFailed`), until the cell next starts.
+pub(crate) fn record_startup_failure(cell: &str, failure: &str) {
+    let mut failures = startup_failures();
+    if failures.len() >= MAX_STARTUP_FAILURES && !failures.contains_key(cell) {
+        if let Some(evicted) = failures.keys().next().cloned() {
+            failures.remove(&evicted);
+        }
+    }
+    let failure = crate::js::bounded_failure_text(failure);
+    failures.insert(cell.to_string(), Arc::from(failure));
+}
+
+/// `cell` started: its last failure no longer explains anything.
+pub(crate) fn forget_startup_failure(cell: &str) {
+    startup_failures().remove(cell);
+}
+
+fn startup_failure(cell: &str) -> Option<Arc<str>> {
+    startup_failures().get(cell).cloned()
+}
 
 /// The gate's verdict as the answer's error, with the handler's own failure
 /// kept below it when the answer was one: the client needs the verdict, and
@@ -24,15 +89,18 @@ pub fn local_request_error(failure: LocalRequestFailure) -> anyhow::Error {
     match failure {
         LocalRequestFailure::Handler(error) => error,
         LocalRequestFailure::OutputGate { verdict, handler } => match handler {
-            Some(handler) => handler.context(RoutedRequestError(verdict)),
-            None => anyhow::Error::new(RoutedRequestError(verdict)),
+            Some(handler) => handler.context(RoutedRequestError::new(verdict)),
+            None => anyhow::Error::new(RoutedRequestError::new(verdict)),
         },
     }
 }
 
 impl std::fmt::Display for RoutedRequestError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "route failed: {:?}", self.0)
+        match &self.1 {
+            Some(detail) => formatter.write_str(detail),
+            None => write!(formatter, "route failed: {:?}", self.0),
+        }
     }
 }
 
@@ -263,7 +331,10 @@ pub async fn dispatch_call_attempt(
     let Routed { request, route } = match routed {
         Ok(routed) => routed,
         Err(error) => {
-            return CallAttempt::RouteError(anyhow::Error::new(RoutedRequestError(error)));
+            return CallAttempt::RouteError(anyhow::Error::new(RoutedRequestError::for_cell(
+                error,
+                &call.scope,
+            )));
         }
     };
     on_routed();
@@ -422,4 +493,61 @@ pub fn local_response_stream(
             }
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_start_tells_its_callers_why_until_the_cell_starts() {
+        let cell = "Room:startup-failure-test";
+        assert_eq!(
+            RoutedRequestError::for_cell(RequestError::RuntimeFailed, cell).to_string(),
+            "route failed: RuntimeFailed"
+        );
+        let failure = "Failed to start Worker:\nError: Script startup exceeded CPU time limit.";
+        record_startup_failure(cell, failure);
+        assert_eq!(
+            RoutedRequestError::for_cell(RequestError::RuntimeFailed, cell).to_string(),
+            failure
+        );
+        // Only a failed start has a reason to give.
+        assert_eq!(
+            RoutedRequestError::for_cell(RequestError::NodeFenced, cell).to_string(),
+            "route failed: NodeFenced"
+        );
+        forget_startup_failure(cell);
+        assert_eq!(
+            RoutedRequestError::for_cell(RequestError::RuntimeFailed, cell).to_string(),
+            "route failed: RuntimeFailed"
+        );
+        // A long failure is kept in part.
+        record_startup_failure(cell, &"x".repeat(10_000));
+        let kept = RoutedRequestError::for_cell(RequestError::RuntimeFailed, cell).to_string();
+        assert!(kept.len() <= crate::js::MAX_FAILURE_TEXT_BYTES + "…".len());
+        forget_startup_failure(cell);
+        // Bounded, in the same test because the registry is the process's.
+        for index in 0..MAX_STARTUP_FAILURES + 10 {
+            record_startup_failure(&format!("Bounded:{index}"), "failed");
+        }
+        assert!(startup_failures().len() <= MAX_STARTUP_FAILURES);
+        for index in 0..MAX_STARTUP_FAILURES + 10 {
+            forget_startup_failure(&format!("Bounded:{index}"));
+        }
+    }
+
+    #[test]
+    fn a_startup_limit_reads_as_a_loader_reports_it() {
+        assert_eq!(
+            crate::js::startup_failure_text(&anyhow::anyhow!(
+                "Script startup exceeded CPU time limit."
+            )),
+            "Failed to start Worker:\nError: Script startup exceeded CPU time limit."
+        );
+        assert_eq!(
+            crate::js::startup_failure_text(&anyhow::anyhow!("Uncaught Error: boom")),
+            "Failed to start Worker:\nUncaught Error: boom"
+        );
+    }
 }

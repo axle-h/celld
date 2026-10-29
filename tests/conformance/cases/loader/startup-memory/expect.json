@@ -71,6 +71,38 @@
         "status": 200,
         "body": "loaded"
       }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "arrays",
+        "error": "Error",
+        "message": "Failed to start Worker:\nError: Script startup exceeded memory limits."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "ok",
+        "status": 200,
+        "body": "facet 0"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "one-string",
+        "error": "Error",
+        "message": "Failed to start Worker:\nError: Script startup exceeded memory limits."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "ok",
+        "status": 200,
+        "body": "facet 1"
+      }
     }
   ]
 }

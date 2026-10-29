@@ -91,7 +91,10 @@ APIs, and Wrangler configuration.
   isolate under load, or a Durable Object's isolate starts, and not only at a
   deployment. A Worker whose load is close to a limit can fail later, when a
   pool grows. A Durable Object request whose isolate fails to start rejects
-  with `route failed: RuntimeFailed`, and the node log names the limit.
+  with the startup error, as a Worker Loader reports one: `Failed to start
+  Worker:` and the cause on the next line, cut to 4 KiB. A start that fails for another
+  reason, such as its storage, rejects with `route failed: RuntimeFailed`, and
+  the node log has the cause.
 - After the load, an isolate that reaches the heap limit is condemned, and no
   JavaScript runs in it again. The event running then, and every other event
   in the isolate, fails with workerd's error, `Worker has exceeded memory
@@ -168,8 +171,48 @@ APIs, and Wrangler configuration.
   such limit. A clone or tee of a stream the Worker made buffers in the
   isolate, so past the limit it condemns the isolate instead. Read clones
   and tees in parallel.
-- A request has a CPU limit only when a Dynamic Worker sets `cpuMs`. See
-  [Dynamic Workers](services/dynamic-workers.md#differences-from-cloudflare).
+- Each invocation has a CPU limit, of 30 seconds unless the Worker's
+  `limits.cpu_ms` sets another, from 1 ms to 5 minutes, as on Cloudflare's
+  Standard usage model. A Dynamic Worker's `cpuMs` works the same way (see
+  [Dynamic Workers](services/dynamic-workers.md#differences-from-cloudflare)).
+  An invocation is a request, a service-binding or RPC call, a queue batch, a
+  cron run, or one event of a Durable Object (a request, an RPC call, an
+  alarm, a WebSocket message), each with a limit of its own; its `waitUntil`
+  work counts toward it. The time is the CPU time of the isolate's thread
+  while the invocation's JavaScript runs, summed across its turns, and a turn
+  that would pass the limit is stopped. `celld dev` applies the same limits;
+  `wrangler dev` applies none.
+- A turn stops at the limit where JavaScript checks for interrupts, so a
+  long builtin call, or a SQL statement (stopped within about 10,000 SQLite
+  steps), can run past it. A loop of large allocations has been seen to run
+  about 9 seconds past a 1 second limit before it stopped. A turn that runs on 100 ms, or the
+  limit if that is longer, past its limit condemns its isolate, as the
+  memory limit does: nothing new is placed there, its Durable Objects move
+  once the turn returns, and its events fail with the CPU limit's error.
+  The thread stays in the call until it returns. Turns run on the node's
+  request threads, so turns that hold their threads, past the limit or
+  inside a limit of minutes, can occupy all of them, and the node then
+  answers nothing, its health checks included, until they end.
+- A D1 call (a query, a batch or an `exec()`) has Cloudflare's 30 second
+  limit on its duration (`CELLD_D1_QUERY_LIMIT_MS` sets another). A
+  statement still running at the limit is interrupted, the call fails with
+  `D1_ERROR: D1 DB exceeded its CPU time limit and was reset.`, its writes
+  roll back, and the database serves the next call.
+- An invocation past its CPU limit fails with `Worker exceeded CPU time
+  limit.`, the isolate lives on, and its other requests go on. Cloudflare
+  answers such a request with error 1102 ("Worker exceeded resource limits");
+  celld answers a request from the public listener with status 500 and
+  `Worker failed: Worker exceeded CPU time limit.`, and a caller through a
+  binding gets the error. workerd run locally enforces no CPU limit, so this
+  follows Cloudflare's documentation rather than a recording.
+- A Durable Object whose event runs past its CPU limit resets, as workerd
+  aborts the object: the write of the turn the limit stopped never commits,
+  the object's other events fail with the same error, a stub bound to it
+  keeps throwing it, and the next call reaches a new instance. A facet past
+  its limit instead fails every later call until its root object starts
+  again; workerd resets the facet alone.
+- A cron trigger whose interval is an hour or more gets the same limit as any
+  invocation, 30 seconds by default; Cloudflare gives it 15 minutes.
 
 ## Platforms
 

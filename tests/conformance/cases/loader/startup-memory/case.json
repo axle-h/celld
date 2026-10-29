@@ -11,6 +11,10 @@
     {"path": "/get?child=arrays"},
     {"path": "/load?child=one-array"},
     {"path": "/load?child=one-string"},
-    {"path": "/load?child=ok"}
+    {"path": "/load?child=ok"},
+    {"path": "/facet?child=arrays"},
+    {"path": "/facet?child=ok"},
+    {"path": "/facet?child=one-string"},
+    {"path": "/facet?child=ok"}
   ]
 }

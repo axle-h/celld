@@ -928,6 +928,15 @@ async fn load_worker_at_pointer(
     let version = manifest.version.clone();
     let prefix = pointer.prefix.clone();
     let crons = manifest.crons.clone();
+    let cpu_ms = manifest.cpu_ms;
+    if let Some(cpu_ms) =
+        cpu_ms.filter(|cpu_ms| !(1..=crate::js::MAX_CPU_LIMIT_MS).contains(cpu_ms))
+    {
+        anyhow::bail!(
+            "manifest limits.cpu_ms is {cpu_ms}, outside 1 to {}",
+            crate::js::MAX_CPU_LIMIT_MS
+        );
+    }
     let containers = manifest.containers.clone();
     let fence_image = manifest.fence_image.clone();
     Ok(LoadedDeployment {
@@ -955,6 +964,7 @@ async fn load_worker_at_pointer(
         assets,
         services,
         crons,
+        cpu_ms,
         containers,
         fence_image,
     })
@@ -974,6 +984,9 @@ pub struct LoadedDeployment {
     pub services: Vec<crate::js::ServiceBinding>,
     /// `triggers.crons` from the manifest, driving the reserved cron cell.
     pub crons: Vec<String>,
+    /// `limits.cpu_ms` from the manifest: each invocation's CPU time, or the
+    /// default when `None`.
+    pub cpu_ms: Option<u32>,
     /// `containers` from the manifest: the classes whose cells supervise a
     /// container.
     pub containers: Vec<crate::container::ContainerSpec>,

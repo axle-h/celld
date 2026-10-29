@@ -11,7 +11,9 @@ let fired = 0;
 export class Obj extends DurableObject {
   async arm() {
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS t (v)");
-    await this.ctx.storage.setAlarm(Date.now() + 20);
+    // Far enough out that this call has answered before the alarm resets
+    // the object, however slow the machine.
+    await this.ctx.storage.setAlarm(Date.now() + 500);
     return "armed";
   }
 
@@ -31,8 +33,13 @@ export default {
     try {
       if (new URL(request.url).pathname === "/arm")
         return Response.json(await env.OBJ.getByName("a").arm());
-      // The first run, and one retry after workerd's 2-second backoff.
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      // The first run, and one retry after workerd's 2-second backoff; the
+      // next retry waits 4 seconds more. Bounded: 15 s.
+      for (let attempt = 0; attempt < 150; attempt++) {
+        if ((await env.OBJ.getByName("a").check()).fired >= 2) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       return Response.json(await env.OBJ.getByName("a").check());
     } catch (error) {
       return Response.json("threw " + error.message);

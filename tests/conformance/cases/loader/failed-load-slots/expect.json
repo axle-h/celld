@@ -1,0 +1,34 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "held": 255,
+        "errors": [
+          "Failed to start Worker:\nUncaught Error: never starts\n  at main.js:1:7"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "held": 256,
+        "body": "loaded"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "held": 257,
+        "body": "Failed to start Worker:\nUncaught Error: never starts\n  at main.js:1:7"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "held": 258,
+        "body": "worker loader: too many failed loads for script \"app\" in generation 1 are still referenced (limit 256)"
+      }
+    }
+  ]
+}

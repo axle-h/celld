@@ -1,0 +1,14 @@
+{
+  "kind": "celld-only",
+  "reason": "celld's D1 query limit (plan 1.34): workerd's local D1 enforces no query duration, so a runaway query never ends there; the case also shortens the limit",
+  "workers": ["app"],
+  "env": { "CELLD_D1_QUERY_LIMIT_MS": "300" },
+  "steps": [
+    {"path": "/setup"},
+    {"path": "/prepared"},
+    {"path": "/batch"},
+    {"path": "/exec"},
+    {"path": "/next"},
+    {"cpu": 300, "wait": 500}
+  ]
+}

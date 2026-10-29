@@ -1,0 +1,39 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": "ready"
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "D1_ERROR: D1 DB exceeded its CPU time limit and was reset."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "D1_ERROR: D1 DB exceeded its CPU time limit and was reset."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "error": "D1_ERROR: D1 DB exceeded its CPU time limit and was reset."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "v": "kept"
+          }
+        ]
+      }
+    },
+    {
+      "cpu": "at most 300 ms in 1 s"
+    }
+  ]
+}

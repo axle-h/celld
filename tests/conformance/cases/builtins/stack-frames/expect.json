@@ -1,0 +1,94 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "badStatus": [
+          "RangeError: Responses may only be constructed with status codes in the range 200 to 599, inclusive.",
+          "    at badStatus",
+          "    at stackOf",
+          "    at Object.fetch"
+        ],
+        "badHeader": [
+          "TypeError: Invalid header name.",
+          "    at badHeader",
+          "    at stackOf",
+          "    at Object.fetch"
+        ],
+        "throwInToString": [
+          "Error: from toString",
+          "    at Object.toString",
+          "    at throwInToString",
+          "    at stackOf",
+          "    at Object.fetch"
+        ],
+        "domException": [
+          "DataError: dom",
+          "    at domException",
+          "    at stackOf",
+          "    at Object.fetch"
+        ],
+        "subclass": [
+          "DataError: sub",
+          "    at new Mine",
+          "    at subclass",
+          "    at stackOf",
+          "    at Object.fetch"
+        ],
+        "badJson": [
+          "SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)",
+          "    at async badJson",
+          "    at async asyncStackOf",
+          "    at async Object.fetch"
+        ],
+        "parseDirect": [
+          "SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)",
+          "    at JSON.parse",
+          "    at parseDirect",
+          "    at stackOf",
+          "    at Object.fetch"
+        ],
+        "parseAliased": [
+          "SyntaxError: Expected property name or '}' in JSON at position 1 (line 1 column 2)",
+          "    at parse",
+          "    at parseAliased",
+          "    at stackOf",
+          "    at Object.fetch"
+        ],
+        "prototypeSetter": {
+          "seen": 0,
+          "prepared": true,
+          "plain": "Error: y"
+        },
+        "stringifyCycle": [
+          "TypeError: Converting circular structure to JSON",
+          "    --> starting at object with constructor 'Object'",
+          "    --- property 'self' closes the circle",
+          "    at JSON.stringify",
+          "    at stringifyCycle",
+          "    at stackOf",
+          "    at Object.fetch"
+        ],
+        "jsonNames": [
+          "parse",
+          2,
+          "function parse() { [native code] }",
+          "stringify",
+          3,
+          "function stringify() { [native code] }"
+        ],
+        "captured": [
+          "Error",
+          "    at captured",
+          "    at Object.fetch"
+        ],
+        "prepared": [
+          "prepared string",
+          "fetch string"
+        ]
+      }
+    }
+  ]
+}

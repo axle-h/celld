@@ -74,6 +74,113 @@ pub struct Cells {
     schema_cookies: RefCell<HashMap<String, SchemaCookie>>,
     /// The cells whose implicit transaction is open (`begin_implicit`).
     implicit: RefCell<HashSet<String>>,
+    /// Set by the CPU watchdog when it ends a turn of this isolate at an
+    /// invocation's limit, until the turn takes the termination. V8 acts on
+    /// a termination only when JavaScript runs, so a statement that never
+    /// returns to it, such as a recursive CTE without a bound, is stopped by
+    /// SQLite's progress handler reading this ([`interrupt_past_cpu_limit`]).
+    cpu_abort: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Cells {
+    /// Cells whose statements stop when `cpu_abort` is set.
+    pub(crate) fn with_cpu_abort(cpu_abort: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self {
+            cpu_abort,
+            ..Self::default()
+        }
+    }
+}
+
+/// How many SQLite virtual machine instructions run between two looks at the
+/// CPU watchdog's flag: a few hundred microseconds of a statement, so a look
+/// costs nothing measurable and a statement stops soon after the limit.
+const SQL_PROGRESS_STEPS: std::ffi::c_int = 10_000;
+
+/// SQLite's progress handler on every cell connection: non-zero, which
+/// interrupts the statement, once the watchdog ended the turn at a CPU limit.
+unsafe extern "C" fn interrupt_past_cpu_limit(_: *mut std::ffi::c_void) -> std::ffi::c_int {
+    if cpu_abort_pending() {
+        return 1;
+    }
+    if d1_deadline_passed() {
+        D1_INTERRUPTED.set(true);
+        return 1;
+    }
+    0
+}
+
+thread_local! {
+    /// When the D1 call running on this thread must end
+    /// ([`d1_query_limit`]), or `None` outside one.
+    static D1_DEADLINE: std::cell::Cell<Option<std::time::Instant>> =
+        const { std::cell::Cell::new(None) };
+    /// Whether the progress handler interrupted a statement of the D1 call
+    /// running on this thread for its deadline.
+    static D1_INTERRUPTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Cloudflare's "Maximum SQL query duration", which covers a whole batch:
+/// 30 s. `CELLD_D1_QUERY_LIMIT_MS` sets another, which the conformance case
+/// uses to stay short.
+fn d1_query_limit() -> std::time::Duration {
+    static LIMIT: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        let millis = std::env::var("CELLD_D1_QUERY_LIMIT_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|millis| *millis > 0)
+            .unwrap_or(30_000);
+        std::time::Duration::from_millis(millis)
+    })
+}
+
+/// Cloudflare's error for a D1 query that ran past the limit.
+const D1_QUERY_LIMIT_EXCEEDED: &str = "D1 DB exceeded its CPU time limit and was reset.";
+
+/// Whether the D1 call on this thread ran past its limit, so that SQLite
+/// interrupts its statement.
+fn d1_deadline_passed() -> bool {
+    D1_DEADLINE
+        .get()
+        .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+}
+
+/// Run one D1 call under the query limit: a statement still running at the
+/// deadline is interrupted, and the call fails with the limit's error, its
+/// transaction rolled back, and the database healthy.
+fn with_d1_deadline<T>(run: impl FnOnce() -> Result<T, D1Failure>) -> Result<T, D1Failure> {
+    /// Disarms the deadline however the call ends, a panic included.
+    struct Armed {
+        deadline: Option<std::time::Instant>,
+        interrupted: bool,
+    }
+    impl Drop for Armed {
+        fn drop(&mut self) {
+            D1_DEADLINE.set(self.deadline);
+            D1_INTERRUPTED.set(self.interrupted);
+        }
+    }
+    let _armed = Armed {
+        deadline: D1_DEADLINE.replace(Some(std::time::Instant::now() + d1_query_limit())),
+        interrupted: D1_INTERRUPTED.replace(false),
+    };
+    match run() {
+        // Only a statement the deadline interrupted fails with the limit's
+        // error; any other failure keeps its own.
+        Err(_) if D1_INTERRUPTED.get() => Err(d1_error(D1_QUERY_LIMIT_EXCEEDED)),
+        result => result,
+    }
+}
+
+/// Whether the running turn was ended at an invocation's CPU limit.
+pub(crate) fn cpu_abort_pending() -> bool {
+    let cells = CURRENT_CELLS.get();
+    // SAFETY: as `cells`: non-null only while a turn holds the isolate.
+    !cells.is_null()
+        && unsafe { &*cells }
+            .cpu_abort
+            .load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The database and the ownership epoch that authorized its activation.
@@ -847,6 +954,15 @@ fn finish_open(
         result == rusqlite::ffi::SQLITE_OK,
         "failed to disable SQLite lookaside"
     );
+    // SAFETY: as above; the handler reads only thread state.
+    unsafe {
+        rusqlite::ffi::sqlite3_progress_handler(
+            c.handle(),
+            SQL_PROGRESS_STEPS,
+            Some(interrupt_past_cpu_limit),
+            std::ptr::null_mut(),
+        );
+    }
     if sqlite_vec {
         register_vec0_extension(&c)?;
     }
@@ -2918,6 +3034,16 @@ fn d1_poison_transaction(scope: &str, error: String) {
 }
 
 fn d1_rollback_after_commit_failure(scope: &str, connection: &Connection) -> Result<(), String> {
+    let deadline = D1_DEADLINE.take();
+    let result = d1_rollback_after_commit_failure_inner(scope, connection);
+    D1_DEADLINE.set(deadline);
+    result
+}
+
+fn d1_rollback_after_commit_failure_inner(
+    scope: &str,
+    connection: &Connection,
+) -> Result<(), String> {
     #[cfg(celld_internal_tests)]
     if let Some(result_code) = D1_ROLLBACK_FAULT.with(std::cell::Cell::take) {
         // SAFETY: the handle belongs to this live connection.
@@ -2940,6 +3066,21 @@ fn d1_rollback_after_commit_failure(scope: &str, connection: &Connection) -> Res
 }
 
 fn d1_transaction_control(
+    scope: &str,
+    connection: &Connection,
+    operation: D1TransactionOperation,
+    failure: fn(String) -> D1Failure,
+) -> Result<(), D1Failure> {
+    // A call's transaction bracket is the engine's own work, which the query
+    // limit must not interrupt: the rollback after the limit is what keeps
+    // the database whole.
+    let deadline = D1_DEADLINE.take();
+    let result = d1_transaction_control_inner(scope, connection, operation, failure);
+    D1_DEADLINE.set(deadline);
+    result
+}
+
+fn d1_transaction_control_inner(
     scope: &str,
     connection: &Connection,
     operation: D1TransactionOperation,
@@ -3040,6 +3181,10 @@ pub fn set_d1_rollback_fault_for_test(result_code: i32) {
 /// inside the same execution, on the same connection.
 pub fn d1_run(scope: &str, request: &D1Request) -> Result<D1Response, D1Failure> {
     require_sql_healthy(scope).map_err(d1_error)?;
+    with_d1_deadline(|| d1_run_within_limit(scope, request))
+}
+
+fn d1_run_within_limit(scope: &str, request: &D1Request) -> Result<D1Response, D1Failure> {
     let started = std::time::Instant::now();
     match request {
         D1Request::Prepared { sql, params, first } => {
@@ -3350,9 +3495,9 @@ pub fn commit_implicit(scope: &str) -> Result<(), String> {
     }
     // An isolate condemned under the turn resets its objects: the turn's
     // writes never commit, as workerd's turn never ends.
-    if crate::pool::current_slot().is_some_and(|slot| slot.is_condemned()) {
+    if let Some(slot) = crate::pool::current_slot().filter(|slot| slot.is_condemned()) {
         rollback_implicit(scope);
-        return Err(crate::js::MEMORY_EXCEEDED.to_string());
+        return Err(slot.condemned_text().to_string());
     }
     let committed = with(scope, |connection| {
         // A critical failure already ended the transaction, and was recorded.
@@ -3513,6 +3658,48 @@ pub fn commit_or_reset(scope: &str) -> Result<(), String> {
 
 /// workerd's error for a turn whose commit a running statement held.
 const TURN_COMMIT_HELD: &str = "internal error";
+
+/// The running turn was cut short by its invocation's CPU limit: roll back
+/// what it wrote, and answer the objects it wrote to besides `scope`, the
+/// object whose event ran out.
+///
+/// Every implicit transaction open now was opened by this turn, since the
+/// last one committed when the previous turn ended. A turn can run other
+/// objects' continuations too (its microtask checkpoint is the isolate's),
+/// and the termination cut those short as well, so none of the turn's
+/// writes commit. The caller samples its gate positions after this, which
+/// would otherwise commit them, and then resets each object
+/// ([`reset_past_cpu_limit`]).
+pub fn roll_back_cpu_limited_turn(scope: Option<&str>) -> Vec<String> {
+    // A turn outside a turn's storage (a stateless isolate's, before any
+    // cell) has nothing to roll back.
+    if CURRENT_CELLS.get().is_null() {
+        return Vec::new();
+    }
+    let mut scopes: Vec<String> =
+        implicit_scopes(|scopes| scopes.borrow().iter().cloned().collect());
+    scopes.sort();
+    for open in &scopes {
+        discard_uncommitted(open);
+    }
+    if let Some(scope) = scope {
+        discard_uncommitted(scope);
+        scopes.retain(|open| open != scope);
+    }
+    scopes
+}
+
+/// Reset the application object `scope` after a turn of it ran past its
+/// CPU limit, as workerd aborts the object's IoContext: its storage refuses
+/// every operation and no output leaves it, its stubs throw `error`, and it
+/// moves to a new instance (`record_critical_error`). The cells of celld's
+/// own classes keep their state; the only one that runs application code,
+/// the cron schedule, has nothing of the handler's to reset.
+pub fn reset_past_cpu_limit(scope: &str, error: &str) {
+    if application_cell(scope) && dbs(|d| d.borrow().contains_key(scope)) {
+        record_critical_error(scope, || error.to_string());
+    }
+}
 
 /// `Ok(Some(at_ms))` when an outermost commit published a dirty committed
 /// alarm: the caller performs the arm-time wake-entry gate before acking the
@@ -4059,6 +4246,11 @@ fn record_sqlite_operation_failure(
             && celld_logic::sqlite::SQLITE_NOMEM == rusqlite::ffi::SQLITE_NOMEM
             && celld_logic::sqlite::SQLITE_INTERRUPT == rusqlite::ffi::SQLITE_INTERRUPT,
     );
+    // A D1 query the query limit interrupted fails alone: its transaction
+    // rolls back, and the database is as healthy as before it.
+    if result_code & 0xff == rusqlite::ffi::SQLITE_INTERRUPT && D1_INTERRUPTED.get() {
+        return;
+    }
     let now_autocommit = unsafe { rusqlite::ffi::sqlite3_get_autocommit(database) != 0 };
     if celld_logic::sqlite::poisons_actor(result_code, started_in_transaction, now_autocommit) {
         record_critical_error(scope, || error.to_string());
@@ -4076,7 +4268,12 @@ fn record_critical_error(scope: &str, error: impl FnOnce() -> String) {
         if errors.contains_key(scope) {
             return None;
         }
-        let error = error();
+        // A statement the CPU limit interrupted fails as the limit does.
+        let error = if cpu_abort_pending() {
+            crate::js::CPU_EXCEEDED.to_string()
+        } else {
+            error()
+        };
         errors.insert(scope.to_string(), error.clone());
         Some(error)
     });
@@ -4811,6 +5008,33 @@ mod implicit_transaction_tests {
     //! when the turn ends or before an output, holds for an unfinished write
     //! cursor, and a reset rolls it back.
     use super::*;
+
+    /// A D1 call's deadline is disarmed however the call ends, and only a
+    /// statement the deadline interrupted fails with the limit's error.
+    #[test]
+    fn the_d1_deadline_is_disarmed_and_reports_only_its_own_interrupt() {
+        let kept = with_d1_deadline(|| Err::<(), _>(d1_error("no such table: x")));
+        assert_eq!(
+            kept.err().map(|failure| failure.message).as_deref(),
+            Some("no such table: x")
+        );
+        assert!(D1_DEADLINE.get().is_none());
+        let panicked = std::panic::catch_unwind(|| {
+            with_d1_deadline(|| -> Result<(), D1Failure> { panic!("statement panicked") })
+        });
+        assert!(panicked.is_err());
+        assert!(D1_DEADLINE.get().is_none());
+        assert!(!D1_INTERRUPTED.get());
+        let interrupted = with_d1_deadline(|| {
+            D1_INTERRUPTED.set(true);
+            Err::<(), _>(d1_error("interrupted"))
+        });
+        assert_eq!(
+            interrupted.err().map(|failure| failure.message).as_deref(),
+            Some(D1_QUERY_LIMIT_EXCEEDED)
+        );
+        assert!(!D1_INTERRUPTED.get());
+    }
 
     const SCOPE: &str = "Obj:one";
 

@@ -1,0 +1,11 @@
+{
+  "kind": "celld-only",
+  "reason": "celld's loader registry bounds (plan 1.34): workerd's Worker Loader has no such count",
+  "workers": ["app"],
+  "steps": [
+    {"path": "/fail?count=255"},
+    {"path": "/load?code=working"},
+    {"path": "/load?code=failing"},
+    {"path": "/load?code=working"}
+  ]
+}

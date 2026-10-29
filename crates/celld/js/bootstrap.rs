@@ -165,6 +165,246 @@ fn run_bootstrap_static_script<'s>(
 /// error leaves their frames out, as workerd's runtime APIs have none.
 pub(super) const INTERNAL_SCRIPT_NAME: &str = "celld:internal";
 
+/// The realm's own `Error` constructor, as V8 holds it: where a Worker sets
+/// `Error.prepareStackTrace`, whatever it later does to the global.
+pub(super) struct IntrinsicError(v8::Global<v8::Object>);
+
+/// Where celld's transparent wrappers around builtins start, as call sites
+/// report a function's start (1-based line and column): the harness's
+/// `__transparentWrappers`.
+pub(super) struct TransparentWrappers(Vec<(u32, u32)>);
+
+impl TransparentWrappers {
+    /// Whether a call site whose function starts at `start` runs a wrapper.
+    /// A call site gives the start of the method's name, the function its
+    /// parameter list, which follows on the same line; only a wrapper starts
+    /// on its line in the harness.
+    fn starts(&self, (line, column): (u32, u32)) -> bool {
+        self.0
+            .iter()
+            .any(|&(wrapper_line, wrapper_column)| wrapper_line == line && column <= wrapper_column)
+    }
+}
+
+/// Record the harness's transparent wrappers, by where each starts.
+pub(super) fn record_transparent_wrappers(scope: &mut v8::PinScope) {
+    let Ok(list) = super::internal_value(scope, "__transparentWrappers")
+        .ok_or(())
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).map_err(|_| ()))
+    else {
+        return;
+    };
+    let starts = (0..list.length())
+        .filter_map(|index| list.get_index(scope, index))
+        .filter_map(|value| v8::Local::<v8::Function>::try_from(value).ok())
+        .filter_map(|function| {
+            Some((
+                function.get_script_line_number()? + 1,
+                function.get_script_column_number()? + 1,
+            ))
+        })
+        .collect();
+    scope.set_slot(Arc::new(TransparentWrappers(starts)));
+}
+
+/// The realm's context, for host code that runs where no scope names one:
+/// the CPU watchdog's interrupt (`running_context_id`).
+pub(super) struct RealmContext(pub(super) v8::Global<v8::Context>);
+
+/// Make `error.stack` leave out celld's own frames, as workerd's has none of
+/// its runtime APIs, which are C++. Installed before any script runs.
+pub(super) fn install_stack_trace_formatter(scope: &mut v8::PinScope) {
+    let context = scope.get_current_context();
+    let realm = v8::Global::new(scope, context);
+    scope.set_slot(Arc::new(RealmContext(realm)));
+    let global = context.global(scope);
+    let key = v8::String::new(scope, "Error").unwrap();
+    if let Some(error) = global
+        .get(scope, key.into())
+        .and_then(|value| value.to_object(scope))
+    {
+        let error = v8::Global::new(scope, error);
+        scope.set_slot(Arc::new(IntrinsicError(error)));
+    }
+    scope.set_prepare_stack_trace_callback(format_stack_trace);
+}
+
+thread_local! {
+    /// Set while a Worker's `Error.prepareStackTrace` runs, so an error's
+    /// stack read inside it gets V8's own format, as V8 guards the hook
+    /// against recursion.
+    static IN_PREPARE_STACK_TRACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// V8's `PrepareStackTraceCallback`: the call sites a stack has, without
+/// celld's, passed to the Worker's `Error.prepareStackTrace` when it set one,
+/// or formatted as V8 formats them by default.
+fn format_stack_trace<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    error: v8::Local<'s, v8::Value>,
+    sites: v8::Local<'s, v8::Array>,
+) -> v8::Local<'s, v8::Value> {
+    // V8's own array of fresh call sites: reading its elements runs nothing.
+    let sites: Vec<v8::Local<'s, v8::Value>> = (0..sites.length())
+        .filter_map(|index| sites.get_index(scope, index))
+        .collect();
+    // A site's caller is the next one. A builtin (`JSON.parse`, `String`)
+    // that celld's code called is part of celld's runtime API, which in
+    // workerd is C++ and calls no builtin the stack would show; one the
+    // Worker called stays.
+    //
+    // A wrapper celld puts around a builtin (`JSON.parse`) is transparent:
+    // the builtin it calls stays when the Worker called the wrapper, as the
+    // Worker called the builtin itself. Wrappers are known by where their
+    // function starts (`TransparentWrappers`), whatever they are called as.
+    let wrappers = scope.get_slot::<Arc<TransparentWrappers>>().cloned();
+    let origins: Vec<SiteOrigin> = sites
+        .iter()
+        .map(|site| call_site_origin(scope, *site, wrappers.as_deref()))
+        .collect();
+    let length = sites.len();
+    let mut internal = vec![false; length];
+    for index in (0..length).rev() {
+        internal[index] = match origins[index] {
+            SiteOrigin::Internal | SiteOrigin::Wrapper => true,
+            SiteOrigin::Worker => false,
+            SiteOrigin::Builtin => {
+                let caller_internal = internal.get(index + 1).copied().unwrap_or(false);
+                caller_internal
+                    && !(matches!(origins.get(index + 1), Some(SiteOrigin::Wrapper))
+                        && matches!(origins.get(index + 2), Some(SiteOrigin::Worker)))
+            }
+        };
+    }
+    let kept: Vec<v8::Local<'s, v8::Value>> = sites
+        .iter()
+        .zip(&internal)
+        .filter(|(_, internal)| !**internal)
+        .map(|(site, _)| *site)
+        .collect();
+    let hook = scope
+        .get_slot::<Arc<IntrinsicError>>()
+        .cloned()
+        .filter(|_| !IN_PREPARE_STACK_TRACE.with(std::cell::Cell::get))
+        .and_then(|intrinsic| {
+            let error_fn = v8::Local::new(scope, &intrinsic.0);
+            let key = v8::String::new(scope, "prepareStackTrace").unwrap();
+            let hook = error_fn.get(scope, key.into())?;
+            let hook = v8::Local::<v8::Function>::try_from(hook).ok()?;
+            Some((error_fn, hook))
+        });
+    if let Some((error_fn, hook)) = hook {
+        // Created with its elements, as data properties: no setter a Worker
+        // put on `Array.prototype` sees them.
+        let array = v8::Array::new_with_elements(scope, &kept);
+        IN_PREPARE_STACK_TRACE.with(|flag| flag.set(true));
+        // An exception the hook throws stays pending, and V8 throws it from
+        // the `stack` read, as it does for its own call of the hook.
+        let result = hook.call(scope, error_fn.into(), &[error, array.into()]);
+        IN_PREPARE_STACK_TRACE.with(|flag| flag.set(false));
+        return result.unwrap_or_else(|| v8::undefined(scope).into());
+    }
+    let mut stack = error_header(scope, error);
+    for site in kept {
+        let tc = std::pin::pin!(v8::TryCatch::new(scope));
+        let tc = &mut tc.init();
+        let frame = site
+            .to_string(tc)
+            .map(|frame| frame.to_rust_string_lossy(tc))
+            .unwrap_or_else(|| "<error>".to_string());
+        stack.push_str("\n    at ");
+        stack.push_str(&frame);
+    }
+    v8::String::new(scope, &stack)
+        .map(Into::into)
+        .unwrap_or_else(|| v8::undefined(scope).into())
+}
+
+#[derive(Clone, Copy)]
+enum SiteOrigin {
+    /// A script of celld's own.
+    Internal,
+    /// One of celld's transparent wrappers around a builtin.
+    Wrapper,
+    /// A V8 builtin, which has no script: no file name and no line.
+    Builtin,
+    /// The Worker's code, `eval` and `new Function` included.
+    Worker,
+}
+
+fn call_site_origin(
+    scope: &mut v8::PinScope,
+    site: v8::Local<v8::Value>,
+    wrappers: Option<&TransparentWrappers>,
+) -> SiteOrigin {
+    let Some(site) = site.to_object(scope) else {
+        return SiteOrigin::Worker;
+    };
+    let tc = std::pin::pin!(v8::TryCatch::new(scope));
+    let tc = &mut tc.init();
+    match site_call(tc, site, "getFileName") {
+        Some(name) if name.is_string() => {
+            if name.to_rust_string_lossy(tc) != INTERNAL_SCRIPT_NAME {
+                return SiteOrigin::Worker;
+            }
+            let line = site_call(tc, site, "getEnclosingLineNumber")
+                .filter(|value| value.is_number())
+                .and_then(|value| value.uint32_value(tc));
+            let column = site_call(tc, site, "getEnclosingColumnNumber")
+                .filter(|value| value.is_number())
+                .and_then(|value| value.uint32_value(tc));
+            match (line.zip(column), wrappers) {
+                (Some(start), Some(wrappers)) if wrappers.starts(start) => SiteOrigin::Wrapper,
+                _ => SiteOrigin::Internal,
+            }
+        }
+        _ if site_call(tc, site, "getLineNumber")
+            .is_none_or(|line| line.is_null_or_undefined()) =>
+        {
+            SiteOrigin::Builtin
+        }
+        _ => SiteOrigin::Worker,
+    }
+}
+
+/// Call the call site's method `name`.
+fn site_call<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    site: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let key = v8::String::new(scope, name).unwrap();
+    let method = site.get(scope, key.into())?;
+    let method = v8::Local::<v8::Function>::try_from(method).ok()?;
+    method.call(scope, site.into(), &[])
+}
+
+/// The first line of V8's default stack: the error as `Error.prototype.toString`
+/// gives it, or `<error>` when reading it throws.
+fn error_header(scope: &mut v8::PinScope, error: v8::Local<v8::Value>) -> String {
+    let tc = std::pin::pin!(v8::TryCatch::new(scope));
+    let tc = &mut tc.init();
+    let Some(object) = error.to_object(tc) else {
+        return "<error>".to_string();
+    };
+    let field = |name: &str, default: &str| -> Option<String> {
+        let key = v8::String::new(tc, name).unwrap();
+        let value = object.get(tc, key.into())?;
+        if value.is_undefined() {
+            return Some(default.to_string());
+        }
+        Some(value.to_string(tc)?.to_rust_string_lossy(tc))
+    };
+    let (Some(name), Some(message)) = (field("name", "Error"), field("message", "")) else {
+        return "<error>".to_string();
+    };
+    match (name.is_empty(), message.is_empty()) {
+        (true, _) => message,
+        (_, true) => name,
+        _ => format!("{name}: {message}"),
+    }
+}
+
 /// Compile an internal script as one function whose parameters are the
 /// internals object and the host ops, and run it. A script and not a
 /// module, because the harness is one scope shared by every prelude file;
@@ -1117,7 +1357,7 @@ pub(super) fn adopt_cell(
     // No cell enters a condemned isolate, and refusing before the open keeps
     // its database closed.
     if owned && super::heap_limit_reached(tc) {
-        return Err(anyhow!(super::MEMORY_EXCEEDED));
+        return Err(super::condemned_error(tc));
     }
     if let Some(cell_storage) = cell_storage {
         storage::open_at_epoch(
@@ -1219,7 +1459,7 @@ fn finish_cell_adoption(tc: &mut v8::PinScope, cell: &str, owned: bool) -> Resul
     // host's side below. None can enter one (`adopt_cell`).
     let condemned = super::heap_limit_reached(tc);
     if condemned && owned {
-        return Err(anyhow!(super::MEMORY_EXCEEDED));
+        return Err(super::condemned_error(tc));
     }
     // The host's side first, and whatever the script's side does: the grants
     // the released residency held go with the objects that held them, and so
@@ -1232,7 +1472,8 @@ fn finish_cell_adoption(tc: &mut v8::PinScope, cell: &str, owned: bool) -> Resul
     // A take-in has no instance yet, and leaves another isolate's alone.
     if !owned {
         let script = super::actor_runtime_state(tc).script_name.clone();
-        super::do_instances::release(&script, cell, condemned);
+        let reset = condemned.then(|| super::condemned_text(tc));
+        super::do_instances::release(&script, cell, reset);
     }
     let released = if condemned {
         Ok(())
@@ -1399,6 +1640,117 @@ mod tests {
     }
 
     const HANDLER: &str = "export default { fetch() { return new Response(); } };\n";
+
+    /// A turn the CPU limit cut rolls back what it wrote and resets the object
+    /// it wrote to, whatever the event: here one of no object, as a stateless
+    /// event whose turn ran a facet's continuation.
+    #[test]
+    fn a_cut_turn_rolls_back_and_resets_whatever_the_event() {
+        let config = config(
+            &format!("{HANDLER}export class Room {{}}\n"),
+            &["Room"],
+            Vec::new(),
+        );
+        std::thread::spawn(move || {
+            let mut worker = Worker::load_config(config).unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("room.db");
+            let path = path.to_str().unwrap();
+            let cell = "Room:cut-turn";
+            worker
+                .own_cell(
+                    cell,
+                    Some(CellStorage {
+                        path,
+                        epoch: 1,
+                        replicated_wake: false,
+                        vfs: None,
+                    }),
+                )
+                .unwrap();
+            worker.with_scope_for_test(|scope| {
+                storage::begin_implicit(cell).unwrap();
+                storage::put_many_serialized(cell, &[("doomed".into(), vec![1])]).unwrap();
+                let error = anyhow::Error::new(super::super::CpuLimitExceeded);
+                let state = super::super::actor_runtime_state(scope);
+                let objects = super::super::roll_back_past_cpu_limit(&state, None, &error).unwrap();
+                assert_eq!(objects, vec![cell.to_string()]);
+                super::super::reset_objects_past_cpu_limit(&objects);
+                assert_eq!(
+                    storage::sql_critical_error(cell).as_deref(),
+                    Some(super::super::CPU_EXCEEDED)
+                );
+            });
+            // A new instance on the same file finds none of the turn's write.
+            worker.own_cell(cell, None).ok();
+            worker
+                .own_cell(
+                    cell,
+                    Some(CellStorage {
+                        path,
+                        epoch: 2,
+                        replicated_wake: false,
+                        vfs: None,
+                    }),
+                )
+                .unwrap();
+            let doomed = worker.with_scope_for_test(|_| {
+                storage::get_many_stored(cell, &["doomed".to_string()]).unwrap()
+            });
+            assert!(doomed.is_empty());
+        })
+        .join()
+        .expect("cut-turn thread panicked");
+    }
+
+    /// A give-back closes the cell's database whatever the isolate's side of
+    /// the release does, so a cell (or a recorded facet, which leaves the same
+    /// way) never holds its database, and the write lock with it, past the
+    /// give-back.
+    #[test]
+    fn a_give_back_whose_release_throws_still_closes_the_database() {
+        let config = config(
+            &format!("{HANDLER}export class Room {{}}\n"),
+            &["Room"],
+            Vec::new(),
+        );
+        std::thread::spawn(move || {
+            let mut worker = Worker::load_config(config).unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("room.db");
+            let path = path.to_str().unwrap();
+            let cell = "Room:give-back";
+            worker
+                .own_cell(
+                    cell,
+                    Some(CellStorage {
+                        path,
+                        epoch: 1,
+                        replicated_wake: false,
+                        vfs: None,
+                    }),
+                )
+                .unwrap();
+            assert_eq!(
+                worker.with_scope_for_test(|_| storage::activation_epoch(cell)),
+                Some(1)
+            );
+            worker.with_scope_for_test(|scope| {
+                run_internal_snippet(
+                    scope,
+                    "__celld.__cell.release = () => { throw new Error(\"release failed\"); };",
+                )
+                .unwrap();
+            });
+            assert!(worker.own_cell(cell, None).is_err());
+            assert_eq!(
+                worker.with_scope_for_test(|_| storage::activation_epoch(cell)),
+                None
+            );
+        })
+        .join()
+        .expect("give-back thread panicked");
+    }
 
     #[test]
     fn a_durable_object_class_the_module_does_not_export_fails_the_load() {

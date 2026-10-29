@@ -391,6 +391,12 @@ keeps what was committed before the reset, but not the writes of the turn the
 limit stopped, its hibernatable WebSockets stay open, and its other WebSockets
 close with code 1012.
 
+Each invocation also has a CPU limit: 30 seconds of CPU time, or the
+Worker's `limits.cpu_ms` (at most 5 minutes), as on Cloudflare. A request,
+a call, or a Durable Object's event that runs past it fails with `Worker
+exceeded CPU time limit.`, and a Durable Object whose event did resets, as
+after `ctx.abort()`. See [Limitations](docs/limitations.md#isolate-limits).
+
 While a Worker loads, celld stops the load at the limit: a load whose module
 scope reaches it fails with `Script startup exceeded memory limits.`, and a
 load that uses more than 1 second of CPU time fails with `Script startup
