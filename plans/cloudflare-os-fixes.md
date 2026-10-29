@@ -475,8 +475,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 40 | 1.29 RPC serialisation follow-ups (leaks, Proxies, signals, flags) | done | `6b09eee` |
 | 41 | 1.30 Durable Object reset follow-ups (hang, stale stubs, discarded writes, storage surface) | done | `a7272a7` |
 | 42 | 1.34 Isolate limit follow-ups (per-request CPU limit, D1 query limit, stack frames, `bytes()`) | done | `e1a4bea` |
-| 43 | 1.61 A stuck isolate must not starve the node (security) | next | |
-| 44+ | Phase 1 in plan order (1.36-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60), and the 1.4 props key-order follow-up | queued | |
+| 43 | 1.61 A stuck isolate must not starve the node (security) | done | (this commit) |
+| 44+ | Phase 1 in plan order (1.36-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -4904,6 +4904,175 @@ node has workers (a builtin loop under a long `cpu_ms`) and checks that
 `/ping` and another Worker keep answering within a bound, and that the
 script's further requests are refused once its stuck isolates reach the
 cap; unit tests for the caps.
+
+**As built (done).**
+- **Isolate threads** (`isolate_threads.rs`). JavaScript no longer runs on
+  the Tokio workers. `main` starts the pool before any Worker loads:
+  `CELLD_ISOLATE_THREADS` threads (the CPU count by default), each entered
+  into the host runtime, so a turn can spawn, arm timers and read
+  `Handle::current()` as before (no turn uses `block_in_place`); they inherit
+  V8's PKRU. Work that has run 50 ms is *long*: while work waits and fewer
+  than `core` threads run short work, the pool (or its monitor, every 10 ms)
+  starts a thread, up to `2 × core` that are not stuck and, counting stuck
+  ones, a hard ceiling of `2 × core + max(core/2, 3)`; past it work waits,
+  except that `max(core/2, 2)` reserve threads past the ceilings take the
+  work of owners with no stuck or long turn, so well-behaved Workers make
+  progress however many others hold threads. A thread over `core` exits
+  after 10 s idle; threads start outside the pool's lock. Without isolate
+  threads (unit tests, the simulated runtime) a driver is an `asyncrt` task
+  and a load runs on `asyncrt::blocking`. Work goes to the idle thread that last ran its isolate, else the one
+  that went idle last (a FIFO hand-off to any idle thread cost a plain fetch
+  about 8%). Loads and placements run there too (`offload`: pool growth,
+  `place_cell`, Dynamic Worker loads, a deploy's `Generation::build`).
+- **Turns** (`pool.rs`). Deviation: `Slot::turn` keeps its shape but takes a
+  `Send + 'static` closure. A borrowing closure run on another thread is
+  sound only if the awaiting future cannot be dropped mid-turn, which Rust
+  cannot guarantee (a leaked pinned future frees what the turn borrows).
+  Call sites move their state in and get it back (`Slot::turn_with` for an
+  event's `InFlight`, the `Residency` of `adopt`, the cell-gate job). A turn
+  whose caller leaves before it starts never runs; once started it runs to
+  its end and its result drops on the isolate thread, inside a catch. A
+  per-slot `TurnQueue` replaces the tokio `Mutex` and `TurnScheduler`, with
+  the same lane round robin. A submitted run takes the slot's waiting turns
+  back to back for up to 1 ms; a driver polled on an isolate thread runs its
+  own turn inline and hands the rest to a thread, so its reply waits for no
+  other request's turn. A run that unwinds ends itself (a guard clears the
+  slot's run, its poisoned locks, and hands the rest on).
+- **Drivers on the isolate threads.** Every event driver (stateless, cell,
+  alarm, facet, Dynamic Worker, worker-on-cell) is a task on a small
+  executor there (`isolate_threads::spawn_near`, first polled on the thread
+  that last ran its isolate, and counted as its isolate's owner's work), so its turns run where it is polled: an op
+  completing costs one wakeup, as at HEAD. A wakeup queues the task itself
+  (`Job::Poll`), with no allocation; a panic in polling or dropping a task
+  ends the task.
+- **Owners and stuck turns** (`turn_owner.rs`). An owner is a script: its
+  stateless and cell pools across generations, and the Dynamic Workers it
+  loads (a Dynamic Worker counts against its loader, which chose its code
+  and ids). celld has no tenant above a script: a tenant's several scripts
+  are several owners. A turn is *stuck* once it still runs
+  `min(grace, 500 ms)` after the CPU watchdog first asked it to stop, where
+  the grace is the condemnation's `max(limit, 100 ms)`: counted from then
+  until it returns (`TurnMark`, marked synchronously on the watchdog's thread
+  and keyed by the slot's turn number, so a later turn is never marked).
+  Deviation from "500 ms after the first fire": for a limit under 500 ms the
+  grace is shorter, and a turn the grace condemns should count by then; an
+  ordinary overrun (a collection, a large sort) ends well inside 100 ms. A
+  stuck isolate takes no new work at once, and placement, the pool policy,
+  `live()` and the census all count it as not live. An owner with 2 stuck turns starts no new event: its stateless
+  requests and Dynamic Worker calls fail at admission, and an event that
+  reaches a turn anyway (`turn_begin`, `turn_begin_cell`) fails there, with
+  `Worker exceeded CPU time limit.` (500 `Worker failed: …` on the public
+  listener); none of its cells is placed (the Durable Object's caller sees
+  the same text). Events already running go on: failing their next turns
+  would need the CPU-failure path (rollback, Durable Object reset) for
+  events that did nothing wrong. At the node-wide count, half the isolate
+  threads and at least 3, so one owner at its own cap never reaches it, an
+  owner that already has a stuck turn grows no isolate (503 `Worker refused:
+  node has N isolates stuck past their CPU limit, this Worker's among them,
+  and starts no more for it`); other owners grow as before. The node cap and
+  the hard thread ceiling bound the threads and heaps stuck turns hold.
+- **Long turns.** While an owner has a long turn (not stuck) it starts at
+  most `core/2` turns at once (at least 1), stuck turns not counted; a turn
+  that would start an event past that waits for one of its turns to end
+  (`Owner::defer`), so other owners always have threads. Only turns that
+  start an event (`Slot::turn_event`, `turn_cell_event`) wait: a turn that
+  continues, cancels or settles an event, or releases a cell, never does, and
+  an owner at its stuck cap never waits, so its new events reach the refusal
+  at once. While event starts wait, the run takes the first turn queued that
+  is not one, in lane order (`TurnQueue::next_skipping_events`), and defers
+  only when nothing but event starts is left.
+- **PBKDF2.** workerd's `checkPbkdfLimits` (`api/crypto/impl.c++`), called
+  from WebCrypto `deriveBits` (`pbkdf2.c++`) and node:crypto's `getPbkdf`
+  (`api/node/crypto.c++`), refuses past the limit enforcer's
+  `checkPbkdfIterations`: the default enforcer caps at
+  `DEFAULT_MAX_PBKDF2_ITERATIONS` (100 000, `io/limit-enforcer.h`), and
+  workerd run locally (`server.c++`) sets none, which is why 1 000 000
+  `pbkdf2Sync` iterations ran there. celld follows the default (Cloudflare's):
+  a `NotSupportedError` `Pbkdf2 failed: iteration counts above 100000 are not
+  supported (requested N).`, at the same point in each API (case
+  `builtins/pbkdf2-iterations`, celld-only).
+- **Runner.** An `internal` step (a GET to the operator listener within a
+  bound, optionally polling dotted JSON paths with `until`, and `record`) and
+  a path step's `probe` (the operator listener every 100 ms while the request
+  is in flight). A Worker cannot reach the operator listener itself.
+- **Test hold.** `CELLD_CONFORMANCE_HOLD=1`, which only `limits/stuck-isolates`
+  sets, gives every isolate `__celldTestHold(ms)` (at most 60 s): a host call
+  that burns its thread's CPU and ignores a termination, so a case holds a
+  turn past its limit for a known time. Only a `celld dev` node has it: any
+  other node refuses to start with the variable set, and a `celld dev` node
+  logs a warning. Without it the global does not exist and the op refuses.
+- **A Durable Object RPC's route** now reports why its cell did not start,
+  as a fetch's route did (`RoutedRequestError::for_cell`): the CPU limit's
+  error of an owner at its cap, or a startup error, rather than `route RPC
+  …: RuntimeFailed`.
+- **Case** `limits/stuck-isolates` (celld-only; 2 Tokio workers, 4 isolate
+  threads, 2 isolates per Worker): the review's repro ×6 while `/ping` and
+  another Worker answer within 500 ms; then holds of 6 s under `cpu_ms: 10`,
+  one stateless and one in a Dynamic Worker of `stuck` (2, its cap: the
+  Dynamic Worker counts against `stuck`) and one of `stuck2` (3, the node's
+  cap), while `/ping` answers within 500 ms. `stuck` is then refused at once
+  with the CPU error, `stuck2` gets the node-cap 503 at once, `other` (no
+  stuck turn) grows a second isolate, and a Durable Object of `stuck` armed
+  before them sends a new event to an object already placed, which fails
+  within 500 ms with the CPU error, and is refused placement of a new object
+  with the same error; once the holds return `stuck` serves and places
+  again. Deterministic (5 runs, and 3 more pinned to 4 cores). At HEAD, run
+  with an uncapped `pbkdf2Sync` in the hold's place (the hold does not exist
+  there), the node wedged: `/ping` got no answer within 500 ms during the
+  holds, `/state` had no counts, and `stuck` was not refused.
+- Unit tests: the caps (owner, node, refusal only for owners with stuck
+  turns), the mark across a turn and racing marks, the long-turn share,
+  refusal at the cap for a stateless request and a cell across pools, lane
+  round robin, a run that unwinds, the pool's growth rule and hard ceiling,
+  locality, cancellation, panics, the executor.
+- **Measured, the review repro** (48 requests 200 ms apart, `cpu_ms: 1000`,
+  `celld dev`, 24 cores): HEAD ran each 5.2–16.9 s, peak RSS 1.33 GB; now 22
+  ran up to 4.8 s and 26 were refused in about 1 ms, peak RSS 518 MB, at
+  most 6 stuck at once against a cap of 2 (13 when counted at the grace of
+  1 s, 4 at the first retry, 10 ms), `/ping` at most 5 ms and another Worker
+  at most 6 ms. With `CELLD_TOKIO_THREADS=4`, HEAD's `/ping` took up to 2 s
+  and timed out once; now at most 5 ms.
+- **Cost** (lab, `ab -n 20000 -c 16`, medians of 11 interleaved rounds against
+  912ba10, a hello-world fetch, an RPC to one Durable Object, and an RPC to it
+  running one SELECT over 1 000 rows): plain fetch 19472 → 18719 req/s
+  (−3.9%), DO RPC 16630 → 17188 (+3.4%), SELECT per DO call 11826 → 11967
+  (+1.2%). A plain fetch crosses threads twice where it crossed none. Kept:
+  the allocation-free task wakeup, threads started outside the lock, a
+  per-slot turn number, the inline turn limited to the driver's own. Tried
+  and dropped, as no measured gain: a spinning idle thread (one, at 30 and
+  100 µs), the caller spinning for the result (10–100 µs), a FIFO hand-off.
+  Not tried: a lock-free idle stack, and pairing Tokio workers with isolate
+  threads; the remaining cost is two wakeups, which neither removes.
+
+### 1.62 Isolate thread gaps (found by 1.61)
+
+- **Turns already running when an owner reaches its cap** can still become
+  stuck: the review's repro peaked at 6 against a cap of 2, counting a turn
+  500 ms after its limit. Failing an owner's running events at their next
+  turn would bound it, but needs the CPU-failure path for each kind of event.
+- **Reserve threads judge cleanliness at submit time.** An owner with no
+  stuck or long turn when its work is queued at the ceilings gets a reserve
+  thread; if its turns then run long they hold the reserve until they end.
+  The total stays bounded (`max(core/2, 2)` reserve threads).
+- **No tenant above a script.** A tenant whose deployment has many scripts
+  gets an owner, and its caps, per script; only the node cap and the hard
+  thread ceiling bound them together.
+- **A load stuck in a builtin** (module scope past the 1 s startup budget, in
+  a call that does not stop) is never marked stuck, so its owner's caps do
+  not count it; it holds an isolate thread until it returns.
+- **Other host calls without a bound.** PBKDF2 now has Cloudflare's cap;
+  any other synchronous host call that runs long (a large `zlib` call) still
+  holds its turn past the limit. Audit them against workerd's.
+- **The hand-off** costs a plain fetch at 16 connections about 4%: two
+  wakeups per request.
+- **Out-of-tree internal tests** (`celld_internal_tests`) need updating:
+  `Slot::turn` and `turn_cell` take `Send + 'static` closures;
+  `Pool::new` takes the build closure unboxed; `Slot::loaded_worker` takes a
+  `turn_owner::Owner`; `hold_turn_for_test` now holds the slot's turn queue
+  (no turn runs while it is held, and queued ones run when it drops) rather
+  than a lock; turn observations are recorded on the isolate thread;
+  `vacant_for_request_cancellation_test` is built in every test build; the
+  `/state` fields are `stuckIsolates.{total,nodeCap,ownerCap,longShare,owners}`.
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 

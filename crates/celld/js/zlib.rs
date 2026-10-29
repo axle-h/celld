@@ -506,7 +506,7 @@ impl ZlibStream {
 ///
 /// **Process-wide, not per thread.** A `CompressionStream` outlives the turn
 /// that created it, and under D1 the next turn of that request runs on
-/// whichever tokio worker takes it — a thread-local table loses the stream,
+/// whichever isolate thread takes it — a thread-local table loses the stream,
 /// and a per-thread counter is worse than that: two workers hand out the same
 /// id, so one request's stream answers another's push. The ids are what JS
 /// holds, so they have to be unique across the process.

@@ -507,9 +507,13 @@ values are sampled every second.
 | `allocator` | Rust allocator bytes: `allocated_bytes`, `resident_bytes`, `mapped_bytes`, `retained_bytes`. V8 heaps are not included |
 | `libc_malloc` | Linux only: `in_use_bytes` and `free_bytes` of the C allocator that SQLite and V8 use |
 | `deployment.isolates`, `deployment.draining` | Per Worker script (`cells`, `stateless`, `services`): `live`, `live_empty`, `retiring`, `freed`, `heap_bytes`, `external_bytes`. The KV, Queue and D1 cells are under `cells.__runtime`: they run in isolates of their own, beside no script's code |
+| `isolateThreads` | The threads turns run on: `core` (`CELLD_ISOLATE_THREADS`), `max` (twice that, not counting stuck turns), `threads`, `idle`, `long` (in a turn for 50 ms or more), `queued` (turns waiting for a thread) |
+| `stuckIsolates` | Turns still running after the CPU watchdog asked them to stop, for their limit or 100 ms, at most 500 ms: `total`, `nodeCap`, `ownerCap`, `longShare` (the most turns an owner runs at once while one is long), and `owners`, the count of each script that has any (its Dynamic Workers count against it). At `ownerCap` a script starts no new event; at `nodeCap` a script that has one grows no isolate |
 
 A `live_empty` count that persists for more than 30 seconds means that
-isolate maintenance does not run. A persistent `retiring` count means that
+isolate maintenance does not run. A `stuckIsolates` count that does not fall
+is a host call that never returns: its threads and heaps stay until the
+node restarts. A persistent `retiring` count means that
 a turn or a request still holds the heap.
 
 A positive `capacity_waiting` or a `pressured` lease is the signal to add
@@ -756,7 +760,9 @@ unset variable selects its default. A Boolean variable accepts only `0` or
 | `CELLD_LTX_PAGED_MIN_MB` | The chain size, in MiB, from which a restore pages (default: 256; `0` pages every chain) |
 | `CELLD_LTX_HYDRATE_MBPS` | The background fill rate of a paged cell, in MiB per second, one cell at a time per node (default: 16; `0` keeps the cell sparse) |
 | `CELLD_LTX_DURABILITY_TIMEOUT_SECS` | The budget for one durability proof, and for the final snapshot of a handoff (default: 10). A queued write waits at most six budgets. A slow store can need more |
-| `CELLD_TOKIO_THREADS` | Host Tokio worker threads (default: the CPU count). The `host_runtime` log event at startup reports `worker_count` |
+| `CELLD_TOKIO_THREADS` | Host Tokio worker threads (default: the CPU count), which serve the listeners and run no JavaScript. The `host_runtime` log event at startup reports `worker_count` |
+| `CELLD_ISOLATE_THREADS` | The threads isolate turns run on (default: the CPU count). The pool adds threads while long turns hold them, up to twice this that are not stuck and `2 × this + max(this / 2, 3)` in all; it reports in `/state` as `isolateThreads`, and the `host_runtime` event reports `isolate_threads` |
+| `CELLD_CONFORMANCE_HOLD` | Test only: `1` gives every isolate of a `celld dev` node `__celldTestHold(ms)`, a host call that ignores a termination, for the conformance case `limits/stuck-isolates`. Any other node refuses to start with it, and `celld dev` logs a warning |
 | `RUST_LOG` | The runtime log filter |
 
 An L1 compaction merges at most 256 source objects within a 64 MiB buffer.

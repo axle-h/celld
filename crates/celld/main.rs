@@ -874,12 +874,13 @@ async fn adopt_deployment(
         node: node.to_string(),
         region: region.to_string(),
     };
-    // Building compiles every script, so it runs on a blocking thread.
-    let built = tokio::task::spawn_blocking(move || Generation::build(id, graph, options)).await;
+    // Building compiles every script, so it runs on an isolate thread.
+    let built =
+        celld::isolate_threads::offload(move || Generation::build(id, graph, options)).await;
     let generation = match built {
         Ok(Ok(generation)) => generation,
         Ok(Err(error)) => return failed(format!("{error:#}")),
-        Err(error) => return failed(format!("generation build panicked: {error}")),
+        Err(error) => return failed(format!("generation build {error}")),
     };
     let adopted = runtime.adopt(generation);
     // Tell the core, so resident cells move to the new generation at their
@@ -1442,10 +1443,16 @@ async fn dispatch_rpc_call(app: AppHandle, call: RpcCallReq) {
         caller.admit(&scope)?;
         let mut dispatcher = RemoteRouteRetry::new(app.operation_deadline_ms);
         loop {
-            let Routed { request, route } = app
-                .request(scope.clone())
-                .await
-                .map_err(|error| anyhow::anyhow!("route RPC {scope}: {error:?}"))?;
+            let Routed { request, route } = app.request(scope.clone()).await.map_err(|error| {
+                // A start that failed tells its callers why, as a fetch's
+                // route does (`for_cell`): a startup error, or the CPU
+                // limit's error of an owner whose turns are stuck.
+                let routed = RoutedRequestError::for_cell(error, &scope);
+                match routed.detail() {
+                    Some(_) => anyhow::Error::new(routed),
+                    None => anyhow::anyhow!("route RPC {scope}: {error:?}"),
+                }
+            })?;
             let (node, addr, epoch, peer_protocol) = match route {
                 Route::Local => {
                     let local_request_id = local_dispatch_request_id(None);
@@ -2491,8 +2498,22 @@ async fn handle_ingress(
                 StatusCode::SERVICE_UNAVAILABLE,
                 format!("Worker refused: {refused}"),
             ),
-            // A build failure is a fault, not saturation.
-            Some(celld::pool::AdmitError::Build(_)) | None => response(
+            // The node's stuck isolates refuse every script's growth: not
+            // this request's failure, and another node may serve it.
+            Some(refused @ celld::pool::AdmitError::Stuck(celld::pool::StuckRefusal::Node(_))) => {
+                response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    format!("Worker refused: {refused}"),
+                )
+            }
+            // A build failure is a fault, not saturation; so is a script
+            // whose own isolates are stuck past their CPU limit, which fails
+            // as a request past its limit does.
+            Some(
+                celld::pool::AdmitError::Build(_)
+                | celld::pool::AdmitError::Stuck(celld::pool::StuckRefusal::Owner),
+            )
+            | None => response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Worker failed: {error:#}"),
             ),
@@ -3574,7 +3595,14 @@ fn main() -> anyhow::Result<()> {
     if let Some(workers) = celld::env_vars::positive::<usize>("CELLD_TOKIO_THREADS")? {
         builder.worker_threads(workers);
     }
-    builder.build()?.block_on(async_main(telemetry_config))
+    let runtime = builder.build()?;
+    // JavaScript runs on these, never on the Tokio workers above, so a turn
+    // that holds its thread cannot take the listeners' threads. Started
+    // after V8, so each thread inherits access to its protection key.
+    let isolate_threads = celld::env_vars::positive::<usize>("CELLD_ISOLATE_THREADS")?
+        .unwrap_or_else(celld::isolate_threads::default_core);
+    celld::isolate_threads::install(runtime.handle().clone(), isolate_threads)?;
+    runtime.block_on(async_main(telemetry_config))
 }
 
 async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyhow::Result<()> {
@@ -3747,12 +3775,27 @@ async fn async_main(telemetry_config: Option<celld::telemetry::Config>) -> anyho
         }
         Action::Run(settings) => settings,
     };
+    // A test hook, for `celld dev` and the conformance runner only: it lets a
+    // Worker hold its turn past any CPU limit.
+    if celld::env_vars::flag("CELLD_CONFORMANCE_HOLD", false)? {
+        anyhow::ensure!(
+            settings.dev_store.is_some(),
+            "CELLD_CONFORMANCE_HOLD=1 is a conformance test hook for `celld dev`; \
+             a node serving a bucket or fleet deployment does not start with it"
+        );
+        tracing::warn!(
+            event = "conformance_hold_enabled",
+            "CELLD_CONFORMANCE_HOLD=1: every Worker can hold its turn past its CPU limit \
+             (`__celldTestHold`); a test hook, never for a node that serves"
+        );
+    }
     // Operators need the applied worker count to verify CELLD_TOKIO_THREADS;
     // a count of process threads also includes unrelated, lazily started
     // thread pools, so it cannot stand in for this value.
     tracing::info!(
         event = "host_runtime",
         worker_count = host_runtime.metrics().num_workers(),
+        isolate_threads = celld::isolate_threads::census().map_or(0, |census| census.core),
         "host runtime initialized"
     );
     celld::startup::raise_file_limit();

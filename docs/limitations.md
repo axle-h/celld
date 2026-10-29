@@ -189,10 +189,39 @@ APIs, and Wrangler configuration.
   limit if that is longer, past its limit condemns its isolate, as the
   memory limit does: nothing new is placed there, its Durable Objects move
   once the turn returns, and its events fail with the CPU limit's error.
-  The thread stays in the call until it returns. Turns run on the node's
-  request threads, so turns that hold their threads, past the limit or
-  inside a limit of minutes, can occupy all of them, and the node then
-  answers nothing, its health checks included, until they end.
+  The thread stays in the call until it returns.
+- Turns run on isolate threads of their own (`CELLD_ISOLATE_THREADS`, the
+  CPU count by default), never on the threads that serve the listeners, so
+  a turn that holds its thread, past its limit or inside a limit of minutes,
+  holds only an isolate thread: the node's listeners, its health checks and
+  its other Workers keep answering. A turn that has run for 50 ms no longer
+  counts against the isolate threads, and the node starts another thread
+  for the turns that wait, up to twice the count of threads that are not
+  stuck and a hard ceiling with them; past that, waiting turns wait for one
+  to end.
+- A turn still running after the CPU watchdog asked it to stop, for the
+  limit or 100 ms, whichever is longer, but at most 500 ms, is stuck: it holds its thread and its heap until the call returns, and its
+  isolate takes no new work. Stuck turns count against their owner, the
+  script, including the Dynamic Workers it loads. An owner with 2 stuck
+  turns starts no new event until one returns: its requests, Dynamic Worker
+  calls and Durable Object events fail at once with the CPU limit's error,
+  and its Durable Objects are not placed; events already running go on.
+  With half as many stuck turns on the node as isolate threads (at least 3),
+  an owner that has one starts no isolate: a request that needs one is
+  refused with status 503 (`Worker refused: node has N isolates stuck past
+  their CPU limit…`), while owners with none grow as before. The caps stop
+  new work, not work already running: turns running when an owner reaches
+  its cap can still become stuck. `/state` reports the counts
+  (`stuckIsolates`) and the threads (`isolateThreads`).
+- While an owner has a turn that has run for 50 ms and is not stuck, it
+  starts at most half as many turns at once as there are isolate threads;
+  its further events wait behind its own, so other owners keep threads. A
+  few isolate threads past every ceiling are kept for owners with no stuck
+  or long turn.
+- PBKDF2 (WebCrypto and `node:crypto`) refuses more than 100 000
+  iterations, as Cloudflare does, with `NotSupportedError: Pbkdf2 failed:
+  iteration counts above 100000 are not supported (requested N).`; workerd
+  run locally sets no limit.
 - A D1 call (a query, a batch or an `exec()`) has Cloudflare's 30 second
   limit on its duration (`CELLD_D1_QUERY_LIMIT_MS` sets another). A
   statement still running at the limit is interrupted, the call fails with

@@ -84,6 +84,15 @@
     );
   }
 
+  // workerd's DEFAULT_MAX_PBKDF2_ITERATIONS, which Cloudflare enforces for
+  // WebCrypto and node:crypto alike (`checkPbkdfLimits`); workerd run
+  // locally sets no limit.
+  const MAX_PBKDF2_ITERATIONS = 100000;
+  function pbkdf2LimitMessage(iterations) {
+    return `Pbkdf2 failed: iteration counts above ${MAX_PBKDF2_ITERATIONS} ` +
+      `are not supported (requested ${iterations}).`;
+  }
+
   function _notSupported(message) {
     return new DOMException(message, "NotSupportedError");
   }
@@ -422,6 +431,11 @@
           if (!Number.isInteger(iterations) || iterations <= 0) {
             throw _operationError(
               "PBKDF2 iterations must be a positive integer");
+          }
+          // Cloudflare's cap (workerd's default limit enforcer): one call
+          // runs in the host, where no CPU limit can stop it.
+          if (iterations > MAX_PBKDF2_ITERATIONS) {
+            throw _notSupported(pbkdf2LimitMessage(iterations));
           }
           out = $$pbkdf2(hash, ikm, salt, iterations, bits / 8);
         }

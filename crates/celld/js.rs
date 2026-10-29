@@ -1476,7 +1476,7 @@ fn abandon_context_input_gates(context: &IoContext) -> Vec<(String, celld_logic:
 /// JS promise resolvers awaiting an async op, keyed by the op's id.
 ///
 /// **Per isolate, and shared across threads.** Under D1 a request's turns run
-/// on whichever tokio worker picks them up, so a resolver registered on one
+/// on whichever isolate thread picks them up, so a resolver registered on one
 /// thread is resolved from another; a thread-local map loses it, and
 /// `resolve_res` fails to find the resolver and returns silently, leaving the
 /// handler awaiting a promise nothing will ever settle. The `Mutex` is what
@@ -2039,6 +2039,17 @@ mod resource_limit_tests {
             cpu_ms,
             sub_requests: None,
         })
+    }
+
+    /// A turn counts as stuck at the condemnation grace, at most 500 ms
+    /// after its limit: never at an ordinary overrun, never minutes late.
+    #[test]
+    fn a_turn_counts_as_stuck_at_the_grace_or_500_ms() {
+        let ms = Duration::from_millis;
+        assert_eq!(cpu_stuck_after(ms(10)), ms(100));
+        assert_eq!(cpu_stuck_after(ms(300)), ms(300));
+        assert_eq!(cpu_stuck_after(ms(1000)), ms(500));
+        assert_eq!(cpu_stuck_after(ms(300_000)), ms(500));
     }
 
     #[test]
@@ -2672,7 +2683,7 @@ pub struct WorkerIsolate {
     /// Every `lock()` below blocks until the current holder releases. That is
     /// only safe because the pool takes an async permit for this isolate
     /// first, so the lock is uncontended by construction; a `lock()` reached
-    /// without that permit would be a blocking call on a tokio worker.
+    /// without that permit would be a blocking call on an isolate thread.
     isolate: v8::SharedIsolate,
     runtime_state: Arc<ActorRuntimeState>,
     /// The one realm this isolate has: its context, and the entry `fetch`
@@ -2694,7 +2705,7 @@ pub struct WorkerIsolate {
     /// The storage of the cells this isolate hosts.
     ///
     /// It lives here, and not in a thread-local, because a driven cell's
-    /// turns run on whatever tokio worker holds the isolate. See
+    /// turns run on whatever isolate thread holds the isolate. See
     /// `storage::Cells`.
     cells: storage::Cells,
     /// The isolate's backing-store budget, also its slot.
@@ -3975,6 +3986,9 @@ struct CpuWatch {
     /// The isolate's slot, which a turn that runs on past
     /// [`cpu_termination_grace`] condemns.
     slot: Option<std::sync::Weak<crate::pool::Slot>>,
+    /// The turn, which counts as stuck once it runs on a retry past the
+    /// limit ([`crate::turn_owner`]).
+    turn: Option<crate::turn_owner::TurnMark>,
     /// The runtime the turn runs under, where a condemnation's hooks run.
     tokio: Option<tokio::runtime::Handle>,
     condemned: bool,
@@ -3990,6 +4004,14 @@ const CPU_TERMINATION_RETRY: Duration = Duration::from_millis(10);
 /// its isolate: the larger of 100 ms and the limit itself.
 fn cpu_termination_grace(limit: Duration) -> Duration {
     limit.max(Duration::from_millis(100))
+}
+
+/// How long a turn may run on after its limit before it counts as stuck
+/// (`crate::turn_owner`): the condemnation grace, but at most 500 ms, so a
+/// long limit cannot hide a stuck turn for minutes, while an ordinary overrun
+/// (a collection, a large sort) is not taken for one.
+fn cpu_stuck_after(limit: Duration) -> Duration {
+    cpu_termination_grace(limit).min(Duration::from_millis(500))
 }
 
 #[derive(Default)]
@@ -4079,6 +4101,7 @@ impl CpuWatchdog {
             runtime_state,
             fired_at: None,
             slot: crate::pool::current_slot_weak(),
+            turn: cpu_limit.then(crate::turn_owner::current_turn).flatten(),
             tokio: tokio::runtime::Handle::try_current().ok(),
             condemned: false,
             spent: false,
@@ -4202,6 +4225,13 @@ fn run_cpu_watchdog_service(shared: &Arc<(Mutex<CpuWatchdogState>, std::sync::Co
                 }
             }
             let now = Instant::now();
+            // Asked long enough ago and still running: stuck in something
+            // that does not stop, which its owner's caps count from now on.
+            if let (Some(fired_at), Some(turn)) = (watch.fired_at, &watch.turn) {
+                if now.duration_since(fired_at) >= cpu_stuck_after(watch.limit) {
+                    turn.fired();
+                }
+            }
             let fired_at = *watch.fired_at.get_or_insert(now);
             if watch.cpu_limit
                 && !watch.condemned
@@ -6014,6 +6044,12 @@ impl Worker {
         let Some(inner) = self.inner.as_mut() else {
             return (None, Vec::new());
         };
+        // Its owner's turns are stuck past their CPU limit: no new event
+        // starts until one returns (`turn_owner`).
+        if crate::turn_owner::turn_refused() {
+            job.fail(anyhow::Error::new(CpuLimitExceeded));
+            return (None, Vec::new());
+        }
         let (mut locker, _cells) = inner.lock();
         if heap_limit_reached(&mut locker) {
             job.fail(condemned_error(&locker));
@@ -8652,6 +8688,12 @@ impl Worker {
         let Some(inner) = self.inner.as_mut() else {
             return (None, Vec::new());
         };
+        // Its owner's turns are stuck past their CPU limit: no new event
+        // starts until one returns (`turn_owner`).
+        if crate::turn_owner::turn_refused() {
+            job.fail(anyhow::Error::new(CpuLimitExceeded));
+            return (None, Vec::new());
+        }
         let (mut locker, _cells) = inner.lock();
         if heap_limit_reached(&mut locker) {
             job.fail(condemned_error(&locker));
@@ -9271,6 +9313,7 @@ ops! { OP_NAMES, install_op_functions,
         "__wait_until" => op_wait_until,
         "__wait_until_active" => op_wait_until_active,
         "__event_depth" => op_event_depth,
+        "__conformance_hold" => op_conformance_hold,
         "__als_get" => op_als_get,
         "__als_set" => op_als_set,
         "__span_owner" => span_ops::op_span_owner,
@@ -9816,6 +9859,8 @@ struct LoaderReload {
     /// its registry entry outlives it until the stub is collected.
     config: Mutex<Option<Arc<WorkerConfig>>>,
     pacing: Mutex<LoaderPacing>,
+    /// The script that loaded it, which its stuck turns count against.
+    owner: Arc<crate::turn_owner::Owner>,
 }
 
 /// The backoff between loads of a Worker whose isolates keep reaching the
@@ -9917,32 +9962,40 @@ impl LoaderReload {
                 )));
                 return;
             };
-            let (error, transient) =
-                match tokio::task::spawn_blocking(move || Worker::load_config(config)).await {
-                    Ok(Ok(worker)) => {
-                        let slot = crate::pool::Slot::loaded_worker(worker);
-                        // Weak: the state holds the slot, so a strong reference
-                        // here would keep both alive for good.
-                        let owner = Arc::downgrade(&reload);
-                        slot.on_condemn(Box::new(move |slot| {
-                            release_condemned_facets(slot);
-                            if let Some(owner) = owner.upgrade() {
-                                owner.let_go(slot);
-                            }
-                        }));
-                        reload.pacing.lock().unwrap().loaded();
-                        reload.state.send_replace(LoaderState::Ready(slot));
-                        return;
-                    }
-                    Ok(Err(error)) => (
-                        Arc::from(failed_to_start(&error)),
-                        error.is::<StartupCpuExceeded>(),
-                    ),
-                    Err(error) => (
-                        Arc::from(format!("worker loader: load task failed: {error}")),
-                        true,
-                    ),
-                };
+            // A load grows an isolate, which the node's stuck isolates can
+            // refuse; the call after the backoff tries again.
+            let loaded = match crate::turn_owner::refusal_for(Some(&reload.owner), true) {
+                Some(refusal) => Err(anyhow::Error::new(refusal)),
+                None => crate::isolate_threads::offload(move || Worker::load_config(config)).await,
+            };
+            let (error, transient) = match loaded {
+                Ok(Ok(worker)) => {
+                    let slot = crate::pool::Slot::loaded_worker(worker, reload.owner.clone());
+                    // Weak: the state holds the slot, so a strong reference
+                    // here would keep both alive for good.
+                    let owner = Arc::downgrade(&reload);
+                    slot.on_condemn(Box::new(move |slot| {
+                        release_condemned_facets(slot);
+                        if let Some(owner) = owner.upgrade() {
+                            owner.let_go(slot);
+                        }
+                    }));
+                    reload.pacing.lock().unwrap().loaded();
+                    reload.state.send_replace(LoaderState::Ready(slot));
+                    return;
+                }
+                Ok(Err(error)) => (
+                    Arc::from(failed_to_start(&error)),
+                    error.is::<StartupCpuExceeded>(),
+                ),
+                Err(error) if error.is::<crate::pool::StuckRefusal>() => {
+                    (Arc::from(error.to_string()), true)
+                }
+                Err(error) => (
+                    Arc::from(format!("worker loader: load task failed: {error}")),
+                    true,
+                ),
+            };
             if reloading || transient {
                 reload.pacing.lock().unwrap().failed();
                 reload
@@ -10188,6 +10241,10 @@ fn within_plan_limits(limits: Option<ResourceLimits>) -> Result<(), String> {
 
 async fn loaded_worker_slot(loaded: LoadedWorker) -> Result<Arc<crate::pool::Slot>, String> {
     let LoadedWorker { mut state, reload } = loaded;
+    // A Worker whose isolates are stuck runs nothing more until one returns.
+    if let Some(refusal) = crate::turn_owner::refusal_for(Some(&reload.owner), false) {
+        return Err(refusal.to_string());
+    }
     // A call that waited for a load and saw it fail takes that failure, and
     // leaves the next load to a later call.
     let mut waited = false;
@@ -10518,6 +10575,8 @@ fn op_loader_load(
         state: sender,
         config: Mutex::new(Some(config)),
         pacing: Mutex::new(LoaderPacing::default()),
+        // Counted against the script that loaded it, which chose its code.
+        owner: crate::turn_owner::owner(&owner.principal.script),
     });
     let loaded = LoadedWorker {
         state,
@@ -10661,7 +10720,12 @@ fn op_loader_fetch(
         // caller's promise and the child ran to completion with a live
         // `request.signal` (denoland/celld#257).
         let cancellation = crate::runtime::RequestCancellationLifetime::stateless();
-        let driving = tokio::spawn(cancellation.clone().drive_fetch_job(slot, job));
+        let (near, owner) = (slot.last_thread(), slot.owner());
+        let driving = crate::isolate_threads::spawn_near(
+            near,
+            owner,
+            cancellation.clone().drive_fetch_job(slot, job),
+        );
         let response = async {
             match receive.await {
                 Ok(response) => response,
@@ -10747,11 +10811,12 @@ fn op_loader_rpc(
             reply,
             parent,
         };
-        let driving = tokio::spawn(crate::runtime::drive(
-            slot,
-            job,
-            crate::telemetry::identity(),
-        ));
+        let (near, owner) = (slot.last_thread(), slot.owner());
+        let driving = crate::isolate_threads::spawn_near(
+            near,
+            owner,
+            crate::runtime::drive(slot, job, crate::telemetry::identity()),
+        );
         match receive.await {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(error)) => Err(format!("{error}")),
@@ -11076,7 +11141,11 @@ pub(crate) async fn release_root_facets(root: &str, epoch: u64, release: RootRel
     };
     // A nested facet records after its parent, so it closes first.
     for RecordedFacet { slot, scope, .. } in open.into_iter().rev() {
-        if let Err(error) = slot.turn(|worker| worker.own_cell(&scope, None)).await {
+        let closing = scope.clone();
+        if let Err(error) = slot
+            .turn(move |worker| worker.own_cell(&closing, None))
+            .await
+        {
             tracing::warn!(root, epoch, facet = %scope, %error, "a facet did not close with its root");
         }
         ws_close_facet(&scope, "the parent Durable Object was released");
@@ -11114,7 +11183,8 @@ fn release_condemned_facets(condemned: &crate::pool::Slot) {
     handle.spawn(async move {
         // A nested facet records after its parent, so it closes first.
         for RecordedFacet { slot, scope, .. } in taken.into_iter().rev() {
-            if let Err(error) = slot.turn(|worker| worker.own_cell(&scope, None)).await {
+            let closing = scope.clone();
+            if let Err(error) = slot.turn(move |worker| worker.own_cell(&closing, None)).await {
                 tracing::warn!(facet = %scope, %error, "a facet did not close with its condemned isolate");
             }
             ws_close_facet(&scope, "the Worker exceeded its memory limit");
@@ -11200,28 +11270,33 @@ async fn prepare_facet(host: FacetHost, start: FacetStart) -> Result<LoadedFacet
         &start.owner,
         &start.name,
     );
-    let opening = slot
-        .turn(|worker| {
-            if let Some(pending) = &pending {
-                pending.record(&slot, &scope, &names)?;
+    let turn_slot = slot.clone();
+    let (scope, root, opening) = slot
+        .turn(move |worker| {
+            let opening = match &pending {
+                Some(pending) => pending.record(&turn_slot, &scope, &names),
+                None => Ok(()),
             }
-            worker
-                .own_embedded_cell(
-                    &scope,
-                    &start.parent,
-                    &start.name,
-                    start.id_sc,
-                    start.props_sc,
-                    file,
-                )
-                .map_err(|error| format!("{error}"))
+            .and_then(|()| {
+                worker
+                    .own_embedded_cell(
+                        &scope,
+                        &start.parent,
+                        &start.name,
+                        start.id_sc,
+                        start.props_sc,
+                        file,
+                    )
+                    .map_err(|error| format!("{error}"))
+            });
+            (scope, start.parent.root_scope, opening)
         })
-        .await
-        .map_err(|error| format!("worker loader facet: {error}"))?;
+        .await;
+    let opening = opening.map_err(|error| format!("worker loader facet: {error}"))?;
     Ok(LoadedFacet {
         slot,
         scope,
-        root: start.parent.root_scope,
+        root,
         stream,
         epoch,
         opening,
@@ -11288,12 +11363,12 @@ fn op_facet_rpc(
             internal: false,
             reply,
         };
-        let driving = tokio::spawn(crate::runtime::drive_cell(
-            facet.slot.affiliate(),
-            job,
-            None,
-            trace,
-        ));
+        let (near, owner) = (facet.slot.last_thread(), facet.slot.owner());
+        let driving = crate::isolate_threads::spawn_near(
+            near,
+            owner,
+            crate::runtime::drive_cell(facet.slot.affiliate(), job, None, trace),
+        );
         let replied = receive.await;
         if replied.is_ok() {
             facet.gate_reply().await?;
@@ -11405,12 +11480,12 @@ fn op_facet_fetch(
             reply,
             order: None,
         };
-        let driving = tokio::spawn(crate::runtime::drive_cell(
-            facet.slot.affiliate(),
-            job,
-            None,
-            trace,
-        ));
+        let (near, owner) = (facet.slot.last_thread(), facet.slot.owner());
+        let driving = crate::isolate_threads::spawn_near(
+            near,
+            owner,
+            crate::runtime::drive_cell(facet.slot.affiliate(), job, None, trace),
+        );
         let replied = receive.await;
         if let Ok(Err(_)) = &replied {
             facet.gate_reply().await?;
@@ -11475,19 +11550,25 @@ fn op_facet_abort(
             None => Vec::new(),
         };
         for RecordedFacet { slot, scope, .. } in below {
-            if let Err(error) = slot.turn(|worker| worker.own_cell(&scope, None)).await {
+            let closing = scope.clone();
+            if let Err(error) = slot
+                .turn(move |worker| worker.own_cell(&closing, None))
+                .await
+            {
                 tracing::warn!(facet = %scope, %error, "a facet did not close with its parent");
             }
             ws_close_facet(&scope, ABORTED);
         }
         let (closed, outcome) = match &root {
             Some((root, _, path)) => {
-                slot.turn(|worker| worker.close_facet_tree(&facet_scope, root, path))
+                let (scope, root, path) = (facet_scope.clone(), root.clone(), path.clone());
+                slot.turn(move |worker| worker.close_facet_tree(&scope, &root, &path))
                     .await
             }
             None => {
+                let scope = facet_scope.clone();
                 let outcome = slot
-                    .turn(|worker| worker.own_cell(&facet_scope, None))
+                    .turn(move |worker| worker.own_cell(&scope, None))
                     .await
                     .map(|_| ());
                 (vec![facet_scope.clone()], outcome)
@@ -13590,6 +13671,7 @@ mod scope_grant_op_tests {
                 state,
                 config: Mutex::new(Some(config)),
                 pacing: Mutex::new(LoaderPacing::default()),
+                owner: crate::turn_owner::owner("loaded"),
             }),
         };
         let owner = LoaderOwner::fresh("parent", 0);
@@ -13613,6 +13695,7 @@ mod scope_grant_op_tests {
                 state: sender,
                 config: Mutex::new(None),
                 pacing: Mutex::new(LoaderPacing::default()),
+                owner: crate::turn_owner::owner("loaded"),
             }),
         }
     }
@@ -13921,10 +14004,11 @@ mod runtime_cell_tests {
             for (index, cell) in [&kv, &queue, &dlq].into_iter().enumerate() {
                 let path = dir.path().join(format!("{index}.db"));
                 let path = path.to_str().unwrap().to_string();
+                let cell = cell.clone();
                 runtime
-                    .block_on(cells.turn(|worker| {
+                    .block_on(cells.turn(move |worker| {
                         worker.own_cell(
-                            cell,
+                            &cell,
                             Some(CellStorage {
                                 path: &path,
                                 epoch: 1,
@@ -13979,19 +14063,20 @@ mod runtime_cell_tests {
                 );
             });
             // The runtime cells' own call, from a Queue cell's event.
+            let (turn_queue, turn_dlq) = (queue.clone(), dlq.clone());
             let operations = runtime
-                .block_on(cells.turn(|worker| {
+                .block_on(cells.turn(move |worker| {
                     // The event has written nothing, so its call trails no
                     // write and needs no output gate.
-                    let context = cell_event_context_for_test(&queue);
+                    let context = cell_event_context_for_test(&turn_queue);
                     context.egress.lock().unwrap()[0].before = worker
-                        .with_scope_for_test(|_| storage::write_position(&queue))
+                        .with_scope_for_test(|_| storage::write_position(&turn_queue))
                         .unwrap()
                         .unwrap_or(0);
                     op_rpc(
                         worker,
                         context,
-                        &dlq,
+                        &turn_dlq,
                         "__queueDlqAcceptBatch",
                         r#"[{ transfers: [] }]"#,
                     )
@@ -16903,6 +16988,57 @@ fn op_event_depth(
     rv.set(v8::Integer::new(scope, depth as i32).into());
 }
 
+/// Whether `CELLD_CONFORMANCE_HOLD=1` is set on a `celld dev` node: the
+/// conformance runner sets it for `limits/stuck-isolates`, and nothing else.
+pub(crate) fn conformance_hold_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    // Only a `celld dev` node has a dev store; the node refuses to start
+    // with the hook otherwise, and this checks again.
+    *ENABLED.get_or_init(|| {
+        crate::env_vars::flag("CELLD_CONFORMANCE_HOLD", false).unwrap_or(false)
+            && std::env::var_os("CELLD_INTERNAL_DEV_STORE").is_some()
+    })
+}
+
+/// The longest `__celldTestHold` call.
+const CONFORMANCE_HOLD_MAX_MS: u64 = 60_000;
+
+/// `__conformance_hold(ms)`: burn this thread's CPU for `ms` without
+/// checking for a termination, as a builtin that does not stop for one does,
+/// so a case can hold a turn past its CPU limit for a known time. Called with
+/// no argument it answers whether the hold exists (`CELLD_CONFORMANCE_HOLD`);
+/// a node without it refuses every hold.
+#[allow(clippy::disallowed_methods)]
+fn op_conformance_hold(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let enabled = conformance_hold_enabled();
+    if args.length() == 0 {
+        rv.set(v8::Boolean::new(scope, enabled).into());
+        return;
+    }
+    if !enabled {
+        return throw_hold_error(scope, "the conformance hold is not enabled");
+    }
+    let ms = args.get(0).number_value(scope).unwrap_or(0.0);
+    if !(ms.is_finite() && (0.0..=CONFORMANCE_HOLD_MAX_MS as f64).contains(&ms)) {
+        return throw_hold_error(scope, "the conformance hold takes 0 to 60000 ms");
+    }
+    let end = Instant::now() + Duration::from_millis(ms as u64);
+    while Instant::now() < end {
+        std::hint::spin_loop();
+    }
+    rv.set(v8::undefined(scope).into());
+}
+
+fn throw_hold_error(scope: &mut v8::PinScope, message: &str) {
+    let message = v8::String::new(scope, message).unwrap();
+    let exception = v8::Exception::type_error(scope, message);
+    scope.throw_exception(exception);
+}
+
 /// `Promise.allSettled(values)`, from the context's own realm.
 fn all_settled<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -17306,7 +17442,7 @@ fn op_btoa(
 /// An isolate slot rather than a process-wide `Mutex<HashMap<..>>` like
 /// [`zlib_streams`]. The reason that one is process-wide holds here too — a
 /// `TextDecoder` in streaming mode outlives the turn that made it, and the
-/// next turn can run on a different tokio worker — but it argues against a
+/// next turn can run on a different isolate thread — but it argues against a
 /// *thread-local*, not against this. A `TextDecoder` is a JS object, so it
 /// never leaves the isolate that made it, and every op that touches its
 /// decoder runs under that isolate's `v8::Locker`. The lock the embedder

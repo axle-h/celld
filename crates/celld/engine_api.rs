@@ -775,6 +775,9 @@ pub struct PoolCensus {
 pub enum AdmitError {
     Refused(Refusal),
     Build(anyhow::Error),
+    /// The script's, or the node's, isolates stuck past their CPU limit
+    /// (`pool::StuckRefusal`).
+    Stuck(crate::pool::StuckRefusal),
 }
 
 impl From<Refusal> for AdmitError {
@@ -791,6 +794,7 @@ impl std::fmt::Display for AdmitError {
             }
             AdmitError::Refused(Refusal::NodePressured) => write!(f, "node is shedding load"),
             AdmitError::Build(error) => write!(f, "isolate could not be started: {error}"),
+            AdmitError::Stuck(refusal) => write!(f, "{refusal}"),
         }
     }
 }

@@ -26,6 +26,11 @@ impl RoutedRequestError {
     /// The route to `cell` failed with `error`. A cell whose isolate failed
     /// to start on this node fails with what the start reported, as a
     /// Dynamic Worker's call does, rather than with the bare kind.
+    /// What the cell's start reported, when it failed to start.
+    pub fn detail(&self) -> Option<&str> {
+        self.1.as_deref()
+    }
+
     pub fn for_cell(error: RequestError, cell: &str) -> Self {
         let detail = (error == RequestError::RuntimeFailed)
             .then(|| startup_failure(cell))

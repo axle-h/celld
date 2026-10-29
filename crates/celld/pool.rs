@@ -6,18 +6,30 @@
 
 //! The isolate pool: the shell around `celld_logic::isolate`.
 //!
-//! One multi-threaded tokio runtime owns every socket and timer. Isolates
-//! belong to no thread — `v8::Locker` installs the entering thread's
-//! per-isolate state, so any worker can take an isolate and run a turn in it.
+//! One multi-threaded tokio runtime owns every socket and timer, and runs no
+//! JavaScript: a turn runs on an isolate thread (`crate::isolate_threads`).
+//! Isolates belong to no thread — `v8::Locker` installs the entering thread's
+//! per-isolate state, so any isolate thread can take an isolate and run a
+//! turn in it.
 //! This module owns the isolates and the counters; every choice about which
 //! isolate, when to grow, what to shed and what to retire is made by
 //! `celld_logic::isolate` and merely performed here.
 //!
-//! **The gate exists so nothing blocks.** `SharedIsolate::lock()` blocks
-//! until its holder releases. Every path here takes the slot's async permit
-//! first, so that blocking lock is uncontended by construction. A `lock()`
-//! reached without the permit would park a tokio worker on V8, which is the
-//! one thing this runtime refuses to do.
+//! **The turn queue exists so nothing blocks.** `SharedIsolate::lock()`
+//! blocks until its holder releases. A turn waits in its slot's queue
+//! without a thread, and one thread at a time runs a slot's queued turns, so
+//! that blocking lock is uncontended by construction. A `lock()` reached
+//! outside a turn would park a thread on V8, which is the one thing this
+//! runtime refuses to do.
+//!
+//! **Stuck isolates.** An isolate condemned for its CPU limit while its turn
+//! still runs (a builtin that does not stop for a termination) is *stuck*: it
+//! holds an isolate thread and its heap until the call returns. They are
+//! counted per script and node-wide ([`stuck_census`]). A script with
+//! [`crate::turn_owner::STUCK_PER_OWNER`] of them has its further requests and
+//! placements refused with the CPU limit's error, and at the node-wide cap
+//! ([`stuck_node_cap`]) a script that has one grows no isolate, until one
+//! returns (`crate::turn_owner`).
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -71,86 +83,166 @@ enum TurnLane {
     Cell(String),
 }
 
+/// One turn waiting for its isolate: it gets the isolate's worker, or `None`
+/// once the isolate was freed.
+type TurnJob = Box<dyn FnOnce(&mut Option<js::Worker>) + Send>;
+
+/// The turns waiting for one isolate, and whether a thread runs them now.
+///
+/// Turns of one isolate run one at a time, in lanes: the stateless lane and
+/// one per cell. A lane that has just run goes to the back when it has more
+/// waiting, so a hot cell can keep its next place but cannot take it from a
+/// cell that already waits on the same isolate.
+///
+/// Whichever thread runs the isolate's turns runs those that wait behind it
+/// too, back to back ([`Slot::run_turns`]), for up to [`TURN_BATCH`]: a busy
+/// Durable Object's turns follow each other on one thread, without a round
+/// trip through Tokio between them.
 #[derive(Default)]
-struct TurnSchedule {
+struct TurnQueue {
+    /// A thread runs this isolate's turns.
+    running: bool,
     current: Option<TurnLane>,
     ready: std::collections::VecDeque<TurnLane>,
-    waiting: std::collections::HashMap<
-        TurnLane,
-        std::collections::VecDeque<tokio::sync::oneshot::Sender<()>>,
-    >,
+    /// Each lane's turns, each marked when it starts an event: only those
+    /// wait for their owner's long turns (`Owner::must_wait`); a turn that
+    /// continues, cancels or settles an event, or releases a cell, never does.
+    waiting: std::collections::HashMap<TurnLane, std::collections::VecDeque<(bool, TurnJob)>>,
+    /// A test holds the isolate (`Slot::hold_turn_for_test`): no turn runs.
+    #[cfg(celld_internal_tests)]
+    held: bool,
 }
 
-#[derive(Default)]
-struct TurnScheduler {
-    schedule: Mutex<TurnSchedule>,
+/// How a run of one isolate's turns goes ([`Slot::run_turns`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunMode {
+    /// In a driver's poll: its own turn, then the rest go to a thread.
+    Inline,
+    /// A run of its own on an isolate thread, for up to [`TURN_BATCH`].
+    Batch,
+    /// No isolate threads: all of them, here.
+    Drain,
 }
 
-struct TurnPermit<'a>(&'a TurnScheduler);
+/// How long one thread runs an isolate's waiting turns before it lets other
+/// isolates have the thread.
+const TURN_BATCH: std::time::Duration = std::time::Duration::from_millis(1);
 
-impl TurnScheduler {
-    async fn acquire(&self, lane: TurnLane) -> TurnPermit<'_> {
-        let receive = {
-            let mut schedule = self.schedule.lock().expect("turn scheduler poisoned");
-            if schedule.current.is_none() {
-                schedule.current = Some(lane);
-                None
-            } else {
-                let (send, receive) = tokio::sync::oneshot::channel();
-                if !schedule.waiting.contains_key(&lane) && schedule.current.as_ref() != Some(&lane)
-                {
-                    schedule.ready.push_back(lane.clone());
-                }
-                schedule.waiting.entry(lane).or_default().push_back(send);
-                Some(receive)
-            }
-        };
-        if let Some(receive) = receive {
-            // Cancellation leaves a closed sender in this lane. `release`
-            // skips it, so a dropped waiter cannot strand the active token.
-            let _ = receive.await;
-        }
-        TurnPermit(self)
+impl TurnQueue {
+    /// Queue `job`; true when no thread runs the isolate's turns, so the
+    /// caller must start one.
+    #[cfg(test)]
+    fn push(&mut self, lane: TurnLane, job: TurnJob) -> bool {
+        self.push_turn(lane, false, job)
     }
 
-    fn release(&self) {
-        let mut schedule = self.schedule.lock().expect("turn scheduler poisoned");
-        let current = schedule
-            .current
-            .take()
-            .expect("a released turn scheduler has a current lane");
-        if schedule
-            .waiting
-            .get(&current)
-            .is_some_and(|waiters| !waiters.is_empty())
-        {
-            schedule.ready.push_back(current);
+    /// [`push`](Self::push), for a turn that starts an event when `event`.
+    fn push_turn(&mut self, lane: TurnLane, event: bool, job: TurnJob) -> bool {
+        if !self.waiting.contains_key(&lane) && self.current.as_ref() != Some(&lane) {
+            self.ready.push_back(lane.clone());
         }
-        while let Some(lane) = schedule.ready.pop_front() {
-            let (send, keep_lane) = {
-                let waiters = schedule
-                    .waiting
-                    .get_mut(&lane)
-                    .expect("a ready turn lane has waiters");
-                (waiters.pop_front().unwrap(), !waiters.is_empty())
+        self.waiting
+            .entry(lane)
+            .or_default()
+            .push_back((event, job));
+        !std::mem::replace(&mut self.running, true)
+    }
+
+    /// Whether the turn [`next`](Self::next) would take starts an event.
+    fn next_starts_event(&self) -> bool {
+        let lane = self.ready.front().or_else(|| {
+            self.current
+                .as_ref()
+                .filter(|lane| self.waiting.contains_key(*lane))
+        });
+        lane.and_then(|lane| self.waiting.get(lane))
+            .and_then(|waiting| waiting.front())
+            .is_some_and(|(event, _)| *event)
+    }
+
+    /// The next turn, round robin over the lanes; `None` ends the run.
+    fn next(&mut self) -> Option<TurnJob> {
+        #[cfg(celld_internal_tests)]
+        if self.held {
+            self.running = false;
+            return None;
+        }
+        if let Some(current) = self.current.take() {
+            if self
+                .waiting
+                .get(&current)
+                .is_some_and(|waiting| !waiting.is_empty())
+            {
+                self.ready.push_back(current);
+            }
+        }
+        while let Some(lane) = self.ready.pop_front() {
+            let Some(waiting) = self.waiting.get_mut(&lane) else {
+                continue;
             };
-            if !keep_lane {
-                schedule.waiting.remove(&lane);
+            let job = waiting.pop_front();
+            if waiting.is_empty() {
+                self.waiting.remove(&lane);
             }
-            if send.send(()).is_ok() {
-                schedule.current = Some(lane);
-                return;
-            }
-            if keep_lane {
-                schedule.ready.push_back(lane);
+            if let Some((_, job)) = job {
+                self.current = Some(lane);
+                return Some(job);
             }
         }
+        self.running = false;
+        None
     }
-}
 
-impl Drop for TurnPermit<'_> {
-    fn drop(&mut self) {
-        self.0.release();
+    /// [`next`](Self::next), but passing over turns that start an event,
+    /// while their owner must wait for its long turns: the first turn that
+    /// does not, in lane order, so a settlement queued behind a deferred
+    /// event start runs at once. `None` when only event starts wait, which
+    /// leaves the queue as it was, its run still marked.
+    fn next_skipping_events(&mut self) -> Option<TurnJob> {
+        #[cfg(celld_internal_tests)]
+        if self.held {
+            return None;
+        }
+        let mut order: Vec<TurnLane> = self.ready.iter().cloned().collect();
+        if let Some(current) = &self.current {
+            if self.waiting.contains_key(current) && !order.contains(current) {
+                order.push(current.clone());
+            }
+        }
+        for lane in order {
+            let Some(waiting) = self.waiting.get_mut(&lane) else {
+                continue;
+            };
+            let Some(index) = waiting.iter().position(|(event, _)| !*event) else {
+                continue;
+            };
+            let (_, job) = waiting.remove(index).expect("found above");
+            if waiting.is_empty() {
+                self.waiting.remove(&lane);
+            }
+            // The lane that just ran goes behind the others, as in `next`.
+            if let Some(current) = self.current.take() {
+                if current != lane
+                    && self.waiting.contains_key(&current)
+                    && !self.ready.contains(&current)
+                {
+                    self.ready.push_back(current);
+                }
+            }
+            self.ready.retain(|ready| *ready != lane);
+            self.current = Some(lane);
+            return Some(job);
+        }
+        None
+    }
+
+    /// End a run with turns still waiting, which another run takes.
+    fn has_waiting(&self) -> bool {
+        !self.ready.is_empty()
+            || self
+                .current
+                .as_ref()
+                .is_some_and(|lane| self.waiting.contains_key(lane))
     }
 }
 
@@ -175,15 +267,21 @@ pub struct Slot {
     me: std::sync::Weak<Slot>,
     /// The identity reported to node-wide Actor and pressure policy.
     heap_id: HeapId,
-    /// The async gate, holding the isolate it guards. Locking this is what
-    /// makes the V8 `Locker` beneath it uncontended.
+    /// The isolate, which the thread running its turns holds
+    /// ([`Slot::run_turns`]). Taking this is what makes the V8 `Locker`
+    /// beneath it uncontended: only that thread waits for it, and only
+    /// behind a census or a free, which `try_lock` it.
     ///
     /// `None` once the isolate has been retired and freed. Retirement only
     /// frees a slot that is drained — no turns, no affiliations — and a
     /// retiring slot is filtered out of every placement decision, so nothing
     /// can arrive afterwards. Entering one would be a bug in this module.
-    worker: tokio::sync::Mutex<Option<js::Worker>>,
-    turn_scheduler: TurnScheduler,
+    worker: Mutex<Option<js::Worker>>,
+    /// Whether a turn runs in this isolate now, and whether it is stuck.
+    presence: Arc<Presence>,
+    turn_queue: Mutex<TurnQueue>,
+    /// The isolate thread that last ran its turns, plus one; 0 for none.
+    last_thread: AtomicU64,
     queue_producers: Mutex<std::collections::HashMap<String, usize>>,
     turns: AtomicUsize,
     requests: AtomicUsize,
@@ -247,6 +345,23 @@ pub(crate) fn condemnations() -> u64 {
     CONDEMNATIONS.load(Ordering::Acquire)
 }
 
+use crate::turn_owner::refusal_for;
+pub use crate::turn_owner::stuck_census;
+pub use crate::turn_owner::stuck_isolates;
+pub use crate::turn_owner::stuck_node_cap;
+use crate::turn_owner::Owner;
+use crate::turn_owner::Presence;
+pub use crate::turn_owner::StuckCensus;
+pub use crate::turn_owner::StuckRefusal;
+
+/// A new slot's presence, counted against `owner`.
+fn presence_of(owner: Option<&Arc<Owner>>) -> Arc<Presence> {
+    match owner {
+        Some(owner) => owner.presence(),
+        None => Arc::new(Presence::new(None)),
+    }
+}
+
 thread_local! {
     static CURRENT_SLOT: std::cell::RefCell<Option<std::sync::Weak<Slot>>> =
         const { std::cell::RefCell::new(None) };
@@ -292,27 +407,80 @@ impl Slot {
             turns: self.turns.load(Ordering::Relaxed),
             requests: self.requests.load(Ordering::Relaxed),
             cells: self.cells.load(Ordering::Relaxed),
-            retiring: self.retiring.load(Ordering::Relaxed),
+            // A stuck turn holds the isolate: placement skips it until the
+            // turn returns, before the grace condemns it.
+            retiring: self.retiring.load(Ordering::Relaxed) || self.presence.is_stuck(),
         }
     }
 
-    /// Enter the isolate for one turn and run `f` inside it.
+    /// Enter the isolate for one turn and run `f` inside it, on an isolate
+    /// thread (`crate::isolate_threads`), or on this one when the node has
+    /// none.
     ///
     /// Only the gate is awaited; `f` is synchronous by type, so holding the
     /// isolate across an await is unwritable rather than a rule a comment
-    /// asks callers to remember.
-    pub async fn turn<T>(&self, f: impl FnOnce(&mut js::Worker) -> T) -> T {
-        self.turn_in(TurnLane::Stateless, f).await
+    /// asks callers to remember. `f` owns what it uses, since the turn can
+    /// outlive a caller that stops waiting: dropping the future before the
+    /// turn starts means it never runs, and after, it runs to its end and
+    /// its result is dropped on the isolate thread.
+    pub async fn turn<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut js::Worker) -> T + Send + 'static,
+    ) -> T {
+        self.turn_in(TurnLane::Stateless, false, f).await
+    }
+
+    /// [`turn`](Self::turn) for the turn that starts an event: it waits while
+    /// its owner runs its share with a long turn (`Owner::must_wait`).
+    pub(crate) async fn turn_event<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut js::Worker) -> T + Send + 'static,
+    ) -> T {
+        self.turn_in(TurnLane::Stateless, true, f).await
+    }
+
+    /// [`turn_cell`](Self::turn_cell) for the turn that starts a cell event.
+    pub(crate) async fn turn_cell_event<T: Send + 'static>(
+        &self,
+        scope: &str,
+        f: impl FnOnce(&mut js::Worker) -> T + Send + 'static,
+    ) -> T {
+        self.turn_in(TurnLane::Cell(scope.to_string()), true, f)
+            .await
+    }
+
+    /// [`turn`](Self::turn) with `state`, which the turn borrows and hands
+    /// back: an event's in-flight record, which lives between its turns.
+    pub async fn turn_with<S: Send + 'static, T: Send + 'static>(
+        &self,
+        mut state: S,
+        f: impl FnOnce(&mut js::Worker, &mut S) -> T + Send + 'static,
+    ) -> (S, T) {
+        self.turn(move |worker| {
+            let result = f(worker, &mut state);
+            (state, result)
+        })
+        .await
     }
 
     /// Enter one cell turn through a round-robin lane for that cell. A hot
     /// cell can retain its next place, but it cannot take the next place from
     /// another cell that already waits on the same isolate.
-    pub async fn turn_cell<T>(&self, scope: &str, f: impl FnOnce(&mut js::Worker) -> T) -> T {
-        self.turn_in(TurnLane::Cell(scope.to_string()), f).await
+    pub async fn turn_cell<T: Send + 'static>(
+        &self,
+        scope: &str,
+        f: impl FnOnce(&mut js::Worker) -> T + Send + 'static,
+    ) -> T {
+        self.turn_in(TurnLane::Cell(scope.to_string()), false, f)
+            .await
     }
 
-    async fn turn_in<T>(&self, lane: TurnLane, f: impl FnOnce(&mut js::Worker) -> T) -> T {
+    async fn turn_in<T: Send + 'static>(
+        &self,
+        lane: TurnLane,
+        event: bool,
+        f: impl FnOnce(&mut js::Worker) -> T + Send + 'static,
+    ) -> T {
         struct Counted<'a>(&'a Slot);
         impl Drop for Counted<'_> {
             fn drop(&mut self) {
@@ -325,22 +493,239 @@ impl Slot {
         }
         self.turns.fetch_add(1, Ordering::Relaxed);
         let _turn = Counted(self);
-        let _scheduled = self.turn_scheduler.acquire(lane.clone()).await;
-        let mut worker = self.worker.lock().await;
-        let worker = match worker.as_mut() {
-            Some(worker) => worker,
-            None => panic!("entered isolate {} after it was freed", self.id),
-        };
+        let me = self
+            .me
+            .upgrade()
+            .expect("a slot whose turn is awaited is alive");
         #[cfg(celld_internal_tests)]
-        self.turn_observations.lock().unwrap().push(match lane {
+        let observed = match &lane {
             TurnLane::Stateless => "stateless".to_string(),
-            TurnLane::Cell(scope) => scope,
+            TurnLane::Cell(scope) => scope.clone(),
+        };
+        let (send, receive) = tokio::sync::oneshot::channel::<std::thread::Result<T>>();
+        let slot = Arc::downgrade(&me);
+        let job: TurnJob = Box::new(move |worker| {
+            // The caller left before the turn began: it never runs. It is
+            // alive otherwise, so its turn keeps the isolate from being
+            // freed.
+            if send.is_closed() {
+                return;
+            }
+            let Some(me) = slot.upgrade() else {
+                return;
+            };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let worker = match worker.as_mut() {
+                    Some(worker) => worker,
+                    None => panic!("entered isolate {} after it was freed", me.id),
+                };
+                #[cfg(celld_internal_tests)]
+                me.turn_observations.lock().unwrap().push(observed);
+                me.run_one(worker, f)
+            }));
+            // A caller that left after the turn began drops its result
+            // here, inside the catch: the run of this isolate's turns must go
+            // on whatever the result's drop does. A panic is only logged.
+            let unsent = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || match send
+                .send(result)
+            {
+                Ok(()) => None,
+                Err(Err(panic)) => Some(crate::isolate_threads::panic_text(&*panic)),
+                Err(Ok(value)) => {
+                    drop(value);
+                    None
+                }
+            }));
+            let panic = match unsent {
+                Ok(panic) => panic,
+                Err(panic) => Some(crate::isolate_threads::panic_text(&*panic)),
+            };
+            if let Some(panic) = panic {
+                tracing::error!(
+                    event = "isolate_turn_panicked",
+                    isolate = %me.heap_id,
+                    %panic,
+                    "a turn whose caller left panicked"
+                );
+            }
         });
-        let previous = CURRENT_SLOT.replace(Some(self.me.clone()));
+        let start = me
+            .turn_queue
+            .lock()
+            .expect("turn queue poisoned")
+            .push_turn(lane, event, job);
+        if start {
+            match crate::isolate_threads::installed() {
+                // Already on an isolate thread, as an event's driver is
+                // (`isolate_threads::spawn_near`): run this turn here, and only
+                // this one, so the driver's reply waits for no other turn.
+                Some(_) if crate::isolate_threads::current_thread().is_some() => {
+                    me.run_turns(RunMode::Inline)
+                }
+                Some(threads) => {
+                    let prefer = me.last_thread();
+                    let owner = me.owner();
+                    threads.submit_for(
+                        Box::new(move || me.run_turns(RunMode::Batch)),
+                        prefer,
+                        owner.as_deref(),
+                    );
+                }
+                None => me.run_turns(RunMode::Drain),
+            }
+        }
+        match receive
+            .await
+            .expect("an isolate dropped a turn without running it")
+        {
+            Ok(value) => value,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+
+    /// The owner this isolate's turns count against.
+    pub(crate) fn owner(&self) -> Option<Arc<Owner>> {
+        self.presence.owner().cloned()
+    }
+
+    /// The isolate thread that last ran this isolate's turns.
+    pub(crate) fn last_thread(&self) -> Option<u64> {
+        self.last_thread.load(Ordering::Relaxed).checked_sub(1)
+    }
+
+    /// Run one turn in `worker`, marked as this slot's.
+    fn run_one<T>(&self, worker: &mut js::Worker, f: impl FnOnce(&mut js::Worker) -> T) -> T {
+        /// Undoes the slot mark, also when `f` panics.
+        struct Current(Option<std::sync::Weak<Slot>>);
+        impl Drop for Current {
+            fn drop(&mut self) {
+                CURRENT_SLOT.set(self.0.take());
+            }
+        }
+        let _entered = self.presence.enter();
+        let _current = Current(CURRENT_SLOT.replace(Some(self.me.clone())));
         let _turn = worker.watched_turn();
-        let result = f(worker);
-        CURRENT_SLOT.set(previous);
-        result
+        f(worker)
+    }
+
+    /// Run this isolate's waiting turns, one after another: one, with
+    /// [`RunMode::Inline`], handing the rest to an isolate thread; for up to
+    /// [`TURN_BATCH`], with [`RunMode::Batch`]; or all, with
+    /// [`RunMode::Drain`], where there are no isolate threads.
+    ///
+    /// While its owner has a long turn and runs its share, the run waits for
+    /// one of the owner's turns to end ([`Owner::must_wait`]).
+    fn run_turns(self: Arc<Self>, mode: RunMode) {
+        /// Ends the run if it unwinds, so the slot's turns are not left
+        /// waiting on a run that is gone.
+        struct Running<'a>(&'a Arc<Slot>, bool);
+        impl Drop for Running<'_> {
+            fn drop(&mut self) {
+                if self.1 {
+                    // What unwound held these; the queue and the isolate
+                    // stay consistent, so later runs and frees may use them.
+                    self.0.worker.clear_poison();
+                    self.0.turn_queue.clear_poison();
+                    self.0.end_run();
+                }
+            }
+        }
+        let started = std::time::Instant::now();
+        if let Some(thread) = crate::isolate_threads::current_thread() {
+            self.last_thread.store(thread + 1, Ordering::Relaxed);
+        }
+        let pooled = crate::isolate_threads::installed().is_some();
+        let mut running = Running(&self, true);
+        loop {
+            let event = self
+                .turn_queue
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .next_starts_event();
+            let wait =
+                event && pooled && self.presence.owner().is_some_and(|owner| owner.must_wait());
+            let next = {
+                let mut queue = self
+                    .turn_queue
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if wait {
+                    queue.next_skipping_events()
+                } else {
+                    queue.next()
+                }
+            };
+            // Only event starts wait, and their owner must wait: the run
+            // resumes once one of the owner's turns ends.
+            if next.is_none() && wait {
+                running.1 = false;
+                let slot = self.clone();
+                if let Some(owner) = self.presence.owner() {
+                    owner.defer(Box::new(move || slot.run_turns(RunMode::Batch)));
+                }
+                return;
+            }
+            let Some(job) = next else {
+                running.1 = false;
+                return;
+            };
+            {
+                // A job catches its own panics; one that escapes poisons
+                // nothing a later turn depends on.
+                let mut worker = self
+                    .worker
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                job(&mut worker);
+            }
+            let yields = match mode {
+                RunMode::Inline => true,
+                RunMode::Batch => started.elapsed() >= TURN_BATCH,
+                RunMode::Drain => false,
+            };
+            if yields {
+                running.1 = false;
+                self.end_run();
+                return;
+            }
+        }
+    }
+
+    /// End a run of this slot's turns: hand those still waiting to an
+    /// isolate thread, or mark the slot idle.
+    fn end_run(self: &Arc<Self>) {
+        let more = {
+            let mut queue = self
+                .turn_queue
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let more = queue.has_waiting();
+            if !more {
+                queue.running = false;
+            }
+            more
+        };
+        if !more {
+            return;
+        }
+        match crate::isolate_threads::installed() {
+            Some(threads) => {
+                let slot = self.clone();
+                let owner = slot.owner();
+                threads.submit_for(
+                    Box::new(move || slot.run_turns(RunMode::Batch)),
+                    None,
+                    owner.as_deref(),
+                );
+            }
+            // Nothing else runs them: the next turn's push starts a run.
+            None => {
+                self.turn_queue
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .running = false;
+            }
+        }
     }
 
     /// Reserve one event through its complete lifetime, including the reply
@@ -384,22 +769,29 @@ impl Slot {
         Affiliation(self.clone())
     }
 
-    /// A slot holding a Worker Loader's Worker.
-    pub(crate) fn loaded_worker(worker: js::Worker) -> Arc<Self> {
-        Self::outside_pool(worker, true)
+    /// A slot holding a Worker Loader's Worker, whose stuck isolates count
+    /// toward `stuck`.
+    pub(crate) fn loaded_worker(worker: js::Worker, owner: Arc<Owner>) -> Arc<Self> {
+        Self::outside_pool(worker, true, Some(owner))
     }
 
     /// A slot holding a Worker outside a placement pool.
     ///
     /// A dynamic Worker owns exactly one isolate, so it needs no
     /// admission, growth, or retirement policy.
-    fn outside_pool(worker: js::Worker, loaded_worker: bool) -> Arc<Self> {
+    fn outside_pool(
+        worker: js::Worker,
+        loaded_worker: bool,
+        owner: Option<Arc<Owner>>,
+    ) -> Arc<Self> {
         Arc::new_cyclic(|me| Slot {
             me: me.clone(),
             id: 0,
             heap_id: next_heap_id(),
-            worker: tokio::sync::Mutex::new(Some(worker)),
-            turn_scheduler: TurnScheduler::default(),
+            worker: Mutex::new(Some(worker)),
+            presence: presence_of(owner.as_ref()),
+            turn_queue: Mutex::default(),
+            last_thread: AtomicU64::new(0),
             queue_producers: Mutex::new(std::collections::HashMap::new()),
             turns: AtomicUsize::new(0),
             requests: AtomicUsize::new(0),
@@ -425,17 +817,19 @@ impl Slot {
 
     #[cfg(any(test, celld_internal_tests))]
     pub fn for_test(worker: js::Worker) -> Arc<Self> {
-        Self::outside_pool(worker, false)
+        Self::outside_pool(worker, false, None)
     }
 
-    #[cfg(all(test, celld_internal_tests))]
+    #[cfg(test)]
     pub(crate) fn vacant_for_request_cancellation_test() -> Arc<Self> {
         Arc::new_cyclic(|me| Slot {
             me: me.clone(),
             id: 0,
             heap_id: HeapId::new(0),
-            worker: tokio::sync::Mutex::new(None),
-            turn_scheduler: TurnScheduler::default(),
+            worker: Mutex::new(None),
+            presence: presence_of(None),
+            turn_queue: Mutex::default(),
+            last_thread: AtomicU64::new(0),
             queue_producers: Mutex::new(std::collections::HashMap::new()),
             turns: AtomicUsize::new(0),
             requests: AtomicUsize::new(0),
@@ -449,14 +843,41 @@ impl Slot {
             condemn_hook: OnceLock::new(),
             condemned_wake: tokio::sync::Notify::new(),
             broken_cells: std::sync::Mutex::new(Vec::new()),
+            #[cfg(celld_internal_tests)]
             turn_observations: Mutex::new(Vec::new()),
         })
     }
 
+    /// Hold the isolate as a turn would, once the turn running now ends: no
+    /// turn runs until the guard drops, and those queued meanwhile then run.
     #[cfg(celld_internal_tests)]
     #[doc(hidden)]
     pub async fn hold_turn_for_test(&self) -> impl Drop + '_ {
-        self.worker.lock().await
+        struct Held<'a>(&'a Slot);
+        impl Drop for Held<'_> {
+            fn drop(&mut self) {
+                let start = {
+                    let mut queue = self.0.turn_queue.lock().unwrap();
+                    queue.held = false;
+                    queue.has_waiting() && !std::mem::replace(&mut queue.running, true)
+                };
+                if let (true, Some(slot)) = (start, self.0.me.upgrade()) {
+                    match crate::isolate_threads::installed() {
+                        Some(threads) => threads.submit_for(
+                            Box::new(move || slot.run_turns(RunMode::Batch)),
+                            None,
+                            None,
+                        ),
+                        None => slot.run_turns(RunMode::Drain),
+                    }
+                }
+            }
+        }
+        self.turn_queue.lock().unwrap().held = true;
+        while self.turn_queue.lock().unwrap().running {
+            tokio::task::yield_now().await;
+        }
+        Held(self)
     }
 
     #[cfg(celld_internal_tests)]
@@ -487,6 +908,12 @@ impl Slot {
             max_cells,
             adopted: false,
         }
+    }
+
+    /// Whether placement may give this isolate new work: it is not
+    /// retiring, and no turn of it is stuck.
+    fn takes_work(&self) -> bool {
+        !self.is_retiring() && !self.presence.is_stuck()
     }
 
     pub fn is_retiring(&self) -> bool {
@@ -678,22 +1105,35 @@ impl Residency {
     ) -> Result<(Self, celld_logic::wake::AlarmSnapshot)> {
         anyhow::ensure!(!self.adopted, "cell residency already adopted");
         let slot = self.slot.clone();
-        let alarm = slot
-            .turn(|worker| -> Result<celld_logic::wake::AlarmSnapshot> {
-                let alarm = worker.own_cell(cell, Some(storage))?;
+        let cell = cell.to_string();
+        let path = storage.path.to_string();
+        let vfs = storage.vfs.map(str::to_string);
+        let (epoch, replicated_wake) = (storage.epoch, storage.replicated_wake);
+        // The residency goes into the turn and comes back: a caller that
+        // stops waiting leaves it to the turn, which drops it with both its
+        // counters once the adoption is accounted.
+        slot.turn(
+            move |worker| -> Result<(Self, celld_logic::wake::AlarmSnapshot)> {
+                let storage = js::CellStorage {
+                    path: &path,
+                    epoch,
+                    replicated_wake,
+                    vfs: vfs.as_deref(),
+                };
+                let alarm = worker.own_cell(&cell, Some(storage))?;
                 // There is no await between adoption and accounting. Cancellation
                 // before this turn drops only the reservation; afterward the
                 // residency owns both counters, including on an error unwind.
                 self.adopted = true;
-                let adopted = slot.adopted_cells.fetch_add(1, Ordering::Relaxed) + 1;
+                let adopted = self.slot.adopted_cells.fetch_add(1, Ordering::Relaxed) + 1;
                 debug_assert!(adopted <= self.max_cells);
                 if adopted == self.max_cells {
                     worker.settle_heap();
                 }
-                Ok(alarm)
-            })
-            .await?;
-        Ok((self, alarm))
+                Ok((self, alarm))
+            },
+        )
+        .await
     }
 }
 
@@ -709,7 +1149,7 @@ impl Drop for Residency {
     }
 }
 
-type Build = Box<dyn Fn() -> Result<js::Worker> + Send + Sync>;
+type Build = Arc<dyn Fn() -> Result<js::Worker> + Send + Sync>;
 
 pub struct Pool {
     slots: RwLock<Vec<Arc<Slot>>>,
@@ -729,20 +1169,34 @@ pub struct Pool {
     /// Stateless admission takes a shared guard, while maintenance and cell
     /// placement take the exclusive guard.
     maintenance: RwLock<()>,
+    /// The owner of the script this pool serves (`for_script`).
+    owner: Option<Arc<Owner>>,
 }
 
 impl Pool {
-    pub fn new(limits: PoolLimits, admission_wait: std::time::Duration, build: Build) -> Self {
+    pub fn new(
+        limits: PoolLimits,
+        admission_wait: std::time::Duration,
+        build: impl Fn() -> Result<js::Worker> + Send + Sync + 'static,
+    ) -> Self {
         Pool {
             slots: RwLock::new(Vec::new()),
             limits,
-            build,
+            build: Arc::new(build),
             freed: Arc::new(tokio::sync::Notify::new()),
             reclaim: Arc::new(tokio::sync::Notify::new()),
             admission_wait,
             retired: AtomicBool::new(false),
             maintenance: RwLock::new(()),
+            owner: None,
         }
+    }
+
+    /// Count this pool's stuck isolates as the script `script`'s, and refuse
+    /// its placements at the caps.
+    pub(crate) fn for_script(mut self, script: &str) -> Self {
+        self.owner = Some(crate::turn_owner::owner(script));
+        self
     }
 
     /// Share `reclaim` as this pool's reclaim bell, for an owner whose one
@@ -787,13 +1241,23 @@ impl Pool {
     /// produced sixteen isolates under load — the breach scaled with offered
     /// concurrency, and the configured limit was met only when serialised.
     fn grow(&self, cap: Option<usize>) -> Result<Arc<Slot>> {
-        let worker =
-            (self.build)().map_err(|source| anyhow::Error::new(WorkerLoadFailed(source)))?;
+        Ok(self.install(self.build_worker()?, cap))
+    }
+
+    /// Load the pool's Worker into a new isolate, outside any lock.
+    fn build_worker(&self) -> Result<js::Worker> {
+        (self.build)().map_err(|source| anyhow::Error::new(WorkerLoadFailed(source)))
+    }
+
+    /// Admit a built isolate to the pool, or, past `cap`, return a live one
+    /// and drop it.
+    fn install(&self, worker: js::Worker, cap: Option<usize>) -> Arc<Slot> {
         let mut slots = self.slots.write().expect("pool poisoned");
-        let live = slots.iter().filter(|slot| !slot.is_retiring()).count();
+        // As placement counts them (`observe`): a stuck isolate is not live.
+        let live = slots.iter().filter(|slot| slot.takes_work()).count();
         if cap.is_some_and(|cap| live >= cap) {
-            if let Some(slot) = slots.iter().find(|slot| !slot.is_retiring()) {
-                return Ok(slot.clone());
+            if let Some(slot) = slots.iter().find(|slot| slot.takes_work()) {
+                return slot.clone();
             }
         }
         // A freed slot has no worker, work, affiliations, or cells. Reuse its
@@ -806,8 +1270,10 @@ impl Pool {
             me: me.clone(),
             id,
             heap_id,
-            worker: tokio::sync::Mutex::new(Some(worker)),
-            turn_scheduler: TurnScheduler::default(),
+            worker: Mutex::new(Some(worker)),
+            presence: presence_of(self.owner.as_ref()),
+            turn_queue: Mutex::default(),
+            last_thread: AtomicU64::new(0),
             queue_producers: Mutex::new(std::collections::HashMap::new()),
             turns: AtomicUsize::new(0),
             requests: AtomicUsize::new(0),
@@ -830,14 +1296,17 @@ impl Pool {
             slots.push(slot.clone());
         }
         tracing::info!(isolate = %heap_id, slot = id, total = slots.len(), "isolate started");
-        Ok(slot)
+        slot
     }
 
-    fn resolve(&self, placement: Placement, cap: Option<usize>) -> Result<Arc<Slot>> {
-        match placement {
-            Placement::Existing(id) => Ok(self.get(id)),
-            Placement::Grow => self.grow(cap),
-        }
+    /// A live isolate to place on when the stuck caps refuse growth.
+    fn any_live(&self) -> Option<Arc<Slot>> {
+        self.slots
+            .read()
+            .expect("pool poisoned")
+            .iter()
+            .find(|slot| slot.takes_work())
+            .cloned()
     }
 
     /// Build one isolate up front.
@@ -853,32 +1322,72 @@ impl Pool {
         Ok(())
     }
 
-    /// Take a stateless request, or refuse it.
+    /// Take a stateless request, or refuse it, building an isolate on this
+    /// thread when it needs one.
     ///
     /// One call against one snapshot: admission and placement are the same
     /// decision, so the node cannot admit a request it then fails to place.
     pub fn admit(&self, shedding: bool) -> Result<Affiliation, AdmitError> {
-        // A configured request ceiling must remain exact under concurrent
-        // admission, so serialize the check and reservation only in that
-        // mode. The default unbounded path keeps concurrent shared access.
-        if self.limits.max_requests.is_some() {
-            let _maintenance = self.maintenance.write().expect("pool poisoned");
-            self.admit_locked(shedding)
-        } else {
-            let _maintenance = self.maintenance.read().expect("pool poisoned");
-            self.admit_locked(shedding)
+        let mut grown = None;
+        loop {
+            if let Some(affiliation) = self.admit_guarded(shedding, &mut grown)? {
+                return Ok(affiliation);
+            }
+            grown = Some(self.build_worker().map_err(AdmitError::Build)?);
         }
     }
 
-    fn admit_locked(&self, shedding: bool) -> Result<Affiliation, AdmitError> {
-        let placement = celld_logic::isolate::admit(&self.load(), shedding)?;
-        self.resolve(placement, Some(self.limits.max_stateless))
-            .map(|slot| slot.affiliate())
-            .map_err(AdmitError::Build)
+    /// One admission decision under the maintenance guard. `None` asks the
+    /// caller to build an isolate, outside the guard, and decide again with
+    /// it in `grown`; a decision that no longer grows drops it.
+    ///
+    /// A configured request ceiling must remain exact under concurrent
+    /// admission, so serialize the check and reservation only in that mode.
+    /// The default unbounded path keeps concurrent shared access.
+    fn admit_guarded(
+        &self,
+        shedding: bool,
+        grown: &mut Option<js::Worker>,
+    ) -> Result<Option<Affiliation>, AdmitError> {
+        if self.limits.max_requests.is_some() {
+            let _maintenance = self.maintenance.write().expect("pool poisoned");
+            self.admit_locked(shedding, grown)
+        } else {
+            let _maintenance = self.maintenance.read().expect("pool poisoned");
+            self.admit_locked(shedding, grown)
+        }
     }
 
-    /// [`admit`](Self::admit), except a request that finds the node full
-    /// waits — bounded — for a slot instead of being refused at once.
+    fn admit_locked(
+        &self,
+        shedding: bool,
+        grown: &mut Option<js::Worker>,
+    ) -> Result<Option<Affiliation>, AdmitError> {
+        // A script whose isolates are stuck runs nothing more until one
+        // returns: each request would only take another thread.
+        if let Some(refusal) = refusal_for(self.owner.as_deref(), false) {
+            return Err(AdmitError::Stuck(refusal));
+        }
+        match celld_logic::isolate::admit(&self.load(), shedding)? {
+            Placement::Existing(id) => Ok(Some(self.get(id).affiliate())),
+            Placement::Grow => {
+                if let Some(refusal) = refusal_for(self.owner.as_deref(), true) {
+                    return match self.any_live() {
+                        Some(slot) => Ok(Some(slot.affiliate())),
+                        None => Err(AdmitError::Stuck(refusal)),
+                    };
+                }
+                Ok(grown.take().map(|worker| {
+                    self.install(worker, Some(self.limits.max_stateless))
+                        .affiliate()
+                }))
+            }
+        }
+    }
+
+    /// [`admit`](Self::admit), except that an isolate is built on an
+    /// isolate thread, and a request that finds the node full waits —
+    /// bounded — for a slot instead of being refused at once.
     ///
     /// The wait is the middle gear between "admit" and "refuse". At
     /// overload the parse-and-503 path costs about half a served request,
@@ -891,11 +1400,22 @@ impl Pool {
     pub async fn admit_or_wait(&self, shedding: bool) -> Result<Affiliation, AdmitError> {
         let deadline_ms =
             crate::asyncrt::mono_ms().saturating_add(self.admission_wait.as_millis() as u64);
+        let mut grown = None;
         loop {
             // Armed before the check: a slot freed between a failed admit
             // and the park would otherwise be a lost wakeup.
             let freed = self.freed.notified();
-            match self.admit(shedding) {
+            match self.admit_guarded(shedding, &mut grown) {
+                Ok(Some(affiliation)) => return Ok(affiliation),
+                Ok(None) => {
+                    let build = self.build.clone();
+                    let built = crate::isolate_threads::offload(move || build())
+                        .await
+                        .map_err(|error| AdmitError::Build(error.context("isolate build")))?;
+                    grown = Some(built.map_err(|source| {
+                        AdmitError::Build(anyhow::Error::new(WorkerLoadFailed(source)))
+                    })?);
+                }
                 Err(AdmitError::Refused(Refusal::NodeFull)) => {
                     tokio::pin!(freed);
                     // A freed slot before the deadline: both arms end the
@@ -911,7 +1431,7 @@ impl Pool {
                         }
                     }
                 }
-                other => return other,
+                Err(other) => return Err(other),
             }
         }
     }
@@ -922,13 +1442,28 @@ impl Pool {
     /// shape: one call against one snapshot. It cannot refuse — by the time
     /// a cell needs a realm, ownership has already agreed the node serves
     /// it, so `celld_logic::isolate::place_cell` always answers.
+    ///
+    /// The stuck caps refuse it ([`StuckRefusal`]): a script at its own cap
+    /// places no cell, and at the node-wide cap no cell grows an isolate.
     pub fn place_cell(&self) -> Result<Residency> {
         let _maintenance = self.maintenance.write().expect("pool poisoned");
-        let placement = celld_logic::isolate::place_cell(&self.load());
-        // Cell isolates have no arbitrary total cap. The resident-cell and
-        // RSS limits bound node memory before placement. The lock keeps this
-        // reservation exact and prevents maintenance from retiring the slot.
-        Ok(self.resolve(placement, None)?.house(self.limits.max_cells))
+        if let Some(refusal) = refusal_for(self.owner.as_deref(), false) {
+            return Err(refusal.into());
+        }
+        let slot = match celld_logic::isolate::place_cell(&self.load()) {
+            Placement::Existing(id) => self.get(id),
+            Placement::Grow => {
+                if let Some(refusal) = refusal_for(self.owner.as_deref(), true) {
+                    return Err(refusal.into());
+                }
+                // Cell isolates have no arbitrary total cap. The resident-cell
+                // and RSS limits bound node memory before placement. The lock
+                // keeps this reservation exact and prevents maintenance from
+                // retiring the slot.
+                self.grow(None)?
+            }
+        };
+        Ok(slot.house(self.limits.max_cells))
     }
 
     /// One maintenance pass: give back an isolate the pool no longer needs,
@@ -1043,13 +1578,14 @@ impl Pool {
         }
     }
 
-    /// Return the current live-isolate count.
+    /// Return the current live-isolate count: those that take work, as
+    /// placement and the census count them.
     pub fn live(&self) -> usize {
         self.slots
             .read()
             .expect("pool poisoned")
             .iter()
-            .filter(|slot| !slot.is_retiring())
+            .filter(|slot| slot.takes_work())
             .count()
     }
 
@@ -1100,7 +1636,8 @@ impl Pool {
 }
 
 /// The property the whole design rests on: an isolate and everything hanging
-/// off it can be reached from any tokio worker. This is what `v8::Locker` and
+/// off it can be reached from any thread, which is how a turn travels to an
+/// isolate thread. This is what `v8::Locker` and
 /// `Send` Globals buy (denoland/rusty_v8#2044, #2045); without them
 /// `js::Worker` would not be `Send` and the pool could not exist.
 ///
@@ -1117,6 +1654,147 @@ const _: fn() = || {
 mod tests {
     use super::*;
 
+    /// Turns of one isolate take their lanes round robin: a lane that just
+    /// ran goes behind one already waiting, and one run ends when none is.
+    #[test]
+    fn turns_take_their_lanes_round_robin() {
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let job = |name: &'static str| -> TurnJob {
+            let order = order.clone();
+            Box::new(move |_| order.lock().unwrap().push(name))
+        };
+        let cell = |name: &str| TurnLane::Cell(name.to_string());
+        let mut queue = TurnQueue::default();
+        assert!(
+            queue.push(cell("a"), job("a1")),
+            "the first turn starts a run"
+        );
+        assert!(!queue.push(cell("a"), job("a2")));
+        assert!(!queue.push(cell("b"), job("b1")));
+        assert!(!queue.push(TurnLane::Stateless, job("s1")));
+        let mut worker = None;
+        let mut ran = 0;
+        while let Some(job) = queue.next() {
+            job(&mut worker);
+            ran += 1;
+            if ran == 1 {
+                // A hot lane keeps its place, but behind the waiting lanes.
+                assert!(!queue.push(cell("a"), job_after("a3", &order)));
+            }
+        }
+        assert_eq!(*order.lock().unwrap(), ["a1", "b1", "s1", "a2", "a3"]);
+        assert!(!queue.has_waiting());
+        assert!(
+            queue.push(cell("b"), job("b2")),
+            "an ended run starts again"
+        );
+    }
+
+    /// A run that unwinds hands its slot's turns on rather than leaving them
+    /// waiting on a run that is gone.
+    #[test]
+    fn a_run_that_unwinds_leaves_the_slot_usable() {
+        let slot = Slot::vacant_for_request_cancellation_test();
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let job = |name: &'static str| -> TurnJob {
+            let ran = ran.clone();
+            Box::new(move |_| ran.lock().unwrap().push(name))
+        };
+        {
+            let mut queue = slot.turn_queue.lock().unwrap();
+            assert!(queue.push(TurnLane::Stateless, Box::new(|_| panic!("outside a catch"))));
+            queue.push(TurnLane::Stateless, job("after"));
+        }
+        let run = slot.clone();
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            run.run_turns(RunMode::Drain)
+        }));
+        assert!(unwound.is_err());
+        // No isolate threads: the run is over, and the next push starts one.
+        assert!(!slot.worker.is_poisoned());
+        assert!(!slot.turn_queue.lock().unwrap().running);
+        assert!(slot
+            .turn_queue
+            .lock()
+            .unwrap()
+            .push(TurnLane::Stateless, job("next")));
+        slot.clone().run_turns(RunMode::Drain);
+        assert_eq!(*ran.lock().unwrap(), ["after", "next"]);
+    }
+
+    /// While event starts wait for their owner, the first turn that is not
+    /// one runs: a settlement queued behind a deferred event start.
+    #[test]
+    fn a_settlement_passes_a_waiting_event_start() {
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let job = |name: &'static str| -> TurnJob {
+            let order = order.clone();
+            Box::new(move |_| order.lock().unwrap().push(name))
+        };
+        let cell = |name: &str| TurnLane::Cell(name.to_string());
+        let mut queue = TurnQueue::default();
+        queue.push_turn(cell("a"), true, job("a-start"));
+        queue.push_turn(cell("a"), false, job("a-settle"));
+        queue.push_turn(cell("b"), true, job("b-start"));
+        queue.push_turn(TurnLane::Stateless, false, job("s-cancel"));
+        assert!(queue.next_starts_event());
+        let mut worker = None;
+        queue.next_skipping_events().unwrap()(&mut worker);
+        queue.next_skipping_events().unwrap()(&mut worker);
+        // Only event starts are left: the queue keeps them, and its run.
+        assert!(queue.next_skipping_events().is_none());
+        assert!(queue.has_waiting());
+        assert!(queue.running);
+        // Once the owner may run them, they run round robin: `a` ran last.
+        while let Some(job) = queue.next() {
+            job(&mut worker);
+        }
+        assert_eq!(
+            *order.lock().unwrap(),
+            ["a-settle", "s-cancel", "b-start", "a-start"]
+        );
+    }
+
+    fn job_after(name: &'static str, order: &Arc<Mutex<Vec<&'static str>>>) -> TurnJob {
+        let order = order.clone();
+        Box::new(move |_| order.lock().unwrap().push(name))
+    }
+
+    /// A script at its cap is refused before placement looks at an isolate,
+    /// with the CPU limit's error: a stateless request, and a cell.
+    #[test]
+    fn a_script_at_its_cap_is_refused_at_once() {
+        let pool = Pool::new(
+            crate::runtime::pool_limits(),
+            std::time::Duration::from_millis(1),
+            || anyhow::bail!("a capped script builds nothing"),
+        )
+        .for_script("a-script-at-its-cap");
+        let owner = pool.owner.clone().unwrap();
+        owner.set_stuck_for_test(crate::turn_owner::STUCK_PER_OWNER);
+        match pool.admit(false) {
+            Err(AdmitError::Stuck(StuckRefusal::Owner)) => {}
+            other => panic!("admitted past the cap: {:?}", other.err()),
+        }
+        let refused = pool.place_cell().err().expect("a cell is refused");
+        assert_eq!(
+            refused.downcast_ref::<StuckRefusal>(),
+            Some(&StuckRefusal::Owner)
+        );
+        assert_eq!(refused.to_string(), crate::js::CPU_EXCEEDED);
+        assert!(pool.is_empty());
+        // Another pool of the same script shares the count.
+        let cells = Pool::new(
+            crate::runtime::pool_limits(),
+            std::time::Duration::from_millis(1),
+            || anyhow::bail!("a capped script builds nothing"),
+        )
+        .for_script("a-script-at-its-cap");
+        assert!(cells.place_cell().err().unwrap().is::<StuckRefusal>());
+        owner.set_stuck_for_test(0);
+        assert!(matches!(pool.admit(false), Err(AdmitError::Build(_))));
+    }
+
     /// A Worker that does not load fails its placement with the load's own
     /// error, typed, so only that error reaches a caller as a startup error.
     #[test]
@@ -1124,9 +1802,7 @@ mod tests {
         let pool = Pool::new(
             crate::runtime::pool_limits(),
             std::time::Duration::from_millis(1),
-            Box::new(|| {
-                Err(anyhow::anyhow!("internal detail").context("Uncaught Error: never starts"))
-            }),
+            || Err(anyhow::anyhow!("internal detail").context("Uncaught Error: never starts")),
         );
         let error = pool.place_cell().err().expect("the build fails");
         let load = error

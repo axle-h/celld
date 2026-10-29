@@ -232,6 +232,7 @@ pub fn validate() -> anyhow::Result<()> {
 
     for name in [
         "CELLD_CLOUD",
+        "CELLD_CONFORMANCE_HOLD",
         "CELLD_LTX_COMPACTION",
         "CELLD_LTX_PAGED",
         "CELLD_TRUST_FORWARDED_HEADERS",
@@ -246,6 +247,7 @@ pub fn validate() -> anyhow::Result<()> {
         "CELLD_FETCH_TIMEOUT_S",
         "CELLD_HANDLER_BUDGET_S",
         "CELLD_IDLE_EVICT_S",
+        "CELLD_ISOLATE_THREADS",
         "CELLD_LOG_PIPELINE",
         "CELLD_LTX_COMPACTIONS",
         "CELLD_LTX_COMPACTION_MIN_TXIDS",

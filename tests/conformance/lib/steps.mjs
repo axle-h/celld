@@ -85,12 +85,15 @@ export function describeStep(step) {
       return `otlp ${step.spans.join(", ")}`;
     case "deploy":
       return `deploy ${[step.worker, ...step.args].join(" ")}`;
+    case "internal":
+      return `internal ${step.path}`;
   }
 }
 
 async function runStep(session, step) {
   switch (step.kind) {
     case "path":
+      if (step.probe !== undefined) return probedFetchStep(session, step);
       return fetchStep(session.origin, step);
     case "ws":
       return webSocketStep(session, step);
@@ -107,7 +110,81 @@ async function runStep(session, step) {
       return { otlp: await session.otlp.take(step.spans, STEP_TIMEOUT_MS) };
     case "deploy":
       return session.deploy(step, STEP_TIMEOUT_MS);
+    case "internal":
+      return internalStep(session.internal, step);
   }
+}
+
+// A GET to celld's operator listener, which must answer within `within` ms:
+// a node whose listener threads are all taken answers late or not at all.
+// With `until`, it asks again every 100 ms until the JSON answer has each
+// value, within the same bound. The transcript keeps the verdict, the last
+// status and the `record` paths, not the times, which vary by run.
+async function internalStep(origin, step) {
+  const started = Date.now();
+  const pick = (body, path) => path.split(".").reduce((value, key) => (value == null ? undefined : value[key]), body) ?? null;
+  const matches = (body) => Object.entries(step.until).every(([path, value]) => JSON.stringify(pick(body, path)) === JSON.stringify(value));
+  let status = null;
+  let body = null;
+  for (;;) {
+    const remaining = step.within - (Date.now() - started);
+    if (remaining <= 0) break;
+    try {
+      const response = await fetch(new URL(step.path, origin), { signal: AbortSignal.timeout(remaining) });
+      status = response.status;
+      const text = await response.text();
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = text;
+      }
+    } catch {
+      break;
+    }
+    if (matches(body) && Date.now() - started <= step.within) {
+      return {
+        status,
+        internal: `answered within ${step.within} ms`,
+        ...(step.record.length ? { values: Object.fromEntries(step.record.map((path) => [path, pick(body, path)])) } : {}),
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const last = Object.fromEntries([...Object.keys(step.until), ...step.record].map((path) => [path, pick(body, path)]));
+  return { status, internal: `no answer within ${step.within} ms`, after: `${Date.now() - started} ms`, last };
+}
+
+// A path step with a "probe": the operator listener must answer each probe
+// within its bound while the request is in flight. The transcript records the
+// verdict; the slowest probe only when it is over.
+async function probedFetchStep(session, step) {
+  let done = false;
+  const request = fetchStep(session.origin, step).finally(() => (done = true));
+  let probes = 0;
+  let slowest = 0;
+  let unanswered = 0;
+  while (!done) {
+    const started = Date.now();
+    try {
+      const response = await fetch(new URL(step.probe.path, session.internal), {
+        signal: AbortSignal.timeout(STEP_TIMEOUT_MS),
+      });
+      await response.arrayBuffer();
+    } catch {
+      unanswered++;
+    }
+    probes++;
+    slowest = Math.max(slowest, Date.now() - started);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const entry = await request;
+  const within = probes > 0 && unanswered === 0 && slowest <= step.probe.within;
+  return {
+    ...entry,
+    probe: within
+      ? `answered within ${step.probe.within} ms`
+      : `${probes} probes, ${unanswered} unanswered, slowest ${slowest} ms, past ${step.probe.within} ms`,
+  };
 }
 
 async function fetchStep(origin, step) {

@@ -108,7 +108,7 @@ pub(super) fn compile_module<'s>(
 ///
 /// **An isolate slot, not a thread-local.** These are `Global<Module>`
 /// handles into *one* isolate's heap. Under D1 several isolates are built and
-/// entered from the same tokio worker, so a thread-local made them share one
+/// entered from the same thread, so a thread-local made them share one
 /// table: `register_stubs` clearing it for a new isolate wiped a live one's
 /// stubs, and `dynamic_namespace` could localise a handle belonging to a
 /// different isolate — not a wrong answer but an invalid one. The registry

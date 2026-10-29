@@ -63,6 +63,8 @@ export async function startCelld({ binary, esbuild, dir, workers, env, publicPor
   const watched = new Set(watchPorts);
   const session = {
     origin: node.ready.public,
+    // The operator listener, for `internal` steps.
+    internal: node.ready.internal,
     otlp,
     // `"baseline"` resets the node's peak resident memory and notes where it
     // stands; a number then checks how far the peak has grown since, in MiB.
@@ -114,6 +116,7 @@ export async function startCelld({ binary, esbuild, dir, workers, env, publicPor
       await stop(node);
       node = await start(configs);
       session.origin = node.ready.public;
+      session.internal = node.ready.internal;
     },
     async stop() {
       try {

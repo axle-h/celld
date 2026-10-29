@@ -1,0 +1,14 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "webAtCap": { "bytes": 32 },
+        "webOver": { "name": "NotSupportedError", "message": "Pbkdf2 failed: iteration counts above 100000 are not supported (requested 100001)." },
+        "nodeAtCap": { "bytes": 32 },
+        "nodeOver": { "name": "NotSupportedError", "message": "Pbkdf2 failed: iteration counts above 100000 are not supported (requested 1000000)." },
+        "nodeCallback": { "name": "NotSupportedError", "message": "Pbkdf2 failed: iteration counts above 100000 are not supported (requested 100001)." }
+      }
+    }
+  ]
+}

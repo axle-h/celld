@@ -243,6 +243,24 @@ whose support hasn't landed yet: `nodes` greater than 1 or a step's `node`
   more it held. It shows a connection the node kept after its peer or its
   owner left. The step needs `"kind": "celld-only"`.
 
+- **`internal`**: `{"internal": "/ping", "within": 500}` sends a GET to
+  the celld node's operator listener, which must answer within `within` ms
+  (at most 30000). `"until"`, an object of dotted JSON paths and values such
+  as `{"stuckIsolates.total": 0}`, asks again every 100 ms until the answer
+  has them all, within the same bound; `"record"` keeps the values of more
+  dotted paths from the last answer. The transcript records the status, the
+  verdict (`"answered within 500 ms"`) and the recorded values; on a miss,
+  the paths' last values. A wedged node answers late or not at all. The
+  step needs `"kind": "celld-only"`.
+
+- **`probe`** on a `path` step: `{"path": "/hold", "probe": {"internal":
+  "/ping", "within": 500}}` sends a GET to the operator listener every
+  100 ms while the request is in flight, and each must answer within
+  `within` ms. The transcript adds `probe` with the verdict, and the
+  slowest probe only when it is over. A Worker cannot probe the operator
+  listener itself: the egress policy refuses it. The step needs `"kind":
+  "celld-only"`.
+
 - **`otlp`**: `{"otlp": {"spans": ["celld.fetch", "outer"]}}` waits until
   celld has exported spans with those names (a name listed twice waits for
   two), then until nothing more arrives for 500 ms. It records everything

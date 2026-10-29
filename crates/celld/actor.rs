@@ -1756,6 +1756,13 @@ impl AppHandle {
                     .collect::<serde_json::Map<_, _>>(),
             });
         }
+        // The threads JavaScript runs on, and the isolates stuck on them past
+        // their CPU limit: a count that stays at a cap is a script, or a node,
+        // refusing work.
+        state["isolateThreads"] = serde_json::to_value(crate::isolate_threads::census())
+            .unwrap_or(serde_json::Value::Null);
+        state["stuckIsolates"] =
+            serde_json::to_value(crate::pool::stuck_census()).unwrap_or(serde_json::Value::Null);
         state.to_string()
     }
 

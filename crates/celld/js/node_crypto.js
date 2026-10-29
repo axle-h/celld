@@ -28,6 +28,7 @@
   "use strict";
   const Buffer = globalThis.Buffer; // lazy global; forces node_buffer
   const kMaxLength = 2147483647;
+  const MAX_PBKDF2_ITERATIONS = 100000;
 
   // ---- errors / validators (Workerd's internal_errors.ts subset) -----------
   const kTypes = [
@@ -1108,6 +1109,15 @@
   function getPbkdf(password, salt, iterations, keylen, digest) {
     const info = digestInfo(digest);
     if (!info) throw new TypeError(`Invalid Pbkdf2 digest: ${digest}`);
+    // Cloudflare's cap, as in workerd's `checkPbkdfLimits` (its default
+    // limit enforcer; workerd run locally sets none): one call runs in the
+    // host, where no CPU limit can stop it.
+    if (iterations > MAX_PBKDF2_ITERATIONS) {
+      throw new DOMException(
+        `Pbkdf2 failed: iteration counts above ${MAX_PBKDF2_ITERATIONS} are ` +
+          `not supported (requested ${iterations}).`,
+        "NotSupportedError");
+    }
     if (keylen > 255 * info[1]) {
       throw new RangeError(
         "Pbkdf2 failed: derived key length exceeds maximum for this hash");

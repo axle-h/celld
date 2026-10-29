@@ -1,0 +1,86 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "hogs": [
+          "Worker exceeded CPU time limit."
+        ],
+        "probed": true,
+        "slowProbes": []
+      },
+      "probe": "answered within 500 ms"
+    },
+    {
+      "status": 200,
+      "internal": "answered within 30000 ms"
+    },
+    {
+      "status": 200,
+      "body": "holding",
+      "probe": "answered within 500 ms"
+    },
+    {
+      "status": 404,
+      "internal": "answered within 500 ms"
+    },
+    {
+      "status": 200,
+      "internal": "answered within 10000 ms",
+      "values": {
+        "stuckIsolates.total": 3,
+        "stuckIsolates.nodeCap": 3,
+        "stuckIsolates.ownerCap": 2
+      }
+    },
+    {
+      "status": 404,
+      "internal": "answered within 500 ms"
+    },
+    {
+      "status": 200,
+      "body": {
+        "stuck": {
+          "message": "Worker exceeded CPU time limit.",
+          "atOnce": true
+        },
+        "stuck2": {
+          "message": "node has 3 isolates stuck past their CPU limit, this Worker's among them, and starts no more for it",
+          "atOnce": true
+        },
+        "otherGrew": 2
+      },
+      "probe": "answered within 500 ms"
+    },
+    {
+      "status": 200,
+      "internal": "answered within 30000 ms"
+    },
+    {
+      "status": 200,
+      "body": {
+        "stateless": "held",
+        "room": "pong",
+        "whileStuck": {
+          "placed": {
+            "error": "Error",
+            "message": "Worker exceeded CPU time limit.",
+            "atOnce": true
+          },
+          "fresh": {
+            "error": "Error",
+            "message": "Worker exceeded CPU time limit."
+          }
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "dynamic": "Worker exceeded CPU time limit.",
+        "stateless": "Worker exceeded CPU time limit.",
+        "stuck2": "Worker exceeded CPU time limit."
+      }
+    }
+  ]
+}

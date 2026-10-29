@@ -14205,6 +14205,15 @@ if (!globalThis.navigator) globalThis.navigator = {
 };
 if (!globalThis.queueMicrotask)
   globalThis.queueMicrotask = (f) => Promise.resolve().then(f);
+// A test hook that exists only on a node started with
+// CELLD_CONFORMANCE_HOLD=1 (`limits/stuck-isolates`): a call that holds its
+// turn for `ms`, past any CPU limit, as a builtin that ignores a termination.
+if (__conformance_hold()) {
+  Object.defineProperty(globalThis, "__celldTestHold", {
+    value: function __celldTestHold(ms) { return __conformance_hold(ms); },
+    writable: false, enumerable: false, configurable: false,
+  });
+}
 // workerd's `Scheduler` (src/workerd/api/basics.h) has `wait` alone. Its
 // arguments convert as JSG converts them, and a bad one rejects rather than
 // throws, because the method returns a promise. An abort rejects with the

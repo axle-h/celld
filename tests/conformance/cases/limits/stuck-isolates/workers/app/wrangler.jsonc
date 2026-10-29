@@ -1,0 +1,11 @@
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "services": [
+    { "binding": "HOG", "service": "hog" },
+    { "binding": "STUCK", "service": "stuck" },
+    { "binding": "STUCK2", "service": "stuck2" },
+    { "binding": "OTHER", "service": "other" }
+  ]
+}

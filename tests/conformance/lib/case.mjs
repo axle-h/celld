@@ -8,7 +8,7 @@ import { REQUIREMENTS } from "./requirements.mjs";
 
 const CASE_KEYS = new Set(["kind", "reason", "workers", "env", "upstream", "observability", "nodes", "xfail", "requires", "steps", "normalize"]);
 const STEP_KEYS = {
-  path: new Set(["path", "method", "headers", "body", "chunked", "responseHeaders"]),
+  path: new Set(["path", "method", "headers", "body", "chunked", "responseHeaders", "probe"]),
   ws: new Set(["ws", "send", "receive", "close", "protocols", "raw", "shutdown", "stall", "record", "drop", "reset", "repeat"]),
   restart: new Set(["restart"]),
   rss: new Set(["rss"]),
@@ -16,6 +16,7 @@ const STEP_KEYS = {
   sockets: new Set(["sockets", "within"]),
   otlp: new Set(["otlp"]),
   deploy: new Set(["deploy", "args"]),
+  internal: new Set(["internal", "within", "until", "record"]),
 };
 // The `celld deploy` flags a deploy step may add. The step always passes
 // --dry-run --json, so nothing is written.
@@ -138,9 +139,11 @@ export function loadCase(root, id) {
     });
   }
   steps.forEach((step, index) => {
-    if (step.kind !== "rss" && step.kind !== "sockets" && step.kind !== "cpu") return;
-    // workerd runs under wrangler, whose process holds more than the case.
-    if (kind !== "celld-only") fail(`steps[${index}]: an "${step.kind}" step measures the celld node, so it needs "kind": "celld-only"`);
+    if (step.kind !== "rss" && step.kind !== "sockets" && step.kind !== "cpu" && step.kind !== "internal" && step.probe === undefined) return;
+    // workerd runs under wrangler, whose process holds more than the case;
+    // the operator listener is celld's own.
+    const what = step.probe === undefined ? `an "${step.kind}" step` : `a "probe"`;
+    if (kind !== "celld-only") fail(`steps[${index}]: ${what} measures the celld node, so it needs "kind": "celld-only"`);
   });
   if (steps.some((step) => typeof step.sockets === "number") && steps.findIndex((step) => step.sockets === "baseline") === -1) {
     fail(`a "sockets" limit is measured from an earlier "sockets": "baseline" step`);
@@ -254,6 +257,7 @@ function validateStep(step, fail) {
         body: step.body,
         chunked: step.chunked ?? false,
         responseHeaders: step.responseHeaders,
+        probe: validateProbe(step.probe, fail),
       };
     case "ws": {
       if (!nonEmptyString(step.ws) || !step.ws.startsWith("/")) fail(`"ws" must start with "/"`);
@@ -344,6 +348,19 @@ function validateStep(step, fail) {
         fail(`"wait" is a number of milliseconds up to 90000, for a "cpu" step`);
       }
       return { kind, cpu: step.cpu, wait: step.wait ?? 0 };
+    case "internal": {
+      if (!nonEmptyString(step.internal) || !step.internal.startsWith("/")) fail(`"internal" must be a path on the operator listener, starting with "/"`);
+      if (!(Number.isInteger(step.within) && step.within > 0 && step.within <= 30_000)) {
+        fail(`"within" must be the most milliseconds the step waits, up to 30000`);
+      }
+      // "until" polls a JSON answer until each dotted path has its value;
+      // "record" keeps the values of these paths from the last answer.
+      const until = step.until ?? {};
+      if (!isObject(until)) fail(`"until" must be an object of dotted JSON paths and the values to wait for`);
+      const record = step.record ?? [];
+      if (!Array.isArray(record) || !record.every(nonEmptyString)) fail(`"record" must be an array of dotted JSON paths`);
+      return { kind, path: step.internal, within: step.within, until, record };
+    }
     case "rss":
       if (!(step.rss === "baseline" || (Number.isInteger(step.rss) && step.rss > 0))) {
         fail(`"rss" must be "baseline" or the most MiB the node's peak memory may grow by`);
@@ -369,6 +386,22 @@ function validateStep(step, fail) {
       return { kind, worker: step.deploy, args };
     }
   }
+}
+
+// A path step's "probe": while the request is in flight, the runner asks
+// celld's operator listener for `internal` every 100 ms, and each answer
+// must come within `within` ms.
+function validateProbe(probe, fail) {
+  if (probe === undefined) return undefined;
+  if (!isObject(probe)) fail(`"probe" must be an object`);
+  for (const key of Object.keys(probe)) {
+    if (!["internal", "within"].includes(key)) fail(`unknown key "probe.${key}"`);
+  }
+  if (!nonEmptyString(probe.internal) || !probe.internal.startsWith("/")) fail(`"probe.internal" must be a path on the operator listener, starting with "/"`);
+  if (!(Number.isInteger(probe.within) && probe.within > 0 && probe.within <= 30_000)) {
+    fail(`"probe.within" must be the most milliseconds a probe may take, up to 30000`);
+  }
+  return { path: probe.internal, within: probe.within };
 }
 
 function readExpect(id, path, kind) {

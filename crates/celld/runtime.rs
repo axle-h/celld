@@ -480,8 +480,8 @@ fn env_usize(name: &str) -> Option<usize> {
 pub struct StatelessRuntime {
     pub node: Arc<str>,
     pub region: Arc<str>,
-    /// The isolates fetch runs on, entered one turn at a time from whichever
-    /// tokio worker is driving the request.
+    /// The isolates fetch runs on, entered one turn at a time on an isolate
+    /// thread for whichever tokio worker is driving the request.
     pub isolates: Arc<crate::pool::Pool>,
 }
 
@@ -494,7 +494,7 @@ pub enum StatelessVerb {
 }
 
 impl StatelessVerb {
-    fn task_died(self, error: tokio::task::JoinError) -> anyhow::Error {
+    fn task_died(self, error: crate::isolate_threads::TaskDied) -> anyhow::Error {
         match self {
             Self::Fetch => anyhow!("stateless request task died: {error}"),
             Self::Rpc => anyhow!("stateless RPC task died: {error}"),
@@ -652,13 +652,13 @@ pub(crate) fn cell_pool(
     config: Arc<WorkerConfig>,
     reclaim: Arc<tokio::sync::Notify>,
 ) -> Arc<crate::pool::Pool> {
+    let script = config.script_name.clone();
     Arc::new(
-        crate::pool::Pool::new(
-            pool_limits(),
-            admission_wait(),
-            Box::new(move || load_cell_isolate(config.clone())),
-        )
-        .with_reclaim(reclaim),
+        crate::pool::Pool::new(pool_limits(), admission_wait(), move || {
+            load_cell_isolate(config.clone())
+        })
+        .with_reclaim(reclaim)
+        .for_script(&script),
     )
 }
 
@@ -1022,7 +1022,8 @@ impl RuntimeManager {
             tail_report: None,
             reply,
         };
-        tokio::spawn(async move {
+        let (near, owner) = (isolate.slot().last_thread(), isolate.slot().owner());
+        let _driving = crate::isolate_threads::spawn_near(near, owner, async move {
             let _inline_activity = inline_activity;
             drive_worker_on_cell(isolate, job).await;
         });
@@ -1272,12 +1273,13 @@ impl RuntimeManager {
             // Taking the isolate for this turn is the barrier: an event of
             // this cell either finished its turn before it or has not
             // started one, so closing its SQLite cannot land mid-handler.
-            slot.turn(|worker| {
+            let releasing = cell.to_string();
+            slot.turn(move |worker| {
                 #[cfg(debug_assertions)]
                 if let Some(error) = crate::engine_api::injected_swap_release_failure() {
                     return Err(error);
                 }
-                worker.own_cell(cell, None)
+                worker.own_cell(&releasing, None)
             })
             .await
             .with_context(|| format!("release {cell} from its isolate for a generation swap"))?;
@@ -1347,17 +1349,23 @@ impl RuntimeManager {
         let isolates = generation
             .cell_isolates(&config.script_name)
             .ok_or_else(|| anyhow!("no cell isolates for script {}", config.script_name))?;
-        // Building an isolate compiles the script, so it runs on a blocking
+        // Building an isolate compiles the script, so it runs on an isolate
         // thread: the pool builds before taking its lock, but the caller is a
         // tokio worker either way.
         let placed = {
             let isolates = isolates.clone();
-            tokio::task::spawn_blocking(move || isolates.place_cell())
+            crate::isolate_threads::offload(move || isolates.place_cell())
                 .await
-                .context("cell placement panicked")?
+                .context("cell placement")?
         };
         let residency = match placed {
             Ok(residency) => residency,
+            // The script's stuck isolates refuse it: its callers see why.
+            Err(error) if error.is::<crate::pool::StuckRefusal>() => {
+                startup_timing.emit("error", "stuck_isolates");
+                let failure = error.to_string();
+                return Err(error.context(crate::cell_dispatch::CellStartupFailed(failure)));
+            }
             Err(error) => {
                 startup_timing.emit("error", "worker_load");
                 // Only the Worker's own startup error is its callers' to see.
@@ -1528,7 +1536,10 @@ impl RuntimeManager {
             let _ = handle
                 .residency
                 .slot()
-                .turn_cell(cell, |worker| worker.own_cell(cell, None))
+                .turn_cell(cell, {
+                    let cell = cell.to_string();
+                    move |worker| worker.own_cell(&cell, None)
+                })
                 .await;
             // Dropping the handle drops its residency, which is what gives
             // the isolate its place back — and what lets `retire` reclaim
@@ -1683,7 +1694,8 @@ impl RuntimeManager {
         };
         let alarm_reporter = self.alarm_reporter.clone();
         let drive_cancellation = cancellation.clone();
-        tokio::spawn(async move {
+        let (near, owner) = (affiliation.slot().last_thread(), affiliation.slot().owner());
+        let _driving = crate::isolate_threads::spawn_near(near, owner, async move {
             let _permit = permit;
             drive_cell_with_request_cancellation(
                 affiliation,
@@ -1786,7 +1798,8 @@ impl RuntimeManager {
         };
         let isolate = self.cell_isolate(&cell)?;
         let alarm_reporter = self.alarm_reporter.clone();
-        let drive = crate::asyncrt::spawn(async move {
+        let (near, owner) = (isolate.slot().last_thread(), isolate.slot().owner());
+        let drive = crate::isolate_threads::spawn_near(near, owner, async move {
             let _guard = guard;
             drive_alarm(isolate, job, Some(alarm_reporter)).await
         });
@@ -2174,7 +2187,9 @@ async fn run_cell_event<T>(
     receive: tokio::sync::oneshot::Receiver<anyhow::Result<T>>,
     dropped: &'static str,
 ) -> anyhow::Result<T> {
-    tokio::spawn(drive_cell(isolate, job, report, parent));
+    let (near, owner) = (isolate.slot().last_thread(), isolate.slot().owner());
+    let _driving =
+        crate::isolate_threads::spawn_near(near, owner, drive_cell(isolate, job, report, parent));
     receive.await.context(dropped)?
 }
 
@@ -2379,7 +2394,7 @@ async fn drive_worker(
     let mut ops = Ops::new();
 
     let (begun, started) = slot
-        .turn(|worker| worker.turn_begin(job, trace, spans))
+        .turn_event(move |worker| worker.turn_begin(job, trace, spans))
         .await;
     // Nothing is in flight; the reply already carries the error.
     let Some(mut entry) = begun else {
@@ -2405,8 +2420,13 @@ async fn drive_worker(
         };
         let started = match wake {
             Wake::Op(op, result) => {
-                slot.turn(|worker| worker.turn_deliver(&mut entry, op, result))
-                    .await
+                let started;
+                (entry, started) = slot
+                    .turn_with(entry, move |worker, entry| {
+                        worker.turn_deliver(entry, op, result)
+                    })
+                    .await;
+                started
             }
             Wake::GatedReply(completion) => {
                 entry.finish_gated_reply(completion);
@@ -2421,12 +2441,13 @@ async fn drive_worker(
                 Vec::new()
             }
             Wake::Cancelled { shutdown } => {
-                let started = slot
-                    .turn(|worker| {
+                let started;
+                (entry, started) = slot
+                    .turn_with(entry, move |worker, entry| {
                         if shutdown {
-                            worker.turn_cancel_for_shutdown(&mut entry)
+                            worker.turn_cancel_for_shutdown(entry)
                         } else {
-                            worker.turn_cancel(&mut entry)
+                            worker.turn_cancel(entry)
                         }
                     })
                     .await;
@@ -2442,10 +2463,21 @@ async fn drive_worker(
                 Vec::new()
             }
             Wake::PendingEventIdle => {
-                slot.turn(|worker| worker.turn_cancel_pending_events(&mut entry))
-                    .await
+                let started;
+                (entry, started) = slot
+                    .turn_with(entry, |worker, entry| {
+                        worker.turn_cancel_pending_events(entry)
+                    })
+                    .await;
+                started
             }
-            Wake::Poll => slot.turn(|worker| worker.turn_poll(&mut entry)).await,
+            Wake::Poll => {
+                let started;
+                (entry, started) = slot
+                    .turn_with(entry, |worker, entry| worker.turn_poll(entry))
+                    .await;
+                started
+            }
         };
         if entry.keeps_native_ops() {
             adopt(&mut ops, started);
@@ -2875,11 +2907,10 @@ impl StatelessRuntime {
             let config = config.clone();
             move || Worker::load_config(config.clone())
         };
-        let isolates = Arc::new(crate::pool::Pool::new(
-            pool_limits(),
-            admission_wait(),
-            Box::new(build),
-        ));
+        let isolates = Arc::new(
+            crate::pool::Pool::new(pool_limits(), admission_wait(), build)
+                .for_script(&config.script_name),
+        );
         // Eagerly, so a script that does not load fails here rather than on
         // every request, and so the first request does not pay for compiling
         // it. Growth past this one stays lazy.
@@ -2977,11 +3008,16 @@ impl StatelessRuntime {
         // Spawned rather than awaited inline, because the response and the
         // event are not the same lifetime: `waitUntil` work outlives the
         // answer, and the driver keeps turning until it settles.
-        let driving = tokio::spawn(drive_affiliated(
-            affiliation,
-            job,
-            Some((self.node.clone(), self.region.clone())),
-        ));
+        let (near, owner) = (affiliation.slot().last_thread(), affiliation.slot().owner());
+        let driving = crate::isolate_threads::spawn_near(
+            near,
+            owner,
+            drive_affiliated(
+                affiliation,
+                job,
+                Some((self.node.clone(), self.region.clone())),
+            ),
+        );
         match receive.await {
             Ok(result) => result,
             // The driver dropped the reply without sending. Joining it here —
@@ -3248,7 +3284,7 @@ pub async fn drive_cell(
 /// leftover work, which the former `drive.await` turned into a loud process
 /// panic, would end the task in silence.
 fn watch_detached_alarm_drive(
-    drive: crate::asyncrt::TaskHandle<anyhow::Result<Option<u64>>>,
+    drive: crate::isolate_threads::Driving<anyhow::Result<Option<u64>>>,
     cell: &str,
     op: celld_logic::OpId,
 ) {
@@ -3540,30 +3576,26 @@ async fn drive_cell_inner(
         _ => None,
     };
     let (begun, started, moves) = loop {
-        let mut waiting = None;
+        let job = pending.take().expect("one job per attempt");
+        let invocation = spans
+            .as_ref()
+            .map(crate::user_spans::InvocationGuard::invocation);
         let taken = slot
-            .turn_cell(&scope, |worker| {
-                let job = pending.take().expect("one job per attempt");
+            .turn_cell_event(&scope, move |worker| {
                 if let Some(open) = js::cell_gate_wait(job.scope()) {
-                    waiting = Some(open);
-                    pending = Some(job);
-                    return None;
+                    // Boxed: the gated path is rare, and the job is large.
+                    return Err(Box::new((job, open)));
                 }
-                let (begun, started) = worker.turn_begin_cell(
-                    job,
-                    trace,
-                    spans
-                        .as_ref()
-                        .map(crate::user_spans::InvocationGuard::invocation),
-                );
-                Some((begun, started, worker.take_alarm_moves()))
+                let (begun, started) = worker.turn_begin_cell(job, trace, invocation);
+                Ok((begun, started, worker.take_alarm_moves()))
             })
             .await;
         match taken {
-            Some(taken) => break taken,
-            None => match waiting {
-                None => {}
-                Some(open) => match open.await {
+            Ok(taken) => break taken,
+            Err(gated) => {
+                let (job, open) = *gated;
+                pending = Some(job);
+                match open.await {
                     // The gate opened normally; try for the isolate again.
                     Ok(Ok(())) => {}
                     // The critical section this event queued behind failed,
@@ -3578,8 +3610,8 @@ async fn drive_cell_inner(
                     }
                     // The cell stopped while this event waited.
                     Err(_) => return Ok(None),
-                },
-            },
+                }
+            }
         }
     };
     // Delivered. Whatever the caller sent next may go.
@@ -3620,11 +3652,14 @@ async fn drive_cell_inner(
         let (started, moves) = match wake_with_cross_entry_gate(&mut ops, &mut entry, budget).await
         {
             Wake::Op(op, result) => {
-                slot.turn(|worker| {
-                    let started = worker.turn_deliver(&mut entry, op, result);
-                    (started, worker.take_alarm_moves())
-                })
-                .await
+                let turned;
+                (entry, turned) = slot
+                    .turn_with(entry, move |worker, entry| {
+                        let started = worker.turn_deliver(entry, op, result);
+                        (started, worker.take_alarm_moves())
+                    })
+                    .await;
+                turned
             }
             Wake::GatedReply(completion) => {
                 entry.finish_gated_reply(completion);
@@ -3639,12 +3674,13 @@ async fn drive_cell_inner(
                 (Vec::new(), Vec::new())
             }
             Wake::Cancelled { shutdown } => {
-                let cancelled = slot
-                    .turn(|worker| {
+                let cancelled;
+                (entry, cancelled) = slot
+                    .turn_with(entry, move |worker, entry| {
                         let started = if shutdown {
-                            worker.turn_cancel_for_shutdown(&mut entry)
+                            worker.turn_cancel_for_shutdown(entry)
                         } else {
-                            worker.turn_cancel(&mut entry)
+                            worker.turn_cancel(entry)
                         };
                         (started, worker.take_alarm_moves())
                     })
@@ -3656,7 +3692,8 @@ async fn drive_cell_inner(
             }
             Wake::Expired => {
                 entry.time_out(budget);
-                slot.turn(|worker| worker.turn_retire_input_gates(&entry))
+                (entry, ()) = slot
+                    .turn_with(entry, |worker, entry| worker.turn_retire_input_gates(entry))
                     .await;
                 #[cfg(celld_internal_tests)]
                 notify_gated_failure_for_test(&mut entry, &mut test_observers.gated_failure);
@@ -3664,25 +3701,32 @@ async fn drive_cell_inner(
             }
             Wake::Idle => {
                 entry.stuck();
-                slot.turn(|worker| worker.turn_retire_input_gates(&entry))
+                (entry, ()) = slot
+                    .turn_with(entry, |worker, entry| worker.turn_retire_input_gates(entry))
                     .await;
                 #[cfg(celld_internal_tests)]
                 notify_gated_failure_for_test(&mut entry, &mut test_observers.gated_failure);
                 (Vec::new(), Vec::new())
             }
             Wake::PendingEventIdle => {
-                slot.turn(|worker| {
-                    let started = worker.turn_cancel_pending_events(&mut entry);
-                    (started, worker.take_alarm_moves())
-                })
-                .await
+                let turned;
+                (entry, turned) = slot
+                    .turn_with(entry, |worker, entry| {
+                        let started = worker.turn_cancel_pending_events(entry);
+                        (started, worker.take_alarm_moves())
+                    })
+                    .await;
+                turned
             }
             Wake::Poll => {
-                slot.turn(|worker| {
-                    let started = worker.turn_poll(&mut entry);
-                    (started, worker.take_alarm_moves())
-                })
-                .await
+                let turned;
+                (entry, turned) = slot
+                    .turn_with(entry, |worker, entry| {
+                        let started = worker.turn_poll(entry);
+                        (started, worker.take_alarm_moves())
+                    })
+                    .await;
+                turned
             }
         };
         #[cfg(celld_internal_tests)]
@@ -3710,9 +3754,10 @@ async fn drive_cell_inner(
     // recording it is storage only the isolate can reach.
     let mut alarm_write = Ok(None);
     if entry.owes_alarm() {
-        let (moves, write) = slot
-            .turn(|worker| {
-                let write = worker.turn_finish_alarm(&mut entry);
+        let (moves, write);
+        (entry, (moves, write)) = slot
+            .turn_with(entry, |worker, entry| {
+                let write = worker.turn_finish_alarm(entry);
                 (worker.take_alarm_moves(), write)
             })
             .await;
@@ -3740,7 +3785,10 @@ async fn drive_cell_inner(
         }
         crate::telemetry::record(span);
     }
-    slot.turn(|worker| worker.turn_abandon_input_gates(&entry))
+    (entry, ()) = slot
+        .turn_with(entry, |worker, entry| {
+            worker.turn_abandon_input_gates(entry)
+        })
         .await;
     entry.abandon();
     alarm_write

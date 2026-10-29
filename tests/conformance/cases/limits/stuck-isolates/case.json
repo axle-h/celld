@@ -1,0 +1,82 @@
+{
+  "kind": "celld-only",
+  "reason": "celld isolate threads (plan 1.61): workerd run locally enforces no CPU limit, so no isolate is condemned or stuck there, and it has no hold to make one",
+  "workers": [
+    "app",
+    "hog",
+    "stuck",
+    "stuck2",
+    "other"
+  ],
+  "env": {
+    "CELLD_TOKIO_THREADS": "2",
+    "CELLD_ISOLATE_THREADS": "4",
+    "CELLD_MAX_STATELESS_ISOLATES": "2",
+    "CELLD_CONFORMANCE_HOLD": "1",
+    "CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${PUBLIC_PORT}"
+  },
+  "steps": [
+    {
+      "path": "/wedge?public=${PUBLIC_PORT}",
+      "probe": {
+        "internal": "/ping",
+        "within": 500
+      }
+    },
+    {
+      "internal": "/state",
+      "within": 30000,
+      "until": {
+        "stuckIsolates.total": 0
+      }
+    },
+    {
+      "path": "/hold",
+      "probe": {
+        "internal": "/ping",
+        "within": 500
+      }
+    },
+    {
+      "internal": "/ping",
+      "within": 500
+    },
+    {
+      "internal": "/state",
+      "within": 10000,
+      "until": {
+        "stuckIsolates.owners.stuck": 2,
+        "stuckIsolates.owners.stuck2": 1
+      },
+      "record": [
+        "stuckIsolates.total",
+        "stuckIsolates.nodeCap",
+        "stuckIsolates.ownerCap"
+      ]
+    },
+    {
+      "internal": "/ping",
+      "within": 500
+    },
+    {
+      "path": "/refused",
+      "probe": {
+        "internal": "/ping",
+        "within": 500
+      }
+    },
+    {
+      "internal": "/state",
+      "within": 30000,
+      "until": {
+        "stuckIsolates.total": 0
+      }
+    },
+    {
+      "path": "/recovered"
+    },
+    {
+      "path": "/results"
+    }
+  ]
+}

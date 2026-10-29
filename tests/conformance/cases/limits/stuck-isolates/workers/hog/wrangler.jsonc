@@ -1,0 +1,1 @@
+{ "name": "hog", "main": "index.js", "compatibility_date": "2026-01-01", "limits": { "cpu_ms": 1000 } }

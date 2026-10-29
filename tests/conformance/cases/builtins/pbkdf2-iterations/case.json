@@ -1,0 +1,6 @@
+{
+  "kind": "celld-only",
+  "reason": "Cloudflare's PBKDF2 iteration cap (plan 1.61) comes from workerd's default limit enforcer, which workerd run locally replaces with one that sets no limit",
+  "workers": ["app"],
+  "steps": [{"path": "/"}]
+}

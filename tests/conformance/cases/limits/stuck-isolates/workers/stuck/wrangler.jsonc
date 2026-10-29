@@ -1,0 +1,9 @@
+{
+  "name": "stuck",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "limits": { "cpu_ms": 10 },
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "durable_objects": { "bindings": [{ "name": "ROOM", "class_name": "Room" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }]
+}
