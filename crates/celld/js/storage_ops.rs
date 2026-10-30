@@ -8,6 +8,7 @@
 //! semantics live in that module and the serialization format lives here,
 //! because it is what JS can see.
 use super::*;
+use std::rc::Rc;
 
 /// The running object's cell, for an op that may write it: the write joins
 /// the cell's implicit transaction (`storage::begin_implicit`).
@@ -1038,6 +1039,135 @@ pub(super) struct ErrorSerialization {
     pub(super) enhanced: bool,
 }
 
+/// The harness's host classes whose instances hold their state privately
+/// (`op_register_host_classes`): a Request, a Response and an AbortSignal
+/// have no own property for V8 to write, so every serializer of the isolate
+/// refuses one rather than write it as an empty object. Storage then lifts
+/// it into its marker (`__storedLift`), as RPC does before it clones; a
+/// signal is refused with workerd's error (AbortSignal::serialize). An
+/// object that only claims one of their prototypes is written as plain
+/// data, as workerd writes it.
+///
+/// Every object a serializer meets is looked at, so the walk up its
+/// prototype chain stops at once at Object.prototype or Array.prototype,
+/// and only an object that reaches a host prototype pays for the brand
+/// check, a call into the harness.
+pub(super) struct HostClasses {
+    prototypes: Vec<v8::Global<v8::Object>>,
+    /// Object.prototype and Array.prototype: no host instance is below them.
+    plain: [v8::Global<v8::Object>; 2],
+    /// `brand(value)`: true for a real instance.
+    brand: v8::Global<v8::Function>,
+    /// `refuse(value)`: the error a serializer outside RPC throws for one.
+    refuse: v8::Global<v8::Function>,
+}
+
+/// What an object is to the serializers (`host_claim`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HostClaim {
+    /// No host prototype is on its chain.
+    None,
+    /// A host prototype is, but it is not an instance: plain data.
+    Unbranded,
+    /// A real Request, Response or AbortSignal.
+    Instance,
+}
+
+/// `__register_host_classes(brand, refuse, ...prototypes)`.
+pub(super) fn op_register_host_classes(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let (Ok(brand), Ok(refuse)) = (
+        args.get(0).try_cast::<v8::Function>(),
+        args.get(1).try_cast::<v8::Function>(),
+    ) else {
+        return;
+    };
+    let mut prototypes = Vec::new();
+    for i in 2..args.length() {
+        if let Ok(prototype) = args.get(i).try_cast::<v8::Object>() {
+            prototypes.push(v8::Global::new(scope, prototype));
+        }
+    }
+    let object = v8::Object::new(scope).get_prototype(scope);
+    let array = v8::Array::new(scope, 0).get_prototype(scope);
+    let (Some(object), Some(array)) = (
+        object.and_then(|value| value.try_cast::<v8::Object>().ok()),
+        array.and_then(|value| value.try_cast::<v8::Object>().ok()),
+    ) else {
+        return;
+    };
+    let classes = HostClasses {
+        prototypes,
+        plain: [
+            v8::Global::new(scope, object),
+            v8::Global::new(scope, array),
+        ],
+        brand: v8::Global::new(scope, brand),
+        refuse: v8::Global::new(scope, refuse),
+    };
+    scope.set_slot(Rc::new(classes));
+}
+
+fn host_classes(scope: &v8::Isolate) -> Option<Rc<HostClasses>> {
+    scope.get_slot::<Rc<HostClasses>>().cloned()
+}
+
+/// Whether `object` is a host instance, claims to be one, or neither.
+fn host_claim(scope: &mut v8::PinScope, object: v8::Local<v8::Object>) -> HostClaim {
+    match host_classes(scope) {
+        Some(classes) => host_claim_in(&classes, scope, object),
+        None => HostClaim::None,
+    }
+}
+
+/// `host_claim` with the isolate's classes in hand: a serializer looks at
+/// every object it meets, so it takes them once.
+fn host_claim_in(
+    classes: &HostClasses,
+    scope: &mut v8::PinScope,
+    object: v8::Local<v8::Object>,
+) -> HostClaim {
+    let mut current = object.get_prototype(scope);
+    loop {
+        let Some(link) = current.and_then(|value| value.try_cast::<v8::Object>().ok()) else {
+            return HostClaim::None;
+        };
+        if classes.plain.iter().any(|plain| *plain == link) {
+            return HostClaim::None;
+        }
+        if classes
+            .prototypes
+            .iter()
+            .any(|prototype| *prototype == link)
+        {
+            break;
+        }
+        current = link.get_prototype(scope);
+    }
+    let brand = v8::Local::new(scope, &classes.brand);
+    let undefined = v8::undefined(scope).into();
+    match brand.call(scope, undefined, &[object.into()]) {
+        Some(branded) if branded.is_true() => HostClaim::Instance,
+        _ => HostClaim::Unbranded,
+    }
+}
+
+/// The refusal of a host instance outside RPC, as the harness words it
+/// (`__hostRefusal`): workerd's for a signal.
+fn throw_host_refusal(scope: &mut v8::PinScope, object: v8::Local<v8::Object>) {
+    let Some(classes) = host_classes(scope) else {
+        return;
+    };
+    let refuse = v8::Local::new(scope, &classes.refuse);
+    let undefined = v8::undefined(scope).into();
+    if let Some(error) = refuse.call(scope, undefined, &[object.into()]) {
+        scope.throw_exception(error);
+    }
+}
+
 fn enhanced_errors(isolate: &v8::Isolate) -> bool {
     isolate
         .get_slot::<ErrorSerialization>()
@@ -1223,6 +1353,8 @@ fn read_native_error<'s>(
 struct StorageValueDelegate {
     enhanced: bool,
     preserve_stack: bool,
+    /// The isolate's host classes (`HostClasses`), for a writer.
+    hosts: Option<Rc<HostClasses>>,
 }
 
 impl StorageValueDelegate {
@@ -1230,6 +1362,7 @@ impl StorageValueDelegate {
         StorageValueDelegate {
             enhanced: enhanced_errors(scope),
             preserve_stack: true,
+            hosts: host_classes(scope),
         }
     }
 
@@ -1237,6 +1370,7 @@ impl StorageValueDelegate {
         StorageValueDelegate {
             enhanced: false,
             preserve_stack,
+            hosts: None,
         }
     }
 }
@@ -1247,17 +1381,24 @@ impl v8::ValueSerializerImpl for StorageValueDelegate {
     }
 
     fn has_custom_host_object(&self, _isolate: &v8::Isolate) -> bool {
-        self.enhanced
+        self.enhanced || self.hosts.is_some()
     }
 
     // As workerd's `Serializer::IsHostObject`: an object with embedder
-    // fields is one, which V8 refuses as it would without this delegate.
+    // fields is one, which V8 refuses as it would without this delegate, as
+    // is an instance of a host class (`HostClasses`).
     fn is_host_object<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
         object: v8::Local<'s, v8::Object>,
     ) -> Option<bool> {
-        Some(object.internal_field_count() > 0 || is_enhanced_error(scope, object))
+        Some(
+            object.internal_field_count() > 0
+                || (self.enhanced && is_enhanced_error(scope, object))
+                || self.hosts.as_ref().is_some_and(|hosts| {
+                    host_claim_in(hosts, scope, object) == HostClaim::Instance
+                }),
+        )
     }
 
     fn write_host_object<'s>(
@@ -1268,6 +1409,10 @@ impl v8::ValueSerializerImpl for StorageValueDelegate {
     ) -> Option<bool> {
         if is_enhanced_error(scope, object) {
             return write_native_error(scope, object, serializer);
+        }
+        if host_claim(scope, object) == HostClaim::Instance {
+            throw_host_refusal(scope, object);
+            return None;
         }
         let message = v8::String::new(scope, "Unsupported object type").unwrap();
         self.throw_data_clone_error(scope, message);
@@ -1332,7 +1477,12 @@ impl v8::ValueSerializerImpl for TransientCloneDelegate<'_> {
         scope: &mut v8::PinScope<'s, '_>,
         object: v8::Local<'s, v8::Object>,
     ) -> Option<bool> {
-        Some(object.has(scope, self.host_object_brand.into())? || is_enhanced_error(scope, object))
+        // A host prototype's brand on an object that is not an instance
+        // (`Object.create(Request.prototype)`) is plain data, as in workerd.
+        if object.has(scope, self.host_object_brand.into())? {
+            return Some(host_claim(scope, object) != HostClaim::Unbranded);
+        }
+        Some(is_enhanced_error(scope, object))
     }
 
     fn write_host_object<'s>(

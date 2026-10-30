@@ -468,7 +468,6 @@ pub(super) fn op_tcp_connect(
                     ),
                 })?;
             let remote = stream.peer_addr().map(|a| a.to_string()).ok();
-            let local = stream.local_addr().map(|a| a.to_string()).ok();
             let mut stream: Duplex = Box::new(stream);
             if request.secure {
                 let host = request.expected_host.unwrap_or(request.hostname);
@@ -480,7 +479,6 @@ pub(super) fn op_tcp_connect(
                 serde_json::json!({
                     "id": id,
                     "remoteAddress": remote,
-                    "localAddress": local,
                 })
                 .to_string(),
             )

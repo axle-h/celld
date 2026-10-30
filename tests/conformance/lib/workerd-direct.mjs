@@ -1,14 +1,15 @@
 // Records a celld-only case's transcript from workerd run directly, for a
 // case that workerd can run but wrangler's harness can't show: the harness
 // sends every global fetch() through a Node outbound service that follows
-// redirects itself. Usage, from tests/conformance:
+// redirects itself, and its proxy agrees to a WebSocket extension whatever
+// workerd agrees to. Usage, from tests/conformance:
 //
 //   node lib/workerd-direct.mjs <case id> [--write]
 //
 // The case has `workerd.capnp` beside case.json: a workerd config whose
 // socket is named "http" and whose globalOutbound is a network service. This
 // starts the upstream, runs `workerd serve` on that config with the socket on
-// a free port, and runs the case's `path` steps as the runner does, with the
+// a free port, and runs the case's `path` and `ws` steps as the runner does, with the
 // same placeholders and normalization. It prints the transcript, and with
 // --write stores it as the case's expect.json. Review it before committing.
 
@@ -33,7 +34,7 @@ const testCase = loadCase(join(ROOT, "cases"), id);
 const config = join(testCase.dir, "workerd.capnp");
 if (!existsSync(config)) throw new Error(`${id} has no workerd.capnp`);
 if (testCase.kind !== "celld-only") throw new Error(`${id} is differential: record it with run.mjs --update`);
-if (testCase.steps.some((step) => step.kind !== "path")) throw new Error(`${id} has a step other than "path"`);
+if (testCase.steps.some((step) => step.kind !== "path" && step.kind !== "ws")) throw new Error(`${id} has a step other than "path" or "ws"`);
 
 const upstream = testCase.upstream ? await startUpstream() : null;
 const port = await freePort();

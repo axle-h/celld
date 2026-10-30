@@ -58,8 +58,14 @@ class WritableStreamDefaultWriter {
   #readyPromise;
   #readyResolve;
   #readyReject;
+  // Whether the ready promise resolved (`releaseLock`).
+  #readyResolved = false;
 
   constructor(stream) {
+    // Without workers_api_getters_setters_on_prototype workerd puts its
+    // attributes on the instance (harness.js `__attributeTable`).
+    if (__celld.__oldAttributes)
+      __celld.__installAttributes(this, "WritableStreamDefaultWriter");
     if (!(stream instanceof WritableStream))
       throw new TypeError(
         "WritableStreamDefaultWriter requires a " +
@@ -85,8 +91,12 @@ class WritableStreamDefaultWriter {
     this._resetReady();
     const state = stream._state;
     if (state === 'writable') {
-      if (stream._closing() || !stream._backpressure)
-        this.#readyResolve();
+      // Before writable_stream_spec_compliant_writer workerd resolves it
+      // only once the sink has started (standard.c++ WritableLockImpl::
+      // lockWriter); the start then resolves it.
+      if ((stream._closing() || !stream._backpressure) &&
+          (stream._started || __celld.__cell.compat.writableStreamSpecCompliantWriter))
+        this._resolveReady();
     } else if (state === 'closed') {
       this.#readyResolve();
       this._resolveClosed();
@@ -99,6 +109,7 @@ class WritableStreamDefaultWriter {
   }
 
   _resetReady() {
+    this.#readyResolved = false;
     this.#readyPromise = new Promise((res, rej) => {
       this.#readyResolve = res;
       this.#readyReject = rej;
@@ -120,7 +131,10 @@ class WritableStreamDefaultWriter {
   }
 
   _resolveReady() {
-    if (this.#readyResolve) this.#readyResolve();
+    if (this.#readyResolve) {
+      this.#readyResolve();
+      this.#readyResolved = true;
+    }
   }
 
   _rejectReady(e) {
@@ -154,7 +168,7 @@ class WritableStreamDefaultWriter {
         new TypeError("This WritableStream writer has been released."));
     const refused = ioRefusal(this.#stream);
     if (refused !== undefined) return refused;
-    return this.#stream._write(chunk);
+    return this.#stream._write(chunk, this);
   }
 
   close() {
@@ -183,7 +197,11 @@ class WritableStreamDefaultWriter {
     // TypeError, even while an abort is in flight.
     const err = new TypeError(
       "This WritableStream writer has been released.");
-    this._rejectReady(err);
+    // Before writable_stream_spec_compliant_writer a ready promise that
+    // resolved stays as it is.
+    if (!this.#readyResolved ||
+        __celld.__cell.compat.writableStreamSpecCompliantWriter)
+      this._rejectReady(err);
     this._rejectClosed(err);
     // Workerd also rejects queued (not in-flight) writes
     // with the same error; the chunks are dropped.
@@ -232,6 +250,12 @@ class WritableStream {
   _started = false;
 
   constructor(underlyingSink, queuingStrategy) {
+    // A DigestStream defines its own attribute first, then this one
+    // (`__celld.__deferWritableAttributes`).
+    const defer = __celld.__deferWritableAttributes;
+    __celld.__deferWritableAttributes = false;
+    if (__celld.__oldAttributes && !defer)
+      __celld.__installAttributes(this, "WritableStream");
     // Per spec: extract strategy fields first. Size is
     // read and validated before highWaterMark; invalid
     // size must beat invalid highWaterMark.
@@ -274,7 +298,15 @@ class WritableStream {
         result = this._startFn.call(sink, this._controller);
       } catch (e) { result = Promise.reject(e); }
       Promise.resolve(result).then(
-        () => { this._started = true; this._advanceQueue(); },
+        () => {
+          this._started = true;
+          // A writer's ready promise that waited for the start
+          // (`WritableStreamDefaultWriter`) resolves now.
+          if (this._writer && this._state === 'writable' &&
+              (this._closing() || !this._backpressure))
+            this._writer._resolveReady();
+          this._advanceQueue();
+        },
         (e) => { this._started = true; this._dealWithRejection(e); },
       );
     } else {
@@ -304,7 +336,7 @@ class WritableStream {
     else w._resolveReady();
   }
 
-  _write(chunk) {
+  _write(chunk, writer = undefined) {
     // Spec: the size algorithm runs before the state
     // checks; a throw or invalid size errors the stream
     // and the checks below then reject with it.
@@ -319,6 +351,13 @@ class WritableStream {
         this._errorStream(e);
       }
     }
+    // A size algorithm that released the writer refuses the write, under
+    // writable_stream_spec_compliant_writer (WritableStreamDefaultWriterWrite
+    // step 5).
+    if (writer !== undefined && this._writer !== writer &&
+        __celld.__cell.compat.writableStreamSpecCompliantWriter)
+      return Promise.reject(new TypeError(
+        "This WritableStream writer has been released."));
     if (this._state === 'errored')
       return Promise.reject(this._storedError);
     if (this._closing() || this._state === 'closed')
@@ -594,10 +633,28 @@ class TransformStreamDefaultController {
   get desiredSize() { return this.#rsc.desiredSize; }
 }
 
-// TransformStream -- pairs a readable + writable
+// TransformStream -- pairs a readable + writable. Its sides are private, as
+// workerd's are, and `readable` and `writable` are accessors of its
+// prototype; the streams that are TransformStreams in workerd without
+// running this constructor (IdentityTransformStream, FixedLengthStream,
+// CompressionStream, DecompressionStream) register theirs too
+// (`__celld.__setTransformSides`).
+const transformSides = new WeakMap();
+const transformSidesGet = WeakMap.prototype.get;
+const transformSidesSet = WeakMap.prototype.set;
+const sidesOf = (stream) => {
+  const sides = Reflect.apply(transformSidesGet, transformSides, [stream]);
+  if (sides === undefined) throw __celld.__illegalInvocation();
+  return sides;
+};
+const setTransformSides = __celld.__setTransformSides = (stream, readable, writable) => {
+  Reflect.apply(transformSidesSet, transformSides,
+    [stream, { __proto__: null, readable, writable }]);
+  if (__celld.__oldAttributes) __celld.__installAttributes(stream, "TransformStream");
+};
 class TransformStream {
-  readable;
-  writable;
+  get readable() { return sidesOf(this).readable; }
+  get writable() { return sidesOf(this).writable; }
 
   constructor(transformer = {}, writableStrategy,
               readableStrategy) {
@@ -657,7 +714,7 @@ class TransformStream {
       return Promise.resolve(
         cancelFn.call(transformer, reason));
     };
-    this.readable = new ReadableStream({ __proto__: null,
+    const readable = new ReadableStream({ __proto__: null,
       start(c) { rsc = c; },
       pull() {
         if (foreign()) return never();
@@ -684,7 +741,7 @@ class TransformStream {
     // transformer feeds Content-Length when the
     // readable becomes a fetch body.
     if (transformer.expectedLength !== undefined)
-      this.readable._expectedLength =
+      readable._expectedLength =
         Number(transformer.expectedLength);
     // Track the first controller.error() so that
     // transformer.flush()'s side effect can be replayed
@@ -766,7 +823,7 @@ class TransformStream {
         }
       },
     }, writableStrategy);
-    this.writable = writable;
+    setTransformSides(this, readable, writable);
   }
 }
 

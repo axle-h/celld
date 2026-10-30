@@ -7,7 +7,7 @@
 // when it flows through user code's await. Non-enumerable
 // keeps it invisible to for..in + assert_object_equals.
 function _readResult(value, done) {
-  const r = { value, done };
+  const r = __celld.__readResult(value, done);
   Object.defineProperty(r, 'then', {
     __proto__: null,
     value: undefined,
@@ -207,6 +207,10 @@ class ReadableStreamDefaultReader {
   #released = false;
 
   constructor(stream) {
+    // Without workers_api_getters_setters_on_prototype workerd puts its
+    // attributes on the instance (harness.js `__attributeTable`).
+    if (__celld.__oldAttributes)
+      __celld.__installAttributes(this, "ReadableStreamDefaultReader");
     if (!(stream instanceof ReadableStream))
       throw new TypeError(
         "ReadableStreamDefaultReader requires a " +
@@ -309,7 +313,22 @@ class ReadableStreamDefaultReader {
   }
 }
 
-class ReadableStream {
+// The object a ReadableStream is made on: one with `newTarget`'s
+// prototype (Object.prototype when that is not an object, as workerd's),
+// or, without
+// workers_api_getters_setters_on_prototype, an instance that carries
+// `locked` as its own property (harness.js `__attributeTarget`).
+// ReadableStream extends nothing, so no script can change what its
+// construction runs by giving it another prototype; its state goes on the
+// object through a class nothing else reaches, whose base returns the
+// object it is given.
+const objectCreate = Object.create;
+class Stamp {
+  constructor(target) {
+    return target;
+  }
+}
+class ReadableStreamFields extends Stamp {
   // The brand the RPC envelope classifies by (harness.js, `__hostKind`).
   #brand;
   static {
@@ -340,11 +359,28 @@ class ReadableStream {
   _closedPromise;
   _closedResolve;
   _closedReject;
+}
+const streamInstance = (newTarget) => {
+  let prototype = newTarget.prototype;
+  if (prototype === null ||
+      (typeof prototype !== 'object' && typeof prototype !== 'function'))
+    prototype = Object.prototype;
+  return __celld.__oldAttributes
+    ? __celld.__attributeTarget('ReadableStream', prototype)
+    : objectCreate(prototype);
+};
 
-  constructor(underlyingSource, queuingStrategy) {
-    this._closedPromise = new Promise((res, rej) => {
-      this._closedResolve = res;
-      this._closedReject = rej;
+// workerd's ReadableStream: a function, so a call without `new` has
+// workerd's error, which a class constructor's cannot have; strict, as a
+// class is. Its members follow (`__celld.__installMembers`).
+function ReadableStream(underlyingSource, queuingStrategy) {
+  'use strict';
+  if (new.target === undefined)
+    throw __celld.__calledWithoutNew('ReadableStream');
+    const self = new ReadableStreamFields(streamInstance(new.target));
+    self._closedPromise = new Promise((res, rej) => {
+      self._closedResolve = res;
+      self._closedReject = rej;
     });
     // WHATWG Streams treats [[closedPromise]] as internal
     // state that only surfaces when the user queries
@@ -355,7 +391,7 @@ class ReadableStream {
     // handled at the engine level; user `await` on
     // reader.closed still sees the rejection because the
     // promise is shared.
-    this._closedPromise.catch(() => {});
+    self._closedPromise.catch(() => {});
     // Spec: extract strategy fields first. Size is read
     // and validated before highWaterMark; an invalid size
     // must beat an invalid highWaterMark. hwm stays
@@ -380,8 +416,8 @@ class ReadableStream {
         hwm = n;
       }
     }
-    this._hwm = hwm === undefined ? 1 : hwm;
-    this._sizeFn = sizeFn;
+    self._hwm = hwm === undefined ? 1 : hwm;
+    self._sizeFn = sizeFn;
     if (underlyingSource === null ||
         (underlyingSource !== undefined &&
          typeof underlyingSource !== 'object'))
@@ -391,7 +427,7 @@ class ReadableStream {
     // byte length; fetch-style consumers read it for
     // Content-Length (see also FixedLengthStream).
     if (src.expectedLength !== undefined)
-      this._expectedLength = Number(src.expectedLength);
+      self._expectedLength = Number(src.expectedLength);
     if (src.type !== undefined) {
       const t = String(src.type);
       if (t !== 'bytes')
@@ -403,8 +439,8 @@ class ReadableStream {
       // overrides for getReader/_cancel, so nothing
       // below (default controller, pull wiring) runs.
       ReadableByteStreamController
-        ._setup(this, src, hwm);
-      return;
+        ._setup(self, src, hwm);
+      return self;
     }
     // Read each getter once per spec -- extracting
     // pull/start/cancel algorithms happens at
@@ -424,41 +460,46 @@ class ReadableStream {
         typeof startFn !== 'function')
       throw new TypeError(
         "start must be a function");
-    this._source = src;
-    this._startFn = startFn;
-    this._pullFn = pullFn;
-    this._cancelFn = cancelFn;
-    this._controller =
+    self._source = src;
+    self._startFn = startFn;
+    self._pullFn = pullFn;
+    self._cancelFn = cancelFn;
+    self._controller =
       new ReadableStreamDefaultController(
-        _rsc_brand, this);
-    if (!this._startFn) {
+        _rsc_brand, self);
+    if (!self._startFn) {
       // Workerd starts a source with no start()
       // synchronously (mirrors the byte controller and
       // the writable's sink), so a strategy size() runs
       // before the constructor returns.
-      this._started = true;
-      this._maybePull();
-      return;
+      self._started = true;
+      Reflect.apply(maybePull, self, []);
+      return self;
     }
     // A sync start() throw must error the stream, not
     // escape the constructor.
     let startResult;
     try {
       startResult =
-        this._startFn.call(this._source, this._controller);
+        self._startFn.call(self._source, self._controller);
     } catch (e) {
       startResult = Promise.reject(e);
     }
     Promise.resolve(startResult).then(
       () => {
-        this._started = true;
-        this._maybePull();
+        self._started = true;
+        Reflect.apply(maybePull, self, []);
       },
       (e) => {
-        this._controller.error(e);
+        self._controller.error(e);
       }
     );
-  }
+    return self;
+}
+// The stream's own pull, which its constructor runs whatever prototype the
+// instance has.
+let maybePull;
+__celld.__installMembers(ReadableStream, class {
 
   // Resolve one pending read request from queue.
   _resolveRead() {
@@ -835,33 +876,73 @@ class ReadableStream {
     return transform.readable;
   }
 
-  async *values(options) {
+  values(options) {
     const preventCancel =
       !!(options && options.preventCancel);
-    const reader = this.getReader();
-    let drained = false;
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) { drained = true; return; }
-        yield value;
+    return new ReadableStreamAsyncIterator(this.getReader(), preventCancel);
+  }
+});
+maybePull = ReadableStream.prototype._maybePull;
+
+
+// workerd's async iterator (jsg/iterator.h AsyncIteratorImpl, with
+// ReadableStream's nextFunction and returnFunction): each next() and
+// return() waits for the one before; a read at the end releases the reader;
+// return() cancels the stream with its value (unless preventCancel) and
+// releases the reader, after which every call is done at once. A step is
+// workerd's `Next` struct (`__iterResult`).
+const _asyncIteratorPrototype = Object.getPrototypeOf(Object.getPrototypeOf(
+  Object.getPrototypeOf((async function* () {})())));
+class ReadableStreamAsyncIterator {
+  #reader;
+  #preventCancel;
+  #finished = false;
+  #returning = false;
+  #current = null;
+  constructor(reader, preventCancel) {
+    this.#reader = reader;
+    this.#preventCancel = preventCancel;
+  }
+  #after(step) {
+    const current = this.#current;
+    const promise = current === null ? step() : current.then(step, step);
+    this.#current = promise.then(() => {}, () => {});
+    return promise;
+  }
+  next() {
+    if (this.#finished || this.#returning)
+      return Promise.resolve(__celld.__iterResult(true));
+    return this.#after(async () => {
+      if (this.#finished) return __celld.__iterResult(true);
+      const result = await this.#reader.read();
+      if (result.done) {
+        this.#finished = true;
+        this.#reader.releaseLock();
+        return __celld.__iterResult(true);
       }
-    } finally {
-      // WHATWG Streams 4.5.3: the default async
-      // iterator's return() must cancel the stream
-      // before releasing the reader lock -- early
-      // termination of the loop (break / return /
-      // throw inside `for await`) was leaking the
-      // upstream source. Cancel is a no-op once the
-      // stream's `done` has been observed, so we
-      // skip it on natural drain.
-      if (!drained && !preventCancel) {
-        try { await reader.cancel(); } catch { /* swallow -- cancel errors don't block release */ }
+      return __celld.__iterResult(false, result.value);
+    });
+  }
+  return(value) {
+    const done = () => value === undefined
+      ? __celld.__iterResult(true) : { done: true, value };
+    if (this.#finished || this.#returning) return Promise.resolve(done());
+    this.#returning = true;
+    return this.#after(async () => {
+      if (this.#finished) return done();
+      this.#finished = true;
+      if (this.#preventCancel) {
+        this.#reader.releaseLock();
+      } else {
+        const cancelled = this.#reader.cancel(value);
+        this.#reader.releaseLock();
+        await cancelled;
       }
-      reader.releaseLock();
-    }
+      return done();
+    });
   }
 }
+Object.setPrototypeOf(ReadableStreamAsyncIterator.prototype, _asyncIteratorPrototype);
 
 // Spec: @@asyncIterator is the same function object as
 // values().

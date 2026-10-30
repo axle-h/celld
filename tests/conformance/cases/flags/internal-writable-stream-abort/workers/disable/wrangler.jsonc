@@ -1,0 +1,1 @@
+{"name": "disable", "main": "index.js", "compatibility_date": "2026-09-04", "compatibility_flags": ["internal_writable_stream_abort_does_not_clear_queue"]}

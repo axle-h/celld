@@ -1,0 +1,7 @@
+{
+  "name": "on",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["enable_request_signal"],
+  "services": [{ "binding": "SELF", "service": "on" }]
+}

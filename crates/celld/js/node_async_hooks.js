@@ -26,6 +26,20 @@
     }
   };
 
+  // bind_asynclocalstorage_snapshot_to_request: a function bound to a frame,
+  // or an AsyncResource, made during a request runs only in that request, or
+  // in a Durable Object only in that object (async-hooks.c++ getIoContextId,
+  // validateIoContext; `__asyncContextOwner`). One made at module scope,
+  // outside every request, runs anywhere.
+  const owner = __celld.__asyncContextOwner;
+  const origin = () =>
+    __celld.__cell.compat.bindAsyncLocalStorageSnapshot ? owner() : "";
+  const validate = (context) => {
+    if (context !== "" && context !== owner())
+      throw new Error("Cannot call this AsyncLocalStorage bound function " +
+        "outside of the request in which it was created.");
+  };
+
   class AsyncLocalStorage {
     #name;
     #defaultValue;
@@ -63,11 +77,17 @@
     }
     static bind(fn) {
       const frame = getFrame();
-      return (...args) => call(frame, fn, globalThis, args);
+      const context = origin();
+      return (...args) => {
+        validate(context);
+        return call(frame, fn, globalThis, args);
+      };
     }
     static snapshot() {
       const frame = getFrame();
+      const context = origin();
       return (fn, ...args) => {
+        validate(context);
         if (typeof fn !== "function")
           throw new TypeError("The first argument must be a function");
         return call(frame, fn, globalThis, args);
@@ -77,19 +97,26 @@
 
   class AsyncResource {
     #frame;
+    #context;
     // Workerd ignores `type` (validating only its shape) and rejects the
     // Node-only triggerAsyncId option.
     constructor(_type, options) {
       if (options && options.triggerAsyncId !== undefined)
         throw new Error("The triggerAsyncId option is not implemented");
       this.#frame = getFrame();
+      this.#context = origin();
     }
     runInAsyncScope(fn, thisArg, ...args) {
+      validate(this.#context);
       return call(this.#frame, fn, thisArg ?? globalThis, args);
     }
     bind(fn, thisArg) {
       const frame = this.#frame;
-      const bound = (...args) => call(frame, fn, thisArg ?? globalThis, args);
+      const context = this.#context;
+      const bound = (...args) => {
+        validate(context);
+        return call(frame, fn, thisArg ?? globalThis, args);
+      };
       bound.asyncResource = this;
       return bound;
     }

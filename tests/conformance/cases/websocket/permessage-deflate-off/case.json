@@ -1,0 +1,17 @@
+{
+  "kind": "celld-only",
+  "reason": "wrangler's createTestHarness puts a Node proxy in front of workerd that agrees to the client's permessage-deflate offer whatever workerd agrees to, so workerd's own negotiation can't be recorded through it. The expected transcript is recorded from workerd 1.20261001.1 run directly, with `node lib/workerd-direct.mjs websocket/permessage-deflate-off --write` and this case's workerd.capnp.",
+  "workers": [
+    "app"
+  ],
+  "steps": [
+    {
+      "ws": "/",
+      "send": [
+        "a long enough message to compress, a long enough message to compress"
+      ],
+      "close": 1000,
+      "extensions": true
+    }
+  ]
+}

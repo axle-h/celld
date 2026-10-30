@@ -1,0 +1,81 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "self": {
+          "result": "rejected: AbortError",
+          "entries": [
+            {
+              "aborted": false,
+              "stable": true,
+              "copied": false
+            }
+          ]
+        },
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "self": {
+          "result": "rejected: AbortError",
+          "entries": [
+            {
+              "aborted": false,
+              "stable": true,
+              "copied": true,
+              "reason": "AbortError: The client has disconnected"
+            }
+          ]
+        },
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "self": {
+          "result": "rejected: AbortError",
+          "entries": [
+            {
+              "aborted": false,
+              "stable": true,
+              "copied": false
+            }
+          ]
+        },
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "ON": {
+          "result": "rejected: AbortError",
+          "entries": [
+            {
+              "aborted": false,
+              "stable": true,
+              "copied": true,
+              "reason": "AbortError: The client has disconnected"
+            }
+          ]
+        },
+        "OFF": {
+          "result": "rejected: AbortError",
+          "entries": [
+            {
+              "aborted": false,
+              "stable": true,
+              "copied": false
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

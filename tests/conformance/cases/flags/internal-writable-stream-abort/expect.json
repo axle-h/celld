@@ -1,0 +1,87 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "identity": {
+          "log": [
+            "w1 rejected Error: why",
+            "w2 rejected Error: why",
+            "abort resolved",
+            "after abort",
+            "closed rejected Error: why"
+          ],
+          "read": "rejected Error: Network connection lost."
+        },
+        "fixed": {
+          "log": [
+            "w1 rejected TypeError: why",
+            "w2 rejected TypeError: why",
+            "abort resolved",
+            "after abort",
+            "closed rejected TypeError: why"
+          ],
+          "read": "rejected Error: Network connection lost."
+        },
+        "empty": "resolved",
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "identity": {
+          "log": [
+            "after abort",
+            "w1 resolved",
+            "closed rejected Error: why",
+            "w2 rejected Error: why",
+            "abort resolved"
+          ],
+          "read": "1"
+        },
+        "fixed": {
+          "log": [
+            "after abort",
+            "w1 resolved",
+            "closed rejected TypeError: why",
+            "w2 rejected TypeError: why",
+            "abort resolved"
+          ],
+          "read": "1"
+        },
+        "empty": "resolved",
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "identity": {
+          "log": [
+            "after abort",
+            "w1 resolved",
+            "closed rejected Error: why",
+            "w2 rejected Error: why",
+            "abort resolved"
+          ],
+          "read": "1"
+        },
+        "fixed": {
+          "log": [
+            "after abort",
+            "w1 resolved",
+            "closed rejected TypeError: why",
+            "w2 rejected TypeError: why",
+            "abort resolved"
+          ],
+          "read": "1"
+        },
+        "empty": "resolved",
+        "reported": false
+      }
+    }
+  ]
+}

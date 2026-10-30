@@ -1,6 +1,6 @@
 const CASES = {
   refused: { compatibilityDate: "2026-02-01", compatibilityFlags: ["webcrypto_modern_algorithms"] },
-  newestDate: { compatibilityDate: "2026-09-05" },
+  newestDate: { compatibilityDate: "2026-10-02" },
 };
 
 export default {

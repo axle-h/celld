@@ -1,0 +1,13 @@
+{
+  "workers": ["front", "before", "disable"],
+  "steps": [
+    { "path": "/make" },
+    { "path": "/later" },
+    { "path": "/before/make" },
+    { "path": "/before/later" },
+    { "path": "/disable/make" },
+    { "path": "/disable/later" },
+    { "path": "/do/make" },
+    { "path": "/do/later" }
+  ]
+}

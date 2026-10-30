@@ -1,0 +1,6 @@
+{
+  "kind": "celld-only",
+  "reason": "Miniflare's queue service sends no error code, so workerd reports every refusal as Unknown Internal Error (15000) with queue_expose_error_codes; celld's sends the cause and code Cloudflare documents",
+  "workers": ["app"],
+  "steps": [{ "path": "/" }]
+}

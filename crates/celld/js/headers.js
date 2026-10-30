@@ -325,14 +325,14 @@ Object.defineProperty(_headersIterProto, "next", {
     // semantics the plain-object version also had.
     const pairs = _pairs(this._list);
     if (this._cnt >= pairs.length)
-      return { value: undefined, done: true };
+      return __celld.__iterResult(true);
     const [k, v] = pairs[this._cnt++];
     // A fresh pair per step: `pairs` outlives the step
     // now, so handing the memo's array to a caller
     // would let the caller rewrite the header list.
     const value = this._kind === 0 ? k
       : this._kind === 1 ? v : [k, v];
-    return { value, done: false };
+    return __celld.__iterResult(false, value);
   },
 });
 Object.defineProperty(_headersIterProto,

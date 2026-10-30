@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"status": 200, "body": "ready"},
+    {"rss": "baseline"},
+    {"status": 200, "body": {"bytes": 1073741824, "boundedChunks": true}},
+    {"rss": "grew at most 256 MiB"},
+    {"rss": "baseline"},
+    {"status": 200, "body": {"bytes": 1073741824, "boundedChunks": true}},
+    {"rss": "grew at most 256 MiB"}
+  ]
+}

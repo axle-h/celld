@@ -917,15 +917,38 @@ pub(super) fn register_loader_modules(
     Some(())
 }
 
+/// `throw_on_unrecognized_import_assertion`, which the isolate holds: workerd
+/// implements no import attribute, and with the flag refuses an import that
+/// gives any (jsg/modules.c++ `resolveCallback`, jsg/modules.h
+/// `dynamicImportCallback`); without it, it ignores them.
+pub(super) struct ImportAttributes {
+    pub(super) refuse: bool,
+}
+
+const UNRECOGNIZED_IMPORT_ATTRIBUTES: &str = "Unrecognized import attributes specified";
+
+fn refuses_import_attributes(scope: &v8::Isolate, attributes: v8::Local<v8::FixedArray>) -> bool {
+    attributes.length() > 0
+        && scope
+            .get_slot::<ImportAttributes>()
+            .is_some_and(|attributes| attributes.refuse)
+}
+
 /// Module resolve callback: serve a registered stub for `cloudflare:*`/`node:*`.
 /// celld bundles are single-file, so anything else is genuinely unresolvable.
 pub(super) fn resolve_external<'s>(
     context: v8::Local<'s, v8::Context>,
     specifier: v8::Local<'s, v8::String>,
-    _a: v8::Local<'s, v8::FixedArray>,
+    attributes: v8::Local<'s, v8::FixedArray>,
     referrer: v8::Local<'s, v8::Module>,
 ) -> Option<v8::Local<'s, v8::Module>> {
     v8::callback_scope!(unsafe scope, context);
+    if refuses_import_attributes(scope, attributes) {
+        let message = v8::String::new(scope, UNRECOGNIZED_IMPORT_ATTRIBUTES).unwrap();
+        let exception = v8::Exception::error(scope, message);
+        scope.throw_exception(exception);
+        return None;
+    }
     let spec = specifier.to_rust_string_lossy(scope);
     let registry = modreg(scope);
     if spec == INTERNALS_SPECIFIER {
@@ -1209,10 +1232,16 @@ pub(super) fn host_import_module_dynamically<'s>(
     _host_defined_options: v8::Local<'s, v8::Data>,
     resource_name: v8::Local<'s, v8::Value>,
     specifier: v8::Local<'s, v8::String>,
-    _import_attributes: v8::Local<'s, v8::FixedArray>,
+    import_attributes: v8::Local<'s, v8::FixedArray>,
 ) -> Option<v8::Local<'s, v8::Promise>> {
     let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
+    if refuses_import_attributes(scope, import_attributes) {
+        let message = v8::String::new(scope, UNRECOGNIZED_IMPORT_ATTRIBUTES).unwrap();
+        let exception = v8::Exception::error(scope, message);
+        resolver.reject(scope, exception);
+        return Some(promise);
+    }
     let spec = specifier.to_rust_string_lossy(scope);
     let referrer = resource_name.to_rust_string_lossy(scope);
     let resolved = resolve_relative_specifier(&referrer, &spec);

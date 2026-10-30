@@ -81,7 +81,10 @@ class URLPattern {
     if (baseURL !== undefined) baseURL = usv(baseURL);
     const values = matchValues(input, baseURL);
     if (values === null) return null;
-    const inputs = [input];
+    // An init input comes back as workerd's URLPatternInit struct, every
+    // member optional (`__struct`).
+    const inputs = [typeof input === 'string' ? input
+      : __celld.__struct([...KEYS, 'baseURL'].map((k) => [k, input[k], true]))];
     if (baseURL !== undefined) inputs.push(baseURL);
     const result = { inputs };
     const c = this[components];

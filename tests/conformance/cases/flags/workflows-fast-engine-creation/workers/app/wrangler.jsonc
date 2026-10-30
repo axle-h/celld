@@ -1,0 +1,7 @@
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "workflows": [{ "name": "fast-flow", "binding": "FLOW", "class_name": "Flow" }],
+  "services": [{ "binding": "LEGACY", "service": "legacy" }]
+}

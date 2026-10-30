@@ -1,0 +1,45 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "request": {
+          "plain": true,
+          "keys": []
+        },
+        "request with data": {
+          "plain": true,
+          "keys": [
+            "a",
+            "b"
+          ]
+        },
+        "response": {
+          "plain": true,
+          "keys": []
+        },
+        "response with data": {
+          "plain": true,
+          "keys": [
+            "a",
+            "b"
+          ]
+        },
+        "signal": {
+          "plain": true,
+          "keys": []
+        },
+        "signal with data": {
+          "plain": true,
+          "keys": [
+            "a",
+            "b"
+          ]
+        },
+        "realSignal": "DataCloneError: AbortSignal serialization is not enabled."
+      }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "identity": "Error: Network connection lost.",
+        "fixed": "Error: Network connection lost.",
+        "idle": "Error: Network connection lost."
+      }
+    }
+  ]
+}

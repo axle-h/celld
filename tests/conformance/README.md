@@ -105,7 +105,9 @@ without the experimental `enable_abortsignal_rpc` flag.
   `/redirect?to=<url>&status=<code>` answers that status (302 by default) to
   that URL, `/chain?n=<n>` redirects `n` times and lands, `/loop` redirects
   to itself, `/echo` answers JSON describing the request it received,
-  `/big?kib=<n>` answers `n` KiB, and every other path answers `upstream`. A WebSocket upgrade to
+  `/big?kib=<n>` answers `n` KiB, `/encoded?as=<gzip|br|GZIP|bad>&text=<text>`
+  answers `text` with that `Content-Encoding` (compressed, except for `bad`,
+  which claims gzip), and every other path answers `upstream`. A WebSocket upgrade to
   `/redirect?to=<url>` answers 302 to that URL, and one to `/chain?n=<n>`
   redirects `n` times and lands on `/ws/close-first`. A WebSocket upgrade to
   `/ws/close-first?id=<id>` (with optional `code` and `reason`) sends the
@@ -175,6 +177,8 @@ whose support hasn't landed yet: `nodes` greater than 1 or a step's `node`
   - Without `close`, the step waits for the server to close.
   - `protocols` (optional) offers those subprotocols, and the transcript
     then also records the one the server selected as `protocol`.
+  - `"extensions": true` also records the extensions the server agreed to
+    (`socket.extensions`): Node's WebSocket offers permessage-deflate.
 
   - `"close": null` closes with no status code, an empty Close, which the
     server reads as 1005.
@@ -317,7 +321,7 @@ such step a case of its own, as `streams/byob-request-body-held-cancel` and
   a `workerd.capnp` beside `case.json`, a workerd config whose socket is
   named `http`, and run `node lib/workerd-direct.mjs <case> --write`. It
   starts the upstream, runs `workerd serve` on that config with the socket on
-  a free port, runs the case's `path` steps as the runner does, and writes
+  a free port, runs the case's `path` and `ws` steps as the runner does, and writes
   `expect.json` with the workerd version it came from. Review the result
   before committing it.
 

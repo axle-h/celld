@@ -1,0 +1,71 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "contentType": "TypeError: Unsupported queue message content type: nope",
+        "upperCase": "sent",
+        "textType": "TypeError: Content Type \"text\" requires a value of type string, but received: number",
+        "bytesType": "TypeError: Content Type \"bytes\" requires a value of type ArrayBufferView, but received: object",
+        "bytes": [
+          "sent",
+          0
+        ],
+        "undefinedBody": "TypeError: Message body cannot be undefined",
+        "batchUndefined": "TypeError: Message body cannot be undefined",
+        "batchEmpty": "TypeError: sendBatch() requires at least one message",
+        "batchUpperCase": "TypeError: Unsupported queue message content type: TEXT",
+        "ok": "sent",
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "large": "Error: Queue send failed: message length of 131073 bytes exceeds limit of 128000",
+        "batchCount": "Error: Queue sendBatch failed: batch message count of 101 exceeds limit of 100",
+        "batchLarge": "Error: Queue sendBatch failed: message in batch has length 131073 bytes which exceeds single message size limit of 128000",
+        "both": "Error: Queue sendBatch failed: batch message count of 101 exceeds limit of 100",
+        "contentType": "TypeError: Unsupported queue message content type: nope",
+        "upperCase": "sent",
+        "textType": "TypeError: Content Type \"text\" requires a value of type string, but received: number",
+        "bytesType": "TypeError: Content Type \"bytes\" requires a value of type ArrayBufferView, but received: object",
+        "bytes": [
+          "sent",
+          0
+        ],
+        "undefinedBody": "TypeError: Message body cannot be undefined",
+        "batchUndefined": "TypeError: Message body cannot be undefined",
+        "batchEmpty": "TypeError: sendBatch() requires at least one message",
+        "batchUpperCase": "TypeError: Unsupported queue message content type: TEXT",
+        "ok": "sent",
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "large": "Error: Queue send failed: message length of 131073 bytes exceeds limit of 128000",
+        "batchCount": "Error: Queue sendBatch failed: batch message count of 101 exceeds limit of 100",
+        "batchLarge": "Error: Queue sendBatch failed: message in batch has length 131073 bytes which exceeds single message size limit of 128000",
+        "both": "Error: Queue sendBatch failed: batch message count of 101 exceeds limit of 100",
+        "contentType": "TypeError: Unsupported queue message content type: nope",
+        "upperCase": "sent",
+        "textType": "TypeError: Content Type \"text\" requires a value of type string, but received: number",
+        "bytesType": "TypeError: Content Type \"bytes\" requires a value of type ArrayBufferView, but received: object",
+        "bytes": [
+          "sent",
+          0
+        ],
+        "undefinedBody": "TypeError: Message body cannot be undefined",
+        "batchUndefined": "TypeError: Message body cannot be undefined",
+        "batchEmpty": "TypeError: sendBatch() requires at least one message",
+        "batchUpperCase": "TypeError: Unsupported queue message content type: TEXT",
+        "ok": "sent",
+        "reported": false
+      }
+    }
+  ]
+}

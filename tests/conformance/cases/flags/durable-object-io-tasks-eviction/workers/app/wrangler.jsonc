@@ -1,0 +1,7 @@
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-10-01",
+  "durable_objects": { "bindings": [{ "name": "HOLDER", "class_name": "Holder" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Holder"] }]
+}

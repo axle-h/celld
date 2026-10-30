@@ -1,0 +1,15 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": [
+        "TypeError: Cannot assign to read only property 'url' of object '#<Request>'",
+        "TypeError: Cannot assign to read only property 'status' of object '#<Response>'",
+        "TypeError: Cannot assign to read only property 'aborted' of object '#<AbortSignal>'",
+        "TypeError: Cannot assign to read only property 'encoding' of object '#<TextDecoder>'"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "readableStream": [],
+        "transformReadable": [],
+        "writableStream": [],
+        "defaultReader": [],
+        "writer": [],
+        "responseBody": [],
+        "headers": [],
+        "blob": [],
+        "file": [],
+        "formData": [],
+        "digestStream": [],
+        "abortSignal": [],
+        "eventTarget": []
+      }
+    }
+  ]
+}

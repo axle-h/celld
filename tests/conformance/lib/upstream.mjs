@@ -6,6 +6,7 @@
 // for `connect()` from `cloudflare:sockets`.
 
 import { createServer } from "node:http";
+import { brotliCompressSync, gzipSync } from "node:zlib";
 import { createServer as createTcpServer } from "node:net";
 import { BINARY, CLOSE, TEXT, acceptKey, closePayload, encodeFrame, frameReader, isFragment, readClose } from "./ws-frames.mjs";
 
@@ -21,6 +22,10 @@ import { BINARY, CLOSE, TEXT, acceptKey, closePayload, encodeFrame, frameReader,
  * - `/chain?n=<n>` answers 302 to `/chain?n=<n - 1>`, and `/landed?n=0`
  *   when `n` reaches 0. `/loop` answers 302 to itself.
  * - `/big?kib=<n>` answers `n` KiB of `x`, written 16 KiB at a time.
+ * - `/encoded?as=<gzip|br|GZIP>&text=<text>` answers `text` compressed (gzip
+ *   for `GZIP`), with that `Content-Encoding` and the compressed length, and
+ *   `as=bad` answers `text` as it is with `Content-Encoding: gzip`. It also
+ *   reports the request's `Accept-Encoding` as `x-accept-encoding`.
  * - `/echo` answers JSON describing the request it received: its method,
  *   path, body, and the headers in `ECHOED`. A `HEAD` response has no body,
  *   so the same JSON is also the `x-echo` header.
@@ -99,6 +104,18 @@ export async function startUpstream() {
       case "/echo":
         await echo(request, url, response);
         return;
+      case "/encoded": {
+        const as = url.searchParams.get("as") ?? "gzip";
+        const text = url.searchParams.get("text") ?? "";
+        const body = as === "br" ? brotliCompressSync(text)
+          : as === "bad" ? Buffer.from(text) : gzipSync(text);
+        response.writeHead(200, {
+          "content-encoding": as === "bad" ? "gzip" : as,
+          "content-length": body.length,
+          "x-accept-encoding": request.headers["accept-encoding"] ?? "none",
+        }).end(body);
+        return;
+      }
       case "/big": {
         response.writeHead(200, { "content-type": "application/octet-stream" });
         const chunk = Buffer.alloc(16 * 1024, "x");

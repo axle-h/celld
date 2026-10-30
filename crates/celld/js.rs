@@ -3835,6 +3835,68 @@ struct EventHooks {
     end_event: v8::Global<v8::Function>,
     advance_io_time: v8::Global<v8::Function>,
     abort_incoming_request: v8::Global<v8::Function>,
+    promise_rejection: v8::Global<v8::Function>,
+    process_rejections: v8::Global<v8::Function>,
+}
+
+/// Rejections the harness holds for its next look after a microtask
+/// checkpoint (`microtask_checkpoint`).
+struct RejectionsPending;
+
+/// V8's report of a promise rejected with no handler, or of a handler added
+/// to one after that, which the harness turns into the global scope's
+/// `unhandledrejection` and `rejectionhandled` events (workerd's
+/// `ServiceWorkerGlobalScope::emitPromiseRejection`). The hook answers
+/// whether it holds rejections for after the microtask checkpoint.
+extern "C" fn promise_reject_callback(message: v8::PromiseRejectMessage) {
+    let kind = match message.get_event() {
+        v8::PromiseRejectEvent::PromiseRejectWithNoHandler => 0,
+        v8::PromiseRejectEvent::PromiseHandlerAddedAfterReject => 1,
+        _ => return,
+    };
+    v8::callback_scope!(unsafe scope, &message);
+    if scope.is_execution_terminating() {
+        return;
+    }
+    // Before the harness installs its hooks, no script can listen.
+    let Ok(function) = event_hook(scope, |hooks| &hooks.promise_rejection) else {
+        return;
+    };
+    let promise = message.get_promise().into();
+    let reason = message
+        .get_value()
+        .unwrap_or_else(|| v8::undefined(scope).into());
+    let kind = v8::Integer::new(scope, kind).into();
+    let tc = std::pin::pin!(v8::TryCatch::new(scope));
+    let tc = &mut tc.init();
+    let recv = v8::undefined(tc).into();
+    let held = function
+        .call(tc, recv, &[kind, promise, reason])
+        .is_some_and(|held| held.is_true());
+    if held {
+        tc.set_slot(RejectionsPending);
+    }
+}
+
+/// A microtask checkpoint, then the harness's look at the rejections it
+/// holds, as workerd's `UnhandledRejectionHandler::onMicrotasksCompleted`
+/// under unhandled_rejection_after_microtask_checkpoint, which asks for
+/// another checkpoint for what its listeners queued.
+fn microtask_checkpoint(scope: &mut v8::PinScope) {
+    scope.perform_microtask_checkpoint();
+    while scope.remove_slot::<RejectionsPending>().is_some() {
+        if scope.is_execution_terminating() {
+            return;
+        }
+        let Ok(function) = event_hook(scope, |hooks| &hooks.process_rejections) else {
+            return;
+        };
+        let recv = v8::undefined(scope).into();
+        let tc = std::pin::pin!(v8::TryCatch::new(scope));
+        let tc = &mut tc.init();
+        let _ = function.call(tc, recv, &[]);
+        tc.perform_microtask_checkpoint();
+    }
 }
 
 /// One cached hook, opened into `scope`.
@@ -6329,14 +6391,14 @@ fn finish_turn(
         // every turn of the process takes.
         let _cpu_watchdog = watchdog.or_else(|| cpu_watchdog_for_context(tc, &entry.context));
         settle(tc, entry);
-        tc.perform_microtask_checkpoint();
+        microtask_checkpoint(tc);
         // V8 schedules FinalizationRegistry cleanup as a foreground task,
         // not a microtask. Without driving that queue, collected loader
         // lifetimes never release their host registry entries. Run one task
         // per turn under the same CPU watchdog, so cleanup cannot monopolize
         // the isolate by continually scheduling more foreground work.
         v8::Platform::pump_message_loop(&v8::V8::get_current_platform(), tc, false);
-        tc.perform_microtask_checkpoint();
+        microtask_checkpoint(tc);
     }
     if let (Err(error), _) = finish_cpu_turn(tc, entry) {
         let error = take_execution_termination_in_context(tc, Some(&entry.context))
@@ -6401,7 +6463,7 @@ fn wake_reset_events(tc: &mut v8::PinScope, context: &IoContext) {
             let _cpu_watchdog = cpu_watchdog_for_context(tc, context);
             let recv = v8::undefined(tc).into();
             let _ = function.call(tc, recv, &[]);
-            tc.perform_microtask_checkpoint();
+            microtask_checkpoint(tc);
         }
         let terminated = take_one_execution_termination(tc, Some(context)).is_some();
         let state = actor_runtime_state(tc);
@@ -6595,7 +6657,7 @@ fn begin<'s>(
     };
     match promise {
         Ok((promise, active_request_id)) => {
-            tc.perform_microtask_checkpoint();
+            microtask_checkpoint(tc);
             let entry = InFlight {
                 runtime_state,
                 promise: v8::Global::new(tc, promise),
@@ -6694,7 +6756,7 @@ fn begin_entrypoint_rpc(
     let event_started = Instant::now();
     match started {
         Ok(promise) => {
-            tc.perform_microtask_checkpoint();
+            microtask_checkpoint(tc);
             let entry = InFlight {
                 runtime_state: actor_runtime_state(tc),
                 promise: v8::Global::new(tc, promise),
@@ -6937,7 +6999,7 @@ fn begin_queue(
     })();
     match started {
         Ok(promise) => {
-            tc.perform_microtask_checkpoint();
+            microtask_checkpoint(tc);
             let entry = InFlight {
                 runtime_state: actor_runtime_state(tc),
                 promise: v8::Global::new(tc, promise),
@@ -7165,7 +7227,7 @@ fn start_cell_event<'s>(
     })();
     match started {
         Ok(promise) => {
-            tc.perform_microtask_checkpoint();
+            microtask_checkpoint(tc);
             if capture_frames {
                 ws_capture_set_promise(&context, v8::Global::new(tc, promise));
             }
@@ -7633,7 +7695,7 @@ fn deliver(
     entry.unrefed_ops.remove(&op);
     let guard = CurrentGuard::enter(entry.context.clone());
     resolve_res(tc, op, res);
-    tc.perform_microtask_checkpoint();
+    microtask_checkpoint(tc);
     drop(guard);
 }
 
@@ -8016,6 +8078,251 @@ fn op_is_dom_exception(
     rv.set_bool(is);
 }
 
+/// `__instance_accessors(target, table)`: an API object's attributes as
+/// workerd defines them without workers_api_getters_setters_on_prototype
+/// (jsg/resource.h, instance properties): each `[name, getter, setter]` of
+/// `table` becomes a property of `target` itself that reads, as a data
+/// property, what the getter gives, read-only without a setter. V8's
+/// accessor properties look like data properties, as workerd's do.
+fn op_instance_accessors(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let (Ok(target), Ok(table)) = (
+        args.get(0).try_cast::<v8::Object>(),
+        args.get(1).try_cast::<v8::Array>(),
+    ) else {
+        return;
+    };
+    for index in 0..table.length() {
+        let Some(entry) = table
+            .get_index(scope, index)
+            .and_then(|entry| entry.try_cast::<v8::Array>().ok())
+        else {
+            continue;
+        };
+        let Some(name) = entry
+            .get_index(scope, 0)
+            .and_then(|name| name.try_cast::<v8::Name>().ok())
+        else {
+            continue;
+        };
+        let writable = entry
+            .get_index(scope, 2)
+            .is_some_and(|setter| setter.is_function());
+        let mut configuration =
+            v8::AccessorConfiguration::new(instance_attribute_get).data(entry.into());
+        if writable {
+            configuration = configuration.setter(instance_attribute_set);
+        } else {
+            configuration = configuration.property_attribute(v8::PropertyAttribute::READ_ONLY);
+        }
+        if target
+            .set_accessor_with_configuration(scope, name, configuration)
+            .is_none()
+        {
+            return;
+        }
+    }
+}
+
+/// The getters and setters of the attribute classes' properties
+/// (`op_attribute_class`), by the index each property carries.
+#[derive(Default)]
+struct AttributeFunctions(Vec<(v8::Global<v8::Function>, Option<v8::Global<v8::Function>>)>);
+
+/// `__attribute_class(table)` -> a constructor whose instances have the
+/// table's attributes as their own data properties, as `__instance_accessors`
+/// gives them. Its instance template holds one native data property per
+/// attribute, so every instance shares their accessors and its shape, and
+/// `Reflect.construct(cls, [], newTarget)` makes one at the cost of any API
+/// object. A class's base constructor returns it, so the class's fields go
+/// on it (`__TargetBase`).
+fn op_attribute_class(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let Ok(table) = args.get(0).try_cast::<v8::Array>() else {
+        return;
+    };
+    if scope
+        .get_slot::<std::rc::Rc<RefCell<AttributeFunctions>>>()
+        .is_none()
+    {
+        scope.set_slot(std::rc::Rc::new(
+            RefCell::new(AttributeFunctions::default()),
+        ));
+    }
+    let functions = scope
+        .get_slot::<std::rc::Rc<RefCell<AttributeFunctions>>>()
+        .expect("set above")
+        .clone();
+    let class = v8::FunctionTemplate::new(scope, attribute_class_construct);
+    let template = class.instance_template(scope);
+    // A template's instance lists its properties in the reverse of the
+    // order they were set.
+    for index in (0..table.length()).rev() {
+        let Some(entry) = table
+            .get_index(scope, index)
+            .and_then(|entry| entry.try_cast::<v8::Array>().ok())
+        else {
+            continue;
+        };
+        let name = entry
+            .get_index(scope, 0)
+            .and_then(|name| name.try_cast::<v8::Name>().ok());
+        let getter = entry
+            .get_index(scope, 1)
+            .and_then(|getter| getter.try_cast::<v8::Function>().ok());
+        let setter = entry
+            .get_index(scope, 2)
+            .and_then(|setter| setter.try_cast::<v8::Function>().ok());
+        let (Some(name), Some(getter)) = (name, getter) else {
+            continue;
+        };
+        let slot = {
+            let mut functions = functions.borrow_mut();
+            functions.0.push((
+                v8::Global::new(scope, getter),
+                setter.map(|setter| v8::Global::new(scope, setter)),
+            ));
+            functions.0.len() - 1
+        };
+        let data = v8::Integer::new_from_unsigned(scope, slot as u32);
+        let configuration =
+            v8::AccessorConfiguration::new(template_attribute_get).data(data.into());
+        let configuration = if setter.is_some() {
+            configuration.setter(template_attribute_set)
+        } else {
+            configuration.property_attribute(v8::PropertyAttribute::READ_ONLY)
+        };
+        template.set_accessor_with_configuration(name, configuration);
+    }
+    if let Some(function) = class.get_function(scope) {
+        rv.set(function.into());
+    }
+}
+
+/// An attribute class's constructor: the object V8 made from its template
+/// is the instance.
+fn attribute_class_construct(
+    _scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+}
+
+/// The getter and setter a template attribute's index names.
+fn template_attribute_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: Option<u32>,
+    setter: bool,
+) -> Option<v8::Local<'s, v8::Function>> {
+    let index = index? as usize;
+    let functions = scope
+        .get_slot::<std::rc::Rc<RefCell<AttributeFunctions>>>()?
+        .clone();
+    let functions = functions.borrow();
+    let (getter_fn, setter_fn) = functions.0.get(index)?;
+    let function = if setter {
+        setter_fn.as_ref()?
+    } else {
+        getter_fn
+    };
+    Some(v8::Local::new(scope, function))
+}
+
+fn template_attribute_get(
+    scope: &mut v8::PinScope,
+    _name: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let index = args.data().uint32_value(scope);
+    let Some(getter) = template_attribute_function(scope, index, false) else {
+        return;
+    };
+    if let Some(value) = getter.call(scope, args.holder().into(), &[]) {
+        rv.set(value);
+    }
+}
+
+fn template_attribute_set(
+    scope: &mut v8::PinScope,
+    _name: v8::Local<v8::Name>,
+    value: v8::Local<v8::Value>,
+    args: v8::PropertyCallbackArguments,
+    _rv: v8::ReturnValue<()>,
+) {
+    let index = args.data().uint32_value(scope);
+    if let Some(setter) = template_attribute_function(scope, index, true) {
+        let _ = setter.call(scope, args.holder().into(), &[value]);
+    }
+}
+
+fn instance_attribute_get(
+    scope: &mut v8::PinScope,
+    _name: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let Ok(entry) = args.data().try_cast::<v8::Array>() else {
+        return;
+    };
+    let Some(getter) = entry
+        .get_index(scope, 1)
+        .and_then(|getter| getter.try_cast::<v8::Function>().ok())
+    else {
+        return;
+    };
+    if let Some(value) = getter.call(scope, args.holder().into(), &[]) {
+        rv.set(value);
+    }
+}
+
+fn instance_attribute_set(
+    scope: &mut v8::PinScope,
+    _name: v8::Local<v8::Name>,
+    value: v8::Local<v8::Value>,
+    args: v8::PropertyCallbackArguments,
+    _rv: v8::ReturnValue<()>,
+) {
+    let Ok(entry) = args.data().try_cast::<v8::Array>() else {
+        return;
+    };
+    if let Some(setter) = entry
+        .get_index(scope, 2)
+        .and_then(|setter| setter.try_cast::<v8::Function>().ok())
+    {
+        let _ = setter.call(scope, args.holder().into(), &[value]);
+    }
+}
+
+/// What workerd's global error reporting (`ServiceWorkerGlobalScope::
+/// reportError`) puts in its ErrorEvent: `[message, filename, lineno,
+/// colno]` from the message V8 creates for `exception`, whose text is
+/// "Uncaught " and the value's description.
+fn op_uncaught_message(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let message = v8::Exception::create_message(scope, args.get(0));
+    let text: v8::Local<v8::Value> = message.get(scope).into();
+    let filename = message
+        .get_script_resource_name(scope)
+        .filter(|name| name.is_string())
+        .unwrap_or_else(|| v8::String::empty(scope).into());
+    let line = message.get_line_number(scope).unwrap_or(0);
+    let column = message.get_start_column();
+    let line = v8::Number::new(scope, line as f64).into();
+    let column = v8::Number::new(scope, column as f64).into();
+    let out = v8::Array::new_with_elements(scope, &[text, filename, line, column]);
+    rv.set(out.into());
+}
+
 /// What a thrown value crosses RPC as when its serialization does not
 /// (jsg/value.h, the kj::Exception workerd makes of it, and util.c++
 /// `decodeTunneledException`, which reads it back): `[type, message]`, the
@@ -8256,6 +8563,7 @@ impl Worker {
         let mut isolate = v8::Isolate::new(params);
         // Dynamic `import()` of builtin specifiers; per-import()-call only.
         isolate.set_host_import_module_dynamically_callback(host_import_module_dynamically);
+        isolate.set_promise_reject_callback(promise_reject_callback);
         let original_heap_limit = isolate.get_heap_statistics().heap_size_limit();
         let cpu_condemned = Arc::new(AtomicBool::new(false));
         let heap_limit_state = Arc::new(HeapLimitState {
@@ -8421,7 +8729,7 @@ impl Worker {
         };
         // Settle what module scope left queued, as workerd does before it
         // reads the module's promise.
-        scope.perform_microtask_checkpoint();
+        microtask_checkpoint(scope);
         if let Some(error) = take_execution_termination(scope) {
             return Err(error);
         }
@@ -9366,6 +9674,7 @@ ops! { OP_NAMES, install_op_functions,
         "__do_id" => op_do_id,
         "__rpc_call" => op_rpc_call,
         "__sc_encode" => storage_ops::op_sc_encode,
+        "__register_host_classes" => storage_ops::op_register_host_classes,
         "__sc_decode" => storage_ops::op_sc_decode,
         "__structured_clone" => storage_ops::op_structured_clone,
         "__op_fetch" => op_fetch,
@@ -9388,6 +9697,9 @@ ops! { OP_NAMES, install_op_functions,
         "__memory_admit" => op_memory_admit,
         "__dom_exception_brand" => op_dom_exception_brand,
         "__tunneled_error" => op_tunneled_error,
+        "__uncaught_message" => op_uncaught_message,
+        "__instance_accessors" => op_instance_accessors,
+        "__attribute_class" => op_attribute_class,
         "__is_dom_exception" => op_is_dom_exception,
         "__memory_limit" => op_memory_limit,
         "__memory_watch_pause" => op_memory_watch_pause,
@@ -9447,7 +9759,8 @@ ops! { OP_NAMES, install_op_functions,
         "__builtin_module" => op_builtin_module,
         "__zlib" => zlib::op_zlib,
         "__zlib_stream_new" => zlib::op_zlib_stream_new,
-        "__zlib_stream_push" => zlib::op_zlib_stream_push,
+        "__zlib_stream_write" => zlib::op_zlib_stream_write,
+        "__zlib_stream_read" => zlib::op_zlib_stream_read,
         "__zlib_stream_end" => zlib::op_zlib_stream_end,
         "__zlib_stream_drop" => zlib::op_zlib_stream_drop,
 }
@@ -17722,7 +18035,8 @@ fn run_decoder(
 }
 
 fn throw_invalid_encoded_data(scope: &mut v8::PinScope) {
-    let msg = v8::String::new(scope, "The encoded data was not valid.").unwrap();
+    // workerd's text for every encoding (api/encoding.c++ TextDecoder::decode).
+    let msg = v8::String::new(scope, "Failed to decode input.").unwrap();
     let exc = v8::Exception::type_error(scope, msg);
     scope.throw_exception(exc);
 }

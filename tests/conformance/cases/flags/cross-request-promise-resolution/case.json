@@ -1,0 +1,10 @@
+{
+  "xfail": "1.64",
+  "workers": ["front", "before"],
+  "steps": [
+    { "path": "/make" },
+    { "path": "/resolve" },
+    { "path": "/before/make" },
+    { "path": "/before/resolve" }
+  ]
+}

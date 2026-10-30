@@ -69,6 +69,19 @@ An unsupported feature that does not cause an error is a defect.
   cannot prove the geolocation, colo, or TLS metadata.
 - celld removes `Content-Length` from a Worker response, except for a `HEAD`
   response.
+- A body with `Content-Encoding: gzip` is handled as in workerd: a response
+  a Worker sends with it is compressed unless it has `encodeBody: "manual"`,
+  and one that `fetch()`, a service binding or a Durable Object returns is
+  decoded unless the request has `encodeResponseBody: "manual"`. A fetched
+  gzip body sent on unread goes out as it came. A body is decoded or
+  compressed a bounded chunk at a time as it is read, as are
+  `CompressionStream` and `DecompressionStream`, so one that inflates many
+  times over never holds more than a few chunks. A `br` body passes as it is,
+  as without `brotli_content_encoding` (see
+  [Differences selected by compatibility date](#differences-selected-by-compatibility-date)).
+- The response to a `HEAD` request, or with status 101, 204, 205 or 304, has
+  a null body. celld does not refuse a Response constructed with such a
+  status and a body, as workerd does for one that is not empty.
 - A remote Durable Object call cannot retry after request-body transmission
   starts because celld keeps no replay copy.
 - A remote Durable Object call waits for a rejected owner generation to change
@@ -317,9 +330,9 @@ The `tail` and `email` handlers are unavailable.
   and id, `navigator`, `scheduler`, `Cloudflare`, `console` and `process`
   are plain objects in celld, and an RPC stub or property a function and an
   RPC promise a Promise, so `Object.prototype.toString()` gives none of them
-  workerd's class name. celld lacks the global classes `Body`, `Crypto`,
+  workerd's class name. celld lacks the global classes `Crypto`,
   `FetchEvent`, `Navigator`, the `Performance` classes,
-  `PromiseRejectionEvent`, `ScheduledEvent`, `ServiceWorkerGlobalScope`,
+  `ScheduledEvent`, `ServiceWorkerGlobalScope`,
   `TailEvent`, `TraceEvent` and `WorkerGlobalScope`, and has a global
   `DigestStream` and `Temporal`, which workerd does not. No API prototype
   has workerd's `Symbol.for("cloudflare:internal-class")` mark.
@@ -455,7 +468,7 @@ It refuses what workerd 1.20261001.1 refuses, with workerd's message:
 It also refuses:
 
 - a Worker without a `compatibility_date`, as Wrangler does
-- a date after 2026-09-04, the newest date celld models, with workerd's
+- a date after 2026-10-01, the newest date celld models, with workerd's
   message for a date newer than the binary supports
 - an experimental flag in a Worker's configuration, which Cloudflare refuses
   too, except `js_rpc`, `service_binding_extra_handlers` and
@@ -578,6 +591,109 @@ celld follows these flags and the dates that turn them on:
   is `[object Request]`. Without the flag none has one. The objects that
   are not instances of an API class in celld, such as the global scope,
   `ctx`, the bindings and an RPC stub, have no tag either way.
+- `enable_request_signal` and `disable_request_signal` (no date): a
+  request's `signal` aborts with an `AbortError` when the client that sent it
+  goes away, and a copy of the request shares it. Otherwise the request has
+  no signal of its own: `request.signal` never aborts, and a copy gets
+  another. A subrequest made from the request does not carry its signal
+  either way.
+- `workflows_enable_fast_engine_creation` and
+  `workflows_disable_fast_engine_creation` (on from 2026-08-11): a Workflow
+  instance that `create()` or `createBatch()` makes without an id is named
+  as Cloudflare's engine names it with the flag, by a Durable Object
+  namespace's `newUniqueId()`, 64 hex digits. Otherwise it gets a random
+  UUID, which Miniflare uses either way.
+- `throw_on_unrecognized_import_assertion` and
+  `ignore_unrecognized_import_assertion` (on from 2025-06-16): an import
+  with import attributes, static or dynamic, fails with "Unrecognized import
+  attributes specified", as celld implements no import attribute. Otherwise
+  the attributes are ignored. As in Wrangler's, a bundle that `celld deploy`
+  makes keeps none; a Dynamic Worker's modules, and a Worker deployed
+  without a build, keep theirs.
+- `internal_writable_stream_abort_clears_queue` and
+  `internal_writable_stream_abort_does_not_clear_queue` (on from
+  2024-09-02): `abort()` on the writable side of an IdentityTransformStream
+  or a FixedLengthStream rejects the writes waiting and errors the stream at
+  once. Otherwise, with a write in flight, the abort waits until that write
+  is read, which then completes, and errors the stream after it.
+- `bind_asynclocalstorage_snapshot_to_request` and
+  `do_not_bind_asynclocalstorage_snapshot_to-request` (on from 2025-06-16):
+  a function that `AsyncLocalStorage.bind()` or `snapshot()` makes, and an
+  `AsyncResource`, made during a request throw when called in another
+  request; one made in a Durable Object runs in each of its requests, and
+  one made at module scope runs anywhere. Otherwise each runs anywhere.
+- `unhandled_rejection_after_microtask_checkpoint` and
+  `no_unhandled_rejection_after_microtask_checkpoint` (on from 2026-03-03):
+  while the global scope has an `unhandledrejection` or
+  `rejectionhandled` listener, a promise rejected with no handler is
+  looked at once the microtask checkpoint completes, so a chain that
+  handles it a few ticks later fires nothing. Otherwise the next microtask
+  looks, and such a chain fires `unhandledrejection`, then
+  `rejectionhandled`. Either event is a `PromiseRejectionEvent`.
+- `queue_expose_error_codes` and `no_queue_expose_error_codes` (on from
+  2026-03-12): a send or a batch the queue service refuses (a message over
+  128 000 bytes, more than 100 messages, a batch over 256 000 bytes) throws
+  an Error with the cause and code Cloudflare documents, such as "Message
+  size out of bounds (10204)". Otherwise it throws "Queue send failed: " or
+  "Queue sendBatch failed: " and Miniflare's message. Miniflare's service
+  sends no code, so on workerd every refusal reads "Unknown Internal Error
+  (15000)" with the flag. The binding's own checks throw workerd's
+  TypeErrors either way.
+- `enable_fast_jsg_struct` and `disable_fast_jsg_struct` (on from
+  2025-12-03): the result objects workerd builds from its structs carry an
+  absent optional member as `undefined`; otherwise it is left out. In celld
+  these are a stream read's result (`{ value, done }`), an iterator's step
+  (`{ done, value }`) from Headers, URLSearchParams, FormData,
+  WebSocketPair, ReadableStream, a SQL cursor, `storage.kv.list()`,
+  HTMLRewriter attributes and node:util's MIMEParams, a URLPattern match's
+  `inputs`, `socket.opened`, queue metrics, R2's `httpMetadata`, `range`,
+  `checksums.toJSON()` and `list()` result, a key's JWK export and
+  node:crypto's `asymmetricKeyDetails`. Either way their members are in
+  workerd's order.
+- `spec_compliant_dispatch_exceptions` and
+  `no_spec_compliant_dispatch_exceptions` (on from 2026-09-15): an
+  exception a listener throws in `dispatchEvent()`, an AbortSignal's abort,
+  or an event the runtime fires on a WebSocket, an EventSource or a
+  MessagePort is reported, as an ErrorEvent on the global scope and then
+  the console, and the remaining listeners run; a MessagePort then fires
+  `messageerror` with it, and a WebSocket's `open` or `message` or an
+  EventSource's `open` or message fails it. Otherwise the first exception
+  ends the dispatch and propagates, and a MessagePort dispatches it again
+  as a `message`. A WebSocket whose listener throws is not failed in celld
+  either way (plan 1.64).
+- `strip_bom_in_read_all_text` and `do_not_strip_bom_in_read_all_text` (on
+  from 2026-01-13): `text()` of a Request or a Response drops a leading
+  byte order mark; otherwise it keeps it. A Blob's `text()` keeps it either
+  way, as workerd's does.
+- `text_decoder_replace_surrogates` and
+  `disable_text_decoder_replace_surrogates` (on from 2026-02-24): the
+  UTF-16LE TextDecoder replaces a lone surrogate with U+FFFD, or fails in
+  fatal mode. Otherwise an even-length chunk that follows no held bytes and
+  does not end in a lead surrogate (or ends the stream) keeps its lone
+  surrogates, as workerd's fast path does.
+- `websocket_close_reason_byte_limit` and
+  `no_websocket_close_reason_byte_limit` (on from 2026-03-03): WebSocket
+  `close()` throws a SyntaxError for a reason over 123 bytes in UTF-8;
+  otherwise it sends it.
+- `writable_stream_spec_compliant_writer` and
+  `no_writable_stream_spec_compliant_writer` (on from 2026-03-24): a
+  WritableStream writer follows the Streams Standard: its `ready` resolves
+  before the sink has started, `releaseLock()` rejects a `ready` that had
+  resolved, and a write whose size algorithm released the writer is
+  refused. Otherwise `ready` waits for the start, stays resolved on
+  release, and that write goes ahead.
+- `workers_api_getters_setters_on_prototype` and
+  `workers_api_getters_setters_on_instance` (on from 2022-01-31): the
+  attributes of an API object, such as a Request's `url` and `body`, a
+  Response's `status`, an Event's `type`, an AbortSignal's `aborted`, a
+  Blob's `size`, a WebSocket's `readyState`, a stream's `locked` and a
+  TextDecoder's `encoding`, are accessors of its class's prototype, whose
+  getters have no name, over state no script can reach. Otherwise each
+  instance carries them as its own read-only properties, in the reverse of
+  workerd's declaration order, which `Object.keys()` lists, and the
+  prototypes have none. A Request, a Response and a ReadableStream are then
+  as cheap to make as with the flag; an instance of another class with
+  attributes costs about 1 µs more an attribute.
 - `assets_navigation_prefers_asset_serving` and
   `assets_navigation_has_no_effect` (on from 2025-04-01); see
   [Static assets](services/static-assets.md).
@@ -608,7 +724,6 @@ behaves as these flags select:
 - `durable_object_fetch_requires_full_url`: a Durable Object stub's fetch() needs an absolute URL.
 - `streams_byob_reader_detaches_buffer`: a BYOB read detaches the buffer it is given.
 - `streams_enable_constructors`: the ReadableStream and WritableStream constructors take JavaScript sources and sinks.
-- `workers_api_getters_setters_on_instance`: Request, Response and Headers carry their attributes as own instance properties, not prototype accessors.
 - `url_standard`: URL follows the WHATWG URL Standard.
 - `global_navigator`: navigator is defined.
 - `capture_async_api_throws`: a promise-returning API rejects instead of throwing.
@@ -616,7 +731,10 @@ behaves as these flags select:
 - `dont_substitute_null_on_type_error`: an API never substitutes null for an argument of the wrong type.
 - `transformstream_enable_standard_constructor`: the TransformStream constructor follows the Streams Standard.
 - `r2_list_honor_include`: R2 list() returns only the metadata `include` names.
+- `no_brotli_content_encoding`: celld neither compresses nor decodes a br body: it passes as it is.
 - `no_web_socket_compression`: celld never negotiates permessage-deflate on a WebSocket.
+- `no_handle_cross_request_promise_resolution`: a promise's continuations run in the request that resolves it, as V8 runs them.
+- `durable_object_io_tasks_do_not_prevent_eviction`: an idle Durable Object can be evicted while its waitUntil() work is pending.
 - `response_redirect_url_standard`: Response.redirect() serializes its URL with the WHATWG URL Standard.
 - `http_headers_getsetcookie`: Headers has getSetCookie() and iterates each Set-Cookie separately.
 - `no_cf_botmanagement_default`: request.cf never has default botManagement data.
@@ -637,23 +755,17 @@ behaves as these flags select:
 - `no_request_signal_passthrough`: an incoming request's signal never reaches a subrequest.
 - `enable_navigator_language`: navigator.language is defined.
 - `allow_eval_during_startup`: eval() and new Function() work while the Worker starts.
-- `enable_request_signal`: an incoming request's signal aborts when the client disconnects.
 - `set_event_target_this`: an event listener runs with the EventTarget as `this`.
 - `non_pedantic_wpt`: celld does not implement workerd's pedantic WPT mode.
 - `expose_global_message_channel`: MessageChannel and MessagePort are globals.
 - `strip_authorization_on_cross_origin_redirect`: fetch() drops Authorization when it follows a redirect to another origin.
 - `enable_ctx_exports`: ctx.exports is defined.
 - `mutable_api_prototypes`: API prototypes are mutable.
-- `strip_bom_in_read_all_text`: Response.text() and Request.text() drop a leading byte order mark.
-- `text_decoder_replace_surrogates`: the UTF-16LE TextDecoder replaces a lone surrogate with U+FFFD.
 - `containers_pid_namespace`: a container has its own PID namespace.
 - `text_decoder_cjk_decoder`: TextDecoder decodes CJK encodings per the Encoding Standard.
-- `websocket_close_reason_byte_limit`: WebSocket close() throws SyntaxError for a reason over 123 bytes.
-- `writable_stream_spec_compliant_writer`: a WritableStream writer follows the Streams Standard on release.
 - `workflows_preserve_non_retryable_error_message`: a NonRetryableError keeps its message and name.
 - `resizable_array_buffer_in_blob`: Blob accepts a resizable ArrayBuffer.
 - `diagnostics_channel_has_subscribers_getter`: diagnostics_channel's hasSubscribers is a getter.
-- `workflows_disable_fast_engine_creation`: Workflow create() without an id names the instance with a random UUID.
 
 These flags do not apply to celld:
 
@@ -686,33 +798,24 @@ These flags do not apply to celld:
 `celld deploy` refuses these flags, and the Worker Loader refuses them in a
 Dynamic Worker's code. celld always behaves as the flag named after each:
 
-- `formdata_parser_converts_files_to_strings` (as formdata_parser_supports_files), `fetch_treats_unknown_protocols_as_http` (as fetch_refuses_unknown_protocols), `durable_object_fetch_allows_relative_url` (as durable_object_fetch_requires_full_url), `streams_byob_reader_does_not_detach_buffer` (as streams_byob_reader_detaches_buffer), `streams_disable_constructors` (as streams_enable_constructors), `url_original` (as url_standard), `no_global_navigator` (as global_navigator), `do_not_capture_async_api_throws` (as capture_async_api_throws), `r2_internal_beta_bindings` (as r2_public_beta_bindings), `substitute_null_on_type_error` (as dont_substitute_null_on_type_error), `transformstream_disable_standard_constructor` (as transformstream_enable_standard_constructor), `response_redirect_url_original` (as response_redirect_url_standard), `no_http_headers_getsetcookie` (as http_headers_getsetcookie), `cf_botmanagement_default` (as no_cf_botmanagement_default), `no_urlsearchparams_delete_has_value_arg` (as urlsearchparams_delete_has_value_arg), `no_strict_compression_checks` (as strict_compression_checks), `no_strict_crypto_checks` (as strict_crypto_checks), `no_crypto_preserve_public_exponent` (as crypto_preserve_public_exponent), `global_importscripts` (as no_global_importscripts), `no_unwrap_custom_thenables` (as unwrap_custom_thenables), `no_rpc` (as rpc), `internal_stream_byob_return_undefined` (as internal_stream_byob_return_view), `fetch_legacy_url` (as fetch_standard_url), `ignore_custom_ports` (as allow_custom_ports), `no_upper_case_all_http_methods` (as upper_case_all_http_methods), `urlpattern_original` (as urlpattern_standard), `disable_weak_ref` (as enable_weak_ref), `disable_navigator_language` (as enable_navigator_language), `disallow_eval_during_startup` (as allow_eval_during_startup), `disable_request_signal` (as enable_request_signal), `no_set_event_target_this` (as set_event_target_this), `no_expose_global_message_channel` (as expose_global_message_channel), `retain_authorization_on_cross_origin_redirect` (as strip_authorization_on_cross_origin_redirect), `disable_ctx_exports` (as enable_ctx_exports), `do_not_strip_bom_in_read_all_text` (as strip_bom_in_read_all_text), `disable_text_decoder_replace_surrogates` (as text_decoder_replace_surrogates), `no_containers_pid_namespace` (as containers_pid_namespace), `disable_text_decoder_cjk_decoder` (as text_decoder_cjk_decoder), `no_websocket_close_reason_byte_limit` (as websocket_close_reason_byte_limit), `no_writable_stream_spec_compliant_writer` (as writable_stream_spec_compliant_writer), `workflows_replace_non_retryable_error_message` (as workflows_preserve_non_retryable_error_message), `no_diagnostics_channel_has_subscribers_getter` (as diagnostics_channel_has_subscribers_getter).
+- `formdata_parser_converts_files_to_strings` (as formdata_parser_supports_files), `fetch_treats_unknown_protocols_as_http` (as fetch_refuses_unknown_protocols), `durable_object_fetch_allows_relative_url` (as durable_object_fetch_requires_full_url), `streams_byob_reader_does_not_detach_buffer` (as streams_byob_reader_detaches_buffer), `streams_disable_constructors` (as streams_enable_constructors), `url_original` (as url_standard), `no_global_navigator` (as global_navigator), `do_not_capture_async_api_throws` (as capture_async_api_throws), `r2_internal_beta_bindings` (as r2_public_beta_bindings), `substitute_null_on_type_error` (as dont_substitute_null_on_type_error), `transformstream_disable_standard_constructor` (as transformstream_enable_standard_constructor), `response_redirect_url_original` (as response_redirect_url_standard), `no_http_headers_getsetcookie` (as http_headers_getsetcookie), `cf_botmanagement_default` (as no_cf_botmanagement_default), `no_urlsearchparams_delete_has_value_arg` (as urlsearchparams_delete_has_value_arg), `no_strict_compression_checks` (as strict_compression_checks), `no_strict_crypto_checks` (as strict_crypto_checks), `no_crypto_preserve_public_exponent` (as crypto_preserve_public_exponent), `global_importscripts` (as no_global_importscripts), `no_unwrap_custom_thenables` (as unwrap_custom_thenables), `no_rpc` (as rpc), `internal_stream_byob_return_undefined` (as internal_stream_byob_return_view), `fetch_legacy_url` (as fetch_standard_url), `ignore_custom_ports` (as allow_custom_ports), `no_upper_case_all_http_methods` (as upper_case_all_http_methods), `urlpattern_original` (as urlpattern_standard), `disable_weak_ref` (as enable_weak_ref), `disable_navigator_language` (as enable_navigator_language), `disallow_eval_during_startup` (as allow_eval_during_startup), `no_set_event_target_this` (as set_event_target_this), `no_expose_global_message_channel` (as expose_global_message_channel), `retain_authorization_on_cross_origin_redirect` (as strip_authorization_on_cross_origin_redirect), `disable_ctx_exports` (as enable_ctx_exports), `no_containers_pid_namespace` (as containers_pid_namespace), `disable_text_decoder_cjk_decoder` (as text_decoder_cjk_decoder), `workflows_replace_non_retryable_error_message` (as workflows_preserve_non_retryable_error_message), `no_diagnostics_channel_has_subscribers_getter` (as diagnostics_channel_has_subscribers_getter).
 
 celld lacks the behaviour these flags select:
 
 - `html_rewriter_treats_esi_include_as_void_tag`: HTMLRewriter parses <esi:include> as an element with an end tag.
-- `workers_api_getters_setters_on_prototype`: Request, Response and Headers carry their attributes as own instance properties, not prototype accessors.
 - `web_socket_compression`: celld never negotiates permessage-deflate on a WebSocket.
-- `brotli_content_encoding`, `no_brotli_content_encoding`: celld neither encodes nor decodes a body by its Content-Encoding, gzip or br.
+- `brotli_content_encoding`: celld neither compresses nor decodes a br body: it passes as it is.
 - `new_module_registry`: celld does not implement workerd's new module registry.
-- `internal_writable_stream_abort_clears_queue`, `internal_writable_stream_abort_does_not_clear_queue`: celld does not model when abort() clears a platform writable stream's queue.
-- `handle_cross_request_promise_resolution`, `no_handle_cross_request_promise_resolution`: celld does not model which request a promise continuation runs in.
+- `handle_cross_request_promise_resolution`: a promise's continuations run in the request that resolves it, as V8 runs them.
 - `nonclass_entrypoint_reuses_ctx_across_invocations`: each event gets its own ctx.
 - `queue_consumer_no_wait_for_wait_until`, `queue_consumer_wait_for_wait_until`: celld does not model when a queue consumer reports its outcome relative to waitUntil().
 - `request_signal_passthrough`: an incoming request's signal never reaches a subrequest.
-- `bind_asynclocalstorage_snapshot_to_request`, `do_not_bind_asynclocalstorage_snapshot_to-request`: celld does not tie an AsyncLocalStorage snapshot to the request that took it.
-- `throw_on_unrecognized_import_assertion`, `ignore_unrecognized_import_assertion`: celld does not model unknown import attributes.
 - `pedantic_wpt`: celld does not implement workerd's pedantic WPT mode.
-- `enable_fast_jsg_struct`, `disable_fast_jsg_struct`: celld does not model whether an API dictionary carries absent optional fields as undefined.
 - `enable_streams_nodejs_v24_compat`, `disable_streams_nodejs_v24_compat`: celld does not model the Node.js 24 stream changes.
 - `immutable_api_prototypes`: API prototypes are mutable.
-- `queue_expose_error_codes`, `no_queue_expose_error_codes`: celld does not model the error codes queue operations carry.
-- `unhandled_rejection_after_microtask_checkpoint`, `no_unhandled_rejection_after_microtask_checkpoint`: celld does not model when an unhandled rejection is reported.
 - `no_resizable_array_buffer_in_blob`: Blob accepts a resizable ArrayBuffer.
 - `auto_grpc_convert`: celld does not convert a gRPC-web subrequest to gRPC.
-- `workflows_enable_fast_engine_creation`: Workflow create() without an id names the instance with a random UUID.
-- `spec_compliant_dispatch_exceptions`, `no_spec_compliant_dispatch_exceptions`: celld does not model how dispatchEvent() reports a listener's exception.
-- `durable_object_io_tasks_prevent_eviction`, `durable_object_io_tasks_do_not_prevent_eviction`: celld does not model eviction protection for a Durable Object's waitUntil() tasks.
+- `durable_object_io_tasks_prevent_eviction`: an idle Durable Object can be evicted while its waitUntil() work is pending.
 - `webcrypto_modern_algorithms`: Web Crypto has no ML-KEM or ML-DSA.
 
 ### Differences selected by compatibility date
@@ -725,32 +828,17 @@ a behaviour on Cloudflare that celld lacks.
 From these dates Cloudflare gives a Worker the flag's behaviour. celld
 behaves as before the date:
 
-- `workers_api_getters_setters_on_prototype`, from 2022-01-31: Request, Response and Headers carry their attributes as own instance properties, not prototype accessors.
 - `web_socket_compression`, from 2023-08-15: celld never negotiates permessage-deflate on a WebSocket.
-- `brotli_content_encoding`, from 2024-04-29: celld neither encodes nor decodes a body by its Content-Encoding, gzip or br.
-- `internal_writable_stream_abort_clears_queue`, from 2024-09-02: celld does not model when abort() clears a platform writable stream's queue.
-- `handle_cross_request_promise_resolution`, from 2024-10-14: celld does not model which request a promise continuation runs in.
-- `bind_asynclocalstorage_snapshot_to_request`, from 2025-06-16: celld does not tie an AsyncLocalStorage snapshot to the request that took it.
-- `throw_on_unrecognized_import_assertion`, from 2025-06-16: celld does not model unknown import attributes.
-- `enable_fast_jsg_struct`, from 2025-12-03: celld does not model whether an API dictionary carries absent optional fields as undefined.
-- `queue_expose_error_codes`, from 2026-03-12: celld does not model the error codes queue operations carry.
-- `unhandled_rejection_after_microtask_checkpoint`, from 2026-03-03: celld does not model when an unhandled rejection is reported.
-- `workflows_enable_fast_engine_creation`, from 2026-08-11: Workflow create() without an id names the instance with a random UUID.
+- `brotli_content_encoding`, from 2024-04-29: celld neither compresses nor decodes a br body: it passes as it is.
+- `handle_cross_request_promise_resolution`, from 2024-10-14: a promise's continuations run in the request that resolves it, as V8 runs them.
+- `durable_object_io_tasks_prevent_eviction`, from 2026-10-01: an idle Durable Object can be evicted while its waitUntil() work is pending.
 
 #### Before a date
 
 Before these dates Cloudflare gives a Worker the behaviour without the
 flag. celld behaves as from the date:
 
-- `formdata_parser_supports_files` (2021-11-03), `fetch_refuses_unknown_protocols` (2021-11-10), `durable_object_fetch_requires_full_url` (2021-11-10), `streams_byob_reader_detaches_buffer` (2021-11-10), `streams_enable_constructors` (2022-11-30), `url_standard` (2022-10-31), `global_navigator` (2022-03-21), `capture_async_api_throws` (2022-10-31), `dont_substitute_null_on_type_error` (2022-06-01), `transformstream_enable_standard_constructor` (2022-11-30), `r2_list_honor_include` (2022-08-04), `response_redirect_url_standard` (2023-03-14), `http_headers_getsetcookie` (2023-03-01), `no_cf_botmanagement_default` (2023-08-01), `urlsearchparams_delete_has_value_arg` (2023-07-01), `strict_compression_checks` (2023-08-01), `strict_crypto_checks` (2023-08-01), `crypto_preserve_public_exponent` (2023-12-01), `no_global_importscripts` (2024-03-04), `unwrap_custom_thenables` (2024-04-01), `rpc` (2024-04-03), `internal_stream_byob_return_view` (2024-05-13), `fetch_standard_url` (2024-06-03), `allow_custom_ports` (2024-09-02), `upper_case_all_http_methods` (2024-10-14), `urlpattern_standard` (2025-05-01), `enable_weak_ref` (2025-05-05), `enable_navigator_language` (2025-05-19), `allow_eval_during_startup` (2025-06-01), `set_event_target_this` (2025-08-01), `expose_global_message_channel` (2025-08-15), `strip_authorization_on_cross_origin_redirect` (2025-09-01), `enable_ctx_exports` (2025-11-17), `strip_bom_in_read_all_text` (2026-01-13), `text_decoder_replace_surrogates` (2026-02-24), `containers_pid_namespace` (2026-04-01), `text_decoder_cjk_decoder` (2026-03-03), `websocket_close_reason_byte_limit` (2026-03-03), `writable_stream_spec_compliant_writer` (2026-03-24), `workflows_preserve_non_retryable_error_message` (2026-05-14), `diagnostics_channel_has_subscribers_getter` (2026-05-19).
-
-#### Whatever the date
-
-These flags have no date, so Cloudflare gives every Worker that does not
-set them the behaviour without the flag. celld always behaves as with the
-flag:
-
-- `enable_request_signal`: an incoming request's signal aborts when the client disconnects.
+- `formdata_parser_supports_files` (2021-11-03), `fetch_refuses_unknown_protocols` (2021-11-10), `durable_object_fetch_requires_full_url` (2021-11-10), `streams_byob_reader_detaches_buffer` (2021-11-10), `streams_enable_constructors` (2022-11-30), `url_standard` (2022-10-31), `global_navigator` (2022-03-21), `capture_async_api_throws` (2022-10-31), `dont_substitute_null_on_type_error` (2022-06-01), `transformstream_enable_standard_constructor` (2022-11-30), `r2_list_honor_include` (2022-08-04), `response_redirect_url_standard` (2023-03-14), `http_headers_getsetcookie` (2023-03-01), `no_cf_botmanagement_default` (2023-08-01), `urlsearchparams_delete_has_value_arg` (2023-07-01), `strict_compression_checks` (2023-08-01), `strict_crypto_checks` (2023-08-01), `crypto_preserve_public_exponent` (2023-12-01), `no_global_importscripts` (2024-03-04), `unwrap_custom_thenables` (2024-04-01), `rpc` (2024-04-03), `internal_stream_byob_return_view` (2024-05-13), `fetch_standard_url` (2024-06-03), `allow_custom_ports` (2024-09-02), `upper_case_all_http_methods` (2024-10-14), `urlpattern_standard` (2025-05-01), `enable_weak_ref` (2025-05-05), `enable_navigator_language` (2025-05-19), `allow_eval_during_startup` (2025-06-01), `set_event_target_this` (2025-08-01), `expose_global_message_channel` (2025-08-15), `strip_authorization_on_cross_origin_redirect` (2025-09-01), `enable_ctx_exports` (2025-11-17), `containers_pid_namespace` (2026-04-01), `text_decoder_cjk_decoder` (2026-03-03), `workflows_preserve_non_retryable_error_message` (2026-05-14), `diagnostics_channel_has_subscribers_getter` (2026-05-19).
 
 ## Wrangler configuration
 

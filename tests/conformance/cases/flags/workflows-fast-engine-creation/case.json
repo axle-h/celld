@@ -1,0 +1,9 @@
+{
+  "kind": "celld-only",
+  "reason": "Cloudflare's Workflows engine reads workflows_enable_fast_engine_creation; workerd does not, and Miniflare's local engine names every instance with a UUID whatever the flag",
+  "workers": ["app", "legacy"],
+  "steps": [
+    { "path": "/" },
+    { "path": "/legacy" }
+  ]
+}

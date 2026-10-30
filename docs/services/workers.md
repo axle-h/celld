@@ -151,10 +151,11 @@ Pyodide 0.28.2 with its own patches). The configuration must satisfy:
   `python_workers_force_new_vendor_path` before 2025-08-11,
   `python_no_global_handlers` before 2025-08-14, `python_workers_20250116`
   before 2025-09-29, and `enable_python_external_sdk` before 2026-04-21.
-- `compatibility_date` is 2026-09-04 or earlier, as for every Worker (see
+- `compatibility_date` is 2026-10-01 or earlier, as for every Worker (see
   [Compatibility flags](../cloudflare-compat.md#compatibility-flags)). From
   2026-09-08 Cloudflare runs Pyodide 314 (Python 3.14), which needs wheels for
-  another ABI, unless the flags include `no_python_workers_314`.
+  another ABI, so celld refuses such a date unless the flags include
+  `no_python_workers_314`.
 
 celld refuses other settings at deploy time. `python_process_pth_files`
 follows its compatibility date (2026-05-26).

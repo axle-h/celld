@@ -45,6 +45,10 @@
           ]
         ],
         "ticks": 2,
+        "receivers": [
+          "globalThis",
+          "globalThis"
+        ],
         "functions": {
           "setTimeout": [
             "setTimeout",
@@ -102,6 +106,10 @@
           ]
         ],
         "ticks": 2,
+        "receivers": [
+          "globalThis",
+          "globalThis"
+        ],
         "functions": {
           "setTimeout": [
             "setTimeout",
@@ -147,6 +155,10 @@
           ]
         ],
         "ticks": 2,
+        "receivers": [
+          "globalThis",
+          "globalThis"
+        ],
         "functions": {
           "setTimeout": [
             "setTimeout",
@@ -222,6 +234,10 @@
           ]
         ],
         "ticks": 2,
+        "receivers": [
+          "globalThis",
+          "globalThis"
+        ],
         "functions": {
           "setTimeout": [
             "setTimeout",
@@ -309,6 +325,10 @@
           ]
         ],
         "ticks": 2,
+        "receivers": [
+          "globalThis",
+          "globalThis"
+        ],
         "functions": {
           "setTimeout": [
             "setTimeout",
@@ -366,6 +386,10 @@
           ]
         ],
         "ticks": 2,
+        "receivers": [
+          "globalThis",
+          "globalThis"
+        ],
         "functions": {
           "setTimeout": [
             "setTimeout",

@@ -1,0 +1,7 @@
+{
+  "name": "legacy",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["workflows_disable_fast_engine_creation"],
+  "workflows": [{ "name": "legacy-flow", "binding": "FLOW", "class_name": "Flow" }]
+}

@@ -15,6 +15,12 @@
 // Compiled on first access (see LAZY_GLOBALS); a bundle that never names
 // either global never pays for this file.
 return (() => {
+// Compiled on first access, after the Worker's code could have replaced the
+// globals: the intrinsics the harness captured.
+const {
+  ReflectApply: reflectApply, Promise: PromiseCtor,
+  PromiseWithResolvers: withResolvers,
+} = __celld.__intrinsics;
 
 const NOT_BYTES =
   'This TransformStream is being used as a byte stream, but received ' +
@@ -47,7 +53,7 @@ function toError(reason) {
 // Same shape streams.js returns from reads: shadow `then` so a user
 // override of Object.prototype.then cannot intercept the result.
 function _readResult(value, done) {
-  const r = { value, done };
+  const r = __celld.__readResult(value, done);
   Object.defineProperty(r, 'then', {
     __proto__: null,
     value: undefined,
@@ -70,6 +76,9 @@ class InternalController {
   _readerClosed = null;  // the default reader's closed promise, made on use
   _stream = null;
   _writable = null;
+  // An abort that waits for the write in flight (`writable._abort`).
+  _pendingAbort = null;
+  _runPendingAbort = null;
 
   _invalidate() {}   // no BYOB-request surface on internal streams
 
@@ -119,6 +128,9 @@ class InternalController {
     const c = this._consumed;
     this._chunk = null;
     this._consumed = null;
+    // A deferred abort runs once the machinery has completed this write
+    // (`writable._advanceQueue`).
+    if (this._pendingAbort !== null) this._pendingAbort.ready = true;
     if (c) c.resolve();
   }
 
@@ -257,6 +269,8 @@ class InternalController {
       this._consumed = null;
       c.reject(e);
     }
+    // A deferred abort ends with the stream.
+    if (this._pendingAbort !== null) this._runPendingAbort();
   }
 
   // reader.cancel / readable.cancel: close the read side, convert the
@@ -285,6 +299,7 @@ class InternalController {
         this._consumed = null;
         c.reject(e);
       }
+      if (this._pendingAbort !== null) this._runPendingAbort();
     }
     return Promise.resolve();
   }
@@ -377,14 +392,29 @@ class IdentityTransformStream {
         }
         ctl._close();
       },
-      abort(reason) { ctl._errorRd(toError(reason)); },
+      // The readable side sees the connection lost, whatever the reason,
+      // as workerd's does.
+      abort() { ctl._errorRd(new Error('Network connection lost.')); },
     });
     ctl._writable = writable;
-    // abort() must not deadlock behind a write parked in _deliver: the
-    // writable machinery waits for the in-flight write before running
-    // the sink abort, so unpark it with the abort reason.
     const abort_ = writable._abort.bind(writable);
     writable._abort = (reason) => {
+      // Before internal_writable_stream_abort_clears_queue workerd aborts
+      // lazily: with a write in flight, the abort waits until that write
+      // is read, which then completes, and errors the stream after it
+      // (streams/internal.c++ WritableStreamInternalController::doAbort).
+      if (!__celld.__cell.compat.internalWritableStreamAbortClearsQueue &&
+          ctl._consumed !== null && writable._state === 'writable') {
+        if (ctl._pendingAbort === null) {
+          ctl._pendingAbort = { __proto__: null, reason,
+            done: reflectApply(withResolvers, PromiseCtor, []), ready: false };
+          writable._abortPromise = ctl._pendingAbort.done.promise;
+        }
+        return ctl._pendingAbort.done.promise;
+      }
+      // abort() must not deadlock behind a write parked in _deliver: the
+      // writable machinery waits for the in-flight write before running
+      // the sink abort, so unpark it with the abort reason.
       const p = abort_(reason);
       if (writable._state === 'erroring' && ctl._consumed !== null) {
         const c = ctl._consumed;
@@ -394,6 +424,31 @@ class IdentityTransformStream {
       }
       return p;
     };
+    // The deferred abort runs once the write in flight has completed, before
+    // the next one starts: as workerd's doError, it rejects the writer's
+    // closed promise, then the writes queued behind, then errors the
+    // readable side and settles the abort.
+    ctl._runPendingAbort = () => {
+      const pending = ctl._pendingAbort;
+      ctl._pendingAbort = null;
+      const reason = pending.reason;
+      if (writable._state === 'writable') {
+        writable._storedError = reason;
+        writable._state = 'errored';
+        if (writable._writer) writable._writer._rejectReady(reason);
+        writable._rejectCloseAndClosed();
+        for (const entry of writable._queue) entry.reject(reason);
+        writable._queue = [];
+        writable._queueSize = 0;
+        ctl._errorRd(new Error('Network connection lost.'));
+      }
+      pending.done.resolve();
+    };
+    const advance_ = writable._advanceQueue.bind(writable);
+    writable._advanceQueue = () => {
+      if (ctl._pendingAbort !== null && ctl._pendingAbort.ready) ctl._runPendingAbort();
+      advance_();
+    };
     // Both sides are I/O objects of the request or Durable Object that
     // made them, as in workerd: any other is refused. One made at global
     // scope belongs to no one.
@@ -401,8 +456,7 @@ class IdentityTransformStream {
       __celld.__streamIo.own(readable, 'ReadableStreamSource');
       __celld.__streamIo.own(writable, 'Writable');
     }
-    this.readable = readable;
-    this.writable = writable;
+    __celld.__setTransformSides(this, readable, writable);
   }
 }
 

@@ -75,7 +75,8 @@
       iterator.__step = () => {
         if (!state.live) throw new TypeError(kDead);
         if (state.attrEpoch !== epoch) throw new TypeError(kIterInvalid);
-        return inner.next();
+        const step = inner.next();
+        return __celld.__iterResult(step.done, step.value);
       };
       return iterator;
     }

@@ -1,0 +1,10 @@
+{
+  "name": "disable",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["disable_fast_jsg_struct"],
+  "durable_objects": { "bindings": [{ "name": "STORE", "class_name": "DisableStore" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DisableStore"] }],
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "disable-bucket" }],
+  "queues": { "producers": [{ "binding": "QUEUE", "queue": "disable-queue" }], "consumers": [{ "queue": "disable-queue" }] }
+}

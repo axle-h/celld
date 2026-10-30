@@ -1,0 +1,13 @@
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-03-12",
+  "queues": {
+    "producers": [{ "binding": "QUEUE", "queue": "probe-queue" }],
+    "consumers": [{ "queue": "probe-queue" }]
+  },
+  "services": [
+    { "binding": "BEFORE", "service": "before" },
+    { "binding": "DISABLE", "service": "disable" }
+  ]
+}

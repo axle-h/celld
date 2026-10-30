@@ -1,0 +1,13 @@
+{
+  "kind": "celld-only",
+  "reason": "wrangler's createTestHarness sends every global fetch() through a Node outboundService, whose fetch() asks for and decodes a compressed body itself, so workerd's own handling (getContentEncoding in api/system-streams.c++) can't be recorded through it. The expected transcript is recorded from workerd 1.20261001.1 run directly, with `node lib/workerd-direct.mjs fetch/content-encoding-direct --write` and this case's workerd.capnp; fetch/content-encoding records a service binding's and a sent response's encoding differentially.",
+  "workers": ["app"],
+  "upstream": true,
+  "env": {"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}"},
+  "steps": [
+    { "path": "/fetch?port=${UPSTREAM_PORT}" },
+    { "path": "/pass?port=${UPSTREAM_PORT}", "responseHeaders": ["content-encoding"] },
+    { "path": "/pass-read?port=${UPSTREAM_PORT}", "responseHeaders": ["content-encoding"] },
+    { "path": "/pass-manual?port=${UPSTREAM_PORT}", "responseHeaders": ["content-encoding"] }
+  ]
+}

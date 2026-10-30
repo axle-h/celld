@@ -1,0 +1,15 @@
+{
+  "workerd": "1.20261001.1",
+  "steps": [
+    {
+      "frames": [
+        "echo a long enough message to compress, a long enough message to compress"
+      ],
+      "close": {
+        "code": 1000,
+        "reason": ""
+      },
+      "extensions": ""
+    }
+  ]
+}

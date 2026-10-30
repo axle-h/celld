@@ -1,0 +1,4076 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "shapes": {
+          "request": {
+            "own": [],
+            "accessors": [
+              [
+                "method",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "url",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "headers",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "redirect",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "fetcher",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "signal",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "cf",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "integrity",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "keepalive",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "body",
+                "Body",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "bodyUsed",
+                "Body",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "response": {
+            "own": [],
+            "accessors": [
+              [
+                "status",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "statusText",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "headers",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "ok",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "redirected",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "url",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "webSocket",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "cf",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "type",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "body",
+                "Body",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "bodyUsed",
+                "Body",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "textDecoder": {
+            "own": [],
+            "accessors": [
+              [
+                "encoding",
+                "TextDecoder",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "fatal",
+                "TextDecoder",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "ignoreBOM",
+                "TextDecoder",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "textEncoder": {
+            "own": [],
+            "accessors": [
+              [
+                "encoding",
+                "TextEncoder",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "event": {
+            "own": [],
+            "accessors": [
+              [
+                "type",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "eventPhase",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "composed",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "bubbles",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "cancelable",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "defaultPrevented",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "returnValue",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "currentTarget",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "target",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "srcElement",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "timeStamp",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "isTrusted",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "cancelBubble",
+                "Event",
+                "",
+                "function",
+                true,
+                true
+              ]
+            ]
+          },
+          "customEvent": {
+            "own": [],
+            "accessors": [
+              [
+                "detail",
+                "CustomEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "type",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "messageEvent": {
+            "own": [
+              [
+                "ports",
+                "object Array",
+                false,
+                true,
+                true
+              ],
+              [
+                "source",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "lastEventId",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "origin",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "data",
+                "number 1",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "data",
+                null
+              ],
+              [
+                "type",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "closeEvent": {
+            "own": [
+              [
+                "wasClean",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "reason",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "code",
+                "number 1000",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "code",
+                null
+              ],
+              [
+                "type",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "errorEvent": {
+            "own": [],
+            "accessors": [
+              [
+                "message",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "filename",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "lineno",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "colno",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "error",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "type",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "abortController": {
+            "own": [],
+            "accessors": [
+              [
+                "signal",
+                "AbortController",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "abortSignal": {
+            "own": [],
+            "accessors": [
+              [
+                "aborted",
+                "AbortSignal",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "reason",
+                "AbortSignal",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "onabort",
+                "AbortSignal",
+                "",
+                "function",
+                true,
+                true
+              ]
+            ]
+          },
+          "transformStream": {
+            "own": [],
+            "accessors": [
+              [
+                "readable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "writable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "identityTransformStream": {
+            "own": [],
+            "accessors": [
+              [
+                "readable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "writable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "textEncoderStream": {
+            "own": [],
+            "accessors": [
+              [
+                "readable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "writable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "encoding",
+                "TextEncoderStream",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "compressionStream": {
+            "own": [],
+            "accessors": [
+              [
+                "readable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "writable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "webSocket": {
+            "own": [],
+            "accessors": [
+              [
+                "readyState",
+                "WebSocket",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "url",
+                "WebSocket",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "protocol",
+                "WebSocket",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "extensions",
+                "WebSocket",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "binaryType",
+                "WebSocket",
+                "",
+                "function",
+                true,
+                true
+              ]
+            ]
+          }
+        },
+        "live": [
+          false,
+          true,
+          true,
+          "why",
+          true,
+          "accessor"
+        ],
+        "json": [
+          "{}",
+          "{}"
+        ],
+        "statusText": [
+          "OK",
+          "Not Found",
+          ""
+        ],
+        "clone": [
+          "object Request",
+          "DataCloneError: ReadableStream can only be serialized for RPC."
+        ],
+        "subclass": [
+          299,
+          "subclass"
+        ],
+        "assign": [
+          "TypeError",
+          "boolean true"
+        ],
+        "targets": [
+          [
+            "undefined undefined",
+            "undefined undefined",
+            "undefined undefined"
+          ],
+          [
+            "object EventTarget",
+            "object EventTarget",
+            "object EventTarget"
+          ],
+          [
+            "object EventTarget",
+            "object EventTarget",
+            "object EventTarget"
+          ]
+        ],
+        "body": [
+          true,
+          "Body",
+          [
+            "body",
+            "bodyUsed",
+            "arrayBuffer",
+            "bytes",
+            "text",
+            "json",
+            "formData",
+            "blob"
+          ],
+          "TypeError: Illegal constructor"
+        ],
+        "transform": [
+          true,
+          true
+        ],
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "shapes": {
+          "request": {
+            "own": [
+              [
+                "keepalive",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "integrity",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "cf",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "signal",
+                "object AbortSignal",
+                false,
+                true,
+                true
+              ],
+              [
+                "fetcher",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "redirect",
+                "string follow",
+                false,
+                true,
+                true
+              ],
+              [
+                "headers",
+                "object Headers",
+                false,
+                true,
+                true
+              ],
+              [
+                "url",
+                "string http://x/",
+                false,
+                true,
+                true
+              ],
+              [
+                "method",
+                "string POST",
+                false,
+                true,
+                true
+              ],
+              [
+                "bodyUsed",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "body",
+                "object ReadableStream",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "method",
+                null
+              ],
+              [
+                "url",
+                null
+              ],
+              [
+                "headers",
+                null
+              ],
+              [
+                "redirect",
+                null
+              ],
+              [
+                "fetcher",
+                null
+              ],
+              [
+                "signal",
+                null
+              ],
+              [
+                "cf",
+                null
+              ],
+              [
+                "integrity",
+                null
+              ],
+              [
+                "keepalive",
+                null
+              ],
+              [
+                "body",
+                null
+              ],
+              [
+                "bodyUsed",
+                null
+              ]
+            ]
+          },
+          "response": {
+            "own": [
+              [
+                "type",
+                "string default",
+                false,
+                true,
+                true
+              ],
+              [
+                "cf",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "webSocket",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "url",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "redirected",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "ok",
+                "boolean true",
+                false,
+                true,
+                true
+              ],
+              [
+                "headers",
+                "object Headers",
+                false,
+                true,
+                true
+              ],
+              [
+                "statusText",
+                "string OK",
+                false,
+                true,
+                true
+              ],
+              [
+                "status",
+                "number 200",
+                false,
+                true,
+                true
+              ],
+              [
+                "bodyUsed",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "body",
+                "object ReadableStream",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "status",
+                null
+              ],
+              [
+                "statusText",
+                null
+              ],
+              [
+                "headers",
+                null
+              ],
+              [
+                "ok",
+                null
+              ],
+              [
+                "redirected",
+                null
+              ],
+              [
+                "url",
+                null
+              ],
+              [
+                "webSocket",
+                null
+              ],
+              [
+                "cf",
+                null
+              ],
+              [
+                "type",
+                null
+              ],
+              [
+                "body",
+                null
+              ],
+              [
+                "bodyUsed",
+                null
+              ]
+            ]
+          },
+          "textDecoder": {
+            "own": [
+              [
+                "ignoreBOM",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "fatal",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "encoding",
+                "string utf-8",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "encoding",
+                null
+              ],
+              [
+                "fatal",
+                null
+              ],
+              [
+                "ignoreBOM",
+                null
+              ]
+            ]
+          },
+          "textEncoder": {
+            "own": [
+              [
+                "encoding",
+                "string utf-8",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "encoding",
+                null
+              ]
+            ]
+          },
+          "event": {
+            "own": [
+              [
+                "cancelBubble",
+                "boolean false",
+                true,
+                true,
+                true
+              ],
+              [
+                "isTrusted",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "timeStamp",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "srcElement",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "target",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "currentTarget",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "returnValue",
+                "boolean true",
+                false,
+                true,
+                true
+              ],
+              [
+                "defaultPrevented",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "cancelable",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "bubbles",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "composed",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "eventPhase",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "type",
+                "string x",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "type",
+                null
+              ],
+              [
+                "eventPhase",
+                null
+              ],
+              [
+                "composed",
+                null
+              ],
+              [
+                "bubbles",
+                null
+              ],
+              [
+                "cancelable",
+                null
+              ],
+              [
+                "defaultPrevented",
+                null
+              ],
+              [
+                "returnValue",
+                null
+              ],
+              [
+                "currentTarget",
+                null
+              ],
+              [
+                "target",
+                null
+              ],
+              [
+                "srcElement",
+                null
+              ],
+              [
+                "timeStamp",
+                null
+              ],
+              [
+                "isTrusted",
+                null
+              ],
+              [
+                "cancelBubble",
+                null
+              ]
+            ]
+          },
+          "customEvent": {
+            "own": [
+              [
+                "cancelBubble",
+                "boolean false",
+                true,
+                true,
+                true
+              ],
+              [
+                "isTrusted",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "timeStamp",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "srcElement",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "target",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "currentTarget",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "returnValue",
+                "boolean true",
+                false,
+                true,
+                true
+              ],
+              [
+                "defaultPrevented",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "cancelable",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "bubbles",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "composed",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "eventPhase",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "type",
+                "string x",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "detail",
+                "CustomEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "type",
+                null
+              ]
+            ]
+          },
+          "messageEvent": {
+            "own": [
+              [
+                "ports",
+                "object Array",
+                false,
+                true,
+                true
+              ],
+              [
+                "source",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "lastEventId",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "origin",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "data",
+                "number 1",
+                false,
+                true,
+                true
+              ],
+              [
+                "cancelBubble",
+                "boolean false",
+                true,
+                true,
+                true
+              ],
+              [
+                "isTrusted",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "timeStamp",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "srcElement",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "target",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "currentTarget",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "returnValue",
+                "boolean true",
+                false,
+                true,
+                true
+              ],
+              [
+                "defaultPrevented",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "cancelable",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "bubbles",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "composed",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "eventPhase",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "type",
+                "string x",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "data",
+                null
+              ],
+              [
+                "type",
+                null
+              ]
+            ]
+          },
+          "closeEvent": {
+            "own": [
+              [
+                "wasClean",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "reason",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "code",
+                "number 1000",
+                false,
+                true,
+                true
+              ],
+              [
+                "cancelBubble",
+                "boolean false",
+                true,
+                true,
+                true
+              ],
+              [
+                "isTrusted",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "timeStamp",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "srcElement",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "target",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "currentTarget",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "returnValue",
+                "boolean true",
+                false,
+                true,
+                true
+              ],
+              [
+                "defaultPrevented",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "cancelable",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "bubbles",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "composed",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "eventPhase",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "type",
+                "string x",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "code",
+                null
+              ],
+              [
+                "type",
+                null
+              ]
+            ]
+          },
+          "errorEvent": {
+            "own": [
+              [
+                "cancelBubble",
+                "boolean false",
+                true,
+                true,
+                true
+              ],
+              [
+                "isTrusted",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "timeStamp",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "srcElement",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "target",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "currentTarget",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "returnValue",
+                "boolean true",
+                false,
+                true,
+                true
+              ],
+              [
+                "defaultPrevented",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "cancelable",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "bubbles",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "composed",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "eventPhase",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "type",
+                "string x",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "message",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "filename",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "lineno",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "colno",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "error",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "type",
+                null
+              ]
+            ]
+          },
+          "abortController": {
+            "own": [
+              [
+                "signal",
+                "object AbortSignal",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "signal",
+                null
+              ]
+            ]
+          },
+          "abortSignal": {
+            "own": [
+              [
+                "reason",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "aborted",
+                "boolean false",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "aborted",
+                null
+              ],
+              [
+                "reason",
+                null
+              ],
+              [
+                "onabort",
+                "AbortSignal",
+                "",
+                "function",
+                true,
+                true
+              ]
+            ]
+          },
+          "transformStream": {
+            "own": [
+              [
+                "writable",
+                "object WritableStream",
+                false,
+                true,
+                true
+              ],
+              [
+                "readable",
+                "object ReadableStream",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "readable",
+                null
+              ],
+              [
+                "writable",
+                null
+              ]
+            ]
+          },
+          "identityTransformStream": {
+            "own": [
+              [
+                "writable",
+                "object WritableStream",
+                false,
+                true,
+                true
+              ],
+              [
+                "readable",
+                "object ReadableStream",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "readable",
+                null
+              ],
+              [
+                "writable",
+                null
+              ]
+            ]
+          },
+          "textEncoderStream": {
+            "own": [
+              [
+                "writable",
+                "object WritableStream",
+                false,
+                true,
+                true
+              ],
+              [
+                "readable",
+                "object ReadableStream",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "readable",
+                null
+              ],
+              [
+                "writable",
+                null
+              ],
+              [
+                "encoding",
+                "TextEncoderStream",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "compressionStream": {
+            "own": [
+              [
+                "writable",
+                "object WritableStream",
+                false,
+                true,
+                true
+              ],
+              [
+                "readable",
+                "object ReadableStream",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "readable",
+                null
+              ],
+              [
+                "writable",
+                null
+              ]
+            ]
+          },
+          "webSocket": {
+            "own": [
+              [
+                "binaryType",
+                "string arraybuffer",
+                true,
+                true,
+                true
+              ],
+              [
+                "extensions",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "protocol",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "url",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "readyState",
+                "number 1",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "readyState",
+                null
+              ],
+              [
+                "url",
+                null
+              ],
+              [
+                "protocol",
+                null
+              ],
+              [
+                "extensions",
+                null
+              ],
+              [
+                "binaryType",
+                null
+              ]
+            ]
+          }
+        },
+        "live": [
+          false,
+          true,
+          true,
+          "why",
+          true,
+          true
+        ],
+        "json": [
+          "{\"keepalive\":false,\"integrity\":\"\",\"signal\":{\"aborted\":false},\"fetcher\":null,\"redirect\":\"follow\",\"headers\":{},\"url\":\"http://x/\",\"method\":\"GET\",\"bodyUsed\":false,\"body\":null}",
+          "{\"type\":\"default\",\"webSocket\":null,\"url\":\"\",\"redirected\":false,\"ok\":true,\"headers\":{},\"statusText\":\"Fine\",\"status\":200,\"bodyUsed\":false,\"body\":null}"
+        ],
+        "statusText": [
+          "OK",
+          "Not Found",
+          ""
+        ],
+        "clone": [
+          "object Request",
+          "DataCloneError: ReadableStream can only be serialized for RPC."
+        ],
+        "subclass": [
+          200,
+          null
+        ],
+        "assign": [
+          "TypeError",
+          "boolean true"
+        ],
+        "targets": [
+          [
+            "undefined undefined",
+            "undefined undefined",
+            "null"
+          ],
+          [
+            "object EventTarget",
+            "object EventTarget",
+            "object EventTarget"
+          ],
+          [
+            "object EventTarget",
+            "object EventTarget",
+            "null"
+          ]
+        ],
+        "body": [
+          true,
+          "Body",
+          [
+            "arrayBuffer",
+            "bytes",
+            "text",
+            "json",
+            "formData",
+            "blob"
+          ],
+          "TypeError: Illegal constructor"
+        ],
+        "transform": [
+          true,
+          true
+        ],
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "shapes": {
+          "request": {
+            "own": [
+              [
+                "keepalive",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "integrity",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "cf",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "signal",
+                "object AbortSignal",
+                false,
+                true,
+                true
+              ],
+              [
+                "fetcher",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "redirect",
+                "string follow",
+                false,
+                true,
+                true
+              ],
+              [
+                "headers",
+                "object Headers",
+                false,
+                true,
+                true
+              ],
+              [
+                "url",
+                "string http://x/",
+                false,
+                true,
+                true
+              ],
+              [
+                "method",
+                "string POST",
+                false,
+                true,
+                true
+              ],
+              [
+                "bodyUsed",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "body",
+                "object ReadableStream",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "method",
+                null
+              ],
+              [
+                "url",
+                null
+              ],
+              [
+                "headers",
+                null
+              ],
+              [
+                "redirect",
+                null
+              ],
+              [
+                "fetcher",
+                null
+              ],
+              [
+                "signal",
+                null
+              ],
+              [
+                "cf",
+                null
+              ],
+              [
+                "integrity",
+                null
+              ],
+              [
+                "keepalive",
+                null
+              ],
+              [
+                "body",
+                null
+              ],
+              [
+                "bodyUsed",
+                null
+              ]
+            ]
+          },
+          "response": {
+            "own": [
+              [
+                "type",
+                "string default",
+                false,
+                true,
+                true
+              ],
+              [
+                "cf",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "webSocket",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "url",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "redirected",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "ok",
+                "boolean true",
+                false,
+                true,
+                true
+              ],
+              [
+                "headers",
+                "object Headers",
+                false,
+                true,
+                true
+              ],
+              [
+                "statusText",
+                "string OK",
+                false,
+                true,
+                true
+              ],
+              [
+                "status",
+                "number 200",
+                false,
+                true,
+                true
+              ],
+              [
+                "bodyUsed",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "body",
+                "object ReadableStream",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "status",
+                null
+              ],
+              [
+                "statusText",
+                null
+              ],
+              [
+                "headers",
+                null
+              ],
+              [
+                "ok",
+                null
+              ],
+              [
+                "redirected",
+                null
+              ],
+              [
+                "url",
+                null
+              ],
+              [
+                "webSocket",
+                null
+              ],
+              [
+                "cf",
+                null
+              ],
+              [
+                "type",
+                null
+              ],
+              [
+                "body",
+                null
+              ],
+              [
+                "bodyUsed",
+                null
+              ]
+            ]
+          },
+          "textDecoder": {
+            "own": [
+              [
+                "ignoreBOM",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "fatal",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "encoding",
+                "string utf-8",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "encoding",
+                null
+              ],
+              [
+                "fatal",
+                null
+              ],
+              [
+                "ignoreBOM",
+                null
+              ]
+            ]
+          },
+          "textEncoder": {
+            "own": [
+              [
+                "encoding",
+                "string utf-8",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "encoding",
+                null
+              ]
+            ]
+          },
+          "event": {
+            "own": [
+              [
+                "cancelBubble",
+                "boolean false",
+                true,
+                true,
+                true
+              ],
+              [
+                "isTrusted",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "timeStamp",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "srcElement",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "target",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "currentTarget",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "returnValue",
+                "boolean true",
+                false,
+                true,
+                true
+              ],
+              [
+                "defaultPrevented",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "cancelable",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "bubbles",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "composed",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "eventPhase",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "type",
+                "string x",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "type",
+                null
+              ],
+              [
+                "eventPhase",
+                null
+              ],
+              [
+                "composed",
+                null
+              ],
+              [
+                "bubbles",
+                null
+              ],
+              [
+                "cancelable",
+                null
+              ],
+              [
+                "defaultPrevented",
+                null
+              ],
+              [
+                "returnValue",
+                null
+              ],
+              [
+                "currentTarget",
+                null
+              ],
+              [
+                "target",
+                null
+              ],
+              [
+                "srcElement",
+                null
+              ],
+              [
+                "timeStamp",
+                null
+              ],
+              [
+                "isTrusted",
+                null
+              ],
+              [
+                "cancelBubble",
+                null
+              ]
+            ]
+          },
+          "customEvent": {
+            "own": [
+              [
+                "cancelBubble",
+                "boolean false",
+                true,
+                true,
+                true
+              ],
+              [
+                "isTrusted",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "timeStamp",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "srcElement",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "target",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "currentTarget",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "returnValue",
+                "boolean true",
+                false,
+                true,
+                true
+              ],
+              [
+                "defaultPrevented",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "cancelable",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "bubbles",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "composed",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "eventPhase",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "type",
+                "string x",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "detail",
+                "CustomEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "type",
+                null
+              ]
+            ]
+          },
+          "messageEvent": {
+            "own": [
+              [
+                "ports",
+                "object Array",
+                false,
+                true,
+                true
+              ],
+              [
+                "source",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "lastEventId",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "origin",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "data",
+                "number 1",
+                false,
+                true,
+                true
+              ],
+              [
+                "cancelBubble",
+                "boolean false",
+                true,
+                true,
+                true
+              ],
+              [
+                "isTrusted",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "timeStamp",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "srcElement",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "target",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "currentTarget",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "returnValue",
+                "boolean true",
+                false,
+                true,
+                true
+              ],
+              [
+                "defaultPrevented",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "cancelable",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "bubbles",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "composed",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "eventPhase",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "type",
+                "string x",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "data",
+                null
+              ],
+              [
+                "type",
+                null
+              ]
+            ]
+          },
+          "closeEvent": {
+            "own": [
+              [
+                "wasClean",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "reason",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "code",
+                "number 1000",
+                false,
+                true,
+                true
+              ],
+              [
+                "cancelBubble",
+                "boolean false",
+                true,
+                true,
+                true
+              ],
+              [
+                "isTrusted",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "timeStamp",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "srcElement",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "target",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "currentTarget",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "returnValue",
+                "boolean true",
+                false,
+                true,
+                true
+              ],
+              [
+                "defaultPrevented",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "cancelable",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "bubbles",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "composed",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "eventPhase",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "type",
+                "string x",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "code",
+                null
+              ],
+              [
+                "type",
+                null
+              ]
+            ]
+          },
+          "errorEvent": {
+            "own": [
+              [
+                "cancelBubble",
+                "boolean false",
+                true,
+                true,
+                true
+              ],
+              [
+                "isTrusted",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "timeStamp",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "srcElement",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "target",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "currentTarget",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "returnValue",
+                "boolean true",
+                false,
+                true,
+                true
+              ],
+              [
+                "defaultPrevented",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "cancelable",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "bubbles",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "composed",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "eventPhase",
+                "number 0",
+                false,
+                true,
+                true
+              ],
+              [
+                "type",
+                "string x",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "message",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "filename",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "lineno",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "colno",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "error",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "type",
+                null
+              ]
+            ]
+          },
+          "abortController": {
+            "own": [
+              [
+                "signal",
+                "object AbortSignal",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "signal",
+                null
+              ]
+            ]
+          },
+          "abortSignal": {
+            "own": [
+              [
+                "reason",
+                "undefined undefined",
+                false,
+                true,
+                true
+              ],
+              [
+                "aborted",
+                "boolean false",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "aborted",
+                null
+              ],
+              [
+                "reason",
+                null
+              ],
+              [
+                "onabort",
+                "AbortSignal",
+                "",
+                "function",
+                true,
+                true
+              ]
+            ]
+          },
+          "transformStream": {
+            "own": [
+              [
+                "writable",
+                "object WritableStream",
+                false,
+                true,
+                true
+              ],
+              [
+                "readable",
+                "object ReadableStream",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "readable",
+                null
+              ],
+              [
+                "writable",
+                null
+              ]
+            ]
+          },
+          "identityTransformStream": {
+            "own": [
+              [
+                "writable",
+                "object WritableStream",
+                false,
+                true,
+                true
+              ],
+              [
+                "readable",
+                "object ReadableStream",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "readable",
+                null
+              ],
+              [
+                "writable",
+                null
+              ]
+            ]
+          },
+          "textEncoderStream": {
+            "own": [
+              [
+                "writable",
+                "object WritableStream",
+                false,
+                true,
+                true
+              ],
+              [
+                "readable",
+                "object ReadableStream",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "readable",
+                null
+              ],
+              [
+                "writable",
+                null
+              ],
+              [
+                "encoding",
+                "TextEncoderStream",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "compressionStream": {
+            "own": [
+              [
+                "writable",
+                "object WritableStream",
+                false,
+                true,
+                true
+              ],
+              [
+                "readable",
+                "object ReadableStream",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "readable",
+                null
+              ],
+              [
+                "writable",
+                null
+              ]
+            ]
+          },
+          "webSocket": {
+            "own": [
+              [
+                "binaryType",
+                "string blob",
+                true,
+                true,
+                true
+              ],
+              [
+                "extensions",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "protocol",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "url",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "readyState",
+                "number 1",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "readyState",
+                null
+              ],
+              [
+                "url",
+                null
+              ],
+              [
+                "protocol",
+                null
+              ],
+              [
+                "extensions",
+                null
+              ],
+              [
+                "binaryType",
+                null
+              ]
+            ]
+          }
+        },
+        "live": [
+          false,
+          true,
+          true,
+          "why",
+          true,
+          true
+        ],
+        "json": [
+          "{\"keepalive\":false,\"integrity\":\"\",\"signal\":{\"aborted\":false},\"fetcher\":null,\"redirect\":\"follow\",\"headers\":{},\"url\":\"http://x/\",\"method\":\"GET\",\"bodyUsed\":false,\"body\":null}",
+          "{\"type\":\"default\",\"webSocket\":null,\"url\":\"\",\"redirected\":false,\"ok\":true,\"headers\":{},\"statusText\":\"Fine\",\"status\":200,\"bodyUsed\":false,\"body\":null}"
+        ],
+        "statusText": [
+          "OK",
+          "Not Found",
+          ""
+        ],
+        "clone": [
+          "object Request",
+          "DataCloneError: ReadableStream can only be serialized for RPC."
+        ],
+        "subclass": [
+          200,
+          null
+        ],
+        "assign": [
+          "TypeError",
+          "boolean true"
+        ],
+        "targets": [
+          [
+            "undefined undefined",
+            "undefined undefined",
+            "null"
+          ],
+          [
+            "object EventTarget",
+            "object EventTarget",
+            "object EventTarget"
+          ],
+          [
+            "object EventTarget",
+            "object EventTarget",
+            "null"
+          ]
+        ],
+        "body": [
+          true,
+          "Body",
+          [
+            "arrayBuffer",
+            "bytes",
+            "text",
+            "json",
+            "formData",
+            "blob"
+          ],
+          "TypeError: Illegal constructor"
+        ],
+        "transform": [
+          true,
+          true
+        ],
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "shapes": {
+          "request": {
+            "own": [],
+            "accessors": [
+              [
+                "method",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "url",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "headers",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "redirect",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "fetcher",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "signal",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "cf",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "integrity",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "keepalive",
+                "Request",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "body",
+                "Body",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "bodyUsed",
+                "Body",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "response": {
+            "own": [],
+            "accessors": [
+              [
+                "status",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "statusText",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "headers",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "ok",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "redirected",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "url",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "webSocket",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "cf",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "type",
+                "Response",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "body",
+                "Body",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "bodyUsed",
+                "Body",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "textDecoder": {
+            "own": [],
+            "accessors": [
+              [
+                "encoding",
+                "TextDecoder",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "fatal",
+                "TextDecoder",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "ignoreBOM",
+                "TextDecoder",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "textEncoder": {
+            "own": [],
+            "accessors": [
+              [
+                "encoding",
+                "TextEncoder",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "event": {
+            "own": [],
+            "accessors": [
+              [
+                "type",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "eventPhase",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "composed",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "bubbles",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "cancelable",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "defaultPrevented",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "returnValue",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "currentTarget",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "target",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "srcElement",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "timeStamp",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "isTrusted",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "cancelBubble",
+                "Event",
+                "",
+                "function",
+                true,
+                true
+              ]
+            ]
+          },
+          "customEvent": {
+            "own": [],
+            "accessors": [
+              [
+                "detail",
+                "CustomEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "type",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "messageEvent": {
+            "own": [
+              [
+                "ports",
+                "object Array",
+                false,
+                true,
+                true
+              ],
+              [
+                "source",
+                "null",
+                false,
+                true,
+                true
+              ],
+              [
+                "lastEventId",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "origin",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "data",
+                "number 1",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "data",
+                null
+              ],
+              [
+                "type",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "closeEvent": {
+            "own": [
+              [
+                "wasClean",
+                "boolean false",
+                false,
+                true,
+                true
+              ],
+              [
+                "reason",
+                "string ",
+                false,
+                true,
+                true
+              ],
+              [
+                "code",
+                "number 1000",
+                false,
+                true,
+                true
+              ]
+            ],
+            "accessors": [
+              [
+                "code",
+                null
+              ],
+              [
+                "type",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "errorEvent": {
+            "own": [],
+            "accessors": [
+              [
+                "message",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "filename",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "lineno",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "colno",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "error",
+                "ErrorEvent",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "type",
+                "Event",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "abortController": {
+            "own": [],
+            "accessors": [
+              [
+                "signal",
+                "AbortController",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "abortSignal": {
+            "own": [],
+            "accessors": [
+              [
+                "aborted",
+                "AbortSignal",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "reason",
+                "AbortSignal",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "onabort",
+                "AbortSignal",
+                "",
+                "function",
+                true,
+                true
+              ]
+            ]
+          },
+          "transformStream": {
+            "own": [],
+            "accessors": [
+              [
+                "readable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "writable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "identityTransformStream": {
+            "own": [],
+            "accessors": [
+              [
+                "readable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "writable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "textEncoderStream": {
+            "own": [],
+            "accessors": [
+              [
+                "readable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "writable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "encoding",
+                "TextEncoderStream",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "compressionStream": {
+            "own": [],
+            "accessors": [
+              [
+                "readable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "writable",
+                "TransformStream",
+                "",
+                "undefined",
+                true,
+                true
+              ]
+            ]
+          },
+          "webSocket": {
+            "own": [],
+            "accessors": [
+              [
+                "readyState",
+                "WebSocket",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "url",
+                "WebSocket",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "protocol",
+                "WebSocket",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "extensions",
+                "WebSocket",
+                "",
+                "undefined",
+                true,
+                true
+              ],
+              [
+                "binaryType",
+                "WebSocket",
+                "",
+                "function",
+                true,
+                true
+              ]
+            ]
+          }
+        },
+        "live": [
+          false,
+          true,
+          true,
+          "why",
+          true,
+          "accessor"
+        ],
+        "json": [
+          "{}",
+          "{}"
+        ],
+        "statusText": [
+          "OK",
+          "Not Found",
+          ""
+        ],
+        "clone": [
+          "object Request",
+          "DataCloneError: ReadableStream can only be serialized for RPC."
+        ],
+        "subclass": [
+          299,
+          "subclass"
+        ],
+        "assign": [
+          "TypeError",
+          "boolean true"
+        ],
+        "targets": [
+          [
+            "undefined undefined",
+            "undefined undefined",
+            "undefined undefined"
+          ],
+          [
+            "object EventTarget",
+            "object EventTarget",
+            "object EventTarget"
+          ],
+          [
+            "object EventTarget",
+            "object EventTarget",
+            "object EventTarget"
+          ]
+        ],
+        "body": [
+          true,
+          "Body",
+          [
+            "body",
+            "bodyUsed",
+            "arrayBuffer",
+            "bytes",
+            "text",
+            "json",
+            "formData",
+            "blob"
+          ],
+          "TypeError: Illegal constructor"
+        ],
+        "transform": [
+          true,
+          true
+        ],
+        "reported": true
+      }
+    }
+  ]
+}

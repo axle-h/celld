@@ -1,0 +1,72 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "websocket": {
+          "log": [
+            "first one",
+            "second one",
+            "error Uncaught Error: socket failed",
+            "client close 1006"
+          ],
+          "returned": 3,
+          "errors": [
+            "Uncaught Error: socket failed"
+          ]
+        },
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "websocket": {
+          "log": [
+            "first one",
+            "error Uncaught Error: socket failed",
+            "client close 1006"
+          ],
+          "returned": 3,
+          "errors": []
+        },
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "websocket": {
+          "log": [
+            "first one",
+            "second one",
+            "error Uncaught Error: socket failed",
+            "client close 1006"
+          ],
+          "returned": 3,
+          "errors": [
+            "Uncaught Error: socket failed"
+          ]
+        },
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "websocket": {
+          "log": [
+            "first one",
+            "error Uncaught Error: socket failed",
+            "client close 1006"
+          ],
+          "returned": 3,
+          "errors": []
+        },
+        "reported": false
+      }
+    }
+  ]
+}

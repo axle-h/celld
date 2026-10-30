@@ -34,7 +34,7 @@
       "exit": 1,
       "worker": null,
       "output": [
-        "Error: This Worker requires compatibility date \"2026-09-05\", but the newest date supported by this server binary is \"2026-09-04\"."
+        "Error: This Worker requires compatibility date \"2026-10-02\", but the newest date supported by this server binary is \"2026-10-01\"."
       ]
     },
     {
@@ -48,7 +48,7 @@
       "exit": 1,
       "worker": null,
       "output": [
-        "Error: A compatibility_date is required when publishing. Add one to the Wrangler configuration file, such as \"compatibility_date\": \"2026-09-04\""
+        "Error: A compatibility_date is required when publishing. Add one to the Wrangler configuration file, such as \"compatibility_date\": \"2026-10-01\""
       ]
     },
     {

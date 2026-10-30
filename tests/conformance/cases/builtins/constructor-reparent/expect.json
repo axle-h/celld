@@ -1,0 +1,122 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "prototypes": {
+          "Body": true,
+          "Request": true,
+          "Response": true,
+          "ReadableStream": true
+        },
+        "constructed": {
+          "Body": [
+            "TypeError: Illegal constructor",
+            "TypeError: Illegal constructor"
+          ],
+          "Request": [
+            true,
+            "TypeError: Failed to construct 'Request': Please use the 'new' operator, this object constructor cannot be called as a function."
+          ],
+          "Response": [
+            true,
+            "TypeError: Failed to construct 'Response': Please use the 'new' operator, this object constructor cannot be called as a function."
+          ],
+          "ReadableStream": [
+            true,
+            "TypeError: Failed to construct 'ReadableStream': Please use the 'new' operator, this object constructor cannot be called as a function."
+          ]
+        },
+        "incoming": [
+          [
+            true,
+            false
+          ],
+          "GET",
+          "/"
+        ],
+        "fetched": [
+          [
+            true,
+            false
+          ],
+          "from target"
+        ],
+        "request": [
+          true,
+          false
+        ],
+        "response": [
+          true,
+          false
+        ],
+        "stream": [
+          true,
+          false
+        ],
+        "text": "piped",
+        "calls": []
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "prototypes": {
+          "Body": true,
+          "Request": true,
+          "Response": true,
+          "ReadableStream": true
+        },
+        "constructed": {
+          "Body": [
+            "TypeError: Illegal constructor",
+            "TypeError: Illegal constructor"
+          ],
+          "Request": [
+            true,
+            "TypeError: Failed to construct 'Request': Please use the 'new' operator, this object constructor cannot be called as a function."
+          ],
+          "Response": [
+            true,
+            "TypeError: Failed to construct 'Response': Please use the 'new' operator, this object constructor cannot be called as a function."
+          ],
+          "ReadableStream": [
+            true,
+            "TypeError: Failed to construct 'ReadableStream': Please use the 'new' operator, this object constructor cannot be called as a function."
+          ]
+        },
+        "incoming": [
+          [
+            true,
+            false
+          ],
+          "GET",
+          "/"
+        ],
+        "fetched": [
+          [
+            true,
+            false
+          ],
+          "from target"
+        ],
+        "request": [
+          true,
+          false
+        ],
+        "response": [
+          true,
+          false
+        ],
+        "stream": [
+          true,
+          false
+        ],
+        "text": "piped",
+        "calls": []
+      }
+    }
+  ]
+}

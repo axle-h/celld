@@ -31,6 +31,12 @@
     "P-521": "P-521", "secp521r1": "P-521",
   };
   const _canonicalEcCurve = (curve) => _EC_CURVES[_curveName(curve)];
+  // An exported key as workerd's JsonWebKey struct: its members in
+  // declaration order, every one but `kty` optional (`__struct`).
+  const _JWK_MEMBERS = ["kty", "use", "key_ops", "alg", "ext", "crv", "x", "y",
+    "d", "n", "e", "p", "q", "dp", "dq", "qi", "oth", "k", "pub", "priv"];
+  const _jwkStruct = __celld.__jwkStruct = (jwk) => __celld.__struct(
+    _JWK_MEMBERS.map((name) => [name, jwk[name], name !== "kty"]));
   // The asymmetric algorithms, as the uppercased name `_algorithmName`
   // produces mapped to the spelling `key.algorithm.name` reports. The
   // uppercased form is for lookup only: echoing it back names an algorithm
@@ -359,7 +365,7 @@
         if (!key.extractable) {
           throw new DOMException("key is not extractable", "InvalidAccessError");
         }
-        return structuredClone(key.__celldMaterial.jwk);
+        return _jwkStruct(structuredClone(key.__celldMaterial.jwk));
       }
       // Asymmetric keys export from their normalized DER: spki and pkcs8 as
       // they are stored, jwk through the host.
@@ -370,10 +376,10 @@
         }
         const visibility = key.type;
         if (format === "jwk") {
-          return _extra("asym-key-export", {
+          return _jwkStruct(_extra("asym-key-export", {
             der: Array.from(material.bytes),
             visibility,
-          }).jwk;
+          }).jwk);
         }
         if ((format === "spki" && visibility === "public") ||
             (format === "pkcs8" && visibility === "private")) {
@@ -747,10 +753,18 @@
   }
 
   const subtle = new SubtleCrypto();
-  const crypto = {
+  // workerd's `crypto` is an instance of its Crypto class: its methods,
+  // `subtle` and DigestStream are its prototype's, which has the tag. celld
+  // has no Crypto global (plan 1.63), so the class is reachable only as the
+  // prototype's constructor, which refuses to construct.
+  const Crypto = function Crypto() {
+    throw new TypeError("Illegal constructor");
+  };
+  const cryptoPrototype = Crypto.prototype;
+  Object.assign(cryptoPrototype, {
     getRandomValues(array) {
       // Web IDL brand check, observable via node:crypto's webcrypto alias.
-      if (this !== crypto) throw new TypeError("Illegal invocation");
+      if (this !== crypto) throw __celld.__illegalInvocation();
       if (
         !(array instanceof Int8Array) &&
         !(array instanceof Uint8Array) &&
@@ -788,20 +802,30 @@
         h(8) + h(9) + "-" + h(10) + h(11) +
         h(12) + h(13) + h(14) + h(15);
     },
-
-    subtle,
-  };
-  // workerd's `crypto` is an instance of its Crypto class, whose prototype
-  // has the tag; celld has no Crypto global, so a prototype of its own.
-  const cryptoPrototype = {};
+  });
+  Object.defineProperty(cryptoPrototype, "subtle", {
+    __proto__: null,
+    get: [function () {
+      if (this !== crypto) throw __celld.__illegalInvocation();
+      return subtle;
+    }][0],
+    enumerable: true,
+    configurable: true,
+  });
+  const crypto = Object.create(cryptoPrototype);
   __celld.__apiTag(cryptoPrototype, "Crypto");
-  Object.setPrototypeOf(crypto, cryptoPrototype);
+  // Without workers_api_getters_setters_on_prototype `subtle` is the
+  // object's own (harness.js `__applyCompat`).
+  __celld.__registerAttributes("Crypto", [[cryptoPrototype, "subtle"]]);
+  __celld.__crypto = crypto;
 
   // Cloudflare's DigestStream: a WritableStream that hashes what is written
   // to it and resolves `digest` when the stream closes. Not Web Crypto, and
   // the reason a Worker can hash a body it never has to hold whole -- though
   // celld buffers here, as its Hash already does.
   class DigestStream extends WritableStream {
+    #digest;
+    #state;
     constructor(algorithm) {
       const name = _algorithmName(algorithm);
       // DigestStream takes the CRC checksums too; `subtle.digest` does not.
@@ -813,6 +837,9 @@
         state.resolve = resolve;
         state.reject = reject;
       });
+      // Its own attribute comes first, then WritableStream's
+      // (`__celld.__deferWritableAttributes`).
+      __celld.__deferWritableAttributes = true;
       super({ __proto__: null,
         write(chunk) {
           // A string is written as its UTF-8 bytes, as workerd does; every
@@ -851,14 +878,21 @@
       // that is disposed. Neither should raise an unhandled rejection just
       // because nobody awaited `digest`.
       digest.catch(() => {});
-      Object.defineProperties(this, {
-        digest: { __proto__: null, value: digest, enumerable: true },
-        bytesWritten: { __proto__: null, get: () => BigInt(state.written), enumerable: true },
-      });
-      this.__celldDigestState = state;
+      this.#digest = digest;
+      this.#state = state;
+      if (__celld.__oldAttributes) __celld.__installAttributes(this, "DigestStream");
+    }
+    get digest() {
+      if (!(#state in this)) throw __celld.__illegalInvocation();
+      return this.#digest;
+    }
+    get bytesWritten() {
+      if (!(#state in this)) throw __celld.__illegalInvocation();
+      return BigInt(this.#state.written);
     }
     [Symbol.dispose]() {
-      const state = this.__celldDigestState;
+      if (!(#state in this)) throw __celld.__illegalInvocation();
+      const state = this.#state;
       if (state.disposed) return; // disposing twice is a no-op
       state.disposed = true;
       state.chunks.length = 0;
@@ -871,13 +905,26 @@
   }
 
   __celld.__apiTag(DigestStream.prototype, "DigestStream");
+  // `digest` as workerd defines it by the flag, `bytesWritten` on the
+  // prototype whatever it says; both getters nameless and enumerable.
+  __celld.__registerAttributes("DigestStream", [
+    [DigestStream.prototype, "digest"], [WritableStream.prototype, "locked"],
+  ]);
+  {
+    const { get } = Object.getOwnPropertyDescriptor(DigestStream.prototype, "bytesWritten");
+    Object.defineProperty(get, "name", { __proto__: null, value: "" });
+    Object.defineProperty(DigestStream.prototype, "bytesWritten",
+      { __proto__: null, enumerable: true });
+  }
   __celld.__apiTag(CryptoKey.prototype, "CryptoKey");
   __celld.__apiTag(SubtleCrypto.prototype, "SubtleCrypto");
-  crypto.DigestStream = DigestStream;
+  cryptoPrototype.DigestStream = DigestStream;
   globalThis.DigestStream = DigestStream;
   globalThis.CryptoKey = CryptoKey;
   globalThis.SubtleCrypto = SubtleCrypto;
   globalThis.crypto = crypto;
+  // The harness's own ids use this, whatever a script does to `crypto`.
+  __celld.__randomUUID = crypto.randomUUID;
   // `node_crypto.js` hands a parsed key to Web Crypto through
   // `KeyObject.toCryptoKey()`, so it reports the same dictionary. It built
   // a second one by hand, which drifted: it named every EC curve P-256 and

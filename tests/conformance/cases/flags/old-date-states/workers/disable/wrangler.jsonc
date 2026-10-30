@@ -1,0 +1,11 @@
+{
+  "name": "disable",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": [
+    "do_not_strip_bom_in_read_all_text",
+    "disable_text_decoder_replace_surrogates",
+    "no_websocket_close_reason_byte_limit",
+    "no_writable_stream_spec_compliant_writer"
+  ]
+}

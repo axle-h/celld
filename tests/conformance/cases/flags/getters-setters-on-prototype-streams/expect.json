@@ -1,0 +1,450 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "readableStream": [
+          [
+            "locked",
+            null,
+            [
+              "accessor",
+              "ReadableStream",
+              "",
+              true
+            ]
+          ]
+        ],
+        "defaultReader": [
+          [
+            "closed",
+            null,
+            [
+              "accessor",
+              "ReadableStreamDefaultReader",
+              "",
+              true
+            ]
+          ]
+        ],
+        "byobReader": [
+          [
+            "closed",
+            null,
+            [
+              "accessor",
+              "ReadableStreamBYOBReader",
+              "",
+              true
+            ]
+          ]
+        ],
+        "writableStream": [
+          [
+            "locked",
+            null,
+            [
+              "accessor",
+              "WritableStream",
+              "",
+              true
+            ]
+          ]
+        ],
+        "writer": [
+          [
+            "closed",
+            null,
+            [
+              "accessor",
+              "WritableStreamDefaultWriter",
+              "",
+              true
+            ]
+          ],
+          [
+            "ready",
+            null,
+            [
+              "accessor",
+              "WritableStreamDefaultWriter",
+              "",
+              true
+            ]
+          ],
+          [
+            "desiredSize",
+            null,
+            [
+              "accessor",
+              "WritableStreamDefaultWriter",
+              "",
+              true
+            ]
+          ]
+        ],
+        "blob": [
+          [
+            "size",
+            null,
+            [
+              "accessor",
+              "Blob",
+              "",
+              true
+            ]
+          ],
+          [
+            "type",
+            null,
+            [
+              "accessor",
+              "Blob",
+              "",
+              true
+            ]
+          ]
+        ],
+        "file": [
+          [
+            "name",
+            null,
+            [
+              "accessor",
+              "File",
+              "",
+              true
+            ]
+          ],
+          [
+            "lastModified",
+            null,
+            [
+              "accessor",
+              "File",
+              "",
+              true
+            ]
+          ],
+          [
+            "size",
+            null,
+            [
+              "accessor",
+              "Blob",
+              "",
+              true
+            ]
+          ],
+          [
+            "type",
+            null,
+            [
+              "accessor",
+              "Blob",
+              "",
+              true
+            ]
+          ]
+        ],
+        "digestStream": [
+          [
+            "digest",
+            null,
+            [
+              "accessor",
+              "DigestStream",
+              "",
+              true
+            ]
+          ],
+          [
+            "bytesWritten",
+            null,
+            [
+              "accessor",
+              "DigestStream",
+              "",
+              true
+            ]
+          ],
+          [
+            "locked",
+            null,
+            [
+              "accessor",
+              "WritableStream",
+              "",
+              true
+            ]
+          ]
+        ],
+        "crypto": [
+          [
+            "subtle",
+            null,
+            [
+              "accessor",
+              "Crypto",
+              "",
+              true
+            ]
+          ],
+          [
+            "getRandomValues",
+            null,
+            [
+              "data",
+              "Crypto",
+              null,
+              true
+            ]
+          ],
+          [
+            "randomUUID",
+            null,
+            [
+              "data",
+              "Crypto",
+              null,
+              true
+            ]
+          ]
+        ],
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "readableStream": [
+          [
+            "locked",
+            [
+              "own",
+              "boolean false",
+              false,
+              true,
+              true
+            ],
+            null
+          ]
+        ],
+        "defaultReader": [
+          [
+            "closed",
+            [
+              "own",
+              "object Promise",
+              false,
+              true,
+              true
+            ],
+            null
+          ]
+        ],
+        "byobReader": [
+          [
+            "closed",
+            [
+              "own",
+              "object Promise",
+              false,
+              true,
+              true
+            ],
+            null
+          ]
+        ],
+        "writableStream": [
+          [
+            "locked",
+            [
+              "own",
+              "boolean false",
+              false,
+              true,
+              true
+            ],
+            null
+          ]
+        ],
+        "writer": [
+          [
+            "closed",
+            [
+              "own",
+              "object Promise",
+              false,
+              true,
+              true
+            ],
+            null
+          ],
+          [
+            "ready",
+            [
+              "own",
+              "object Promise",
+              false,
+              true,
+              true
+            ],
+            null
+          ],
+          [
+            "desiredSize",
+            [
+              "own",
+              "number 1",
+              false,
+              true,
+              true
+            ],
+            null
+          ]
+        ],
+        "blob": [
+          [
+            "size",
+            [
+              "own",
+              "number 1",
+              false,
+              true,
+              true
+            ],
+            null
+          ],
+          [
+            "type",
+            [
+              "own",
+              "string ",
+              false,
+              true,
+              true
+            ],
+            null
+          ]
+        ],
+        "file": [
+          [
+            "name",
+            [
+              "own",
+              "string f",
+              false,
+              true,
+              true
+            ],
+            null
+          ],
+          [
+            "lastModified",
+            [
+              "own",
+              "number 1",
+              false,
+              true,
+              true
+            ],
+            null
+          ],
+          [
+            "size",
+            [
+              "own",
+              "number 1",
+              false,
+              true,
+              true
+            ],
+            null
+          ],
+          [
+            "type",
+            [
+              "own",
+              "string ",
+              false,
+              true,
+              true
+            ],
+            null
+          ]
+        ],
+        "digestStream": [
+          [
+            "digest",
+            [
+              "own",
+              "object Promise",
+              false,
+              true,
+              true
+            ],
+            null
+          ],
+          [
+            "bytesWritten",
+            null,
+            [
+              "accessor",
+              "DigestStream",
+              "",
+              true
+            ]
+          ],
+          [
+            "locked",
+            [
+              "own",
+              "boolean false",
+              false,
+              true,
+              true
+            ],
+            null
+          ]
+        ],
+        "crypto": [
+          [
+            "subtle",
+            [
+              "own",
+              "object SubtleCrypto",
+              false,
+              true,
+              true
+            ],
+            null
+          ],
+          [
+            "getRandomValues",
+            null,
+            [
+              "data",
+              "Crypto",
+              null,
+              true
+            ]
+          ],
+          [
+            "randomUUID",
+            null,
+            [
+              "data",
+              "Crypto",
+              null,
+              true
+            ]
+          ]
+        ],
+        "reported": false
+      }
+    }
+  ]
+}

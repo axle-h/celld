@@ -1,0 +1,1 @@
+{"name": "disable", "main": "index.js", "compatibility_date": "2026-09-04", "compatibility_flags": ["workers_api_getters_setters_on_instance"]}

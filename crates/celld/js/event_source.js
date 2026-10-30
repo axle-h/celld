@@ -97,20 +97,32 @@
 
     [Symbol.dispose]() { this.close(); }
 
+    // Report-only: the EventSource has already failed, so a throwing
+    // 'error' listener triggers nothing more.
     _notifyError(message, reconnecting, error = undefined) {
       if (this._sourceState === 2) return;
       this._sourceState = reconnecting ? 0 : 2;
       const event = new ErrorEvent("error", { message, error });
-      event._trust();
-      this.dispatchEvent(event);
+      __celld.__eventTrust(event);
+      __celld.__dispatchEvent(this, event, __celld.__specPolicy());
+    }
+
+    // An 'open' or a message listener that throws fails the EventSource,
+    // as workerd's notifyOpen and notifyMessages do: under
+    // spec_compliant_dispatch_exceptions after the dispatch reported it and
+    // ran the other listeners, and otherwise at once. Either way the
+    // exception reaches `_pump`, which fails it.
+    _dispatchFailFast(event) {
+      const { first } = __celld.__dispatchEvent(this, event, __celld.__specPolicy());
+      if (first !== null) throw first.error;
     }
 
     _notifyOpen() {
       if (this._sourceState === 2) return;
       this._sourceState = 1; // OPEN
       const event = new Event("open");
-      event._trust();
-      this.dispatchEvent(event);
+      __celld.__eventTrust(event);
+      this._dispatchFailFast(event);
     }
 
     _dispatchMessage() {
@@ -126,8 +138,8 @@
         origin,
         lastEventId: this._lastId,
       });
-      event._trust();
-      this.dispatchEvent(event);
+      __celld.__eventTrust(event);
+      this._dispatchFailFast(event);
     }
 
     _feedLine(line) {
@@ -194,8 +206,8 @@
     }
 
     async _pump(readable, withReconnection) {
-      this._notifyOpen();
       try {
+        this._notifyOpen();
         const reader = readable.getReader();
         this._reader = reader;
         const decoder = new TextDecoder(); // strips a leading BOM

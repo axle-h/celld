@@ -1,0 +1,14 @@
+{
+  "kind": "celld-only",
+  "reason": "The case measures the celld node's memory, which only celld's runner can read. workerd decodes both bodies too (fetch/content-encoding); what this case adds is the bound on memory.",
+  "workers": ["app"],
+  "steps": [
+    {"path": "/prepare"},
+    {"rss": "baseline"},
+    {"path": "/fetch"},
+    {"rss": 256},
+    {"rss": "baseline"},
+    {"path": "/stream"},
+    {"rss": 256}
+  ]
+}

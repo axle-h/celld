@@ -3910,6 +3910,27 @@ function debuglog(set, cb) {
 const MIME_TOKEN = /^[!#$%&'*+\-.^_`|~A-Za-z0-9]+$/;
 const MIME_VALUE = /^[\t\u0020-\u007e\u0080-\u00ff]*$/;
 const kParams = Symbol("kParams");
+// An iterator over `inner` whose steps are workerd's `Next` struct
+// (`__iterResult`).
+const structIterators = new WeakMap();
+const structIteratorPrototype = Object.create(
+  Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]())), {
+    next: {
+      value() {
+        const inner = structIterators.get(this);
+        if (inner === undefined) throw __celld.__illegalInvocation();
+        const step = inner.next();
+        return __celld.__iterResult(step.done, step.value);
+      },
+      writable: true, enumerable: true, configurable: true,
+    },
+  });
+function structIterator(inner) {
+  const iterator = Object.create(structIteratorPrototype);
+  structIterators.set(iterator, inner);
+  return iterator;
+}
+
 class MIMEParams {
   constructor() {
     this[kParams] = new Map();
@@ -3935,14 +3956,16 @@ class MIMEParams {
     }
     this[kParams].set(name.toLowerCase(), value);
   }
-  *entries() {
-    yield* this[kParams].entries();
+  // workerd's MIMEParams iterators (JSG_ITERATOR), whose steps are its
+  // `Next` struct.
+  entries() {
+    return structIterator(this[kParams].entries());
   }
-  *keys() {
-    yield* this[kParams].keys();
+  keys() {
+    return structIterator(this[kParams].keys());
   }
-  *values() {
-    yield* this[kParams].values();
+  values() {
+    return structIterator(this[kParams].values());
   }
   [Symbol.iterator]() {
     return this.entries();

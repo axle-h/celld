@@ -59,5 +59,16 @@ globalThis.TextDecoderStream = class TextDecoderStream
   get fatal() { return this.#dec.fatal; }
   get ignoreBOM() { return this.#dec.ignoreBOM; }
 };
+// Accessors as workerd defines them: enumerable, their getters nameless.
+for (const [prototype, names] of [
+  [TextEncoderStream.prototype, ["encoding"]],
+  [TextDecoderStream.prototype, ["encoding", "fatal", "ignoreBOM"]],
+]) {
+  for (const name of names) {
+    const { get } = Object.getOwnPropertyDescriptor(prototype, name);
+    Object.defineProperty(get, "name", { __proto__: null, value: "" });
+    Object.defineProperty(prototype, name, { __proto__: null, enumerable: true });
+  }
+}
 __celld.__apiTag(TextEncoderStream.prototype, "TextEncoderStream");
 __celld.__apiTag(TextDecoderStream.prototype, "TextDecoderStream");

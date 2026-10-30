@@ -1,0 +1,21 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "automatic": [
+          "br",
+          11,
+          "plain"
+        ],
+        "manual": [
+          "br",
+          11,
+          "plain"
+        ]
+      }
+    }
+  ]
+}

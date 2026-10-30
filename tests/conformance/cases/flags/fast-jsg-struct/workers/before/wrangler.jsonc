@@ -1,0 +1,10 @@
+{
+  "name": "before",
+  "main": "index.js",
+  "compatibility_date": "2025-12-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": { "bindings": [{ "name": "STORE", "class_name": "BeforeStore" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BeforeStore"] }],
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "before-bucket" }],
+  "queues": { "producers": [{ "binding": "QUEUE", "queue": "before-queue" }], "consumers": [{ "queue": "before-queue" }] }
+}

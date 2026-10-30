@@ -1,0 +1,110 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "responseText": "a",
+        "requestText": "a",
+        "blobText": "﻿a",
+        "decoded": [
+          97,
+          65533,
+          98
+        ],
+        "decodedFatal": "TypeError: Failed to decode input.",
+        "closeLong": "SyntaxError: WebSocket close reason must not be longer than 123 bytes when UTF-8 encoded.",
+        "closeUtf8": "SyntaxError: WebSocket close reason must not be longer than 123 bytes when UTF-8 encoded.",
+        "closeShort": "closed",
+        "writerReady": [
+          "ready resolved",
+          "before start"
+        ],
+        "releasedReady": [
+          false,
+          "rejected TypeError: This WritableStream writer has been released."
+        ],
+        "writeAfterSizeRelease": "rejected TypeError: This WritableStream writer has been released.",
+        "reported": [
+          true,
+          true,
+          true,
+          true
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "responseText": "﻿a",
+        "requestText": "﻿a",
+        "blobText": "﻿a",
+        "decoded": [
+          97,
+          55296,
+          98
+        ],
+        "decodedFatal": [
+          97,
+          55296,
+          98
+        ],
+        "closeLong": "closed",
+        "closeUtf8": "closed",
+        "closeShort": "closed",
+        "writerReady": [
+          "before start",
+          "ready resolved"
+        ],
+        "releasedReady": [
+          true,
+          "resolved"
+        ],
+        "writeAfterSizeRelease": "resolved",
+        "reported": [
+          false,
+          false,
+          false,
+          false
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "responseText": "﻿a",
+        "requestText": "﻿a",
+        "blobText": "﻿a",
+        "decoded": [
+          97,
+          55296,
+          98
+        ],
+        "decodedFatal": [
+          97,
+          55296,
+          98
+        ],
+        "closeLong": "closed",
+        "closeUtf8": "closed",
+        "closeShort": "closed",
+        "writerReady": [
+          "before start",
+          "ready resolved"
+        ],
+        "releasedReady": [
+          true,
+          "resolved"
+        ],
+        "writeAfterSizeRelease": "resolved",
+        "reported": [
+          false,
+          false,
+          false,
+          false
+        ]
+      }
+    }
+  ]
+}

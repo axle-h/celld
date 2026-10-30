@@ -1,0 +1,104 @@
+{
+  "workerd": "1.20261001.1",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "gzip": {
+          "status": 200,
+          "encoding": "gzip",
+          "length": "30",
+          "acceptEncoding": "none",
+          "body": [
+            10,
+            "hello gzip"
+          ]
+        },
+        "gzip manual": {
+          "status": 200,
+          "encoding": "gzip",
+          "length": "30",
+          "acceptEncoding": "none",
+          "body": [
+            30,
+            "gzip bytes"
+          ]
+        },
+        "GZIP": {
+          "status": 200,
+          "encoding": "GZIP",
+          "length": "30",
+          "acceptEncoding": "none",
+          "body": [
+            30,
+            "gzip bytes"
+          ]
+        },
+        "GZIP manual": {
+          "status": 200,
+          "encoding": "GZIP",
+          "length": "30",
+          "acceptEncoding": "none",
+          "body": [
+            30,
+            "gzip bytes"
+          ]
+        },
+        "bad": {
+          "status": 200,
+          "encoding": "gzip",
+          "length": "9",
+          "acceptEncoding": "none",
+          "body": "TypeError: Gzip decompression failed."
+        },
+        "bad manual": {
+          "status": 200,
+          "encoding": "gzip",
+          "length": "9",
+          "acceptEncoding": "none",
+          "body": [
+            9,
+            "hello bad"
+          ]
+        },
+        "head": [
+          "gzip",
+          null
+        ],
+        "copy": [
+          4,
+          "copy"
+        ],
+        "reqInit": [
+          24,
+          "gzip bytes"
+        ],
+        "clone": [
+          4,
+          "copy"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "headers": {
+        "content-encoding": "gzip"
+      },
+      "body": "passed"
+    },
+    {
+      "status": 200,
+      "headers": {
+        "content-encoding": "gzip"
+      },
+      "body": "read and sent"
+    },
+    {
+      "status": 200,
+      "headers": {
+        "content-encoding": "gzip"
+      },
+      "body": "manual passed"
+    }
+  ]
+}

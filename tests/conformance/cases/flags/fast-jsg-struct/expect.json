@@ -1,0 +1,714 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "defaultRead": [
+          [
+            "value",
+            "done"
+          ],
+          [
+            "value",
+            "done"
+          ]
+        ],
+        "bodyRead": [
+          [
+            "value",
+            "done"
+          ],
+          [
+            "value",
+            "done"
+          ]
+        ],
+        "byobRead": [
+          [
+            "value",
+            "done"
+          ],
+          [
+            "value",
+            "done"
+          ]
+        ],
+        "identityRead": [
+          [
+            "value",
+            "done"
+          ],
+          [
+            "value",
+            "done"
+          ]
+        ],
+        "values": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ]
+        ],
+        "valuesReturn": [
+          "done",
+          "value"
+        ],
+        "headers": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ]
+        ],
+        "headerKeys": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ]
+        ],
+        "searchParams": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ]
+        ],
+        "formData": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ]
+        ],
+        "webSocketPair": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ]
+        ],
+        "mimeParams": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ]
+        ],
+        "attributes": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ]
+        ],
+        "patternInputs": [
+          "protocol",
+          "username",
+          "password",
+          "hostname",
+          "port",
+          "pathname",
+          "search",
+          "hash",
+          "baseURL"
+        ],
+        "socketOpened": [
+          "remoteAddress",
+          "localAddress"
+        ],
+        "sendMetrics": [
+          "backlogCount",
+          "backlogBytes",
+          "oldestMessageTimestamp"
+        ],
+        "sendBatchMetrics": [
+          "backlogCount",
+          "backlogBytes",
+          "oldestMessageTimestamp"
+        ],
+        "queueMetrics": [
+          "backlogCount",
+          "backlogBytes",
+          "oldestMessageTimestamp"
+        ],
+        "r2HttpMetadata": [
+          "contentType",
+          "contentLanguage",
+          "contentDisposition",
+          "contentEncoding",
+          "cacheControl",
+          "cacheExpiry"
+        ],
+        "r2EmptyHttpMetadata": [
+          "contentType",
+          "contentLanguage",
+          "contentDisposition",
+          "contentEncoding",
+          "cacheControl",
+          "cacheExpiry"
+        ],
+        "r2Range": [
+          "offset",
+          "length",
+          "suffix"
+        ],
+        "r2Checksums": [
+          "md5",
+          "sha1",
+          "sha256",
+          "sha384",
+          "sha512"
+        ],
+        "r2List": [
+          "objects",
+          "truncated",
+          "cursor",
+          "delimitedPrefixes"
+        ],
+        "r2ListTruncated": [
+          "objects",
+          "truncated",
+          "cursor",
+          "delimitedPrefixes"
+        ],
+        "keyDetails": [
+          [
+            "modulusLength",
+            "publicExponent",
+            "divisorLength",
+            "namedCurve"
+          ],
+          [
+            "modulusLength",
+            "publicExponent",
+            "divisorLength",
+            "namedCurve"
+          ],
+          [
+            "modulusLength",
+            "publicExponent",
+            "divisorLength",
+            "namedCurve"
+          ]
+        ],
+        "durableObject": {
+          "next": [
+            [
+              "done",
+              "value"
+            ],
+            [
+              "done",
+              "value"
+            ]
+          ],
+          "raw": [
+            [
+              "done",
+              "value"
+            ],
+            [
+              "done",
+              "value"
+            ]
+          ],
+          "iterator": [
+            [
+              "done",
+              "value"
+            ],
+            [
+              "done",
+              "value"
+            ]
+          ],
+          "kvList": [
+            [
+              "done",
+              "value"
+            ],
+            [
+              "done",
+              "value"
+            ]
+          ]
+        },
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "defaultRead": [
+          [
+            "value",
+            "done"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "bodyRead": [
+          [
+            "value",
+            "done"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "byobRead": [
+          [
+            "value",
+            "done"
+          ],
+          [
+            "value",
+            "done"
+          ]
+        ],
+        "identityRead": [
+          [
+            "value",
+            "done"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "values": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "valuesReturn": [
+          "done",
+          "value"
+        ],
+        "headers": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "headerKeys": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "searchParams": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "formData": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "webSocketPair": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "mimeParams": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "attributes": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ]
+        ],
+        "patternInputs": [
+          "pathname"
+        ],
+        "socketOpened": [
+          "remoteAddress"
+        ],
+        "sendMetrics": [
+          "backlogCount",
+          "backlogBytes",
+          "oldestMessageTimestamp"
+        ],
+        "sendBatchMetrics": [
+          "backlogCount",
+          "backlogBytes",
+          "oldestMessageTimestamp"
+        ],
+        "queueMetrics": [
+          "backlogCount",
+          "backlogBytes",
+          "oldestMessageTimestamp"
+        ],
+        "r2HttpMetadata": [
+          "contentType"
+        ],
+        "r2EmptyHttpMetadata": [],
+        "r2Range": [
+          "offset",
+          "length"
+        ],
+        "r2Checksums": [
+          "md5"
+        ],
+        "r2List": [
+          "objects",
+          "truncated",
+          "delimitedPrefixes"
+        ],
+        "r2ListTruncated": [
+          "objects",
+          "truncated",
+          "cursor",
+          "delimitedPrefixes"
+        ],
+        "keyDetails": [
+          [
+            "modulusLength",
+            "publicExponent"
+          ],
+          [
+            "namedCurve"
+          ],
+          []
+        ],
+        "durableObject": {
+          "next": [
+            [
+              "done",
+              "value"
+            ],
+            [
+              "done"
+            ]
+          ],
+          "raw": [
+            [
+              "done",
+              "value"
+            ],
+            [
+              "done"
+            ]
+          ],
+          "iterator": [
+            [
+              "done",
+              "value"
+            ],
+            [
+              "done"
+            ]
+          ],
+          "kvList": [
+            [
+              "done",
+              "value"
+            ],
+            [
+              "done"
+            ]
+          ]
+        },
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "defaultRead": [
+          [
+            "value",
+            "done"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "bodyRead": [
+          [
+            "value",
+            "done"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "byobRead": [
+          [
+            "value",
+            "done"
+          ],
+          [
+            "value",
+            "done"
+          ]
+        ],
+        "identityRead": [
+          [
+            "value",
+            "done"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "values": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "valuesReturn": [
+          "done",
+          "value"
+        ],
+        "headers": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "headerKeys": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "searchParams": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "formData": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "webSocketPair": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "mimeParams": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done"
+          ]
+        ],
+        "attributes": [
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ],
+          [
+            "done",
+            "value"
+          ]
+        ],
+        "patternInputs": [
+          "pathname"
+        ],
+        "socketOpened": [
+          "remoteAddress"
+        ],
+        "sendMetrics": [
+          "backlogCount",
+          "backlogBytes",
+          "oldestMessageTimestamp"
+        ],
+        "sendBatchMetrics": [
+          "backlogCount",
+          "backlogBytes",
+          "oldestMessageTimestamp"
+        ],
+        "queueMetrics": [
+          "backlogCount",
+          "backlogBytes",
+          "oldestMessageTimestamp"
+        ],
+        "r2HttpMetadata": [
+          "contentType"
+        ],
+        "r2EmptyHttpMetadata": [],
+        "r2Range": [
+          "offset",
+          "length"
+        ],
+        "r2Checksums": [
+          "md5"
+        ],
+        "r2List": [
+          "objects",
+          "truncated",
+          "delimitedPrefixes"
+        ],
+        "r2ListTruncated": [
+          "objects",
+          "truncated",
+          "cursor",
+          "delimitedPrefixes"
+        ],
+        "keyDetails": [
+          [
+            "modulusLength",
+            "publicExponent"
+          ],
+          [
+            "namedCurve"
+          ],
+          []
+        ],
+        "durableObject": {
+          "next": [
+            [
+              "done",
+              "value"
+            ],
+            [
+              "done"
+            ]
+          ],
+          "raw": [
+            [
+              "done",
+              "value"
+            ],
+            [
+              "done"
+            ]
+          ],
+          "iterator": [
+            [
+              "done",
+              "value"
+            ],
+            [
+              "done"
+            ]
+          ],
+          "kvList": [
+            [
+              "done",
+              "value"
+            ],
+            [
+              "done"
+            ]
+          ]
+        },
+        "reported": false
+      }
+    }
+  ]
+}

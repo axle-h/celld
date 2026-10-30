@@ -1,0 +1,21 @@
+{
+  "workerd": "1.20261001.1",
+  "steps": [
+    {
+      "status": 200,
+      "headers": {
+        "content-encoding": "gzip",
+        "content-length": "26"
+      },
+      "body": "passed"
+    },
+    {
+      "status": 200,
+      "headers": {
+        "content-encoding": "gzip",
+        "content-length": "26"
+      },
+      "body": "manual"
+    }
+  ]
+}

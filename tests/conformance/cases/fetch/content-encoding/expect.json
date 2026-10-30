@@ -1,0 +1,127 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "requestBody": "plain",
+        "badMode": "TypeError: encodeResponseBody: unexpected value: other",
+        "badBodyMode": "TypeError: encodeBody: unexpected value: other"
+      }
+    },
+    {
+      "status": 200,
+      "headers": {
+        "content-encoding": "gzip",
+        "content-length": null,
+        "transfer-encoding": "chunked"
+      },
+      "body": "hello out"
+    },
+    {
+      "status": 200,
+      "headers": {
+        "content-encoding": "gzip",
+        "content-length": null
+      },
+      "body": "raw"
+    },
+    {
+      "status": 200,
+      "headers": {
+        "content-encoding": "gzip",
+        "content-length": null
+      },
+      "body": "copied"
+    },
+    {
+      "status": 200,
+      "body": {
+        "auto": {
+          "status": 200,
+          "encoding": "gzip",
+          "length": null,
+          "acceptEncoding": null,
+          "body": [
+            9,
+            "from back"
+          ]
+        },
+        "manual": "from back",
+        "targetManual": {
+          "status": 200,
+          "encoding": "gzip",
+          "length": null,
+          "acceptEncoding": null,
+          "body": [
+            13,
+            "from back raw"
+          ]
+        },
+        "members": {
+          "status": 200,
+          "encoding": "gzip",
+          "length": null,
+          "acceptEncoding": null,
+          "body": [
+            12,
+            "hello\nworld\n"
+          ]
+        },
+        "truncated": {
+          "status": 200,
+          "encoding": "gzip",
+          "length": null,
+          "acceptEncoding": null,
+          "body": "TypeError: Gzip compressed stream ended prematurely."
+        },
+        "garbage": {
+          "status": 200,
+          "encoding": "gzip",
+          "length": null,
+          "acceptEncoding": null,
+          "body": "TypeError: Gzip decompression failed."
+        },
+        "longName": {
+          "status": 200,
+          "encoding": "gzip",
+          "length": null,
+          "acceptEncoding": null,
+          "body": [
+            17,
+            "after a long name"
+          ]
+        },
+        "headerCrc": {
+          "status": 200,
+          "encoding": "gzip",
+          "length": null,
+          "acceptEncoding": null,
+          "body": [
+            14,
+            "header checked"
+          ]
+        },
+        "badHeaderCrc": {
+          "status": 200,
+          "encoding": "gzip",
+          "length": null,
+          "acceptEncoding": null,
+          "body": "TypeError: Gzip decompression failed."
+        },
+        "self": {
+          "status": 200,
+          "encoding": "gzip",
+          "length": "9",
+          "acceptEncoding": null,
+          "body": [
+            9,
+            "hello out"
+          ]
+        },
+        "selfManual": "hello out"
+      }
+    }
+  ]
+}

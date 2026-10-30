@@ -1,0 +1,10 @@
+{
+  "workers": ["front", "before", "disable"],
+  "upstream": true,
+  "env": { "CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_ECHO_PORT}" },
+  "steps": [
+    { "path": "/?port=${UPSTREAM_ECHO_PORT}" },
+    { "path": "/before?port=${UPSTREAM_ECHO_PORT}" },
+    { "path": "/disable?port=${UPSTREAM_ECHO_PORT}" }
+  ]
+}

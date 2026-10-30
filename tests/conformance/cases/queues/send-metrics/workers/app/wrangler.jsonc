@@ -1,0 +1,9 @@
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "queues": {
+    "producers": [{ "binding": "QUEUE", "queue": "metrics-queue" }],
+    "consumers": [{ "queue": "metrics-queue", "max_batch_timeout": 30 }]
+  }
+}

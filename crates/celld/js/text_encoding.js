@@ -47,6 +47,12 @@
         _tdRegistry?.register(target, id);
     };
     globalThis.TextEncoder = class TextEncoder {
+        constructor() {
+            // Without workers_api_getters_setters_on_prototype workerd puts
+            // its attributes on the instance (harness.js `__attributeTable`).
+            if (__celld.__oldAttributes)
+                __celld.__installAttributes(this, 'TextEncoder');
+        }
         get encoding() { return 'utf-8'; }
         encode(s = '') {
             s = String(s);
@@ -149,6 +155,97 @@
             return { read, written };
         }
     };
+    // workerd's UTF-16LE decoder before text_decoder_replace_surrogates
+    // (api/encoding.c++ IcuDecoder::decode): with nothing held from an
+    // earlier chunk, an even-length chunk that does not end in a lead
+    // surrogate (or ends the stream) becomes its code units as they are, a
+    // lone surrogate included; anything else goes through the converter,
+    // which holds an odd byte and a trailing lead surrogate for the next
+    // chunk and replaces a lone surrogate with U+FFFD, or fails in fatal
+    // mode. An initial BOM is dropped once unless ignoreBOM.
+    const isLead = (unit) => unit >= 0xd800 && unit <= 0xdbff;
+    const isTrail = (unit) => unit >= 0xdc00 && unit <= 0xdfff;
+    const units = (bytes, count) => {
+        const out = new Uint16Array(count);
+        for (let i = 0; i < count; i++)
+            out[i] = bytes[2 * i] | (bytes[2 * i + 1] << 8);
+        return out;
+    };
+    // Captured when the prelude runs, before the Worker's code.
+    const fromCharCode = String.fromCharCode;
+    const reflectApply = Reflect.apply;
+    const subarray = Object.getPrototypeOf(Uint16Array.prototype).subarray;
+    const fromUnits = (codes, start) => {
+        let text = '';
+        for (let i = start; i < codes.length; i += 4096)
+            text += reflectApply(fromCharCode, null,
+                reflectApply(subarray, codes, [i, Math.min(i + 4096, codes.length)]));
+        return text;
+    };
+    class LegacyUtf16Decoder {
+        #fatal;
+        #ignoreBOM;
+        #held = new Uint8Array(0);
+        #bomSeen = false;
+        constructor(fatal, ignoreBOM) {
+            this.#fatal = fatal;
+            this.#ignoreBOM = ignoreBOM;
+        }
+        #start(codes) {
+            if (codes.length === 0) return 0;
+            const omit = !this.#ignoreBOM && !this.#bomSeen &&
+                codes[0] === 0xfeff;
+            this.#bomSeen = true;
+            return omit ? 1 : 0;
+        }
+        #reset() {
+            this.#held = new Uint8Array(0);
+            this.#bomSeen = false;
+        }
+        decode(b, stream) {
+            if (this.#held.length === 0 && b.length > 0 &&
+                b.length % 2 === 0) {
+                const codes = units(b, b.length / 2);
+                if (!stream || !isLead(codes[codes.length - 1])) {
+                    const text = fromUnits(codes, this.#start(codes));
+                    if (!stream) this.#reset();
+                    return text;
+                }
+            }
+            const bytes = new Uint8Array(this.#held.length + b.length);
+            bytes.set(this.#held);
+            bytes.set(b, this.#held.length);
+            let count = Math.floor(bytes.length / 2);
+            const odd = bytes.length % 2 === 1;
+            let end = count;
+            if (stream && count > 0 && isLead(bytes[2 * count - 2] |
+                    (bytes[2 * count - 1] << 8)))
+                end = count - 1;
+            const codes = units(bytes, end);
+            const out = new Uint16Array(end + (!stream && odd ? 1 : 0));
+            for (let i = 0; i < end; i++) {
+                const unit = codes[i];
+                const paired = isLead(unit) ? i + 1 < end && isTrail(codes[i + 1])
+                    : isTrail(unit) ? i > 0 && isLead(codes[i - 1]) : true;
+                if (!paired && this.#fatal) {
+                    this.#reset();
+                    throw new TypeError('Failed to decode input.');
+                }
+                out[i] = paired ? unit : 0xfffd;
+            }
+            if (!stream && odd) {
+                if (this.#fatal) {
+                    this.#reset();
+                    throw new TypeError('Failed to decode input.');
+                }
+                out[end] = 0xfffd;
+            }
+            this.#held = stream ? bytes.slice(2 * end) : new Uint8Array(0);
+            const text = fromUnits(out, this.#start(out));
+            if (!stream) this.#reset();
+            return text;
+        }
+    }
     globalThis.TextDecoder = class TextDecoder {
         #encoding;
         #fatal;
@@ -156,6 +253,8 @@
         // Live native decoder id while a stream is in
         // flight; undefined otherwise.
         #nativeId;
+        // The UTF-16LE decoder before text_decoder_replace_surrogates.
+        #utf16;
         constructor(label = 'utf-8', options = {}) {
             // Per WHATWG encoding: strip ASCII whitespace
             // only (not Unicode -- \v, NBSP, etc. stay).
@@ -201,6 +300,8 @@
             this.#encoding = enc;
             this.#fatal = !!options.fatal;
             this.#ignoreBOM = !!options.ignoreBOM;
+            if (__celld.__oldAttributes)
+                __celld.__installAttributes(this, 'TextDecoder');
         }
         get encoding() { return this.#encoding; }
         get fatal() { return this.#fatal; }
@@ -245,6 +346,12 @@
         // native decoder; a fatal error frees it, matching Workerd -- the
         // next decode starts clean.
         _decodeNative(b, stream) {
+            if (this.#encoding === 'utf-16le' &&
+                !__celld.__cell.compat.textDecoderReplaceSurrogates) {
+                this.#utf16 ??= new LegacyUtf16Decoder(
+                    this.#fatal, this.#ignoreBOM);
+                return this.#utf16.decode(b, stream);
+            }
             let id = this.#nativeId;
             // A complete buffer with no stream around it
             // needs no decoder that outlives the call, so

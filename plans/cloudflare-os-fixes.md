@@ -477,7 +477,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 42 | 1.34 Isolate limit follow-ups (per-request CPU limit, D1 query limit, stack frames, `bytes()`) | done | `e1a4bea` |
 | 43 | 1.61 A stuck isolate must not starve the node (security) | done | `7d8df19` |
 | 44 | 1.36 items 1–7 (error serialization, Node timers, Request `cache`, iterable bodies, stream backpressure, Blob MIME type, `Symbol.toStringTag`) | done | `0ac37a1` |
-| 45+ | Phase 1 in plan order (1.36 items 8–15, 1.37-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63), and the 1.4 props key-order follow-up | queued | |
+| 45 | 1.36 items 8–15 (accessors on prototypes, gzip Content-Encoding, Workflow ids, struct/queue/rejection/ALS/import/abort flags, request signal, old-date states, newest date 2026-10-01) | done | (this commit) |
+| 46+ | Phase 1 in plan order (1.37-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -2106,6 +2107,296 @@ its source at that tag.
   Durable Object RPC 17150 → 16975 (−1.0%), a service binding's fetch to the
   Worker's own entrypoint 18464 → 18333 (−0.7%), RPC to it 18145 → 18131
   (−0.1%).
+
+**As built (items 8–15).** Probed on workerd 1.20261001.1 and read in its
+source at that tag. Each honoured flag is read from `compat_flags`, with its
+date and disable name, and reported in `Cloudflare.compatibilityFlags`.
+8. **`workers_api_getters_setters_on_prototype`** (jsg/resource.h
+   `registerReadonlyPrototypeProperty` and `registerReadonlyInstanceProperty`
+   under `jsgPropertyOnPrototypeTemplate`). A Request's and a Response's
+   state is in private fields of the classes, and their body in those of
+   `Body` (`#bytes`, `#stream`, `#read`, `#text`), now a global as in
+   workerd (a function that throws "Illegal constructor" called with or
+   without `new`; its prototype holds `body`, `bodyUsed` and the read
+   methods). Body, Request, Response and ReadableStream extend nothing, as
+   in workerd at either date (`Object.getPrototypeOf` of each is
+   Function.prototype). Each is a function rather than a class, so a call
+   without `new` throws workerd's "Failed to construct '<name>': Please use
+   the 'new' operator, this object constructor cannot be called as a
+   function." (`__celld.__calledWithoutNew`), with a class's members and a
+   read-only `prototype` (`__celld.__installMembers`). Each constructor
+   makes its object itself (`__bodyInstance`, streams.js `streamInstance`,
+   with `newTarget`'s prototype read once, or Object.prototype when that
+   is not an object, as in workerd) and puts its private
+   state on it through a state class no script can reach (`__BodyFields`,
+   `__RequestFields`, `__ResponseFields`, `ReadableStreamFields`), whose
+   base returns the object it is given (`__Stamp`). So giving one of the
+   constructors another prototype changes no construction, celld's own
+   included (`builtins/constructor-reparent`: both dates, the request a
+   handler receives, a service binding's fetch and its response); every
+   celld path reads them through accessor functions the class bodies hand
+   out (`__requestUrl`, `__responseStatus`, `__bodyStream` and the like), so
+   nothing a script defines on an instance or a subclass changes what
+   crosses or is sent. Each attribute is an accessor of the prototype with
+   no getter name, enumerable, as in workerd, for Request, Response, Body,
+   Event and its subclasses, AbortSignal, AbortController, WebSocket, Blob,
+   File, the streams, their readers and writers, TransformStream,
+   TextEncoder, TextDecoder, DigestStream and `crypto` (a `Crypto`
+   prototype with `subtle`). Without the flag, `__applyCompat` deletes those
+   accessors and each instance gets its attributes as own data properties,
+   read-only unless the attribute has a setter (`cancelBubble`), in the
+   reverse of workerd's declaration order, as native data properties that
+   read the live private state, so an attribute that changes (`bodyUsed`,
+   `readyState`, `aborted`) still reads true. A Request, a Response and a
+   ReadableStream, which every request makes, are made from an attribute
+   class (`op_attribute_class`: a FunctionTemplate whose instance template
+   holds the table's properties, made once per table): the object their
+   constructor makes is an instance of it given the class's prototype, so
+   every instance shares the accessors and the shape and the state goes on
+   it. Each other class adds the properties to its instance after
+   construction (`op_instance_accessors`), which costs about 1 µs an
+   attribute. MessageEvent, CloseEvent and
+   PromiseRejectionEvent have their own read-only properties either way, as
+   workerd's do, defined before Event's. `structuredClone()` of a Request or a Response, which now
+   has no own property for V8 to write, goes through the RPC marker lift
+   and revival, as in workerd it serializes; every serializer of the
+   isolate refuses a real Request, Response or AbortSignal (by a brand check
+   and a refusal the harness registers, `storage_ops::HostClasses`: the
+   walk up an object's prototype chain stops at Object.prototype or
+   Array.prototype, and only one that reaches a host prototype calls the
+   brand check), so storage lifts it into its marker as before; an object
+   that only claims one of their prototypes is written as plain data, as
+   workerd writes it, by `structuredClone()` too
+   (`builtins/structured-clone-unbranded`). Every reviver reads a marker's
+   own fields only (`__ownRecord`), so a getter a script put on
+   Object.prototype under a marker field's name (`k`, `x`, `m`) changes
+   nothing a Request or a Response revives as (`rpc/marker-fields-inherited`).
+   Prototypes list `constructor` after their members, as workerd's do
+   (api_tags.js), and WebSocket and its prototype carry workerd's
+   `READY_STATE_*` and `CONNECTING`..`CLOSED` constants in its order, read-only
+   and configurable, as Event's now are. An EventTarget method on another
+   receiver throws workerd's "Illegal invocation" text, as every celld
+   class's does now (`__celld.__illegalInvocation`). The 1.63
+   entry "Request and Response attributes are own data properties" is
+   closed; `rpc/marker-shaped-host-attributes` (xfail 1.36) now passes.
+   Cases `flags/getters-setters-on-prototype` (Request, Response, events,
+   AbortSignal, AbortController, WebSocket; four dates and flags) and
+   `flags/getters-setters-on-prototype-streams`; found, with xfail cases:
+   `builtins/readonly-attribute-assignment`, `builtins/internal-own-keys`.
+9. **Content-Encoding** (api/system-streams.c++ `getContentEncoding`,
+   http.c++ `makeHttpResponse` and `Response::send`). gzip is handled
+   whatever the date: a body that arrives with exactly
+   `Content-Encoding: gzip` (a `fetch()`, a service binding's, a Durable
+   Object's or a cross-isolate cell's response) is decoded as it is read
+   (`CelldGzipBodyStream`) unless the request has
+   `encodeResponseBody: "manual"`: every gzip member of it, as kj's
+   GzipInputStream decodes it, with its messages ("Gzip decompression
+   failed.", "Gzip compressed stream ended prematurely."); a response sent
+   with it is compressed
+   (`__gzipBody`) unless it has `encodeBody: "manual"`, and a gzip body
+   that arrived so and that nothing read goes out as it came. A copy, a
+   clone and a Request used as the init keep the mode; a same-isolate
+   service binding encodes or decodes only where the two sides' modes
+   differ, as if the response crossed HTTP. Every coder, these and
+   CompressionStream and DecompressionStream, is a native zlib stream
+   (zlib.rs `ZlibStream`) that queues its input and codes it in bounded
+   steps: up to 1 MiB of output as input is written, so bad input fails
+   the write that brought it, as in workerd, then 64 KiB a read, taking
+   more input only once its output is read. A decoder inflates with
+   flate2's `Decompress` into a fixed 64 KiB buffer and reads gzip's
+   framing itself (miniz, flate2's backend, inflates zlib and raw deflate
+   only), so it takes its input whole. The header is a stream: its fixed
+   ten bytes, then, as its flags say, FEXTRA's length and data, FNAME and
+   FCOMMENT up to their NUL and FHCRC, each taken a whole slice at a time
+   and never held, whatever its length (a 1 MiB FNAME decodes at once, on
+   both runtimes, in `fetch/content-encoding`; an 8 MiB one in a unit
+   test). FHCRC is checked against the CRC32 of the header's bytes, as
+   zlib checks it: a wrong one fails a body with "Gzip decompression
+   failed." and a DecompressionStream with "Decompression failed."
+   (`fetch/content-encoding`, `streams/decompression-errors`).
+   Throughput: plain text decodes at about 800 MB/s and zeros at 2.3 GB/s
+   through a DecompressionStream, against
+   520 MB/s and 910 MB/s at 62ffd57. Bytes after a body's last member
+   that are not another member fail it with "Gzip decompression failed.",
+   as kj's do. Before, a write inflated a
+   whole chunk at once: a 256 KiB body of 256 MiB of zeros took that much
+   memory, as a single large DecompressionStream write did already at HEAD
+   (`fetch/gzip-bomb`, celld-only: 1 GiB of zeros in 1 MiB, read in full
+   from a Durable Object's body and from one DecompressionStream write,
+   while the node's peak memory grows by under 256 MiB, a quarter of what
+   is decoded, from a baseline taken in the same process; the runner
+   prints the growth when it is over). DecompressionStream now reports
+   workerd's "Trailing bytes after end of compressed data" and "Called
+   close() on a decompression stream with incomplete data"
+   (`streams/decompression-errors`). The response to a HEAD request
+   or with a null body status now has a null body, as `makeHttpResponse`
+   gives it (it had an empty stream). `br` under `brotli_content_encoding`
+   (on from 2024-04-29) is not supported: the flag is `Support::Off`, so
+   `no_brotli_content_encoding` is accepted and the date's state is a
+   listed difference; a br body passes as it is, as without the flag.
+   celld carries no brotli implementation, and adding the `brotli` crate
+   needs the review the quality bar asks for (plan 1.64). Cases
+   `fetch/content-encoding` (a request body, sent responses in each mode, a
+   service binding's and the Worker's own responses), `fetch/content-encoding-direct`
+   (a global `fetch()`, recorded from workerd run directly, as the
+   harness's Node outbound decodes it), `fetch/received-null-body`,
+   `fetch/content-encoding-br-off`; xfail `fetch/content-encoding-br`,
+   `fetch/passthrough-length`, `fetch/null-body-status-construct`. The
+   conformance upstream gained `/encoded`.
+10. **`workflows_enable_fast_engine_creation`** (on from 2026-08-11; only
+    compatibility-date.capnp has it, as Cloudflare's engine is not in
+    workerd). A Workflow instance that `create()` or `createBatch()` makes
+    without an id is named by the Workflow's Durable Object namespace's
+    `newUniqueId()`, 64 hex digits, with the flag, and by a random UUID
+    without it, which Miniflare uses either way (`__wfNewInstanceId`). Case
+    `flags/workflows-fast-engine-creation` (celld-only: Miniflare names
+    every instance by UUID).
+11. Each modelled, gated as workerd gates it:
+    - **`enable_fast_jsg_struct`** (jsg/struct.h). The objects workerd
+      builds from its structs are built by `__celld.__struct`,
+      `__iterResult` and `__readResult` (api_tags.js), which keep workerd's
+      member order and, with the flag, an absent optional member as
+      undefined: stream reads, every iterator step (Headers,
+      URLSearchParams, FormData, WebSocketPair, ReadableStream, SQL cursor,
+      `kv.list()`, HTMLRewriter attributes, MIMEParams), URLPattern's
+      `inputs`, `socket.opened`, queue metrics, R2's `httpMetadata`,
+      `range`, `checksums.toJSON()` and `list()`, JWK export and
+      `asymmetricKeyDetails`. The async iterators became classes
+      (`ReadableStreamAsyncIterator`, a WebSocketPair `PairIterator`), as
+      an async generator's step cannot be shaped. Case
+      `flags/fast-jsg-struct`.
+    - **`queue_expose_error_codes`** (api/queue.c++). The queue binding's
+      send and sendBatch were rewritten as workerd's: its own TypeErrors
+      for a bad body, content type or batch, then the service's refusal,
+      which with the flag is an Error with Cloudflare's documented cause
+      and code ("Message size out of bounds (10204)", 10205, 10206) and
+      without it "Queue send failed: " or "Queue sendBatch failed: " and
+      Miniflare's text. Cases `flags/queue-expose-error-codes`,
+      `flags/queue-error-codes` (celld-only: Miniflare's service sends no
+      code); found: `queues/send-metrics` (xfail).
+    - **`unhandled_rejection_after_microtask_checkpoint`**
+      (api/global-scope.c++, jsg/promise.c++). celld now has workerd's
+      `unhandledrejection` and `rejectionhandled` events and
+      `PromiseRejectionEvent`: V8's promise reject callback
+      (`set_promise_reject_callback`) records rejections, and they are
+      looked at after each microtask checkpoint with the flag, or from the
+      next microtask without it, while the global scope has a listener;
+      every checkpoint site goes through one `microtask_checkpoint` helper.
+      Case `flags/unhandled-rejection-checkpoint`. The bookkeeping inside
+      V8's callback, and the dispatch of the events, use captured
+      functions, null-prototype records and index loops only, so nothing
+      a script replaced on Map.prototype, Array.prototype or
+      Object.prototype runs there; the listener count comes from
+      EventTarget's private lists, which every dispatch now works on the
+      same way. As in workerd (`ServiceWorkerGlobalScope::
+      emitPromiseRejection`), a rejection is recorded only while a listener
+      exists, so one added after it does not hear it
+      (`builtins/unhandled-rejection-hooks` pins both against workerd). The
+      global timers use captured functions too, and run a callback with the
+      global scope as `this`, as workerd does under either timers flag (it
+      was `undefined` at 62ffd57; `flags/nodejs-global-timers`).
+    - **`bind_asynclocalstorage_snapshot_to_request`**
+      (api/node/async-hooks.c++). A function from
+      `AsyncLocalStorage.bind()` or `snapshot()`, and an `AsyncResource`,
+      made in a request throws workerd's error when called in another with
+      the flag; one made at module scope runs anywhere, and one made in a
+      Durable Object runs in each of its requests, which share one
+      IoContext in workerd (`__asyncContextOwner`: the object's state).
+      Case `flags/async-local-storage-snapshot`.
+    - **`handle_cross_request_promise_resolution`** (io/worker.c++, with
+      workerd's V8 patches that tag promises with their context). celld's
+      V8 lacks the patches, so the flag is `Support::Off`: a promise's
+      continuations run in the request that resolves it. Case
+      `flags/cross-request-promise-resolution` (xfail 1.64).
+    - **`throw_on_unrecognized_import_assertion`** (jsg/modules.c++). An
+      import with attributes, static or dynamic, fails with "Unrecognized
+      import attributes specified" with the flag (`ImportAttributes` slot in
+      `js/modules.rs`); without it they are ignored. `celld deploy` bundles
+      with `--supported:import-attributes=false`, as Wrangler's esbuild
+      drops them, so a deployed bundle keeps none; a Dynamic Worker's
+      modules keep theirs. Case `flags/import-attributes`.
+    - **`internal_writable_stream_abort_clears_queue`**
+      (api/streams/internal.c++). `abort()` on an IdentityTransformStream's
+      or FixedLengthStream's writable side rejects the queued writes and
+      errors the stream at once with the flag; without it, with a write in
+      flight, it waits until that write is read. A read of the readable
+      side then fails with "Network connection lost." whatever the reason,
+      as workerd's does. Cases `flags/internal-writable-stream-abort`,
+      `streams/internal-abort-read-error`.
+    - Found while modelling them: **`spec_compliant_dispatch_exceptions`**
+      (api/basics.c++ `EventTarget::dispatchEventImpl`, on from 2026-09-15).
+      EventTarget keeps its listeners in a private field and dispatches
+      through one `__dispatchEvent(target, event, policy)`: with the flag a
+      listener's exception is reported (an ErrorEvent on the global scope,
+      then the console) and the remaining listeners run; without it the
+      first exception ends the dispatch and propagates. An AbortSignal's
+      abort, a WebSocket's, an EventSource's and a MessagePort's events
+      follow it; a MessagePort fires `messageerror` with the flag. Case
+      `flags/spec-compliant-dispatch-exceptions`; found:
+      `websocket/listener-exception` (xfail).
+    - **`durable_object_io_tasks_prevent_eviction`** (on from 2026-10-01;
+      only compatibility-date.capnp has it). celld evicts an idle object
+      with waitUntil() work pending, so the flag is `Support::Off`. Case
+      `flags/durable-object-io-tasks-eviction` (xfail 1.64; workerd run
+      locally keeps the object).
+12. **`web_socket_compression`** (api/web-socket.c++, http.c++; on from
+    2023-08-15) stays `Support::Off`: celld never agrees to
+    permessage-deflate. The WebSocket library celld pins, fastwebsockets
+    0.8.1, refuses a frame with RSV1 set (`ReservedBitsNotZero`), so
+    support needs a reviewed fork or another library, and the negotiation
+    and per-message deflate on every socket path (inbound, `fetch()`
+    upgrades, Durable Object hibernation, cross-isolate pairs): plan 1.64.
+    Cases `websocket/permessage-deflate-off` and
+    `websocket/permessage-deflate` (xfail), both celld-only, recorded from
+    workerd run directly (the harness's proxy agrees to the client's offer
+    itself); the runner's `ws` step gained `"extensions": true` and
+    `lib/workerd-direct.mjs` runs `ws` steps.
+13. **`enable_request_signal`** (io/worker-entrypoint.c++; no date). With
+    it an arrived request's `signal` aborts with an `AbortError`
+    ("The client has disconnected") when its caller goes away, and a copy
+    shares it; without it the request has a signal of its own that never
+    aborts, and a copy gets another. A same-isolate service binding's call
+    abandoned by its caller aborts the target's signal too. Case
+    `flags/request-signal`.
+14. The old-date states, each now honoured: **`strip_bom_in_read_all_text`**
+    (a Request's or Response's `text()` keeps a BOM before 2026-01-13; a
+    Blob's always does), **`text_decoder_replace_surrogates`** (the
+    UTF-16LE decoder's fast path keeps lone surrogates before 2026-02-24),
+    **`websocket_close_reason_byte_limit`** (no 123-byte check before
+    2026-03-03) and **`writable_stream_spec_compliant_writer`** (`ready`
+    waits for the start, stays resolved on release, and a write whose size
+    algorithm released the writer goes ahead, before 2026-03-24). Case
+    `flags/old-date-states`.
+15. **`NEWEST_DATE`** is 2026-10-01, workerd 1.20261001.1's newest: the
+    flags dated after 2026-09-04 are modelled (items 11 and above), and
+    `python_workers_314`, which `python_workers` implies from 2026-09-08,
+    is refused for a Python Worker with a hint to add
+    `no_python_workers_314` or use an earlier date (`deploy/python.rs`).
+    `deploy/compat-flags` and `loader/compat-flags-refused` now refuse
+    2026-10-02.
+- Also: `crypto.randomUUID()` is captured for celld's own use
+  (`__celld.__randomUUID`), as is one TextEncoder for every body the
+  harness encodes; a TextDecoder's fatal error is workerd's
+  "Failed to decode input."; a socket's `opened` no longer has
+  `localAddress`, which workerd's lacks.
+- Updated: `flags/compatibility-flags` reports the new flags.
+- Cost (lab, `ab -n 20000 -c 16`, medians of 9 interleaved rounds
+  against 62ffd57): at 2026-09-04, hello-world fetch 19068 → 18982 req/s
+  (−0.5%; an earlier 9 rounds gave +0.1%) and Durable Object RPC
+  17160 → 17336 (+1.0%); at 2021-01-01, without
+  workers_api_getters_setters_on_prototype, hello-world fetch
+  18659 → 18496 (−0.9%). That last is the old state's own cost: an
+  incoming Request and a Response are made through their attribute class,
+  an API constructor, about 0.3 µs and 0.2 µs more than a plain object
+  each, and the Response's body stream, a ReadableStream, about 0.15 µs
+  more, which together are the 0.5 µs a request loses (in loops of
+  300 000 constructions). Giving the attribute class the API class's
+  prototype, so that no instance needs its prototype set, saved under
+  0.05 µs, so it was left out. At 2026-09-04 each construction costs the
+  same as at 62ffd57 or less. Before the attribute classes a Response
+  cost 15 µs more at 2021-01-01 (its body stream's attribute took the
+  stream off its shared shape), and the first review measured −4.8% on
+  that hello world.
 
 ### 1.37 Gaps found by 1.16 that no flag gates
 
@@ -4651,7 +4942,8 @@ lift, or carry markers out of band.
     an integer status, a plain-object `cf`, a branded Headers, a branded
     stream body) and refuses the value otherwise. What a script defines
     over them crosses, where workerd ignores it:
-    `rpc/marker-shaped-host-attributes` (xfail 1.36).
+    `rpc/marker-shaped-host-attributes` (xfail 1.36; passes since 1.36
+    items 8–15).
   - The revival (`__reviveHostValue`) checks every field's type again, and
     a body is null, a Uint8Array (by V8's type check, a new
     `op_util_type_flags` bit) or, over RPC, a stream marker the lift built
@@ -5250,7 +5542,7 @@ cap; unit tests for the caps.
   promise and DOMException give `[object Function]`, `[object Promise]` and
   `[object Error]` without it, where workerd gives `[object Object]`.
   celld lacks the globals `Body`, `Crypto`, `FetchEvent`, `Navigator`, the
-  `Performance` classes, `PromiseRejectionEvent`, `ScheduledEvent`,
+  `Performance` classes, `ScheduledEvent`,
   `ServiceWorkerGlobalScope`, `TailEvent`, `TraceEvent` and
   `WorkerGlobalScope`, has `DigestStream` and `Temporal` globals that
   workerd does not, and no API prototype has workerd's
@@ -5290,20 +5582,12 @@ cap; unit tests for the caps.
   accessor a script puts on Object.prototype under one of those names
   (`_closedPromise`, `_hwm` and the like) makes the class throw.
 - **Request init fields celld reads and does not use.** `fetcher` is read
-  and ignored, where workerd sends the Request through that Fetcher, and
-  `encodeResponseBody` is checked and then ignored, as celld neither
-  decodes nor encodes a body (1.36 item 9). Other globals that celld's own
+  and ignored, where workerd sends the Request through that Fetcher
+  (`encodeResponseBody` is used since 1.36 item 9). Other globals that celld's own
   paths look up when they run (`structuredClone`, `TextDecoder`, `Blob`
   and others beyond Request, Response, Headers, AbortController,
   ReadableStream, FormData and URLSearchParams) can still be replaced by a
   Worker under them.
-- **Request and Response attributes are own data properties.** workerd's
-  are prototype accessors, so in workerd `Object.keys(new Request(u))` is
-  `[]` and `JSON.stringify` gives `"{}"`, where celld shows about 11 own
-  fields. A subclass that defines `get status()` or `get cf()` is shadowed
-  by the own field (celld reads 200 or `null`, workerd 299 or the getter's
-  value). `structuredClone(new Request(u))` fails in celld with
-  "Unsupported object type" and succeeds in workerd.
 - **A failed fetch handler's 500 body.** celld's 500 shows
   "Worker failed: <message>" to the client where workerd sends
   "Internal Server Error"; the text is workerd's own fixed message, so
@@ -5314,6 +5598,113 @@ cap; unit tests for the caps.
   workerd the host value serializes. An Error's property that is a
   function crosses another isolate's RPC result as a DataCloneError where
   workerd gives a stub (cross-isolate stubs, Phase 3).
+
+### 1.64 Gaps found by 1.36 (items 8–15)
+
+- **Content-Encoding br** (`brotli_content_encoding`, on from 2024-04-29).
+  celld neither compresses nor decodes a br body, as if the flag were off,
+  so the flag is `Support::Off`: a response a Worker sends with
+  `Content-Encoding: br` goes out uncompressed under that header, and a br
+  response a Worker fetches arrives undecoded. Supporting it needs a brotli
+  implementation, the `brotli` crate or the C library, reviewed as the
+  quality bar asks, behind the same paths as gzip (`CelldGzipBodyStream`,
+  `__gzipBody`). Pinned by `fetch/content-encoding-br` (xfail).
+- **WebSocket permessage-deflate** (`web_socket_compression`, on from
+  2023-08-15). celld never agrees to it; fastwebsockets 0.8.1 refuses a
+  frame with RSV1 set, so it needs a reviewed fork or another library, then
+  the negotiation and per-message deflate (with context takeover and window
+  bits) on every socket path: an accepted socket, a `fetch()` upgrade, a
+  hibernated Durable Object's sockets and a pair across isolates. Pinned by
+  `websocket/permessage-deflate` (xfail, recorded from workerd run
+  directly).
+- **A WebSocket whose listener throws.** workerd errors the socket out (an
+  `error` event with the exception, the socket CLOSED, the peer sees 1006),
+  after the remaining listeners under `spec_compliant_dispatch_exceptions`
+  or at once without it. celld runs the listeners as the flag says and
+  leaves the socket open. Pinned by `websocket/listener-exception` (xfail).
+- **Cross-request promise resolution**
+  (`handle_cross_request_promise_resolution`, on from 2024-10-14). workerd
+  runs a promise's continuations in the request that made it, or drops them
+  with a warning when that request is over, through its own V8 patches that
+  tag promises with their context; celld's V8 lacks them, so continuations
+  run in the request that resolves the promise. Pinned by
+  `flags/cross-request-promise-resolution` (xfail).
+- **Durable Object eviction with work pending**
+  (`durable_object_io_tasks_prevent_eviction`, on from 2026-10-01). On
+  Cloudflare an object whose waitUntil() work is pending stays in memory
+  for up to 15 minutes; celld ends a request's activity with its answer,
+  so idle eviction takes the object and its pending work is lost. Holding
+  the object's activity until that work settles, within the bound, models
+  it. Pinned by `flags/durable-object-io-tasks-eviction` (xfail; workerd
+  run locally keeps the object too).
+- **Queue send metrics.** The backlog a `send()` or `sendBatch()` reports
+  counts the message being sent in celld; Miniflare's service counts the
+  queue before it. Pinned by `queues/send-metrics` (xfail). celld's service
+  also refuses with Cloudflare's documented codes where Miniflare's sends
+  none (`flags/queue-error-codes`, celld-only).
+- **JWK export.** celld exports no symmetric key (HMAC, AES) as a JWK, and
+  an asymmetric one without `key_ops`, `ext` and `alg` and in another member
+  order. Pinned by `builtins/jwk-export` (xfail).
+- **Assigning to a read-only attribute** in strict code: workerd's
+  prototype accessors are V8 read-only accessors, so V8 reports "Cannot
+  assign to read only property"; celld's are JavaScript getters, so V8
+  reports a getter without a setter. Pinned by
+  `builtins/readonly-attribute-assignment` (xfail).
+- **Own keys of API objects.** The streams, their readers, writers and
+  controllers, Headers, Blob, File, FormData, EventTarget and others still
+  hold their state in own `_`-prefixed properties, which `Object.keys()`
+  and `Reflect.ownKeys()` show; workerd's have none. Their move to private
+  fields, as Request, Response, Event and AbortSignal had in 1.36, closes
+  it. Pinned by `builtins/internal-own-keys` (xfail). `Headers.prototype`
+  also carries celld's `__celldHeaderList` getter.
+- **A Response with a null body status and a body.** workerd refuses one
+  whose body is a stream or not empty, and treats an empty one as no body;
+  celld takes the body. celld's own paths build such responses from what a
+  target sent, so they need to pass a null body first. Pinned by
+  `fetch/null-body-status-construct` (xfail).
+- **Content-Length of a body passed on.** A fetched gzip response a Worker
+  returns unread keeps the upstream's `Content-Length` in workerd; celld
+  sends it chunked (the listed difference "celld removes Content-Length from
+  a Worker response"). Pinned by `fetch/passthrough-length` (xfail,
+  recorded from workerd run directly).
+- **A socket's writable side and `internal_writable_stream_abort_clears_queue`.**
+  The flag's old state is modelled for IdentityTransformStream and
+  FixedLengthStream; a TCP socket's writable side, an internal stream in
+  workerd, is a standard WritableStream in celld, which aborts as the
+  Streams Standard does whatever the flag.
+- **Old-date attributes elsewhere.** Without
+  workers_api_getters_setters_on_prototype only a Request, a Response and a
+  ReadableStream come from an attribute class (`__bodyInstance`,
+  `streamInstance`);
+  every other class with attributes (Event and its subclasses,
+  AbortSignal, AbortController, WebSocket, Blob, File, the readers and
+  writers, WritableStream, TransformStream, TextEncoder, TextDecoder,
+  DigestStream) adds them to each instance after construction, about 1 µs
+  an attribute (an Event about 12 µs), and the instance loses its shared
+  shape. Making each hierarchy's root build its object as Body does closes
+  it.
+- **Prototype member order.** Members other than `constructor` are not all
+  in workerd's order (Blob's `slice`, AbortSignal's `onabort`, TextDecoder's
+  `decode`, Headers' `getAll`, which celld lacks).
+- **deflate-raw output.** celld's compressor is miniz (flate2's default
+  backend), whose output differs in size from zlib's, which workerd uses:
+  5 MB of zeros encodes to 4861 bytes in celld and 4874 in workerd, with
+  `deflate-raw` (and likewise for the other formats). Both decode either.
+  Matching it needs flate2's zlib backend, a C dependency or `zlib-rs`,
+  reviewed as the quality bar asks.
+- **DecompressionStream details.** A close after a failed write rejects
+  with "Stream already closed/errored" where workerd's reads "This
+  WritableStream has been closed.", and a CompressionStream gives a small
+  message back in one chunk where workerd gives two.
+- **Constructor surface.** `Request.prototype`, `Response.prototype`,
+  `ReadableStream.prototype` and `Body.prototype` are read-only in celld
+  where workerd's are writable (non-enumerable, non-configurable); making
+  them writable needs celld's own constructions to stop reading them at run
+  time first. Constructing reads `newTarget.prototype` twice (V8 allocates
+  `this` from it, then celld builds the instance) and allocates one object
+  it discards; workerd reads it once. `length` is 1, 1 and 2 where
+  workerd's is 0, and `toString()` shows source rather than
+  `[native code]`.
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 

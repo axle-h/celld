@@ -102,10 +102,12 @@
       this.#opened = opening.then((info) => {
         this.#id = info.id;
         collected.register(this, info.id, this);
-        return {
-          remoteAddress: info.remoteAddress ?? undefined,
-          localAddress: info.localAddress ?? undefined,
-        };
+        // workerd's SocketInfo struct; an outbound socket has no local
+        // address (sockets.c++), and the host gives none.
+        return __celld.__struct([
+          ["remoteAddress", info.remoteAddress ?? undefined, true],
+          ["localAddress", undefined, true],
+        ]);
       });
       this.#opened.catch(() => {});
 

@@ -9,7 +9,7 @@ import { REQUIREMENTS } from "./requirements.mjs";
 const CASE_KEYS = new Set(["kind", "reason", "workers", "env", "upstream", "observability", "nodes", "xfail", "requires", "steps", "normalize"]);
 const STEP_KEYS = {
   path: new Set(["path", "method", "headers", "body", "chunked", "responseHeaders", "probe"]),
-  ws: new Set(["ws", "send", "receive", "close", "protocols", "raw", "shutdown", "stall", "record", "drop", "reset", "repeat"]),
+  ws: new Set(["ws", "send", "receive", "close", "protocols", "extensions", "raw", "shutdown", "stall", "record", "drop", "reset", "repeat"]),
   restart: new Set(["restart"]),
   rss: new Set(["rss"]),
   cpu: new Set(["cpu", "wait"]),
@@ -274,6 +274,10 @@ function validateStep(step, fail) {
         }
         if (new Set(protocols).size !== protocols.length) fail(`"protocols" names a subprotocol twice`);
       }
+      // With "extensions", the transcript also records the extensions the
+      // server agreed to (Node's WebSocket offers permessage-deflate).
+      const extensions = step.extensions ?? false;
+      if (typeof extensions !== "boolean") fail(`"extensions" must be a boolean`);
       // With "close", the client closes after "receive" frames (by default
       // one per frame sent). Without it, the step waits for the server to
       // close.
@@ -282,7 +286,7 @@ function validateStep(step, fail) {
       // end it too.
       if ("drop" in step) {
         if (step.drop !== true) fail(`"drop" must be true when present`);
-        for (const key of ["close", "receive", "protocols", "raw", "shutdown", "stall", "record", "reset", "repeat"]) {
+        for (const key of ["close", "receive", "protocols", "extensions", "raw", "shutdown", "stall", "record", "reset", "repeat"]) {
           if (key in step) fail(`"drop" cannot be used with "${key}"`);
         }
         return { kind, path: step.ws, send, receive: 0, raw: true, drop: true, stall: 0, record: "frames", reset: 0, repeat: 1 };
@@ -292,7 +296,7 @@ function validateStep(step, fail) {
         if ("raw" in step || "shutdown" in step || "stall" in step || "record" in step || "reset" in step || "repeat" in step) {
           fail(`"raw", "shutdown", "stall", "record", "reset" and "repeat" need "close"`);
         }
-        return { kind, path: step.ws, send, receive: Infinity, protocols };
+        return { kind, path: step.ws, send, receive: Infinity, protocols, extensions };
       }
       // null closes with no status code (an empty Close, 1005 at the server).
       if (!(step.close === null || (Number.isInteger(step.close) && (step.close === 1000 || (step.close >= 3000 && step.close <= 4999))))) {
@@ -323,9 +327,10 @@ function validateStep(step, fail) {
       if (!Number.isInteger(repeat) || repeat < 1 || repeat > 100_000) fail(`"repeat" must be a count from 1 to 100000`);
       const raw = (step.raw ?? false) || shutdown || "stall" in step || "record" in step || reset > 0 || repeat > 1;
       if (raw && protocols !== undefined) fail(`"raw", "shutdown", "stall" and "record" cannot be used with "protocols"`);
+      if (raw && extensions) fail(`"raw", "shutdown", "stall" and "record" cannot be used with "extensions"`);
       const receive = step.receive ?? send.length;
       if (!Number.isInteger(receive) || receive < 0) fail(`"receive" must be a non-negative integer`);
-      return { kind, path: step.ws, send, receive, close: step.close, protocols, raw, shutdown, stall, record, reset, repeat };
+      return { kind, path: step.ws, send, receive, close: step.close, protocols, extensions, raw, shutdown, stall, record, reset, repeat };
     }
     case "restart":
       if (step.restart !== true) fail(`"restart" must be true`);

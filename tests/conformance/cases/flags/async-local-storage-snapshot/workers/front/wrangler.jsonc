@@ -1,0 +1,12 @@
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2025-06-16",
+  "compatibility_flags": ["nodejs_compat"],
+  "services": [
+    { "binding": "BEFORE", "service": "before" },
+    { "binding": "DISABLE", "service": "disable" }
+  ],
+  "durable_objects": { "bindings": [{ "name": "HOLDER", "class_name": "Holder" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Holder"] }]
+}

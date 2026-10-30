@@ -32,7 +32,7 @@ const NOT_BYTES = 'This ReadableStream did not return bytes.';
 // Same shape streams.js returns from reads: shadow `then` so a user
 // override of Object.prototype.then cannot intercept the result.
 function _readResult(value, done) {
-  const r = { value, done };
+  const r = __celld.__readResult(value, done);
   Object.defineProperty(r, 'then', {
     __proto__: null,
     value: undefined,
@@ -547,6 +547,8 @@ class ReadableStreamBYOBReader {
   // IdentityTransformStream readables and the harness's platform streams),
   // both of which implement the `_pullInto` protocol.
   constructor(stream) {
+    if (__celld.__oldAttributes)
+      __celld.__installAttributes(this, "ReadableStreamBYOBReader");
     const c = stream instanceof ReadableStream
       ? (stream._byteCtl ?? stream._ictl) : undefined;
     if (c === undefined) throw new TypeError(NO_BYOB);
@@ -797,6 +799,9 @@ for (const [cls, name] of [
 ]) {
   __celld.__apiTag(cls.prototype, name);
 }
+
+__celld.__registerAttributes("ReadableStreamBYOBReader",
+  [[ReadableStreamBYOBReader.prototype, "closed"]]);
 
 return {
   ReadableByteStreamController,

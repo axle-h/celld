@@ -1,0 +1,9 @@
+{
+  "workers": ["front", "on", "off"],
+  "steps": [
+    { "path": "/" },
+    { "path": "/on" },
+    { "path": "/off" },
+    { "path": "/cross" }
+  ]
+}

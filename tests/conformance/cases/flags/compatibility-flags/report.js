@@ -37,6 +37,19 @@ const HONOURED = [
   "python_process_pth_files",
   "python_workers_20260610",
   "python_workers_314",
+  "enable_request_signal",
+  "workflows_enable_fast_engine_creation",
+  "spec_compliant_dispatch_exceptions",
+  "throw_on_unrecognized_import_assertion",
+  "internal_writable_stream_abort_clears_queue",
+  "bind_asynclocalstorage_snapshot_to_request",
+  "unhandled_rejection_after_microtask_checkpoint",
+  "queue_expose_error_codes",
+  "enable_fast_jsg_struct",
+  "strip_bom_in_read_all_text",
+  "text_decoder_replace_surrogates",
+  "websocket_close_reason_byte_limit",
+  "writable_stream_spec_compliant_writer",
 ];
 
 // Flags celld always behaves as on. celld reports one, as true, only where
@@ -46,8 +59,6 @@ const ALWAYS_ON = [
   "capture_async_api_throws",
   "upper_case_all_http_methods",
   "enable_ctx_exports",
-  "strip_bom_in_read_all_text",
-  "websocket_close_reason_byte_limit",
 ];
 
 export function report() {

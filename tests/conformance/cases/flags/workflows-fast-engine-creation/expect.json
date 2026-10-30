@@ -1,0 +1,26 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "created": "unique id",
+        "batch": ["unique id", "unique id"],
+        "distinct": 3,
+        "found": true,
+        "named": "other: named",
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "created": "uuid",
+        "batch": ["uuid", "uuid"],
+        "distinct": 3,
+        "found": true,
+        "named": "other: named",
+        "reported": false
+      }
+    }
+  ]
+}

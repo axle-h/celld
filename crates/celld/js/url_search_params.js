@@ -90,6 +90,8 @@ const _parseString = (s) => {
   return params;
 };
 
+// The parameter list of a URLSearchParams, for its iterators.
+let paramsOf;
 class URLSearchParams {
   #params = [];
   _url = null; // live-bound URL, if any
@@ -224,17 +226,13 @@ class URLSearchParams {
       .join('&');
   }
 
-  *entries() {
-    for (let i = 0; i < this.#params.length; i++)
-      yield this.#params[i];
-  }
-  *keys() {
-    for (let i = 0; i < this.#params.length; i++)
-      yield this.#params[i][0];
-  }
-  *values() {
-    for (let i = 0; i < this.#params.length; i++)
-      yield this.#params[i][1];
+  // workerd's iterators (JSG_ITERATOR) read the live list by index, and
+  // their steps are its `Next` struct.
+  entries() { return new URLSearchParamsIterator(this, 2); }
+  keys() { return new URLSearchParamsIterator(this, 0); }
+  values() { return new URLSearchParamsIterator(this, 1); }
+  static {
+    paramsOf = (search) => search.#params;
   }
   [Symbol.iterator]() { return this.entries(); }
 
@@ -248,6 +246,25 @@ class URLSearchParams {
 
   get size() { return this.#params.length; }
 }
+
+class URLSearchParamsIterator {
+  #search;
+  #kind;
+  #index = 0;
+  constructor(search, kind) {
+    this.#search = search;
+    this.#kind = kind;
+  }
+  next() {
+    const params = paramsOf(this.#search);
+    if (this.#index >= params.length) return __celld.__iterResult(true);
+    const pair = params[this.#index++];
+    return __celld.__iterResult(false,
+      this.#kind === 2 ? [pair[0], pair[1]] : pair[this.#kind]);
+  }
+}
+Object.setPrototypeOf(URLSearchParamsIterator.prototype,
+  Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]())));
 
 globalThis.URLSearchParams = URLSearchParams;
 __celld.__apiTag(URLSearchParams.prototype, 'URLSearchParams');

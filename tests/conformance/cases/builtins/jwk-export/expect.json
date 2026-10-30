@@ -1,0 +1,226 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "hmac": {
+          "keys": [
+            "kty",
+            "use",
+            "key_ops",
+            "alg",
+            "ext",
+            "crv",
+            "x",
+            "y",
+            "d",
+            "n",
+            "e",
+            "p",
+            "q",
+            "dp",
+            "dq",
+            "qi",
+            "oth",
+            "k",
+            "pub",
+            "priv"
+          ],
+          "kty": "oct",
+          "alg": "HS256",
+          "key_ops": [
+            "sign"
+          ],
+          "ext": true,
+          "crv": null
+        },
+        "aes": {
+          "keys": [
+            "kty",
+            "use",
+            "key_ops",
+            "alg",
+            "ext",
+            "crv",
+            "x",
+            "y",
+            "d",
+            "n",
+            "e",
+            "p",
+            "q",
+            "dp",
+            "dq",
+            "qi",
+            "oth",
+            "k",
+            "pub",
+            "priv"
+          ],
+          "kty": "oct",
+          "alg": "A128GCM",
+          "key_ops": [
+            "encrypt"
+          ],
+          "ext": true,
+          "crv": null
+        },
+        "rsaPublic": {
+          "keys": [
+            "kty",
+            "use",
+            "key_ops",
+            "alg",
+            "ext",
+            "crv",
+            "x",
+            "y",
+            "d",
+            "n",
+            "e",
+            "p",
+            "q",
+            "dp",
+            "dq",
+            "qi",
+            "oth",
+            "k",
+            "pub",
+            "priv"
+          ],
+          "kty": "RSA",
+          "alg": "RS256",
+          "key_ops": [
+            "verify"
+          ],
+          "ext": true,
+          "crv": null
+        },
+        "rsaPrivate": {
+          "keys": [
+            "kty",
+            "use",
+            "key_ops",
+            "alg",
+            "ext",
+            "crv",
+            "x",
+            "y",
+            "d",
+            "n",
+            "e",
+            "p",
+            "q",
+            "dp",
+            "dq",
+            "qi",
+            "oth",
+            "k",
+            "pub",
+            "priv"
+          ],
+          "kty": "RSA",
+          "alg": "RS256",
+          "key_ops": [
+            "sign"
+          ],
+          "ext": true,
+          "crv": null
+        },
+        "ecPublic": {
+          "keys": [
+            "kty",
+            "use",
+            "key_ops",
+            "alg",
+            "ext",
+            "crv",
+            "x",
+            "y",
+            "d",
+            "n",
+            "e",
+            "p",
+            "q",
+            "dp",
+            "dq",
+            "qi",
+            "oth",
+            "k",
+            "pub",
+            "priv"
+          ],
+          "kty": "EC",
+          "alg": null,
+          "key_ops": [
+            "verify"
+          ],
+          "ext": true,
+          "crv": "P-256"
+        },
+        "edPublic": {
+          "keys": [
+            "kty",
+            "use",
+            "key_ops",
+            "alg",
+            "ext",
+            "crv",
+            "x",
+            "y",
+            "d",
+            "n",
+            "e",
+            "p",
+            "q",
+            "dp",
+            "dq",
+            "qi",
+            "oth",
+            "k",
+            "pub",
+            "priv"
+          ],
+          "kty": "OKP",
+          "alg": "EdDSA",
+          "key_ops": [
+            "verify"
+          ],
+          "ext": true,
+          "crv": "Ed25519"
+        },
+        "nodeSecret": {
+          "keys": [
+            "kty",
+            "use",
+            "key_ops",
+            "alg",
+            "ext",
+            "crv",
+            "x",
+            "y",
+            "d",
+            "n",
+            "e",
+            "p",
+            "q",
+            "dp",
+            "dq",
+            "qi",
+            "oth",
+            "k",
+            "pub",
+            "priv"
+          ],
+          "kty": "oct",
+          "alg": null,
+          "key_ops": null,
+          "ext": true,
+          "crv": null
+        }
+      }
+    }
+  ]
+}

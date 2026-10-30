@@ -1,0 +1,12 @@
+{
+  "kind": "celld-only",
+  "xfail": "1.64",
+  "reason": "wrangler's createTestHarness sends every global fetch() through a Node outboundService, which buffers and re-frames the body, so workerd's own response framing can't be recorded through it. The expected transcript is recorded from workerd 1.20261001.1 run directly, with `node lib/workerd-direct.mjs fetch/passthrough-length --write` and this case's workerd.capnp.",
+  "workers": ["app"],
+  "upstream": true,
+  "env": {"CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}"},
+  "steps": [
+    { "path": "/gzip?port=${UPSTREAM_PORT}", "responseHeaders": ["content-encoding", "content-length"] },
+    { "path": "/gzip-manual?port=${UPSTREAM_PORT}", "responseHeaders": ["content-encoding", "content-length"] }
+  ]
+}

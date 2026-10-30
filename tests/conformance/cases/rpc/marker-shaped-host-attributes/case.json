@@ -1,5 +1,4 @@
 {
-  "xfail": "1.36",
   "workers": ["app"],
   "steps": [{"path": "/"}]
 }

@@ -1,0 +1,141 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "module bind": "none",
+        "module bind in run": "stored",
+        "module snapshot": "none",
+        "module snapshot in run": "stored",
+        "module resource": "none",
+        "module resource in run": "stored",
+        "module resource bind in run": "stored",
+        "request bind": "none",
+        "request bind in run": "stored",
+        "request snapshot": "none",
+        "request snapshot in run": "stored",
+        "request resource": "none",
+        "request resource in run": "stored",
+        "request resource bind in run": "stored"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "later": {
+          "module bind": "none",
+          "module bind in run": "stored",
+          "module snapshot": "none",
+          "module snapshot in run": "stored",
+          "module resource": "none",
+          "module resource in run": "stored",
+          "module resource bind in run": "stored",
+          "request bind": "Error: Cannot call this AsyncLocalStorage bound function outside of the request in which it was created.",
+          "request bind in run": "Error: Cannot call this AsyncLocalStorage bound function outside of the request in which it was created.",
+          "request snapshot": "Error: Cannot call this AsyncLocalStorage bound function outside of the request in which it was created.",
+          "request snapshot in run": "Error: Cannot call this AsyncLocalStorage bound function outside of the request in which it was created.",
+          "request resource": "Error: Cannot call this AsyncLocalStorage bound function outside of the request in which it was created.",
+          "request resource in run": "Error: Cannot call this AsyncLocalStorage bound function outside of the request in which it was created.",
+          "request resource bind in run": "Error: Cannot call this AsyncLocalStorage bound function outside of the request in which it was created."
+        },
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "module bind": "none",
+        "module bind in run": "stored",
+        "module snapshot": "none",
+        "module snapshot in run": "stored",
+        "module resource": "none",
+        "module resource in run": "stored",
+        "module resource bind in run": "stored",
+        "request bind": "none",
+        "request bind in run": "stored",
+        "request snapshot": "none",
+        "request snapshot in run": "stored",
+        "request resource": "none",
+        "request resource in run": "stored",
+        "request resource bind in run": "stored"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "later": {
+          "module bind": "none",
+          "module bind in run": "stored",
+          "module snapshot": "none",
+          "module snapshot in run": "stored",
+          "module resource": "none",
+          "module resource in run": "stored",
+          "module resource bind in run": "stored",
+          "request bind": "none",
+          "request bind in run": "stored",
+          "request snapshot": "none",
+          "request snapshot in run": "stored",
+          "request resource": "none",
+          "request resource in run": "stored",
+          "request resource bind in run": "stored"
+        },
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "module bind": "none",
+        "module bind in run": "stored",
+        "module snapshot": "none",
+        "module snapshot in run": "stored",
+        "module resource": "none",
+        "module resource in run": "stored",
+        "module resource bind in run": "stored",
+        "request bind": "none",
+        "request bind in run": "stored",
+        "request snapshot": "none",
+        "request snapshot in run": "stored",
+        "request resource": "none",
+        "request resource in run": "stored",
+        "request resource bind in run": "stored"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "later": {
+          "module bind": "none",
+          "module bind in run": "stored",
+          "module snapshot": "none",
+          "module snapshot in run": "stored",
+          "module resource": "none",
+          "module resource in run": "stored",
+          "module resource bind in run": "stored",
+          "request bind": "none",
+          "request bind in run": "stored",
+          "request snapshot": "none",
+          "request snapshot in run": "stored",
+          "request resource": "none",
+          "request resource in run": "stored",
+          "request resource bind in run": "stored"
+        },
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "same": "in object"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "later": "in object"
+      }
+    }
+  ]
+}

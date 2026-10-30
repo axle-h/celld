@@ -1,0 +1,359 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "results": {
+          "plain": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "plain",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            }
+          ],
+          "multi-tick": [],
+          "late": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "late",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            },
+            {
+              "type": "rejectionhandled",
+              "reason": null,
+              "promise": true
+            }
+          ],
+          "handled": [],
+          "microtask": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "micro",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            }
+          ],
+          "context": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "context",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": "stored"
+            }
+          ],
+          "two": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "first",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            },
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "second",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            }
+          ]
+        },
+        "constructed": "TypeError: Illegal constructor",
+        "tag": "[object PromiseRejectionEvent]",
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "results": {
+          "plain": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "plain",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            }
+          ],
+          "multi-tick": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "multi",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            },
+            {
+              "type": "rejectionhandled",
+              "reason": null,
+              "promise": true
+            }
+          ],
+          "late": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "late",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            },
+            {
+              "type": "rejectionhandled",
+              "reason": null,
+              "promise": true
+            }
+          ],
+          "handled": [],
+          "microtask": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "micro",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            }
+          ],
+          "context": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "context",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": "stored"
+            }
+          ],
+          "two": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "first",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            },
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "second",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            }
+          ]
+        },
+        "constructed": "TypeError: Illegal constructor",
+        "tag": "[object PromiseRejectionEvent]",
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "results": {
+          "plain": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "plain",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            }
+          ],
+          "multi-tick": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "multi",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            },
+            {
+              "type": "rejectionhandled",
+              "reason": null,
+              "promise": true
+            }
+          ],
+          "late": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "late",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            },
+            {
+              "type": "rejectionhandled",
+              "reason": null,
+              "promise": true
+            }
+          ],
+          "handled": [],
+          "microtask": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "micro",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            }
+          ],
+          "context": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "context",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": "stored"
+            }
+          ],
+          "two": [
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "first",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            },
+            {
+              "type": "unhandledrejection",
+              "class": "PromiseRejectionEvent",
+              "reason": "second",
+              "promise": true,
+              "own": [
+                "reason",
+                "promise"
+              ],
+              "cancelable": false,
+              "trusted": true,
+              "store": null
+            }
+          ]
+        },
+        "constructed": "TypeError: Illegal constructor",
+        "tag": "[object PromiseRejectionEvent]",
+        "reported": false
+      }
+    }
+  ]
+}

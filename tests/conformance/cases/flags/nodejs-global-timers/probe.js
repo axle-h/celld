@@ -25,7 +25,12 @@ export default {
     const byNumber = setTimeout(() => fired.push(["byNumber"]), 1);
     clearTimeout(+byNumber);
     let ticks = 0;
-    const interval = setInterval(() => {
+    // A callback's `this`, which is the global scope under either flag.
+    const receivers = [];
+    const receiver = (self) => self === globalThis ? "globalThis" : String(self);
+    setTimeout(function () { receivers.push(receiver(this)); }, 1);
+    const interval = setInterval(function () {
+      if (ticks === 0) receivers.push(receiver(this));
       ticks++;
       if (ticks === 2) clearInterval(interval);
     }, 1);
@@ -35,6 +40,7 @@ export default {
       interval: shape(interval),
       fired,
       ticks,
+      receivers,
       functions: {
         setTimeout: [setTimeout.name, setTimeout.length],
         setInterval: [setInterval.name, setInterval.length],

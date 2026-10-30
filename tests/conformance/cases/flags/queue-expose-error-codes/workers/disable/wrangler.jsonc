@@ -1,0 +1,1 @@
+{"name": "disable", "main": "index.js", "compatibility_date": "2026-09-04", "compatibility_flags": ["no_queue_expose_error_codes"], "queues": {"producers": [{"binding": "QUEUE", "queue": "probe-queue"}]}}

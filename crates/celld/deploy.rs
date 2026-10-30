@@ -4038,6 +4038,11 @@ fn run_esbuild(
         "--format=esm".to_string(),
         "--platform=browser".to_string(),
         "--target=es2024".to_string(),
+        // Wrangler's bundles keep no import attributes: its plugins mark the
+        // builtins external, and esbuild drops the attributes of such an
+        // import. Without them a Worker that names one on a builtin loads,
+        // as on Cloudflare, under throw_on_unrecognized_import_assertion.
+        "--supported:import-attributes=false".to_string(),
         "--conditions=workerd,worker,browser".to_string(),
         format!("--banner:js={commonjs_builtin_bridge}"),
         "--external:node:*".to_string(),

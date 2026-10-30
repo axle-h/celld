@@ -40,15 +40,26 @@
           "python_request_headers_preserve_commas": true,
           "python_process_pth_files": true,
           "python_workers_20260610": false,
-          "python_workers_314": false
+          "python_workers_314": false,
+          "enable_request_signal": false,
+          "workflows_enable_fast_engine_creation": true,
+          "spec_compliant_dispatch_exceptions": false,
+          "throw_on_unrecognized_import_assertion": true,
+          "internal_writable_stream_abort_clears_queue": true,
+          "bind_asynclocalstorage_snapshot_to_request": true,
+          "unhandled_rejection_after_microtask_checkpoint": true,
+          "queue_expose_error_codes": true,
+          "enable_fast_jsg_struct": true,
+          "strip_bom_in_read_all_text": true,
+          "text_decoder_replace_surrogates": true,
+          "websocket_close_reason_byte_limit": true,
+          "writable_stream_spec_compliant_writer": true
         },
         "alwaysOn": {
           "url_standard": true,
           "capture_async_api_throws": true,
           "upper_case_all_http_methods": true,
-          "enable_ctx_exports": true,
-          "strip_bom_in_read_all_text": true,
-          "websocket_close_reason_byte_limit": true
+          "enable_ctx_exports": true
         },
         "prototype": null,
         "sealed": true,
@@ -101,15 +112,26 @@
           "python_request_headers_preserve_commas": false,
           "python_process_pth_files": false,
           "python_workers_20260610": false,
-          "python_workers_314": false
+          "python_workers_314": false,
+          "enable_request_signal": false,
+          "workflows_enable_fast_engine_creation": false,
+          "spec_compliant_dispatch_exceptions": false,
+          "throw_on_unrecognized_import_assertion": false,
+          "internal_writable_stream_abort_clears_queue": true,
+          "bind_asynclocalstorage_snapshot_to_request": false,
+          "unhandled_rejection_after_microtask_checkpoint": false,
+          "queue_expose_error_codes": false,
+          "enable_fast_jsg_struct": false,
+          "strip_bom_in_read_all_text": false,
+          "text_decoder_replace_surrogates": false,
+          "websocket_close_reason_byte_limit": false,
+          "writable_stream_spec_compliant_writer": false
         },
         "alwaysOn": {
           "url_standard": true,
           "capture_async_api_throws": true,
           "upper_case_all_http_methods": true,
-          "enable_ctx_exports": false,
-          "strip_bom_in_read_all_text": false,
-          "websocket_close_reason_byte_limit": false
+          "enable_ctx_exports": false
         },
         "prototype": null,
         "sealed": true,
@@ -162,15 +184,26 @@
           "python_request_headers_preserve_commas": true,
           "python_process_pth_files": true,
           "python_workers_20260610": false,
-          "python_workers_314": false
+          "python_workers_314": false,
+          "enable_request_signal": false,
+          "workflows_enable_fast_engine_creation": true,
+          "spec_compliant_dispatch_exceptions": false,
+          "throw_on_unrecognized_import_assertion": true,
+          "internal_writable_stream_abort_clears_queue": true,
+          "bind_asynclocalstorage_snapshot_to_request": true,
+          "unhandled_rejection_after_microtask_checkpoint": true,
+          "queue_expose_error_codes": true,
+          "enable_fast_jsg_struct": true,
+          "strip_bom_in_read_all_text": true,
+          "text_decoder_replace_surrogates": true,
+          "websocket_close_reason_byte_limit": true,
+          "writable_stream_spec_compliant_writer": true
         },
         "alwaysOn": {
           "url_standard": true,
           "capture_async_api_throws": true,
           "upper_case_all_http_methods": true,
-          "enable_ctx_exports": true,
-          "strip_bom_in_read_all_text": true,
-          "websocket_close_reason_byte_limit": true
+          "enable_ctx_exports": true
         },
         "prototype": null,
         "sealed": true,

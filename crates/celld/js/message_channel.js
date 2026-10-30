@@ -57,9 +57,28 @@
       // same turn as postMessage still sees the message.
       queueMicrotask(() => {
         if (this._portClosed) return;
-        const event = new MessageEvent("message", { data });
-        event._trust();
-        this.dispatchEvent(event);
+        const message = (type, value) => {
+          const event = new MessageEvent(type, { data: value });
+          __celld.__eventTrust(event);
+          return event;
+        };
+        const policy = __celld.__specPolicy();
+        if (policy === __celld.__REPORT) {
+          // A listener's exception is reported, the rest run, and the
+          // port fires 'messageerror' with the first, report-only.
+          const { first } = __celld.__dispatchEvent(this, message("message", data), policy);
+          if (first !== null)
+            __celld.__dispatchEvent(this, message("messageerror", first.error), policy);
+          return;
+        }
+        // Before spec_compliant_dispatch_exceptions the first exception
+        // ends the dispatch and is dispatched again as a 'message' with
+        // the exception as its data; one from that propagates.
+        try {
+          __celld.__dispatchEvent(this, message("message", data), policy);
+        } catch (error) {
+          __celld.__dispatchEvent(this, message("message", error), policy);
+        }
       });
     }
 
@@ -85,8 +104,8 @@
       const peer = this._peer;
       if (peer && !peer._portClosed) peer.close();
       const event = new Event("close");
-      event._trust();
-      this.dispatchEvent(event);
+      __celld.__eventTrust(event);
+      __celld.__dispatchEvent(this, event, __celld.__PROPAGATE);
     }
   }
 

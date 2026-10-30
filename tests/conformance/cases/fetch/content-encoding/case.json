@@ -1,0 +1,40 @@
+{
+  "workers": [
+    "front",
+    "back"
+  ],
+  "upstream": true,
+  "env": {
+    "CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}"
+  },
+  "steps": [
+    {
+      "path": "/request-body?port=${UPSTREAM_PORT}"
+    },
+    {
+      "path": "/out",
+      "responseHeaders": [
+        "content-encoding",
+        "content-length",
+        "transfer-encoding"
+      ]
+    },
+    {
+      "path": "/out-manual",
+      "responseHeaders": [
+        "content-encoding",
+        "content-length"
+      ]
+    },
+    {
+      "path": "/out-copy",
+      "responseHeaders": [
+        "content-encoding",
+        "content-length"
+      ]
+    },
+    {
+      "path": "/binding?port=${UPSTREAM_PORT}"
+    }
+  ]
+}

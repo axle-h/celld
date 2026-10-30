@@ -1,0 +1,1 @@
+{"name": "enable", "main": "index.js", "compatibility_date": "2022-01-30", "compatibility_flags": ["workers_api_getters_setters_on_prototype"]}

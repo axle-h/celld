@@ -1,0 +1,31 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "trailing": {
+          "write": "TypeError: Trailing bytes after end of compressed data",
+          "read": "TypeError: Trailing bytes after end of compressed data"
+        },
+        "members": {
+          "write": "TypeError: Trailing bytes after end of compressed data",
+          "read": "TypeError: Trailing bytes after end of compressed data"
+        },
+        "truncated": {
+          "write": "ok",
+          "read": "TypeError: Called close() on a decompression stream with incomplete data"
+        },
+        "bad": {
+          "write": "TypeError: Decompression failed.",
+          "read": "TypeError: Decompression failed."
+        },
+        "badHeaderCrc": {
+          "write": "TypeError: Decompression failed.",
+          "read": "TypeError: Decompression failed."
+        }
+      }
+    }
+  ]
+}

@@ -40,7 +40,7 @@ pub const WORKERD_VERSION: &str = "1.20261001.1";
 
 /// The newest compatibility date celld models. Every flag enabled by a date up
 /// to this one has a [`Support`] that accounts for its date.
-pub const NEWEST_DATE: Date = Date::new(2026, 9, 4);
+pub const NEWEST_DATE: Date = Date::new(2026, 10, 1);
 
 /// A compatibility date, which workerd accepts only as `YYYY-MM-DD`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -227,12 +227,16 @@ pub const ABORTSIGNAL_RPC: FlagId = id("enable_abortsignal_rpc");
 pub const ALLOW_IRREVOCABLE_STUB_STORAGE: FlagId = id("allow_irrevocable_stub_storage");
 pub const ASSETS_NAVIGATION_PREFERS_ASSET_SERVING: FlagId =
     id("assets_navigation_prefers_asset_serving");
+pub const BIND_ASYNCLOCALSTORAGE_SNAPSHOT_TO_REQUEST: FlagId =
+    id("bind_asynclocalstorage_snapshot_to_request");
 pub const BLOB_STANDARD_MIME_TYPE: FlagId = id("blob_standard_mime_type");
 pub const CACHE_NO_CACHE: FlagId = id("cache_no_cache_enabled");
 pub const CACHE_OPTION_ENABLED: FlagId = id("cache_option_enabled");
 pub const DELETE_ALL_DELETES_ALARM: FlagId = id("delete_all_deletes_alarm");
 pub const DISALLOW_IMPORTABLE_ENV: FlagId = id("disallow_importable_env");
+pub const ENABLE_FAST_JSG_STRUCT: FlagId = id("enable_fast_jsg_struct");
 pub const ENABLE_NODEJS_GLOBAL_TIMERS: FlagId = id("enable_nodejs_global_timers");
+pub const ENABLE_REQUEST_SIGNAL: FlagId = id("enable_request_signal");
 pub const ENCODER_STREAM_SPEC_COMPLIANT_BACKPRESSURE: FlagId =
     id("encoder_stream_spec_compliant_backpressure");
 pub const ENHANCED_ERROR_SERIALIZATION: FlagId = id("enhanced_error_serialization");
@@ -241,18 +245,35 @@ pub const FETCH_ITERABLE_TYPE_SUPPORT: FlagId = id("fetch_iterable_type_support"
 pub const FETCH_ITERABLE_TYPE_SUPPORT_OVERRIDE_ADJUSTMENT: FlagId =
     id("fetch_iterable_type_support_override_adjustment");
 pub const FIXUP_TRANSFORM_STREAM_BACKPRESSURE: FlagId = id("fixup-transform-stream-backpressure");
+pub const INTERNAL_WRITABLE_STREAM_ABORT_CLEARS_QUEUE: FlagId =
+    id("internal_writable_stream_abort_clears_queue");
 pub const JS_RPC: FlagId = id("js_rpc");
 pub const NODEJS_ALS: FlagId = id("nodejs_als");
 pub const NODEJS_COMPAT: FlagId = id("nodejs_compat");
 pub const NODEJS_COMPAT_POPULATE_PROCESS_ENV: FlagId = id("nodejs_compat_populate_process_env");
 pub const NODEJS_COMPAT_V2: FlagId = id("nodejs_compat_v2");
 pub const QUEUES_JSON_MESSAGES: FlagId = id("queues_json_messages");
+pub const QUEUE_EXPOSE_ERROR_CODES: FlagId = id("queue_expose_error_codes");
 pub const RPC_PARAMS_DUP_STUBS: FlagId = id("rpc_params_dup_stubs");
 pub const SERVICE_BINDING_EXTRA_HANDLERS: FlagId = id("service_binding_extra_handlers");
 pub const SET_TOSTRING_TAG: FlagId = id("set_tostring_tag");
+pub const SPEC_COMPLIANT_DISPATCH_EXCEPTIONS: FlagId = id("spec_compliant_dispatch_exceptions");
 pub const SQLITE_VEC: FlagId = id("sqlite_vec");
+pub const STRIP_BOM_IN_READ_ALL_TEXT: FlagId = id("strip_bom_in_read_all_text");
+pub const TEXT_DECODER_REPLACE_SURROGATES: FlagId = id("text_decoder_replace_surrogates");
+pub const THROW_ON_UNRECOGNIZED_IMPORT_ASSERTION: FlagId =
+    id("throw_on_unrecognized_import_assertion");
+pub const UNHANDLED_REJECTION_AFTER_MICROTASK_CHECKPOINT: FlagId =
+    id("unhandled_rejection_after_microtask_checkpoint");
+pub const WEBSOCKET_CLOSE_REASON_BYTE_LIMIT: FlagId = id("websocket_close_reason_byte_limit");
 pub const WEB_SOCKET_AUTO_REPLY_TO_CLOSE: FlagId = id("web_socket_auto_reply_to_close");
 pub const WEBSOCKET_STANDARD_BINARY_TYPE: FlagId = id("websocket_standard_binary_type");
+pub const WORKERS_API_GETTERS_SETTERS_ON_PROTOTYPE: FlagId =
+    id("workers_api_getters_setters_on_prototype");
+pub const WORKFLOWS_ENABLE_FAST_ENGINE_CREATION: FlagId =
+    id("workflows_enable_fast_engine_creation");
+pub const WRITABLE_STREAM_SPEC_COMPLIANT_WRITER: FlagId =
+    id("writable_stream_spec_compliant_writer");
 
 /// A Worker's computed flags.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
@@ -513,7 +534,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2022, 1, 31)),
         implied: None,
         experimental: false,
-        support: Off("Request, Response and Headers carry their attributes as own instance properties, not prototype accessors"),
+        support: Honoured,
     },
     Flag {
         field: "minimalSubrequests",
@@ -741,7 +762,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2024, 4, 29)),
         implied: None,
         experimental: false,
-        support: Unmodelled("celld neither encodes nor decodes a body by its Content-Encoding, gzip or br"),
+        support: Off("celld neither compresses nor decodes a br body: it passes as it is"),
     },
     Flag {
         field: "strictCrypto",
@@ -966,7 +987,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2024, 9, 2)),
         implied: None,
         experimental: false,
-        support: Unmodelled("celld does not model when abort() clears a platform writable stream's queue"),
+        support: Honoured,
     },
     Flag {
         field: "pythonWorkersDevPyodide",
@@ -1011,7 +1032,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2024, 10, 14)),
         implied: None,
         experimental: false,
-        support: Unmodelled("celld does not model which request a promise continuation runs in"),
+        support: Off("a promise's continuations run in the request that resolves it, as V8 runs them"),
     },
     Flag {
         field: "obsolete63",
@@ -1272,7 +1293,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: None,
         experimental: false,
-        support: On("an incoming request's signal aborts when the client disconnects"),
+        support: Honoured,
     },
     Flag {
         field: "connectPassThrough",
@@ -1290,7 +1311,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2025, 6, 16)),
         implied: None,
         experimental: false,
-        support: Unmodelled("celld does not tie an AsyncLocalStorage snapshot to the request that took it"),
+        support: Honoured,
     },
     Flag {
         field: "throwOnUnrecognizedImportAssertion",
@@ -1299,7 +1320,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2025, 6, 16)),
         implied: None,
         experimental: false,
-        support: Unmodelled("celld does not model unknown import attributes"),
+        support: Honoured,
     },
     Flag {
         field: "pythonWorkflows",
@@ -1722,7 +1743,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2025, 12, 3)),
         implied: None,
         experimental: false,
-        support: Unmodelled("celld does not model whether an API dictionary carries absent optional fields as undefined"),
+        support: Honoured,
     },
     Flag {
         field: "cacheReload",
@@ -1803,7 +1824,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2026, 1, 13)),
         implied: Some(Implied { by: &["pedanticWpt"], date: Date::new(2026, 1, 13) }),
         experimental: false,
-        support: On("Response.text() and Request.text() drop a leading byte order mark"),
+        support: Honoured,
     },
     Flag {
         field: "allowIrrevocableStubStorage",
@@ -1875,7 +1896,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2026, 3, 12)),
         implied: None,
         experimental: false,
-        support: Unmodelled("celld does not model the error codes queue operations carry"),
+        support: Honoured,
     },
     Flag {
         field: "textDecoderReplaceSurrogates",
@@ -1884,7 +1905,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2026, 2, 24)),
         implied: Some(Implied { by: &["pedanticWpt"], date: Date::new(2026, 2, 24) }),
         experimental: false,
-        support: On("the UTF-16LE TextDecoder replaces a lone surrogate with U+FFFD"),
+        support: Honoured,
     },
     Flag {
         field: "containersPidNamespace",
@@ -1911,7 +1932,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2026, 3, 3)),
         implied: None,
         experimental: false,
-        support: Unmodelled("celld does not model when an unhandled rejection is reported"),
+        support: Honoured,
     },
     Flag {
         field: "textDecoderCjkDecoder",
@@ -1929,7 +1950,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2026, 3, 3)),
         implied: None,
         experimental: false,
-        support: On("WebSocket close() throws SyntaxError for a reason over 123 bytes"),
+        support: Honoured,
     },
     Flag {
         field: "enableVersionApi",
@@ -1956,7 +1977,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2026, 3, 24)),
         implied: None,
         experimental: false,
-        support: On("a WritableStream writer follows the Streams Standard on release"),
+        support: Honoured,
     },
     Flag {
         field: "encoderStreamSpecCompliantBackpressure",
@@ -2118,7 +2139,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2026, 8, 11)),
         implied: None,
         experimental: false,
-        support: Off("Workflow create() without an id names the instance with a random UUID"),
+        support: Honoured,
     },
     Flag {
         field: "wasmMemoryDiscard",
@@ -2145,7 +2166,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2026, 9, 15)),
         implied: None,
         experimental: false,
-        support: Unmodelled("celld does not model how dispatchEvent() reports a listener's exception"),
+        support: Honoured,
     },
     Flag {
         field: "autoInjectPythonWorkers",
@@ -2163,7 +2184,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2026, 10, 1)),
         implied: None,
         experimental: false,
-        support: Unmodelled("celld does not model eviction protection for a Durable Object's waitUntil() tasks"),
+        support: Off("an idle Durable Object can be evicted while its waitUntil() work is pending"),
     },
     Flag {
         field: "webCryptoModernAlgorithms",
@@ -2455,11 +2476,13 @@ mod tests {
             ("#### Before a date", before),
             ("#### Whatever the date", always),
         ] {
-            assert_eq!(
-                flags_named(docs_section(docs, heading)),
-                expected,
-                "{heading}"
-            );
+            // A class with no flags has no section.
+            let listed = if expected.is_empty() && !docs.contains(&format!("\n{heading}\n")) {
+                Default::default()
+            } else {
+                flags_named(docs_section(docs, heading))
+            };
+            assert_eq!(listed, expected, "{heading}");
         }
     }
 
@@ -2550,6 +2573,32 @@ mod tests {
             (BLOB_STANDARD_MIME_TYPE, ("2024-06-02", "2024-06-03")),
             (SET_TOSTRING_TAG, ("2024-09-25", "2024-09-26")),
             (
+                WORKFLOWS_ENABLE_FAST_ENGINE_CREATION,
+                ("2026-08-10", "2026-08-11"),
+            ),
+            (
+                SPEC_COMPLIANT_DISPATCH_EXCEPTIONS,
+                ("2026-09-14", "2026-09-15"),
+            ),
+            (ENABLE_FAST_JSG_STRUCT, ("2025-12-02", "2025-12-03")),
+            (QUEUE_EXPOSE_ERROR_CODES, ("2026-03-11", "2026-03-12")),
+            (
+                UNHANDLED_REJECTION_AFTER_MICROTASK_CHECKPOINT,
+                ("2026-03-02", "2026-03-03"),
+            ),
+            (
+                BIND_ASYNCLOCALSTORAGE_SNAPSHOT_TO_REQUEST,
+                ("2025-06-15", "2025-06-16"),
+            ),
+            (
+                THROW_ON_UNRECOGNIZED_IMPORT_ASSERTION,
+                ("2025-06-15", "2025-06-16"),
+            ),
+            (
+                INTERNAL_WRITABLE_STREAM_ABORT_CLEARS_QUEUE,
+                ("2024-09-01", "2024-09-02"),
+            ),
+            (
                 FIXUP_TRANSFORM_STREAM_BACKPRESSURE,
                 ("2024-12-15", "2024-12-16"),
             ),
@@ -2607,10 +2656,10 @@ mod tests {
             ["Invalid compatibility date: 2026-1"]
         );
         assert_eq!(
-            errors(Some("2026-09-05"), &[]),
+            errors(Some("2026-10-02"), &[]),
             [
-                "This Worker requires compatibility date \"2026-09-05\", but the newest date \
-              supported by this server binary is \"2026-09-04\"."
+                "This Worker requires compatibility date \"2026-10-02\", but the newest date \
+              supported by this server binary is \"2026-10-01\"."
             ]
         );
         assert_eq!(
@@ -2743,7 +2792,7 @@ mod tests {
     fn every_error_is_reported() {
         assert_eq!(
             errors(
-                Some("2026-09-05"),
+                Some("2026-10-02"),
                 &["bogus", "url_original", "experimental"]
             )
             .len(),
@@ -2779,5 +2828,12 @@ mod tests {
         assert_eq!(reported.get("blob_standard_mime_type"), Some(&true));
         assert_eq!(old.get("blob_standard_mime_type"), Some(&false));
         assert_eq!(reported.get("experimental"), None);
+        // enable_request_signal has no date: off unless set.
+        assert_eq!(reported.get("enable_request_signal"), Some(&false));
+        let signal: std::collections::HashMap<_, _> =
+            values("2026-09-04", &["enable_request_signal"])
+                .reported()
+                .collect();
+        assert_eq!(signal.get("enable_request_signal"), Some(&true));
     }
 }

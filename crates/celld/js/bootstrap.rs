@@ -647,6 +647,8 @@ fn install_event_hooks(scope: &mut v8::PinScope) -> Result<()> {
         end_event: internal_global(scope, "__endEvent")?,
         advance_io_time: internal_global(scope, "__advanceIoTime")?,
         abort_incoming_request: internal_global(scope, "__abortIncomingRequest")?,
+        promise_rejection: internal_global(scope, "__promiseRejection")?,
+        process_rejections: internal_global(scope, "__processRejections")?,
     };
     actor_runtime_state(scope)
         .event_hooks
@@ -1524,6 +1526,10 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
     scope.set_slot(storage_ops::ErrorSerialization {
         enhanced: flags.get(f::ENHANCED_ERROR_SERIALIZATION),
     });
+    // The module resolver reads this (`modules::resolve_external`).
+    scope.set_slot(super::modules::ImportAttributes {
+        refuse: flags.get(f::THROW_ON_UNRECOGNIZED_IMPORT_ASSERTION),
+    });
     let source = format!(
         "const c = __celld.__cell;\n\
          c.deleteAllDeletesAlarm = {};\n\
@@ -1547,6 +1553,19 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
          c.compat.transformStreamBackpressure = {};\n\
          c.compat.blobStandardMimeType = {};\n\
          c.compat.setToStringTag = {};\n\
+         c.compat.requestSignal = {};\n\
+         c.compat.workflowsFastEngineCreation = {};\n\
+         c.compat.specCompliantDispatchExceptions = {};\n\
+         c.compat.internalWritableStreamAbortClearsQueue = {};\n\
+         c.compat.bindAsyncLocalStorageSnapshot = {};\n\
+         c.compat.unhandledRejectionAfterMicrotaskCheckpoint = {};\n\
+         c.compat.queueExposeErrorCodes = {};\n\
+         c.compat.fastJsgStruct = {};\n\
+         c.compat.stripBomInReadAllText = {};\n\
+         c.compat.textDecoderReplaceSurrogates = {};\n\
+         c.compat.websocketCloseReasonByteLimit = {};\n\
+         c.compat.writableStreamSpecCompliantWriter = {};\n\
+         c.compat.workersApiGettersSettersOnPrototype = {};\n\
          c.applyCompat();",
         compat.delete_all_deletes_alarm,
         compat.js_rpc,
@@ -1569,6 +1588,19 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
         flags.get(f::FIXUP_TRANSFORM_STREAM_BACKPRESSURE),
         flags.get(f::BLOB_STANDARD_MIME_TYPE),
         flags.get(f::SET_TOSTRING_TAG),
+        flags.get(f::ENABLE_REQUEST_SIGNAL),
+        flags.get(f::WORKFLOWS_ENABLE_FAST_ENGINE_CREATION),
+        flags.get(f::SPEC_COMPLIANT_DISPATCH_EXCEPTIONS),
+        flags.get(f::INTERNAL_WRITABLE_STREAM_ABORT_CLEARS_QUEUE),
+        flags.get(f::BIND_ASYNCLOCALSTORAGE_SNAPSHOT_TO_REQUEST),
+        flags.get(f::UNHANDLED_REJECTION_AFTER_MICROTASK_CHECKPOINT),
+        flags.get(f::QUEUE_EXPOSE_ERROR_CODES),
+        flags.get(f::ENABLE_FAST_JSG_STRUCT),
+        flags.get(f::STRIP_BOM_IN_READ_ALL_TEXT),
+        flags.get(f::TEXT_DECODER_REPLACE_SURROGATES),
+        flags.get(f::WEBSOCKET_CLOSE_REASON_BYTE_LIMIT),
+        flags.get(f::WRITABLE_STREAM_SPEC_COMPLIANT_WRITER),
+        flags.get(f::WORKERS_API_GETTERS_SETTERS_ON_PROTOTYPE),
     );
     run_internal_snippet(scope, &source).ok_or_else(|| anyhow!("compatibility install failed"))?;
     Ok(())

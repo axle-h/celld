@@ -565,18 +565,19 @@
       validateObject(options, "options");
       validateExportOptions(options, this.type);
       const bytes = keyMaterial(this[kHandle]);
+      // workerd's JsonWebKey struct (`__jwkStruct`).
       if (options.format === "jwk" && this.type === "secret") {
-        return {
+        return __celld.__jwkStruct({
           kty: "oct",
           k: Buffer.from(bytes).toString("base64url"),
           ext: true,
-        };
+        });
       }
       if (options.format === "jwk") {
-        return keyOp("asym-key-export", {
+        return __celld.__jwkStruct(keyOp("asym-key-export", {
           der: Array.from(bytes),
           visibility: this.type,
-        }).jwk;
+        }).jwk);
       }
       // Asymmetric: the host re-encodes into the requested structure. Node's
       // shapes -- a pem export is a string, a der export a Buffer.
@@ -687,13 +688,18 @@
   }
 
   class AsymmetricKeyObject extends KeyObject {
+    // workerd's AsymmetricKeyDetails struct, each member optional.
     get asymmetricKeyDetails() {
-      const details = { ...asymmetricMaterial(this[kHandle]).details };
+      const details = asymmetricMaterial(this[kHandle]).details;
       // Node reports the exponent as a BigInt. JSON cannot carry one, so the
       // host sends a decimal string and it is widened back here.
-      if (details.publicExponent !== undefined)
-        details.publicExponent = BigInt(details.publicExponent);
-      return details;
+      return __celld.__struct([
+        ["modulusLength", details.modulusLength, true],
+        ["publicExponent", details.publicExponent === undefined
+          ? undefined : BigInt(details.publicExponent), true],
+        ["divisorLength", details.divisorLength, true],
+        ["namedCurve", details.namedCurve, true],
+      ]);
     }
     get asymmetricKeyType() {
       return asymmetricMaterial(this[kHandle]).keyType;

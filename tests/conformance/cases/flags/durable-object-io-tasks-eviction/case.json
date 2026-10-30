@@ -1,0 +1,6 @@
+{
+  "xfail": "1.64",
+  "env": {"CELLD_IDLE_EVICT_S": "1"},
+  "workers": ["app"],
+  "steps": [{"path": "/pending"}]
+}

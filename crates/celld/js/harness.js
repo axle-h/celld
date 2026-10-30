@@ -7,6 +7,8 @@
 // application code runs, as tracing.js does, so that a Worker that replaces
 // JSON.parse or the WeakMap methods does not see that path's host results.
 const __ReflectApply = Reflect.apply;
+const __ReflectConstruct = Reflect.construct;
+const __ReflectDeleteProperty = Reflect.deleteProperty;
 const __JSONParse = JSON.parse;
 const __jsonParse = (text) => __ReflectApply(__JSONParse, JSON, [text]);
 const __SafeWeakMap = WeakMap;
@@ -19,6 +21,12 @@ const __WeakSetAdd = WeakSet.prototype.add;
 const __WeakSetHas = WeakSet.prototype.has;
 const __WeakSetDelete = WeakSet.prototype.delete;
 const __SafeMap = Map;
+// UTF-8 bytes of a string, by an encoder made before any script runs: one
+// TextEncoder for the harness, not one per body.
+const __utf8Encoder = new TextEncoder();
+const __TextEncoderEncode = TextEncoder.prototype.encode;
+const __encodeUtf8 = (text) =>
+  __ReflectApply(__TextEncoderEncode, __utf8Encoder, [text]);
 const __MapGet = Map.prototype.get;
 const __MapSet = Map.prototype.set;
 const __MapDelete = Map.prototype.delete;
@@ -33,7 +41,18 @@ const __hostRecord = (text) => {
 };
 const __ArrayFrom = Array.from;
 const __ArraySort = Array.prototype.sort;
+const __StringToLowerCase = String.prototype.toLowerCase;
 const __FunctionBind = Function.prototype.bind;
+// UTF-8 text of a body or a Blob, by decoders made before any script runs:
+// one that drops a leading byte order mark and one that keeps it.
+const __utf8Stripping = new TextDecoder();
+const __utf8Keeping = new TextDecoder("utf-8", { ignoreBOM: true });
+const __TextDecoderDecode = TextDecoder.prototype.decode;
+const __utf8 = (bytes, stripBom) => __ReflectApply(__TextDecoderDecode,
+  stripBom ? __utf8Stripping : __utf8Keeping, [bytes]);
+// crypto.js's randomUUID(), for ids celld makes itself. crypto.js runs after
+// the harness and leaves it on `__celld`, out of a script's reach.
+const __cryptoRandomUUID = () => __celld.__randomUUID();
 const __ErrorCaptureStackTrace = Error.captureStackTrace;
 const __ObjectDefineProperty = Object.defineProperty;
 const __ObjectHasOwn = Object.hasOwn;
@@ -49,6 +68,7 @@ const __ReadableStream = ReadableStream;
 const __URLSearchParams = URLSearchParams;
 const __ObjectGetPrototypeOf = Object.getPrototypeOf;
 const __ObjectPrototype = Object.prototype;
+const __ObjectCreate = Object.create;
 const __ArrayPush = Array.prototype.push;
 // A derived class's `super()` calls whatever the class's [[Prototype]] is
 // at that moment, which a script can set (`Object.setPrototypeOf(File,
@@ -90,25 +110,118 @@ const __unpinBase = (cls, current) => {
 };
 // The brands of the harness's own host classes, set by each class's static
 // block (`__hostKind`).
+let __requestSignalOf;
 let __isRequest, __isResponse, __isBlob, __isFile, __isAbortSignal,
   __isRpcTarget, __requestCache, __requestOneTimeBody,
-  __requestSubrequestSignal;
-// A Request's or Response's buffered body (null for a stream body), and a
-// Blob's bytes: private, so what a subrequest, a lift or a read sends is
-// the value's own, never a property a script set. undefined for an object
-// that is no Request, Response or Blob.
-let __requestBodyBytes, __setRequestBodyBytes, __responseBodyBytes,
-  __setResponseBodyBytes, __blobBytesOf, __blobTypeOf, __setBlobBytes,
-  __setBlobType;
-const __bodyBytesOf = (owner) =>
-  owner === null || typeof owner !== "object" ? undefined
-    : __isRequest(owner) ? __requestBodyBytes(owner)
-    : __isResponse(owner) ? __responseBodyBytes(owner)
-    : undefined;
-const __setBodyBytes = (owner, bytes) => {
-  if (__isRequest(owner)) __setRequestBodyBytes(owner, bytes);
-  else __setResponseBodyBytes(owner, bytes);
+  __requestSubrequestSignal, __setSignalAborted;
+// A Request's or a Response's body (Body), a Blob's bytes, and a Request's
+// and a Response's attributes: private, so what a subrequest, a lift or a
+// read sends is the value's own, never a property a script set, and celld's
+// own paths read them here rather than through the prototype's getters.
+let __isBody, __bodyBytesRaw, __setBodyBytesRaw, __bodyStream,
+  __setBodyStream, __bodyRead, __setBodyRead, __bodyText, __setBodyText,
+  __blobBytesOf, __blobTypeOf, __setBlobBytes, __setBlobType;
+let __requestUrl, __setRequestUrl, __requestMethod, __requestRedirect,
+  __requestCf, __setRequestCf, __requestHeaders, __requestHeadersJson,
+  __requestHeaderList, __requestEncodeResponseBody, __responseEncodeBody,
+  __setResponseEncodeBody;
+let __responseStatus, __responseStatusText, __responseHeaders, __responseUrl,
+  __setResponseUrl, __responseRedirected, __setResponseRedirected,
+  __responseType, __setResponseType, __responseCf, __responseWebSocket,
+  __responseRequestControllers, __setResponseRequestControllers,
+  __responseCancellationWrapped, __setResponseCancellationWrapped,
+  __makeErrorResponse;
+// workers_api_getters_setters_on_prototype (jsg/resource.h): an API class's
+// attributes are accessors of its prototype, and their getters have no
+// name, as workerd's. Without the flag workerd defines them on each
+// instance instead, as read-only data properties (V8's accessor properties)
+// in the reverse of their declaration order, and its prototypes have none:
+// `__applyCompat` takes them off the prototypes, and each constructor puts
+// them on its instance (`__instanceAttributes`).
+let __oldAttributes = false;
+const __attributeOwners = [];
+// A prototype's accessor as workerd defines one: enumerable, with getter
+// and setter functions that have no name.
+const __workerdAccessor = (prototype, name) => {
+  const descriptor = __ObjectGetOwnPropertyDescriptor(prototype, name);
+  for (const accessor of [descriptor.get, descriptor.set]) {
+    if (accessor !== undefined)
+      __ObjectDefineProperty(accessor, "name", { __proto__: null, value: "" });
+  }
+  __ObjectDefineProperty(prototype, name, { __proto__: null, enumerable: true });
+  return descriptor;
 };
+// The table of the attributes `entries` names, as `[prototype, name]` in
+// the order workerd defines them on an instance.
+const __attributeTable = (entries) => {
+  const table = [];
+  for (let i = 0; i < entries.length; i++) {
+    const [prototype, name] = entries[i];
+    const descriptor = __workerdAccessor(prototype, name);
+    table[i] = [name, descriptor.get, descriptor.set];
+    __attributeOwners[__attributeOwners.length] = [prototype, name];
+  }
+  return table;
+};
+// Redefines `names`, own properties of `target`, in that order after its
+// other ones, so its own keys list them as workerd's prototype does.
+const __reorderOwnKeys = (target, names) => {
+  for (let i = 0; i < names.length; i++) {
+    const descriptor = __ObjectGetOwnPropertyDescriptor(target, names[i]);
+    if (descriptor === undefined) continue;
+    __ReflectDeleteProperty(target, names[i]);
+    __ObjectDefineProperty(target, names[i], descriptor);
+  }
+};
+const __instanceAttributes = (target, table) =>
+  __instance_accessors(target, table);
+// The prelude's classes with attributes, which their constructors put on an
+// instance by name (`__celld.__installAttributes`) when `__celld.
+// __oldAttributes` says so.
+const __namedAttributes = {
+  __proto__: null,
+  TextDecoder: __attributeTable([
+    [TextDecoder.prototype, "ignoreBOM"], [TextDecoder.prototype, "fatal"],
+    [TextDecoder.prototype, "encoding"],
+  ]),
+  TextEncoder: __attributeTable([[TextEncoder.prototype, "encoding"]]),
+  TransformStream: __attributeTable([
+    [TransformStream.prototype, "writable"], [TransformStream.prototype, "readable"],
+  ]),
+  ReadableStream: __attributeTable([[ReadableStream.prototype, "locked"]]),
+  ReadableStreamDefaultReader: __attributeTable([
+    [ReadableStreamDefaultReader.prototype, "closed"],
+  ]),
+  WritableStream: __attributeTable([[WritableStream.prototype, "locked"]]),
+  WritableStreamDefaultWriter: __attributeTable([
+    [WritableStreamDefaultWriter.prototype, "desiredSize"],
+    [WritableStreamDefaultWriter.prototype, "ready"],
+    [WritableStreamDefaultWriter.prototype, "closed"],
+  ]),
+};
+__celld.__oldAttributes = false;
+__celld.__deferWritableAttributes = false;
+__celld.__installAttributes = (target, name) =>
+  __instanceAttributes(target, __namedAttributes[name]);
+// The object a prelude class makes its instance on (streams.js
+// `streamInstance`) without workers_api_getters_setters_on_prototype: one
+// with `prototype` that already carries its attributes.
+__celld.__attributeTarget = (name, prototype) =>
+  __attributeTarget(__namedAttributes[name], prototype);
+// A class defined after the harness (a lazy global, crypto.js) registers
+// its attributes here, and loses them from its prototype at once when the
+// flags already took the others off.
+__celld.__registerAttributes = (name, entries) => {
+  __namedAttributes[name] = __attributeTable(entries);
+  if (__oldAttributes) {
+    for (const [prototype, key] of entries) __ReflectDeleteProperty(prototype, key);
+  }
+};
+// A Request's or Response's buffered body (null for a stream body), or
+// undefined for anything else.
+const __bodyBytesOf = (owner) =>
+  __isBody(owner) ? __bodyBytesRaw(owner) : undefined;
+const __setBodyBytes = (owner, bytes) => __setBodyBytesRaw(owner, bytes);
 const __Array = Array;
 const __ArrayFill = Array.prototype.fill;
 const __ObjectSetPrototypeOf = Object.setPrototypeOf;
@@ -140,7 +253,7 @@ function __bodyBytes(body) {
   if (body instanceof ArrayBuffer) return new Uint8Array(body.slice(0));
   if (ArrayBuffer.isView(body))
     return new Uint8Array(body.buffer, body.byteOffset, body.byteLength).slice();
-  return new TextEncoder().encode(String(body));
+  return __encodeUtf8(String(body));
 }
 // Bodies that carry their own Content-Type. A Blob's is its `type`, a
 // FormData serializes to multipart with a generated boundary, and a
@@ -156,7 +269,7 @@ function __typedBody(body) {
     return __multipartBody(body);
   if (globalThis.URLSearchParams && body instanceof URLSearchParams)
     return {
-      bytes: new TextEncoder().encode(String(body)),
+      bytes: __encodeUtf8(String(body)),
       type: "application/x-www-form-urlencoded;charset=UTF-8",
     };
   return null;
@@ -319,12 +432,12 @@ async function __drainStream(stream, expected = stream?._expectedLength) {
   return bytes;
 }
 async function __drainBody(target) {
-  const bytes = await __drainStream(target.body);
+  const bytes = await __drainStream(__bodyStream(target));
   __ownedBodies.add(bytes);
   __setBodyBytes(target, bytes);
-  // text() memoizes into _body on demand. Decoding here charges every
-  // binary passthrough the cost of a string it never reads.
-  target._body = undefined;
+  // text() decodes on demand. Decoding here charges every binary
+  // passthrough the cost of a string it never reads.
+  __setBodyText(target, undefined);
   return bytes;
 }
 // The next chunk of a platform stream, for either kind of reader: what a BYOB
@@ -486,7 +599,7 @@ const __usableBody = (stream, response) => {
 };
 // A subrequest takes its body's stream over, so the stream must be free.
 const __unlockedBody = (req) => {
-  if (req.body?._locked)
+  if (__bodyStream(req)?._locked)
     throw new TypeError("The ReadableStream has been locked to a reader.");
 };
 // A body whose bytes are in the isolate. Chunks are views of those bytes.
@@ -496,8 +609,7 @@ class CelldBodyStream extends CelldChunkStream {
     // Couple the stream to its buffered owner, so _bodyBytes and the stream
     // cannot be installed from different arrays. Copying the owner's bytes
     // again here doubles the external memory held for every constructed body.
-    if (!(owner instanceof globalThis.Request) &&
-        !(owner instanceof globalThis.Response))
+    if (!__isBody(owner))
       throw new TypeError("CelldBodyStream requires a buffered body owner");
     const bytes = __bodyBytesOf(owner);
     if (!(bytes instanceof Uint8Array))
@@ -597,6 +709,145 @@ for (const bodyStream of [CelldChunkStream, CelldBodyStream, CelldHttpBodyStream
     value: ReadableStream, writable: true, configurable: true,
   });
 }
+// Content-Encoding gzip, which workerd handles whatever the date
+// (api/system-streams.c++ `getContentEncoding`; `br` too under
+// brotli_content_encoding, which celld does not support): a body that
+// arrives over HTTP (a fetch(), a service binding's or a Durable Object's
+// response) with `Content-Encoding: gzip`, exactly, is decoded unless the
+// request asked for `encodeResponseBody: "manual"`; a response sent out
+// with it is compressed unless it has `encodeBody: "manual"`.
+const __gzipEncoded = (headers) =>
+  __ReflectApply(__HeadersGet, headers, ["content-encoding"]) === "gzip";
+const __nullBodyStatus = (status) =>
+  status === 101 || status === 204 || status === 205 || status === 304;
+// The chunks of a body for a coder: a stream's, or the bytes as one.
+const __bodySource = (body) => {
+  if (body === null || body === undefined) return null;
+  if (!__isReadableStream(body)) {
+    let bytes = body instanceof __Uint8Array ? body : new __Uint8Array(body);
+    return { __proto__: null,
+             pull: () => { const chunk = bytes; bytes = null; return chunk; },
+             cancel: () => { bytes = null; } };
+  }
+  const reader = __ReflectApply(__StreamGetReader, body, []);
+  return { __proto__: null,
+    pull: async () => {
+      const result = await __ReflectApply(__ReaderRead, reader, []);
+      return result.done ? null : result.value;
+    },
+    cancel: (reason) => __ReflectApply(__ReaderCancel, reader, [reason]),
+  };
+};
+// The pull and cancel of a stream of `raw`'s chunks coded by a native zlib
+// stream of `format` (zlib.rs `ZlibStream`): a bounded chunk per pull, the
+// next of `raw`'s chunks read only when the coder has nothing left to give,
+// so a body that inflates a thousandfold never holds more than a few chunks.
+// A failure throws workerd's TypeError for it.
+const __coderSource = (format, decompress, raw) => {
+  let source = null;
+  let id = 0;
+  let ended = false;
+  let done = false;
+  const pull = async () => {
+    if (done) return null;
+    source ??= __bodySource(raw);
+    if (id === 0) id = __zlib_stream_new(format, decompress);
+    try {
+      for (;;) {
+        const out = __zlib_stream_read(id);
+        if (out.byteLength) return out;
+        if (ended) {
+          done = true;
+          return null;
+        }
+        const chunk = await source.pull();
+        if (chunk === null) {
+          ended = true;
+          __zlib_stream_end(id);
+        } else {
+          __zlib_stream_write(id, chunk instanceof __Uint8Array ? chunk
+            : new __Uint8Array(chunk.buffer ?? chunk, chunk.byteOffset ?? 0,
+              chunk.byteLength));
+        }
+      }
+    } catch (error) {
+      // The native side dropped the stream with its error.
+      done = true;
+      throw error;
+    }
+  };
+  const cancel = async (reason) => {
+    if (id !== 0 && !done) __zlib_stream_drop(id);
+    done = true;
+    await (source ?? __bodySource(raw))?.cancel(reason);
+  };
+  return { __proto__: null, pull, cancel };
+};
+// A body decoded from gzip as it is read, every gzip member of it, as kj's
+// GzipInputStream decodes it, with its messages ("Gzip decompression
+// failed.", "Gzip compressed stream ended prematurely."). Untouched, it
+// still names the body it decodes (`__gzipRawBody`), which goes out as it
+// came when it is sent with the same encoding, as workerd's pass-through
+// does.
+let __gzipRawBody;
+class CelldGzipBodyStream extends CelldChunkStream {
+  #raw;
+  #started = false;
+  static {
+    __recordBase(this);
+    __gzipRawBody = (stream) => typeof stream === "object" && stream !== null &&
+      #raw in stream && !stream.#started && !stream._disturbed && !stream.locked
+      ? stream.#raw : undefined;
+  }
+  constructor(raw) {
+    const coder = __coderSource("gzip-body", true, raw);
+    const set = __pinBase(CelldGzipBodyStream);
+    try {
+      super(coder.pull, coder.cancel);
+    } finally {
+      __unpinBase(CelldGzipBodyStream, set);
+    }
+    this.#raw = raw;
+    // The first pull, which takes the raw body over.
+    const pull = this._chunks.pull;
+    this._chunks.pull = () => {
+      this.#started = true;
+      return pull();
+    };
+  }
+}
+// The compressed body of a response sent with `Content-Encoding: gzip`.
+const __gzipBody = (body) => {
+  const coder = __coderSource("gzip", false, body);
+  return new CelldChunkStream(coder.pull, coder.cancel);
+};
+// A response as a fetch() whose request was `req` gives it, from the
+// response as it arrived (its body encoded as its headers say): decoded
+// under `encodeResponseBody: "automatic"`, and sent on with the request's
+// mode, as workerd's makeHttpResponse makes it.
+//
+// The response to a HEAD request, or with a null body status, has no body
+// (http.c++ `makeHttpResponse`, as the Fetch spec has it); whatever the
+// server sent is cancelled.
+const __receivedResponse = (response, req) => {
+  const mode = __requestEncodeResponseBody(req);
+  __setResponseEncodeBody(response, mode);
+  const stream = __bodyStream(response);
+  if (stream === null) return response;
+  if (__requestMethod(req) === "HEAD" || __nullBodyStatus(__responseStatus(response))) {
+    // As `new Response(null)` holds it.
+    __setBodyBytes(response, __bodyBytes(null));
+    __setBodyStream(response, null);
+    __ignoreRejection(__ReflectApply(__StreamCancel, stream, []));
+    return response;
+  }
+  if (mode !== "automatic" || !__gzipEncoded(__responseHeaders(response)))
+    return response;
+  const bytes = __bodyBytesOf(response);
+  __setBodyBytes(response, null);
+  __setBodyStream(response, new CelldGzipBodyStream(bytes !== null ? bytes : stream));
+  return response;
+};
 __celld.__makeInternalByteStream = (pull, cancel) =>
   new CelldChunkStream(pull, cancel);
 // What a body method left: workerd reads the stream to its end, which
@@ -604,30 +855,32 @@ __celld.__makeInternalByteStream = (pull, cancel) =>
 // buffered body without its stream, so a flag stands in for the lock. A
 // stream's own reads and cancels make it disturbed instead. `bodyUsed` is
 // either, and only a body has one (`Body::getBodyUsed` in api/http.c++).
-const __bodyUsed = (target) => target.body !== null &&
-  (target._bodyUsed || target.body._disturbed === true);
+const __bodyUsed = (target) => {
+  const stream = __bodyStream(target);
+  return stream !== null && (__bodyRead(target) || stream._disturbed === true);
+};
 // workerd reads a body stream that is closed, and was never read from,
 // without a reader: it gives nothing, and the body stays unused (a tee of a
 // finished stream has two of them).
 const __closedUnread = (body) =>
   body != null && body._closed === true && body._disturbed !== true;
 const __markBodyRead = (target) => {
-  if (!__closedUnread(target.body)) target._bodyUsed = true;
+  if (!__closedUnread(__bodyStream(target))) __setBodyRead(target, true);
 };
 // workerd's clone of a body (`Body::clone` in api/http.c++): the stream is
 // teed, the original keeps one branch and the clone gets the other, so both
 // are unused again after a partial read. A buffered body nothing has read
 // stays buffered in both, as a copy.
 const __cloneBody = (target) => {
-  const body = target.body;
+  const body = __bodyStream(target);
   if (body === null) return null;
-  if (target._bodyUsed || body.locked)
+  if (__bodyRead(target) || body.locked)
     throw new TypeError("This ReadableStream is currently locked to a reader,");
   if (__bodyBytesOf(target) !== null && body instanceof CelldBodyStream &&
       !body._disturbed)
     return __bodyBytesOf(target);
   const [left, right] = body.tee();
-  target.body = left;
+  __setBodyStream(target, left);
   __setBodyBytes(target, null);
   return right;
 };
@@ -650,209 +903,410 @@ const __statusOf = (value) => {
 const __NETWORK_RESPONSE = Object.freeze({ __proto__: null });
 const __networkResponse = (body, init) =>
   new __NetworkResponse(body, __responseInit(init), __NETWORK_RESPONSE);
-globalThis.Response = class Response {
-  // Read-only, as in workerd, so the socket a response carries is the one it
-  // was made with.
-  #webSocket = null;
-  // The buffered body, or null for a stream body (`__bodyBytesOf`).
-  #bodyBytes = null;
-  // The brand the RPC envelope classifies by (`__hostKind`).
-  static {
-    __isResponse = (value) =>
-      typeof value === "object" && value !== null && #webSocket in value;
-    __responseBodyBytes = (response) => response.#bodyBytes;
-    __setResponseBodyBytes = (response, bytes) => {
-      response.#bodyBytes = bytes;
-    };
+// workerd's Body (api/http.h): the body a Request or a Response holds, its
+// `body` and `bodyUsed`, and the methods that read it, on the prototype the
+// two share. A global, as in workerd, which a script cannot construct.
+// The state is private, so what a subrequest, a lift or a read sends is the
+// value's own, never a property a script set; celld's own paths read it
+// through the accessors below. Request, Response and Body extend nothing:
+// each constructor makes its object itself (`__bodyInstance`) and puts its
+// state on it through a class no script can reach, so giving a constructor
+// another prototype changes no construction, celld's own included.
+const __kBody = Symbol("Body");
+// The constructor whose instances carry a table's attributes as their own
+// properties (`__attribute_class`), made once per table.
+const __attributeClasses = new __SafeMap();
+const __attributeClass = (table) => {
+  let cls = __ReflectApply(__MapGet, __attributeClasses, [table]);
+  if (cls === undefined) {
+    cls = __attribute_class(table);
+    __ReflectApply(__MapSet, __attributeClasses, [table, cls]);
   }
-  // Its own attributes and celld's own fields, defined as fields (not
-  // assigned), so a setter or getter a script put on Object.prototype under
-  // one of these names is not run. `cf` is undefined when it has none, as
-  // workerd's is.
-  _body;
-  body;
-  status;
-  statusText;
-  headers;
-  ok;
-  redirected;
-  type;
-  url;
-  _bodyUsed;
-  cf;
-  get webSocket() { return this.#webSocket; }
-  constructor(body, init = undefined, origin = undefined) {
-    const fromNetwork = origin === __NETWORK_RESPONSE;
-    // Streaming/iterable detection runs only for object bodies, so
-    // the common string path skips every instanceof below.
-    let stream = null;
-    let typed = null;
-    if (body !== null && typeof body === "object") {
-      if (body instanceof ReadableStream) stream = __usableBody(body, true);
-      else if ((typed = __typedBody(body)) !== null) { /* bytes and type */ }
-      else {
-        stream = __iterableBody(body);
-      }
-    }
-    this.#bodyBytes = stream !== null
-      ? null
-      : typed ? typed.bytes : __bodyBytes(body);
-    // Never decoded eagerly: a whole-body UTF-8 decode costs seconds for a
-    // large binary body (an archive, a git pack) and can exceed V8's string
-    // length. On Response the field is deliberately write-only -- text()
-    // decodes fresh from _bodyBytes and only Request.text() memoizes into
-    // _body -- but the assignment stays: __drainBody and __adoptBody assign
-    // _body on both classes, so defining it here keeps the hidden-class
-    // shape stable. Do not add a Response reader; do not "simplify" this
-    // away.
-    this._body = undefined;
-    // Hono rebuilds a response after middleware with
-    // `new Response(response.body, response)`; the held stream (or a
-    // fresh CelldBodyStream) preserves the payload across that
-    // standard clone shape.
-    this.body = body == null
-      ? null
-      : stream !== null
-        ? stream
-        : new CelldBodyStream(this);
-    // The init's fields, each read once in the order of workerd's
-    // ResponseInitializerDict; a Response as the init (its other arm) gives
-    // its own, and has no encodeBody to read.
-    let initStatus, initStatusText, initHeaders, initCf, initWebSocket;
-    if (init !== undefined) {
-      initStatus = init.status;
-      initStatusText = init.statusText;
-      initHeaders = init.headers;
-      initCf = init.cf;
-      initWebSocket = init.webSocket;
-      if (!__isResponse(init)) void init.encodeBody;
-    }
-    this.status = initStatus === undefined
-      ? 200
-      : fromNetwork ? Number(initStatus) : __statusOf(initStatus);
-    this.statusText = initStatusText === undefined ? "" : String(initStatusText);
-    this.headers = new __Headers(initHeaders);
-    if (typed && typed.type && !this.headers.has("content-type"))
-      this.headers.set("content-type", typed.type);
-    const webSocket = initWebSocket ?? null;
-    if (webSocket !== null && !__wsIsSocket(webSocket))
-      throw new TypeError(
-        "Failed to construct 'Response': member webSocket is not of type WebSocket.");
-    this.#webSocket = webSocket;
-    // Workerd admits 101, and only 101, for a response that carries a
-    // WebSocket. A cross-isolate upgrade carries a client end made from the
-    // target.
-    if (fromNetwork) {
-      // As the origin sent it.
-    } else if (webSocket === null) {
-      if (this.status < 200 || this.status > 599)
-        throw new RangeError(
-          "Responses may only be constructed with status codes in the range " +
-          "200 to 599, inclusive.");
-    } else if (this.status !== 101) {
-      throw new RangeError("Responses with a WebSocket must have status code 101.");
-    }
-    this.ok = this.status >= 200 && this.status <= 299;
-    this.redirected = false;
-    this.type = "default";
-    this.url = "";
-    this._bodyUsed = false;
-    this.cf = initCf;
-  }
-  static json(data, init = {}) {
-    const headers = new __Headers(init.headers || {});
-    if (!headers.has("content-type"))
-      headers.set("content-type", "application/json");
-    return new Response(JSON.stringify(data), { ...init, headers });
-  }
-  static redirect(url, status = 302) {
-    const input = String(url);
-    const statusCode = Number(status) | 0;
-    if (![301, 302, 303, 307, 308].includes(statusCode)) {
-      throw new RangeError(
-        `${statusCode} is not a redirect status code. ` +
-        "It must be one of: 301, 302, 303, 307, or 308.");
-    }
-    const response = new Response(null, {
-      status: statusCode,
-      headers: { Location: new URL(input).href },
-    });
-    // A redirect response owns a guarded header list. Without the guard, an
-    // application can rewrite Location after construction, which differs
-    // from both Fetch and Workerd even though the initial response is valid.
-    Object.defineProperty(response.headers, "_immutable", { __proto__: null, value: true });
-    return response;
-  }
-  static error() {
-    const response = new Response(null);
-    response.status = 0;
-    response.ok = false;
-    response.type = "error";
-    return response;
-  }
-  async _consume() {
-    if (__handedOverBodies.has(this)) throw new TypeError(__BODY_USED);
-    if (__closedUnread(this.body)) return new Uint8Array();
-    if (__bodyBytesOf(this) !== null) {
-      if (this.body !== null && this.body._cancelled)
-        throw new TypeError(
-          "Body has already been used. It can only be used once. " +
-          "Use tee() first if you need to read it twice.");
-      return __bodyBytesOf(this);
-    }
-    return __drainBody(this);
-  }
-  async text() {
-    __markBodyRead(this);
-    return new TextDecoder().decode(await this._consume());
-  }
-  async json() { return JSON.parse(await this.text()); }
-  async formData() {
-    // The undecoded bytes, not `text()`: a UTF-8 decode replaces each invalid
-    // sequence in a binary file part with one U+FFFD, so both the bytes and
-    // the length change.
-    __markBodyRead(this);
-    return __celld.__parseFormData(
-      await this._consume(), this.headers.get('content-type'));
-  }
-  async arrayBuffer() {
-    __markBodyRead(this);
-    return __handOverBody(this, await this._consume());
-  }
-  // workerd's `Body::bytes`: the body as a Uint8Array over a buffer of its
-  // own, which `arrayBuffer()` hands over.
-  async bytes() {
-    __markBodyRead(this);
-    return new __Uint8Array(__handOverBody(this, await this._consume()));
-  }
-  async blob() {
-    return __bodyBlob(await this.arrayBuffer(),
-      this.headers.get("content-type"));
-  }
-  get bodyUsed() { return __bodyUsed(this); }
-  // workerd's `Response::clone`: the clone has the body's other branch, a
-  // copy of the headers with their guard, a copy of `cf`, and the same
-  // status, statusText, URL list and type. The constructor's checks don't
-  // apply, as a network response's don't, so `Response.error()` clones.
-  clone() {
-    if (this.#webSocket !== null)
-      throw new TypeError("Cannot clone a response to a WebSocket handshake.");
-    const body = __cloneBody(this);
-    const response = __networkResponse(body, {
-      status: this.status,
-      statusText: this.statusText,
-      // The list, not the iterator, which combines and lower-cases.
-      headers: this.headers.__celldHeaderList,
-      cf: this.cf === undefined ? undefined : structuredClone(this.cf),
-    });
-    if (this.headers._immutable)
-      Object.defineProperty(response.headers, "_immutable", { __proto__: null, value: true });
-    response.type = this.type;
-    response.url = this.url;
-    response.redirected = this.redirected;
-    return response;
-  }
+  return cls;
 };
+// An object with `prototype` and a table's attributes as its own
+// properties: an attribute class's instance given that prototype, which
+// costs far less than constructing it with another new.target.
+const __attributeTarget = (table, prototype) => {
+  const target = __ReflectConstruct(__attributeClass(table), []);
+  __ObjectSetPrototypeOf(target, prototype);
+  return target;
+};
+// A base whose constructor returns the object it is given, so a class
+// that extends it puts its fields on that object: the Request's and
+// Response's state classes, which nothing a script can reach extends.
+class __Stamp {
+  constructor(target) {
+    return target;
+  }
+}
+const __calledWithoutNew = __celld.__calledWithoutNew;
+const __installMembers = __celld.__installMembers;
+let Body;
+// Body's state, which `__bodyInstance` puts on the object a Request or a
+// Response is made on.
+class __BodyFields extends __Stamp {
+  // The buffered body, or null for a stream body (`__bodyBytesOf`).
+  #bytes = null;
+  // The body's stream, or null for none.
+  #stream = null;
+  // Whether a body method has read the buffered body: it stands in for the
+  // lock workerd's read leaves on the stream (`__bodyUsed`).
+  #read = false;
+  // What a Request's text() decoded (`text`).
+  #text = undefined;
+  static {
+    __isBody = (value) =>
+      typeof value === "object" && value !== null && #bytes in value;
+    __bodyBytesRaw = (target) => target.#bytes;
+    __setBodyBytesRaw = (target, bytes) => { target.#bytes = bytes; };
+    __bodyStream = (target) => target.#stream;
+    __setBodyStream = (target, stream) => { target.#stream = stream; };
+    __bodyRead = (target) => target.#read;
+    __setBodyRead = (target, read) => { target.#read = read; };
+    __setBodyText = (target, text) => { target.#text = text; };
+    // A leading byte order mark is dropped under
+    // strip_bom_in_read_all_text. A Request keeps what it decoded; a
+    // Response decodes each time.
+    __bodyText = async (target) => {
+      __markBodyRead(target);
+      const bytes = await __consumeBody(target);
+      const strip = __cell.compat.stripBomInReadAllText;
+      if (!__isRequest(target)) return __utf8(bytes, strip);
+      return target.#text ??= __utf8(bytes, strip);
+    };
+    // workerd's Body global, which neither `Body()` nor `new Body()` makes:
+    // a function, so a call without `new` has the same error.
+    Body = function Body() {
+      throw new TypeError("Illegal constructor");
+    };
+    // Its members, defined here where the state is in reach.
+    __installMembers(Body, class {
+      get body() {
+        if (!__isBody(this)) throw __illegalInvocation();
+        return this.#stream;
+      }
+      get bodyUsed() {
+        if (!__isBody(this)) throw __illegalInvocation();
+        return __bodyUsed(this);
+      }
+      async arrayBuffer() {
+        if (!__isBody(this)) throw __illegalInvocation();
+        __markBodyRead(this);
+        return __handOverBody(this, await __consumeBody(this));
+      }
+      // workerd's `Body::bytes`: the body as a Uint8Array over a buffer of its
+      // own, which `arrayBuffer()` hands over.
+      async bytes() {
+        if (!__isBody(this)) throw __illegalInvocation();
+        __markBodyRead(this);
+        return new __Uint8Array(__handOverBody(this, await __consumeBody(this)));
+      }
+      async text() {
+        if (!__isBody(this)) throw __illegalInvocation();
+        return __bodyText(this);
+      }
+      async json() {
+        if (!__isBody(this)) throw __illegalInvocation();
+        return __jsonParse(await __bodyText(this));
+      }
+      async formData() {
+        if (!__isBody(this)) throw __illegalInvocation();
+        // The undecoded bytes, not `text()`: a UTF-8 decode replaces each invalid
+        // sequence in a binary file part with one U+FFFD, so both the bytes and
+        // the length change.
+        __markBodyRead(this);
+        return __celld.__parseFormData(await __consumeBody(this),
+          __ReflectApply(__HeadersGet, __bodyHeaders(this), ["content-type"]));
+      }
+      async blob() {
+        if (!__isBody(this)) throw __illegalInvocation();
+        __markBodyRead(this);
+        return __bodyBlob(__handOverBody(this, await __consumeBody(this)),
+          __ReflectApply(__HeadersGet, __bodyHeaders(this), ["content-type"]));
+      }
+    });
+  }
+}
+globalThis.Body = Body;
+// The object a Request or a Response is made on, with Body's state: one
+// with `newTarget`'s prototype (Object.prototype when that is not an
+// object, as workerd's), or, without workers_api_getters_setters_on_prototype, an
+// attribute class's instance given that prototype, which carries the
+// table's attributes as its own properties (`__attributeTarget`).
+const __bodyInstance = (newTarget, table) => {
+  let prototype = newTarget.prototype;
+  if (prototype === null ||
+      (typeof prototype !== "object" && typeof prototype !== "function"))
+    prototype = __ObjectPrototype;
+  return new __BodyFields(table === null
+    ? __ObjectCreate(prototype) : __attributeTarget(table, prototype));
+};
+// The whole body, once: a buffered one as it is, a stream read to its end
+// (`__drainBody`). A Response's buffered body whose stream was cancelled is
+// used, as it would be over a socket.
+const __consumeBody = async (target) => {
+  if (__ReflectApply(__WeakSetHas, __handedOverBodies, [target]))
+    throw new TypeError(__BODY_USED);
+  const stream = __bodyStream(target);
+  if (__closedUnread(stream)) return new Uint8Array();
+  const bytes = __bodyBytesRaw(target);
+  if (bytes !== null) {
+    if (__isResponse(target) && stream !== null && stream._cancelled)
+      throw new TypeError(__BODY_USED);
+    return bytes;
+  }
+  return __drainBody(target);
+};
+// A Request's or a Response's headers.
+const __bodyHeaders = (target) => __isRequest(target)
+  ? __requestHeaders(target) : __responseHeaders(target);
+let __ResponseClass;
+// Response's state, which `new __ResponseFields(target)` puts on the object
+// its constructor makes (`__bodyInstance`). Response is a base class, so
+// no script can change what its construction runs by giving it another
+// prototype, and nothing reaches this class.
+class __ResponseFields extends __Stamp {
+  // Read-only, as in workerd, so the socket a response carries is the one it
+  // was made with. Also the brand the RPC envelope classifies by
+  // (`__hostKind`).
+  #webSocket = null;
+  #status = 200;
+  // undefined when the init gave none: `statusText` is then the status's
+  // own text, as workerd's `defaultStatusText` gives it.
+  #statusText = undefined;
+  #headers = null;
+  #redirected = false;
+  #type = "default";
+  #url = "";
+  // undefined when it has none, as workerd's is.
+  #cf = undefined;
+  // The controllers whose signals the requests behind this response see
+  // abort when its body is cancelled (`__attachResponseRequestCancellation`),
+  // and whether its body was wrapped to watch for that.
+  #requestControllers = null;
+  #cancellationWrapped = false;
+  // `encodeBody`: whether a `Content-Encoding: gzip` body is compressed when
+  // it is sent ("automatic") or sent as it is ("manual").
+  #encodeBody = "automatic";
+  static {
+    // workerd's Response: a function, so a call without `new` has workerd's
+    // error, which a class constructor's cannot have. Its members are
+    // defined below, where the state is in reach (`__installMembers`).
+    const Response = function Response(body, init = undefined, origin = undefined) {
+      if (new.target === undefined) throw __calledWithoutNew("Response");
+        const self = new __ResponseFields(__bodyInstance(new.target,
+          __oldAttributes ? __responseAttributes : null));
+        const fromNetwork = origin === __NETWORK_RESPONSE;
+        // Streaming/iterable detection runs only for object bodies, so
+        // the common string path skips every instanceof below.
+        let stream = null;
+        let typed = null;
+        if (body !== null && typeof body === "object") {
+          if (body instanceof __ReadableStream) stream = __usableBody(body, true);
+          else if ((typed = __typedBody(body)) !== null) { /* bytes and type */ }
+          else {
+            stream = __iterableBody(body);
+          }
+        }
+        __setBodyBytesRaw(self, stream !== null
+          ? null
+          : typed ? typed.bytes : __bodyBytes(body));
+        // Hono rebuilds a response after middleware with
+        // `new Response(response.body, response)`; the held stream (or a
+        // fresh CelldBodyStream) preserves the payload across that
+        // standard clone shape.
+        __setBodyStream(self, body == null
+          ? null
+          : stream !== null
+            ? stream
+            : new CelldBodyStream(self));
+        // The init's fields, each read once in the order of workerd's
+        // ResponseInitializerDict; a Response as the init (its other arm) gives
+        // its own, and has no encodeBody to read.
+        let initStatus, initStatusText, initHeaders, initCf, initWebSocket;
+        let encodeBody = "automatic";
+        if (init !== undefined) {
+          if (__isResponse(init)) {
+            initStatus = init.#status;
+            initStatusText = init.#statusText;
+            initHeaders = init.#headers;
+            initCf = init.#cf;
+            initWebSocket = init.#webSocket;
+            encodeBody = init.#encodeBody;
+          } else {
+            initStatus = init.status;
+            initStatusText = init.statusText;
+            initHeaders = init.headers;
+            initCf = init.cf;
+            initWebSocket = init.webSocket;
+            const initEncodeBody = init.encodeBody;
+            if (initEncodeBody !== undefined) {
+              encodeBody = `${initEncodeBody}`;
+              if (encodeBody !== "manual" && encodeBody !== "automatic")
+                throw new TypeError(`encodeBody: unexpected value: ${encodeBody}`);
+            }
+          }
+        }
+        self.#encodeBody = encodeBody;
+        self.#status = initStatus === undefined
+          ? 200
+          : fromNetwork ? Number(initStatus) : __statusOf(initStatus);
+        self.#statusText = initStatusText === undefined ? undefined : String(initStatusText);
+        self.#headers = new __Headers(initHeaders);
+        if (typed && typed.type &&
+            !__ReflectApply(__HeadersHas, self.#headers, ["content-type"]))
+          __ReflectApply(__HeadersSet, self.#headers, ["content-type", typed.type]);
+        const webSocket = initWebSocket ?? null;
+        if (webSocket !== null && !__wsIsSocket(webSocket))
+          throw new TypeError(
+            "Failed to construct 'Response': member webSocket is not of type WebSocket.");
+        self.#webSocket = webSocket;
+        // Workerd admits 101, and only 101, for a response that carries a
+        // WebSocket. A cross-isolate upgrade carries a client end made from the
+        // target.
+        if (fromNetwork) {
+          // As the origin sent it.
+        } else if (webSocket === null) {
+          if (self.#status < 200 || self.#status > 599)
+            throw new RangeError(
+              "Responses may only be constructed with status codes in the range " +
+              "200 to 599, inclusive.");
+        } else if (self.#status !== 101) {
+          throw new RangeError("Responses with a WebSocket must have status code 101.");
+        }
+        self.#cf = initCf;
+        return self;
+    };
+    __installMembers(Response, class {
+      static {
+        __responseEncodeBody = (response) => response.#encodeBody;
+        __setResponseEncodeBody = (response, mode) => { response.#encodeBody = mode; };
+        __isResponse = (value) =>
+          typeof value === "object" && value !== null && #webSocket in value;
+        __responseStatus = (response) => response.#status;
+        __responseStatusText = (response) =>
+          response.#statusText ?? __STATUS_TEXT[response.#status] ?? "";
+        __responseHeaders = (response) => response.#headers;
+        __responseUrl = (response) => response.#url;
+        __setResponseUrl = (response, url) => { response.#url = url; };
+        __responseRedirected = (response) => response.#redirected;
+        __setResponseRedirected = (response, redirected) => {
+          response.#redirected = redirected;
+        };
+        __responseType = (response) => response.#type;
+        __setResponseType = (response, type) => { response.#type = type; };
+        __responseCf = (response) => response.#cf;
+        __responseWebSocket = (response) => response.#webSocket;
+        __responseRequestControllers = (response) => response.#requestControllers;
+        __setResponseRequestControllers = (response, controllers) => {
+          response.#requestControllers = controllers;
+        };
+        __responseCancellationWrapped = (response) => response.#cancellationWrapped;
+        __setResponseCancellationWrapped = (response) => {
+          response.#cancellationWrapped = true;
+        };
+        // Response.error(): status 0, type "error".
+        __makeErrorResponse = () => {
+          const response = new Response(null);
+          response.#status = 0;
+          response.#type = "error";
+          return response;
+        };
+      }
+      static json(data, init = {}) {
+        const headers = new __Headers(init.headers || {});
+        if (!headers.has("content-type"))
+          headers.set("content-type", "application/json");
+        return new Response(JSON.stringify(data), { ...init, headers });
+      }
+      static redirect(url, status = 302) {
+        const input = String(url);
+        const statusCode = Number(status) | 0;
+        if (![301, 302, 303, 307, 308].includes(statusCode)) {
+          throw new RangeError(
+            `${statusCode} is not a redirect status code. ` +
+            "It must be one of: 301, 302, 303, 307, or 308.");
+        }
+        const response = new Response(null, {
+          status: statusCode,
+          headers: { Location: new URL(input).href },
+        });
+        // A redirect response owns a guarded header list. Without the guard, an
+        // application can rewrite Location after construction, which differs
+        // from both Fetch and Workerd even though the initial response is valid.
+        Object.defineProperty(response.#headers, "_immutable", { __proto__: null, value: true });
+        return response;
+      }
+      static error() {
+        return __makeErrorResponse();
+      }
+      // workerd's `Response::clone`: the clone has the body's other branch, a
+      // copy of the headers with their guard, a copy of `cf`, and the same
+      // status, statusText, URL list and type. The constructor's checks don't
+      // apply, as a network response's don't, so `Response.error()` clones.
+      clone() {
+        if (!__isResponse(this)) throw __illegalInvocation();
+        if (this.#webSocket !== null)
+          throw new TypeError("Cannot clone a response to a WebSocket handshake.");
+        const body = __cloneBody(this);
+        const response = __networkResponse(body, {
+          status: this.#status,
+          statusText: this.#statusText,
+          // The list, not the iterator, which combines and lower-cases.
+          headers: __ReflectApply(__HeadersList, this.#headers, []),
+          cf: this.#cf === undefined ? undefined : structuredClone(this.#cf),
+        });
+        if (this.#headers._immutable)
+          Object.defineProperty(response.#headers, "_immutable", { __proto__: null, value: true });
+        response.#type = this.#type;
+        response.#url = this.#url;
+        response.#redirected = this.#redirected;
+        response.#encodeBody = this.#encodeBody;
+        return response;
+      }
+      get status() {
+        if (!__isResponse(this)) throw __illegalInvocation();
+        return this.#status;
+      }
+      get statusText() {
+        if (!__isResponse(this)) throw __illegalInvocation();
+        return __responseStatusText(this);
+      }
+      get headers() {
+        if (!__isResponse(this)) throw __illegalInvocation();
+        return this.#headers;
+      }
+      get ok() {
+        if (!__isResponse(this)) throw __illegalInvocation();
+        return this.#status >= 200 && this.#status <= 299;
+      }
+      get redirected() {
+        if (!__isResponse(this)) throw __illegalInvocation();
+        return this.#redirected;
+      }
+      get url() {
+        if (!__isResponse(this)) throw __illegalInvocation();
+        return this.#url;
+      }
+      get webSocket() {
+        if (!__isResponse(this)) throw __illegalInvocation();
+        return this.#webSocket;
+      }
+      get cf() {
+        if (!__isResponse(this)) throw __illegalInvocation();
+        return this.#cf;
+      }
+      get type() {
+        if (!__isResponse(this)) throw __illegalInvocation();
+        return this.#type;
+      }
+    });
+    __ResponseClass = Response;
+  }
+}
+globalThis.Response = __ResponseClass;
+__ObjectSetPrototypeOf(__ResponseClass.prototype, Body.prototype);
 // Captured as it is defined: a Worker that replaces globalThis.Response
 // must not receive the network token.
 const __NetworkResponse = globalThis.Response;
@@ -952,6 +1406,9 @@ const __subrequestCf = (req) => {
 // builds a Headers from only when they are read, and say whether it has a
 // body (`hasBody`).
 const __requestInits = new __SafeWeakSet();
+// The signals of arrived requests (the client's), which a subrequest made
+// from such a Request, or a copy of it, does not carry.
+const __incomingSignals = new __SafeWeakSet();
 const __requestInit = (fields) => {
   // Without a prototype, so a field it leaves out is not one a script put
   // on Object.prototype.
@@ -976,293 +1433,360 @@ const __requestBodyInit = (body) => {
     return body;
   return __iterableBody(body) ?? `${body}`;
 };
-globalThis.Request = class Request {
+let __RequestClass;
+// Request's state, which `new __RequestFields(target)` puts on the object
+// its constructor makes (`__bodyInstance`). Request is a base class, so
+// no script can change what its construction runs by giving it another
+// prototype, and nothing reaches this class.
+class __RequestFields extends __Stamp {
   // The brand the RPC envelope classifies by (`__hostKind`).
   #brand;
-  // The buffered body, or null for a stream body (`__bodyBytesOf`).
-  #bodyBytes = null;
+  #url;
+  #method;
+  // The headers, or null until they are read: the hot paths -- a hello
+  // world, a Worker that only forwards to a cell -- read none, so `new
+  // Headers` and the JSON.parse behind it never run. `#headersJson` or
+  // `#headersInit` (a raw list) holds them until then.
+  #headers = null;
+  #headersJson = undefined;
+  #headersInit = undefined;
+  #redirect = "follow";
+  // The Fetcher the init gave, which `fetcher` reports (celld sends nothing
+  // through it: plan 1.63).
+  #fetcher = null;
+  // The signal the Request was made with (workerd's `signal`), or null: a
+  // copy and a clone share it, and `signal` reports a signal of the
+  // Request's own without one (`#thisSignal`, made when it is first read).
+  #signal = null;
+  #thisSignal = null;
+  // undefined when it has none, as workerd's is.
+  #cf = undefined;
   // The cache mode: undefined, "no-store" or "no-cache".
   #cache = undefined;
   // Whether the body is one-time, as an arrived request's is, so that a
   // redirect cannot send it again (`__fetchThrough`).
   #oneTimeBody = false;
-  // The signal a subrequest made from this Request carries, or null.
-  #signalForSubrequests = null;
-  // Its own attributes and celld's own fields, defined as fields (not
-  // assigned), so a setter or getter a script put on Object.prototype under
-  // one of these names is not run. `cf` is undefined when it has none, as
-  // workerd's is; `signal` is defined in the constructor, after them.
-  url;
-  method;
-  _body;
-  _headersJson;
-  _headersInit;
-  _headers;
-  _bodyUsed;
-  body;
-  redirect;
-  cf;
+  // `encodeResponseBody`: whether a fetch() decodes a gzip response
+  // ("automatic") or gives its body as it came ("manual").
+  #encodeResponseBody = "automatic";
+  #headersOf() {
+    if (this.#headers === null) {
+      const source = this.#headersJson !== undefined
+        ? __jsonParse(this.#headersJson)
+        : this.#headersInit;
+      this.#headers = new __Headers(source);
+      this.#headersJson = undefined;
+      this.#headersInit = undefined;
+    }
+    return this.#headers;
+  }
   static {
-    __requestOneTimeBody = (request) => request.#oneTimeBody;
-    __requestSubrequestSignal = (request) => request.#signalForSubrequests;
-    __isRequest = (value) =>
-      typeof value === "object" && value !== null && #brand in value;
-    __requestCache = (request) => request.#cache;
-    __requestBodyBytes = (request) => request.#bodyBytes;
-    __setRequestBodyBytes = (request, bytes) => {
-      request.#bodyBytes = bytes;
+    // workerd's Request: a function, so a call without `new` has workerd's
+    // error, which a class constructor's cannot have. Its members are
+    // defined below, where the state is in reach (`__installMembers`).
+    const Request = function Request(input, init = undefined) {
+      if (new.target === undefined) throw __calledWithoutNew("Request");
+        const self = new __RequestFields(__bodyInstance(new.target,
+          __oldAttributes ? __requestAttributes : null));
+        const prior = __isRequest(input) ? input : null;
+        // workerd converts `input` before it reads `init`.
+        const url = prior !== null ? prior.#url : `${input}`;
+        let method, headers, headersJson, redirect, cf, cache, signal, fetcher;
+        let hasBody = false;
+        let body = null;
+        let internal = null;
+        // A Headers this constructor made from a script's init.
+        let madeHeaders = false;
+        if (__ReflectApply(__WeakSetHas, __requestInits, [init])) {
+          internal = init;
+          method = init.method;
+          headers = init.headersList;
+          headersJson = init.headersJson;
+          hasBody = init.hasBody === true;
+          body = init.body;
+          redirect = init.redirect;
+          cf = init.cf;
+          cache = init.cache;
+          signal = init.signal;
+          if (init.encodeResponseBody !== undefined)
+            self.#encodeResponseBody = init.encodeResponseBody;
+          if (cache !== undefined) self.#cache = __requestCacheMode(cache);
+        } else if (init === undefined) {
+          // No init: nothing to read.
+        } else if (__isRequest(init)) {
+          // A Request as the init, RequestInitializer's other arm: its members,
+          // and its cache mode.
+          method = init.#method;
+          headers = init.#headersOf();
+          hasBody = true;
+          body = __bodyStream(init);
+          redirect = init.#redirect;
+          fetcher = init.#fetcher;
+          cf = init.#cf;
+          signal = init.#signal;
+          self.#cache = init.#cache;
+          self.#encodeResponseBody = init.#encodeResponseBody;
+        } else {
+          // A script's RequestInitializerDict: each field read and converted in
+          // the order of its JSG_STRUCT, then checked as its validate() and the
+          // constructor check them.
+          const initMethod = init.method;
+          if (initMethod !== undefined) method = `${initMethod}`;
+          const initHeaders = init.headers;
+          if (initHeaders !== undefined) {
+            headers = new __Headers(initHeaders);
+            madeHeaders = true;
+          }
+          const initBody = init.body;
+          if (initBody !== undefined) {
+            hasBody = true;
+            body = __requestBodyInit(initBody);
+          }
+          const initRedirect = init.redirect;
+          if (initRedirect !== undefined) redirect = `${initRedirect}`;
+          // Kept for `fetcher`; celld sends nothing through it.
+          fetcher = init.fetcher;
+          cf = init.cf;
+          const initCache = init.cache;
+          if (initCache !== undefined) cache = `${initCache}`;
+          const initIntegrity = init.integrity;
+          const integrity = initIntegrity === undefined ? undefined : `${initIntegrity}`;
+          signal = init.signal;
+          const initEncoding = init.encodeResponseBody;
+          const encoding = initEncoding === undefined ? undefined : `${initEncoding}`;
+          if (cache !== undefined) self.#cache = __requestCacheMode(cache);
+          if (cf !== null && typeof cf === "object") __checkCfCacheControl(cf, cache);
+          if (encoding !== undefined && encoding !== "manual" && encoding !== "automatic")
+            throw new TypeError(`encodeResponseBody: unexpected value: ${encoding}`);
+          // A copy of a Request keeps no mode of its input's, as in workerd.
+          if (encoding !== undefined) self.#encodeResponseBody = encoding;
+          if (integrity !== undefined && integrity !== "")
+            throw new TypeError(
+              "Subrequest integrity checking is not implemented. The integrity " +
+              "option must be either undefined or an empty string.");
+        }
+        // A copy keeps the cache mode of the Request it copies, unless its init
+        // gives one; the copy a same-isolate target receives stands for the
+        // request that arrives over HTTP, which has none.
+        if (prior !== null && cache === undefined && !__isRequest(init) &&
+            internal?.received !== true)
+          self.#cache = prior.#cache;
+        // An arrived request's signal is the client's, which aborts when the
+        // client goes away, only under enable_request_signal; without it the
+        // Request has none, as in workerd (worker-entrypoint.c++).
+        if (internal?.incomingSignal) {
+          signal = __cell.compat.requestSignal
+            ? signal ?? new __AbortController().signal : null;
+          if (signal !== null)
+            __ReflectApply(__WeakSetAdd, __incomingSignals, [signal]);
+        }
+        const suppliedSignal = signal !== undefined && signal !== null;
+        self.#url = url;
+        {
+          // Workers upper-cases every method (the
+          // upper_case_all_http_methods flag) but rejects anything outside
+          // the known set, reporting the original casing.
+          const raw = String(method === undefined
+            ? (prior ? prior.#method : "GET") : method);
+          const upper = raw.toUpperCase();
+          if (!__HTTP_METHODS.has(upper))
+            throw new TypeError(`Invalid HTTP method string: ${raw}`);
+          self.#method = upper;
+        }
+        let stream = null;
+        let typed = null;
+        if (hasBody && body !== null && typeof body === "object") {
+          if (body instanceof __ReadableStream) stream = __usableBody(body, false);
+          else if ((typed = __typedBody(body)) !== null) { /* bytes and type */ }
+          else {
+            stream = __iterableBody(body);
+          }
+        }
+        if (!hasBody && prior && __bodyBytesRaw(prior) === null) {
+          // Adopt the prior request's stream; per spec the prior body
+          // is disturbed by the new request.
+          stream = __bodyStream(prior);
+          __setBodyRead(prior, true);
+        }
+        __setBodyBytesRaw(self, stream !== null
+          ? null
+          : hasBody
+            ? (typed ? typed.bytes : __bodyBytes(body))
+            : (prior ? __bodyBytesRaw(prior).slice() : new Uint8Array()));
+        // An incoming request's body is a one-time stream in workerd, even when
+        // celld holds it as bytes, so a redirect can't send it again
+        // (see __fetchThrough). A copy that adopts the body keeps that.
+        self.#oneTimeBody = internal?.oneTimeBody === true ||
+          (!hasBody && prior !== null && prior.#oneTimeBody);
+        // A script's init gave a Headers made above, as workerd converts it.
+        // celld's own inits and a copy keep the raw list or JSON, built into a
+        // Headers on the first read (`#headersOf`).
+        if (headersJson !== undefined) {
+          self.#headersJson = headersJson;
+        } else if (madeHeaders) {
+          self.#headers = headers;
+        } else if (headers === undefined && prior) {
+          // Per spec `new Request(request)` copies the header list. The prior
+          // request's `Headers` object cannot stand in for it: `new Headers(h)`
+          // reads `h` through its iterator, which sorts, lower-cases and
+          // combines, so forwarding a request whose headers were read would
+          // undo the wire shape the outbound paths preserve.
+          if (prior.#headers !== null)
+            self.#headersInit = __ReflectApply(__HeadersList, prior.#headers, []);
+          else if (prior.#headersJson !== undefined)
+            self.#headersJson = prior.#headersJson;
+          else
+            self.#headersInit = prior.#headersInit;
+        } else {
+          self.#headersInit = __celld.__isHeaders(headers)
+            ? __ReflectApply(__HeadersList, headers, []) : headers;
+        }
+        // A typed body's default content-type must land now; only user-built
+        // typed bodies reach this, never the incoming request path.
+        if (typed && typed.type) {
+          const own = self.#headersOf();
+          if (!__ReflectApply(__HeadersHas, own, ["content-type"]))
+            __ReflectApply(__HeadersSet, own, ["content-type", typed.type]);
+        }
+        __setBodyStream(self, stream !== null
+          ? stream
+          : self.#method === "GET" || self.#method === "HEAD"
+            ? null : new CelldBodyStream(self));
+        self.#redirect = redirect === undefined
+          ? (prior ? prior.#redirect : "follow")
+          : __parseRedirectMode(redirect);
+        self.#fetcher = fetcher === undefined
+          ? (prior !== null ? prior.#fetcher : null) : fetcher;
+        self.#cf = cf === undefined ? (prior ? prior.#cf : undefined) : cf;
+        self.#signal = suppliedSignal ? signal
+          : signal === undefined && prior !== null ? prior.#signal : null;
+        return self;
     };
-  }
-  constructor(input, init = undefined) {
-    const prior = input instanceof Request ? input : null;
-    // workerd converts `input` before it reads `init`.
-    const url = prior !== null ? prior.url : `${input}`;
-    let method, headers, headersJson, redirect, cf, cache, signal;
-    let hasBody = false;
-    let body = null;
-    let internal = null;
-    // A Headers this constructor made from a script's init.
-    let madeHeaders = false;
-    if (__ReflectApply(__WeakSetHas, __requestInits, [init])) {
-      internal = init;
-      method = init.method;
-      headers = init.headersList;
-      headersJson = init.headersJson;
-      hasBody = init.hasBody === true;
-      body = init.body;
-      redirect = init.redirect;
-      cf = init.cf;
-      cache = init.cache;
-      signal = init.signal;
-      if (cache !== undefined) this.#cache = __requestCacheMode(cache);
-    } else if (init === undefined) {
-      // No init: nothing to read.
-    } else if (__isRequest(init)) {
-      // A Request as the init, RequestInitializer's other arm: its members,
-      // and its cache mode.
-      method = init.method;
-      headers = init.headers;
-      hasBody = true;
-      body = init.body;
-      redirect = init.redirect;
-      cf = init.cf;
-      signal = init.signal;
-      this.#cache = init.#cache;
-    } else {
-      // A script's RequestInitializerDict: each field read and converted in
-      // the order of its JSG_STRUCT, then checked as its validate() and the
-      // constructor check them.
-      const initMethod = init.method;
-      if (initMethod !== undefined) method = `${initMethod}`;
-      const initHeaders = init.headers;
-      if (initHeaders !== undefined) {
-        headers = new __Headers(initHeaders);
-        madeHeaders = true;
+    __installMembers(Request, class {
+      static {
+        __requestEncodeResponseBody = (request) => request.#encodeResponseBody;
+        __requestOneTimeBody = (request) => request.#oneTimeBody;
+        // The signal a subrequest made from this Request carries: the one it
+        // was made with, unless that is an arrived request's, which workerd
+        // ignores for subrequests (request_signal_passthrough is off).
+        __requestSubrequestSignal = (request) => {
+          const signal = request.#signal;
+          return signal !== null &&
+            !__ReflectApply(__WeakSetHas, __incomingSignals, [signal])
+            ? signal : null;
+        };
+        __isRequest = (value) =>
+          typeof value === "object" && value !== null && #brand in value;
+        // `signal`, read without the public getter.
+        __requestSignalOf = (request) =>
+          request.#signal ?? (request.#thisSignal ??= new __AbortController().signal);
+        __requestCache = (request) => request.#cache;
+        __requestUrl = (request) => request.#url;
+        // A Fetcher sends no fragment (`__fetchThrough`).
+        __setRequestUrl = (request, url) => { request.#url = url; };
+        __requestMethod = (request) => request.#method;
+        __requestRedirect = (request) => request.#redirect;
+        __requestCf = (request) => request.#cf;
+        // The `cf` a subrequest carries (`__subrequestCf`).
+        __setRequestCf = (request, cf) => { request.#cf = cf; };
+        __requestHeaders = (request) => request.#headersOf();
+        // The headers as JSON for the host, without building a Headers that
+        // nothing read.
+        __requestHeadersJson = (request) => request.#headersJson !== undefined
+          ? request.#headersJson
+          : __jsonStringify(__ReflectApply(__HeadersList, request.#headersOf(), []));
+        // The header list a copy or a redirect starts from, raw.
+        __requestHeaderList = (request) => request.#headers !== null
+          ? __ReflectApply(__HeadersList, request.#headers, [])
+          : request.#headersJson !== undefined
+            ? __jsonParse(request.#headersJson)
+            : request.#headersInit;
       }
-      const initBody = init.body;
-      if (initBody !== undefined) {
-        hasBody = true;
-        body = __requestBodyInit(initBody);
+      // workerd's `Request::clone`: the clone has the body's other branch, a
+      // copy of the headers with their guard and of `cf`, and the same method,
+      // URL and redirect mode. It shares the signal the request was made with;
+      // without one, as for a request the Worker received, it has its own.
+      clone() {
+        if (!__isRequest(this)) throw __illegalInvocation();
+        const body = __cloneBody(this);
+        const headers = this.#headersOf();
+        const request = new Request(this.#url, __requestInit({
+          method: this.#method,
+          headersList: __ReflectApply(__HeadersList, headers, []),
+          redirect: this.#redirect,
+          signal: this.#signal ?? undefined,
+          hasBody: body !== null,
+          body,
+          cf: this.#cf === undefined ? undefined : structuredClone(this.#cf),
+        }));
+        request.#cache = this.#cache;
+        request.#fetcher = this.#fetcher;
+        request.#encodeResponseBody = this.#encodeResponseBody;
+        if (headers._immutable)
+          Object.defineProperty(request.#headersOf(), "_immutable", { __proto__: null, value: true });
+        request.#oneTimeBody = this.#oneTimeBody;
+        return request;
       }
-      const initRedirect = init.redirect;
-      if (initRedirect !== undefined) redirect = `${initRedirect}`;
-      // Read, as workerd reads it; celld has no use for a Fetcher here.
-      void init.fetcher;
-      cf = init.cf;
-      const initCache = init.cache;
-      if (initCache !== undefined) cache = `${initCache}`;
-      const initIntegrity = init.integrity;
-      const integrity = initIntegrity === undefined ? undefined : `${initIntegrity}`;
-      signal = init.signal;
-      const initEncoding = init.encodeResponseBody;
-      const encoding = initEncoding === undefined ? undefined : `${initEncoding}`;
-      if (cache !== undefined) this.#cache = __requestCacheMode(cache);
-      if (cf !== null && typeof cf === "object") __checkCfCacheControl(cf, cache);
-      if (encoding !== undefined && encoding !== "manual" && encoding !== "automatic")
-        throw new TypeError(`encodeResponseBody: unexpected value: ${encoding}`);
-      if (integrity !== undefined && integrity !== "")
-        throw new TypeError(
-          "Subrequest integrity checking is not implemented. The integrity " +
-          "option must be either undefined or an empty string.");
-    }
-    // A copy keeps the cache mode of the Request it copies, unless its init
-    // gives one; the copy a same-isolate target receives stands for the
-    // request that arrives over HTTP, which has none.
-    if (prior !== null && cache === undefined && !__isRequest(init) &&
-        internal?.received !== true)
-      this.#cache = prior.#cache;
-    const suppliedSignal = signal !== undefined;
-    this.url = url;
-    {
-      // Workers upper-cases every method (the
-      // upper_case_all_http_methods flag) but rejects anything outside
-      // the known set, reporting the original casing.
-      const raw = String(method === undefined
-        ? (prior ? prior.method : "GET") : method);
-      const upper = raw.toUpperCase();
-      if (!__HTTP_METHODS.has(upper))
-        throw new TypeError(`Invalid HTTP method string: ${raw}`);
-      this.method = upper;
-    }
-    let stream = null;
-    let typed = null;
-    if (hasBody && body !== null && typeof body === "object") {
-      if (body instanceof __ReadableStream) stream = __usableBody(body, false);
-      else if ((typed = __typedBody(body)) !== null) { /* bytes and type */ }
-      else {
-        stream = __iterableBody(body);
+      get method() {
+        if (!__isRequest(this)) throw __illegalInvocation();
+        return this.#method;
       }
-    }
-    if (!hasBody && prior && __bodyBytesOf(prior) === null) {
-      // Adopt the prior request's stream; per spec the prior body
-      // is disturbed by the new request.
-      stream = prior.body;
-      prior._bodyUsed = true;
-    }
-    this.#bodyBytes = stream !== null
-      ? null
-      : hasBody
-        ? (typed ? typed.bytes : __bodyBytes(body))
-        : (prior ? __bodyBytesOf(prior).slice() : new Uint8Array());
-    // An incoming request's body is a one-time stream in workerd, even when
-    // celld holds it as bytes, so a redirect can't send it again
-    // (see __fetchThrough). A copy that adopts the body keeps that.
-    this.#oneTimeBody = internal?.oneTimeBody === true ||
-      (!hasBody && prior !== null && prior.#oneTimeBody);
-    // Body text is decoded on the first text()/json(), not here: a request
-    // whose body is never read never pays the decode.
-    this._body = undefined;
-    // A script's init gave a Headers made above, as workerd converts it.
-    // celld's own inits and a copy keep the raw list or JSON, built into a
-    // Headers on the first `.headers` access: the hot paths -- a hello
-    // world, a Worker that only forwards to a cell -- read none, so
-    // `new Headers` and the JSON.parse behind it never run.
-    this._headers = null;
-    if (headersJson !== undefined) {
-      this._headersJson = headersJson;
-      this._headersInit = undefined;
-    } else if (madeHeaders) {
-      this._headersJson = undefined;
-      this._headersInit = undefined;
-      this._headers = headers;
-    } else if (headers === undefined && prior) {
-      this._headersJson = prior._headersJson;
-      // Per spec `new Request(request)` copies the header list. The prior
-      // request's `Headers` object cannot stand in for it: `new Headers(h)`
-      // reads `h` through its iterator, which sorts, lower-cases and
-      // combines, so forwarding a request whose headers were read would
-      // undo the wire shape the outbound paths preserve.
-      this._headersInit = prior._headers
-        ? prior._headers.__celldHeaderList
-        : prior._headersInit;
-    } else {
-      this._headersJson = undefined;
-      this._headersInit = headers;
-    }
-    // A typed body's default content-type must land now; only user-built
-    // typed bodies reach this, never the incoming request path.
-    if (typed && typed.type && !this.headers.has("content-type")) {
-      this.headers.set("content-type", typed.type);
-    }
-    this._bodyUsed = false;
-    // The body stream and the signal stay eager, own properties: the RPC and
-    // storage serializers fall back to the lift-into-marker path only when a
-    // value is not directly structured-cloneable, and a Request's un-cloneable
-    // body stream (or AbortSignal) is what triggers that. Making them lazy
-    // getters let `__sc_encode` clone the Request into a broken plain object
-    // and skip the lift -- the serializeHttpTypes conformance failure.
-    this.body = stream !== null
-      ? stream
-      : ["GET", "HEAD"].includes(this.method)
-        ? null : new CelldBodyStream(this);
-    this.redirect = redirect === undefined
-      ? (prior ? prior.redirect : "follow")
-      : __parseRedirectMode(redirect);
-    const ownCf = cf === undefined
-      ? (prior ? prior.cf : undefined) : cf;
-    this.cf = ownCf;
-    __defineData(this, "signal", suppliedSignal
-      ? signal
-      : (prior ? prior.signal : new __AbortController().signal));
-    this.#signalForSubrequests = internal?.incomingSignal
-      ? null
-      : suppliedSignal
-        ? this.signal
-        : (prior ? prior.#signalForSubrequests : null);
+      get url() {
+        if (!__isRequest(this)) throw __illegalInvocation();
+        return this.#url;
+      }
+      get headers() {
+        if (!__isRequest(this)) throw __illegalInvocation();
+        return this.#headersOf();
+      }
+      get redirect() {
+        if (!__isRequest(this)) throw __illegalInvocation();
+        return this.#redirect;
+      }
+      get fetcher() {
+        if (!__isRequest(this)) throw __illegalInvocation();
+        return this.#fetcher;
+      }
+      get signal() {
+        if (!__isRequest(this)) throw __illegalInvocation();
+        return __requestSignalOf(this);
+      }
+      get cf() {
+        if (!__isRequest(this)) throw __illegalInvocation();
+        return this.#cf;
+      }
+      get integrity() {
+        if (!__isRequest(this)) throw __illegalInvocation();
+        return "";
+      }
+      get keepalive() {
+        if (!__isRequest(this)) throw __illegalInvocation();
+        return false;
+      }
+    });
+    __RequestClass = Request;
   }
-  get headers() {
-    if (this._headers === null) {
-      const src = this._headersJson !== undefined
-        ? __jsonParse(this._headersJson)
-        : this._headersInit;
-      this._headers = new __Headers(src);
-      this._headersJson = undefined;
-      this._headersInit = undefined;
-    }
-    return this._headers;
-  }
-  set headers(value) {
-    this._headers = __celld.__isHeaders(value) ? value : new __Headers(value);
-    this._headersJson = undefined;
-    this._headersInit = undefined;
-  }
-  async _consume() {
-    if (__handedOverBodies.has(this)) throw new TypeError(__BODY_USED);
-    if (__closedUnread(this.body)) return new Uint8Array();
-    if (__bodyBytesOf(this) !== null) return __bodyBytesOf(this);
-    return __drainBody(this);
-  }
-  async text() {
-    __markBodyRead(this);
-    const bytes = await this._consume();
-    return this._body ??= new TextDecoder().decode(bytes);
-  }
-  async json() { return JSON.parse(await this.text()); }
-  async formData() {
-    // The undecoded bytes, not `text()`: a UTF-8 decode replaces each invalid
-    // sequence in a binary file part with one U+FFFD, so both the bytes and
-    // the length change.
-    __markBodyRead(this);
-    return __celld.__parseFormData(
-      await this._consume(), this.headers.get('content-type'));
-  }
-  async arrayBuffer() {
-    __markBodyRead(this);
-    return __handOverBody(this, await this._consume());
-  }
-  // workerd's `Body::bytes`: the body as a Uint8Array over a buffer of its
-  // own, which `arrayBuffer()` hands over.
-  async bytes() {
-    __markBodyRead(this);
-    return new __Uint8Array(__handOverBody(this, await this._consume()));
-  }
-  async blob() {
-    return __bodyBlob(await this.arrayBuffer(),
-      this.headers.get("content-type"));
-  }
-  get bodyUsed() { return __bodyUsed(this); }
-  // workerd's `Request::clone`: the clone has the body's other branch, a
-  // copy of the headers with their guard and of `cf`, and the same method,
-  // URL and redirect mode. It shares the signal the request was made with;
-  // without one, as for a request the Worker received, it has its own.
-  clone() {
-    const body = __cloneBody(this);
-    const request = new Request(this.url, __requestInit({
-      method: this.method,
-      headersList: this.headers.__celldHeaderList,
-      redirect: this.redirect,
-      signal: this.#signalForSubrequests ?? undefined,
-      hasBody: body !== null,
-      body,
-      cf: this.cf === undefined ? undefined : structuredClone(this.cf),
-    }));
-    request.#cache = this.#cache;
-    if (this.headers._immutable)
-      Object.defineProperty(request.headers, "_immutable", { __proto__: null, value: true });
-    request.#oneTimeBody = this.#oneTimeBody;
-    return request;
-  }
-};
+}
+globalThis.Request = __RequestClass;
+__ObjectSetPrototypeOf(__RequestClass.prototype, Body.prototype);
+// The attributes of a Request and a Response, as workerd orders them on an
+// instance (`__attributeTable`).
+const __requestAttributes = __attributeTable([
+  [Request.prototype, "keepalive"], [Request.prototype, "integrity"],
+  [Request.prototype, "cf"], [Request.prototype, "signal"],
+  [Request.prototype, "fetcher"], [Request.prototype, "redirect"],
+  [Request.prototype, "headers"], [Request.prototype, "url"],
+  [Request.prototype, "method"], [Body.prototype, "bodyUsed"],
+  [Body.prototype, "body"],
+]);
+const __responseAttributes = __attributeTable([
+  [Response.prototype, "type"], [Response.prototype, "cf"],
+  [Response.prototype, "webSocket"], [Response.prototype, "url"],
+  [Response.prototype, "redirected"], [Response.prototype, "ok"],
+  [Response.prototype, "headers"], [Response.prototype, "statusText"],
+  [Response.prototype, "status"], [Body.prototype, "bodyUsed"],
+  [Body.prototype, "body"],
+]);
 const __makeRequest = __celld.__makeRequest = (
   url, method, body, headersJson = "[]", signal = undefined,
   incomingSignal = false,
@@ -1323,18 +1847,19 @@ const __subrequestBody = async (req, absent = false) => {
   if (__bodyBytesOf(req) !== null)
     return { body: __bodyBytesOf(req), streamId: undefined };
   __unlockedBody(req);
-  const streamId = __hostStreamId(req.body);
+  const stream = __bodyStream(req);
+  const streamId = __hostStreamId(stream);
   if (streamId === undefined) {
-    req._bodyUsed = true;
-    return { body: await req._consume(), streamId: undefined };
+    __setBodyRead(req, true);
+    return { body: await __consumeBody(req), streamId: undefined };
   }
   // The receiver now owns the one host source. Lock the wrapper so a later
   // read fails instead of racing the receiver, and expose the transfer through
   // the standard Body flag, and on the stream: a Response whose body was sent
   // on reads as used, as in workerd.
-  req._bodyUsed = true;
-  req.body._disturbed = true;
-  req.body.getReader();
+  __setBodyRead(req, true);
+  stream._disturbed = true;
+  stream.getReader();
   return { body: new Uint8Array(), streamId };
 };
 // A data: URL carries its response inline; RFC 2397 percent-decoding
@@ -1396,6 +1921,9 @@ const __HeadersSet = Headers.prototype.set;
 const __HeadersList =
   Object.getOwnPropertyDescriptor(Headers.prototype, "__celldHeaderList").get;
 const __StreamCancel = ReadableStream.prototype.cancel;
+const __StreamGetReader = ReadableStream.prototype.getReader;
+const __ReaderRead = ReadableStreamDefaultReader.prototype.read;
+const __ReaderCancel = ReadableStreamDefaultReader.prototype.cancel;
 const __StringIndexOf = String.prototype.indexOf;
 const __StringSlice = String.prototype.slice;
 // workerd's limit (MAX_REDIRECT_COUNT in api/http.c++, the Fetch Standard's
@@ -1428,44 +1956,44 @@ const __withoutFragment = (url) => {
 // copy, made by its fetch(), so it is changed in place.
 const __fetchThrough = async (req, send) => {
   // A Fetcher sends no fragment.
-  req.url = __withoutFragment(req.url);
+  __setRequestUrl(req, __withoutFragment(__requestUrl(req)));
   // What the cache mode and `cf` make of the subrequest, as workerd's
   // fetch() sends it: the cf it carries, then Cache-Control and Pragma
   // `no-cache` unless the request has its own.
   const subrequestCf = __subrequestCf(req);
-  if (subrequestCf !== req.cf) __defineData(req, "cf", subrequestCf);
+  if (subrequestCf !== __requestCf(req)) __setRequestCf(req, subrequestCf);
   if (__requestCache(req) !== undefined) {
-    const headers = req.headers;
+    const headers = __requestHeaders(req);
     for (const name of ["cache-control", "pragma"]) {
       if (!__ReflectApply(__HeadersHas, headers, [name]))
         __ReflectApply(__HeadersSet, headers, [name, "no-cache"]);
     }
   }
   const chain = { __proto__: null };
-  if (req.redirect !== "follow")
-    return __fetchedFrom(await send(req, chain), [req.url]);
+  if (__requestRedirect(req) !== "follow")
+    return __fetchedFrom(await send(req, chain), [__requestUrl(req)]);
   // What a hop sends again, read before `send`, which can take over the body.
   // A byte body is never consumed in place: every send copies it. No send
   // changes `req`'s headers, so they are read only once a redirect needs them.
-  const replayable = req.body === null ||
+  const replayable = __bodyStream(req) === null ||
     (__bodyBytesOf(req) !== null && !__requestOneTimeBody(req));
-  let body = req.body === null ? undefined : __bodyBytesOf(req);
-  let method = req.method;
+  let body = __bodyStream(req) === null ? undefined : __bodyBytesOf(req);
+  let method = __requestMethod(req);
   const signal = __requestSubrequestSignal(req);
-  const cf = req.cf;
-  const urls = [req.url];
+  const cf = __requestCf(req);
+  const urls = [__requestUrl(req)];
   let response = await send(req, chain);
   let headers = null;
   for (;;) {
-    const status = response.status;
+    const status = __responseStatus(response);
     if (!__isRedirectStatus(status)) break;
-    const location = __ReflectApply(__HeadersGet, response.headers, ["location"]);
+    const location = __ReflectApply(__HeadersGet, __responseHeaders(response), ["location"]);
     if (location === null) break;
     // Nobody can read the redirect's body after this. Cancelling it releases
     // a cross-isolate body stream instead of waiting for its idle TTL.
-    if (response.body !== null) {
+    if (__bodyStream(response) !== null) {
       try {
-        await __ReflectApply(__StreamCancel, response.body, []);
+        await __ReflectApply(__StreamCancel, __bodyStream(response), []);
       } catch { /* the redirect still wins */ }
     }
     const current = urls[urls.length - 1];
@@ -1480,9 +2008,7 @@ const __fetchThrough = async (req, send) => {
       for (let at = 1; at < urls.length; at++) list += ", " + urls[at];
       throw new TypeError("Too many redirects." + list);
     }
-    headers ??= new __Headers(req._headersJson !== undefined
-      ? __jsonParse(req._headersJson)
-      : __ReflectApply(__HeadersList, req.headers, []));
+    headers ??= new __Headers(__requestHeaderList(req));
     if (__ReflectApply(__URLOrigin, next, []) !==
         __ReflectApply(__URLOrigin, new __URL(current), []))
       __ReflectApply(__HeadersDelete, headers, ["authorization"]);
@@ -1509,8 +2035,8 @@ const __fetchThrough = async (req, send) => {
   return __fetchedFrom(response, urls);
 };
 const __fetchedFrom = (response, urls) => {
-  response.url = urls[urls.length - 1];
-  response.redirected = urls.length > 1;
+  __setResponseUrl(response, urls[urls.length - 1]);
+  __setResponseRedirected(response, urls.length > 1);
   return response;
 };
 globalThis.fetch = async (input, init) => {
@@ -1596,8 +2122,8 @@ const __fetchNetwork = async (req, chain, container) => {
   );
   // The server's headers, which the Worker can read but not change.
   Object.defineProperty(response.headers, "_immutable", { __proto__: null, value: true });
-  response.url = req.url;
-  return response;
+  __setResponseUrl(response, __requestUrl(req));
+  return __receivedResponse(response, req);
 };
 const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
   async (req, container) => {
@@ -1650,12 +2176,12 @@ const __fetchWebSocketUpgrade = __celld.__fetchWebSocketUpgrade =
       headers: raw.headers,
     });
     Object.defineProperty(response.headers, "_immutable", { __proto__: null, value: true });
-    response.url = req.url;
-    return response;
+    __setResponseUrl(response, __requestUrl(req));
+    return __receivedResponse(response, req);
   }
   state.protocol = raw.protocol ?? "";
   const response = new __Response(null, __responseInit({ status: 101, webSocket: socket }));
-  response.url = req.url;
+  __setResponseUrl(response, __requestUrl(req));
   return response;
 };
 __celld.__makeAssetsBinding = (script) => {
@@ -1706,7 +2232,7 @@ const __r2Reject = (bucket, method, detail) => {
 // here too rather than quietly written.
 const __r2Key = (binding, method, key) => {
   const text = String(key);
-  const length = new TextEncoder().encode(text).length;
+  const length = __encodeUtf8(text).length;
   if (length === 0 || length > 1024) {
     throw new Error(
       `R2 ${method} (binding ${binding}): a key is 1 to 1024 bytes, not ${length}`,
@@ -1823,12 +2349,12 @@ const __r2Range = (binding, value) => {
 };
 // R2 hashes an object's bytes and hands the digests back as
 // `ArrayBuffer`s, with a `toJSON()` that spells them in hex.
+const __R2_CHECKSUMS = ["md5", "sha1", "sha256", "sha384", "sha512"];
 const __r2Checksums = (hex) => {
   const checksums = {
+    // workerd's StringChecksums struct, each digest optional.
     toJSON() {
-      const json = {};
-      for (const [name, digest] of Object.entries(hex)) json[name] = digest;
-      return json;
+      return __celld.__struct(__R2_CHECKSUMS.map((name) => [name, hex[name], true]));
     },
   };
   for (const [name, digest] of Object.entries(hex)) {
@@ -1838,11 +2364,14 @@ const __r2Checksums = (hex) => {
 };
 // One object as R2 describes it. `object` is the host's record; `body`,
 // when there is one, makes this an `R2ObjectBody`.
+const __R2_HTTP_METADATA = ["contentType", "contentLanguage",
+  "contentDisposition", "contentEncoding", "cacheControl", "cacheExpiry"];
 const __r2Object = (object, body) => {
-  const http = { ...object.http };
-  if (http.cacheExpiry !== undefined) {
-    http.cacheExpiry = new Date(http.cacheExpiry);
-  }
+  // workerd's HttpMetadata struct, each member optional.
+  const stored = object.http ?? {};
+  const http = __celld.__struct(__R2_HTTP_METADATA.map((name) => [name,
+    name === "cacheExpiry" && stored[name] !== undefined
+      ? new Date(stored[name]) : stored[name], true]));
   const etag = object.etag ? String(object.etag).replace(/^"|"$/g, "") : "";
   const r2 = {
     key: object.key,
@@ -1872,7 +2401,12 @@ const __r2Object = (object, body) => {
       }
     },
   };
-  if (object.range) r2.range = { ...object.range };
+  // workerd's Range struct.
+  if (object.range) r2.range = __celld.__struct([
+    ["offset", object.range.offset, true],
+    ["length", object.range.length, true],
+    ["suffix", object.range.suffix, true],
+  ]);
   if (!body) return r2;
   // The body's length: the object's size, or the range of it that was read.
   const range = object.range;
@@ -1945,7 +2479,7 @@ const __r2WriteOptions = (binding, method, options) => {
 // to feed the host chunk by chunk. R2 takes all of these.
 const __r2Value = async (binding, value) => {
   if (value === undefined || value === null) return new Uint8Array(0);
-  if (typeof value === "string") return new TextEncoder().encode(value);
+  if (typeof value === "string") return __encodeUtf8(value);
   if (value instanceof Uint8Array) return value;
   if (ArrayBuffer.isView(value)) {
     return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
@@ -2087,11 +2621,14 @@ __celld.__makeR2Bucket = (binding, bucketName) => ({
       if (!include.includes("customMetadata")) object.custom = {};
       return __r2Object(object);
     });
-    // R2 omits `cursor` entirely when the listing is complete, and callers
-    // test `truncated` before reading it.
-    const page = { objects, truncated: r.truncated, delimitedPrefixes: r.prefixes };
-    if (r.truncated && r.cursor) page.cursor = r.cursor;
-    return page;
+    // workerd's ListResult struct: `cursor` only when the listing is
+    // truncated.
+    return __celld.__struct([
+      ["objects", objects],
+      ["truncated", r.truncated],
+      ["cursor", r.truncated && r.cursor ? r.cursor : undefined, true],
+      ["delimitedPrefixes", r.prefixes],
+    ]);
   },
   async createMultipartUpload(key, options) {
     const name = __r2Key(binding, "createMultipartUpload", key);
@@ -2130,39 +2667,43 @@ __celld.__makeR2Bucket = (binding, bucketName) => ({
 // round. `__timers` maps the id the caller holds to the op that is armed
 // right now: for a timeout that is the same id, and for an interval it is a
 // fresh id each round. Clearing therefore cancels the armed op, not the id.
-const __timers = new Map();
+const __timers = new __SafeMap();
+const __timerThen = Promise.prototype.then;
+// A timer's callback runs with the global scope as `this`, as workerd's
+// does under either timers flag.
+const __timerThis = globalThis;
 const __clearTimer = (id) => {
-  const armed = __timers.get(id);
+  const armed = __ReflectApply(__MapGet, __timers, [id]);
   if (armed === undefined) return;
-  __timers.delete(id);
+  __ReflectApply(__MapDelete, __timers, [id]);
   __timer_cancel(armed);
 };
 const __armTimeout = (cb, ms, a) => {
   const id = __timer_alloc();
-  __timers.set(id, id);
-  __op_timer(id, ms | 0).then(() => {
-    if (!__timers.delete(id)) return;
-    cb(...a);
-  });
+  __ReflectApply(__MapSet, __timers, [id, id]);
+  __ReflectApply(__timerThen, __op_timer(id, ms | 0), [() => {
+    if (!__ReflectApply(__MapDelete, __timers, [id])) return;
+    __ReflectApply(cb, __timerThis, a);
+  }]);
   return id;
 };
 const __armInterval = (cb, ms, a) => {
   const id = __timer_alloc();
   const delay = ms | 0;
   const arm = (armed) => {
-    __timers.set(id, armed);
-    __op_timer(armed, delay).then(() => {
+    __ReflectApply(__MapSet, __timers, [id, armed]);
+    __ReflectApply(__timerThen, __op_timer(armed, delay), [() => {
       // Cancelling drops the entry and cancelling then re-arming replaces
       // it, so a round whose op is no longer the armed one is dead and
       // stops here. A cancelled op still resolves, which is why this test
       // is on identity and not on the op alone.
-      if (__timers.get(id) !== armed) return;
+      if (__ReflectApply(__MapGet, __timers, [id]) !== armed) return;
       // Arm the next round before the callback runs. A `clearInterval`
       // inside the callback must end the interval, and arming after the
       // callback would undo it.
       arm(__timer_alloc());
-      cb(...a);
-    });
+      __ReflectApply(cb, __timerThis, a);
+    }]);
   };
   arm(id);
   return id;
@@ -2459,12 +3000,10 @@ class SqlCursor {
       throw new Error("Expected exactly one result from SQL query, but got multiple results");
     return first.value;
   }
-  *raw() {
-    while (true) {
-      const result = this.#nextRaw();
-      if (result.done) return;
-      yield result.value;
-    }
+  // workerd's raw iterator (JSG_ITERATOR): rows as arrays, and steps as its
+  // `Next` struct.
+  raw() {
+    return new __SqlRawIterator(() => this.#nextRaw());
   }
   get columnNames() { return this.#columns; }
   get rowsRead() { return this.#rowsRead; }
@@ -2472,10 +3011,21 @@ class SqlCursor {
   get reusedCachedQueryForTest() { return this.#reusedCachedQuery; }
   next() {
     const result = this.#nextRaw();
-    return result.done ? result : { done: false, value: this.#obj(result.value) };
+    return result.done ? __celld.__iterResult(true)
+      : __celld.__iterResult(false, this.#obj(result.value));
   }
   [Symbol.iterator]() { return this; }
 }
+class __SqlRawIterator {
+  #step;
+  constructor(step) { this.#step = step; }
+  next() {
+    const result = this.#step();
+    return __celld.__iterResult(result.done, result.value);
+  }
+}
+__ObjectSetPrototypeOf(__SqlRawIterator.prototype,
+  __ObjectGetPrototypeOf(__ObjectGetPrototypeOf([][Symbol.iterator]())));
 // The state is private, and only the root storage object constructs one
 // ("Illegal constructor").
 class SqlStorage {
@@ -2599,9 +3149,9 @@ class SyncKvListIterator {
     }
     const value =
       __storage_sync_list_next(this.#cursor, __storedSentinel);
-    if (value === null) return { done: true, value: undefined };
+    if (value === null) return __celld.__iterResult(true);
     value[1] = __unwrapStored(value[1]);
-    return { done: false, value };
+    return __celld.__iterResult(false, value);
   }
 }
 class SyncKvStorage {
@@ -3541,7 +4091,7 @@ class DurableObjectFacets {
   }
   #validName(name) {
     name = String(name);
-    if (new TextEncoder().encode(name).length > 256)
+    if (__encodeUtf8(name).length > 256)
       throw new TypeError("Facet name is too long (max 256 characters).");
     return name;
   }
@@ -3619,11 +4169,13 @@ class DurableObjectFacets {
       // The facet's socket lives in the facet's isolate. The target lets
       // the root return the upgrade, or accept the client end that the
       // wrapper binds to the facet's socket.
+      // As its target sent it (`__wrapServiceResponse`).
       return __wrapServiceResponse(new __Response(responseBody, __responseInit({
         status: response.status,
         headers: response.headers,
         webSocket: __responseSocket(response),
-      })), req.url);
+        encodeBody: "manual",
+      })), req);
     };
     target.fetch = async function(input, init) {
       return invoke((started) => __fetchThrough(
@@ -3717,6 +4269,9 @@ const __Uint8Array = Uint8Array;
 const __ArrayBuffer = ArrayBuffer;
 const __ArrayBufferIsView = ArrayBuffer.isView;
 const __PromiseThen = Promise.prototype.then;
+const __PromiseResolveFn = Promise.resolve;
+const __SafePromise = Promise;
+const __PromiseResolve = () => __ReflectApply(__PromiseResolveFn, __SafePromise, []);
 const __PromiseAll = Promise.all.bind(Promise);
 const __RegExpTest = RegExp.prototype.test;
 // Settle a host promise nobody waits on, without its `catch` a Worker could
@@ -3724,6 +4279,24 @@ const __RegExpTest = RegExp.prototype.test;
 const __ignoreRejection = (promise) => {
   __ReflectApply(__PromiseThen, promise, [undefined, () => {}]);
 };
+// The intrinsics a lazily compiled builtin (compression_streams.js) uses,
+// which run after the Worker's code could have replaced the globals.
+__celld.__intrinsics = Object.freeze({
+  __proto__: null,
+  ReflectApply: __ReflectApply, Promise: __SafePromise, PromiseThen: __PromiseThen,
+  PromiseWithResolvers: Promise.withResolvers,
+  Uint8Array: __Uint8Array,
+  ArrayBuffer: __ArrayBuffer, ArrayBufferIsView: __ArrayBufferIsView,
+  TypeError, TransformStream, ObjectSetPrototypeOf: __ObjectSetPrototypeOf,
+  TransformStreamReadable:
+    Object.getOwnPropertyDescriptor(TransformStream.prototype, "readable").get,
+  TransformStreamWritable:
+    Object.getOwnPropertyDescriptor(TransformStream.prototype, "writable").get,
+  StreamGetReader: ReadableStream.prototype.getReader,
+  ReaderCancel: ReadableStreamDefaultReader.prototype.cancel,
+  ReaderClosed:
+    Object.getOwnPropertyDescriptor(ReadableStreamDefaultReader.prototype, "closed").get,
+});
 const __containerEnvList = (env) => {
   const list = [];
   if (env === undefined || env === null) return list;
@@ -4469,7 +5042,7 @@ class DurableObjectState {
         "'WebSocketRequestResponsePair'.",
       );
     const max = 2048;
-    const bytes = (s) => new TextEncoder().encode(s).length;
+    const bytes = (s) => __encodeUtf8(s).length;
     const requestSize = bytes(pair.request);
     if (requestSize > max)
       throw new RangeError(
@@ -4538,6 +5111,19 @@ const __currentActorEvent = () => {
   return undefined;
 };
 const __currentActorScope = () => __currentActorEvent()?.scope ?? "";
+// What a function AsyncLocalStorage binds belongs to under
+// bind_asynclocalstorage_snapshot_to_request (async-hooks.c++
+// getIoContextId): the request it was made in, or, in a Durable Object,
+// whose requests share one IoContext in workerd, the object's state, so it
+// runs in every request of that object. "" at module scope.
+__celld.__asyncContextOwner = () => {
+  const scope = __currentActorScope();
+  if (scope !== "") {
+    const inst = __cell.instances[scope];
+    if (inst) return __instanceState(inst);
+  }
+  return String(__io_context_id());
+};
 const __beginActorEvent = (scope) => {
   __rpcSignalRefresh();
   const event = { scope, context: String(__io_context_id()) };
@@ -4554,26 +5140,35 @@ const __endActorEventsForContext = (context) => {
       __actorEventStack.splice(index, 1);
   }
 };
-const __incomingRequestSignals = new Map();
+const __incomingRequestSignals = new __SafeMap();
+// What an arrived request's signal aborts with when its client goes away,
+// as workerd's (worker-entrypoint.c++).
+const __clientDisconnected = () =>
+  new __DOMException("The client has disconnected", "AbortError");
 const __abortSignal = (signal, reason) => {
   if (signal.aborted) return;
-  signal.aborted = true;
-  signal.reason = reason;
-  signal.dispatchEvent(new Event("abort"));
+  __setSignalAborted(signal, reason);
+  const event = new Event("abort");
+  __eventTrust(event);
+  __dispatchEvent(signal, event, __specPolicy());
 };
 const __abortIncomingRequest = __celld.__abortIncomingRequest = (requestId) => {
-  const signal = __incomingRequestSignals.get(String(requestId));
+  const signal = __ReflectApply(__MapGet, __incomingRequestSignals, [String(requestId)]);
   if (signal && !signal.aborted) {
-    __abortSignal(signal, new Error("The client has disconnected"));
+    __abortSignal(signal, __clientDisconnected());
     return true;
   }
   return false;
 };
+// Without enable_request_signal an arrived request has no client signal,
+// so there is nothing to abort.
 __celld.__registerIncomingRequest = (requestId, request) => {
-  __incomingRequestSignals.set(String(requestId), request.signal);
+  if (__cell.compat.requestSignal)
+    __ReflectApply(__MapSet, __incomingRequestSignals,
+      [String(requestId), __requestSignalOf(request)]);
 };
 __celld.__finishIncomingRequest = (requestId) => {
-  __incomingRequestSignals.delete(String(requestId));
+  __ReflectApply(__MapDelete, __incomingRequestSignals, [String(requestId)]);
 };
 __celld.__retireInputGateContext = (context) => {
   for (const [scope, block] of __cellBlocks) {
@@ -4700,35 +5295,59 @@ const __STATUS_TEXT = {
 const __ERROR_RESPONSE_MESSAGE =
   "Return value from serve handler must not be an error " +
   "response (like Response.error())";
-const __wrapServiceResponse = (res, url) => {
+const __wrapServiceResponse = (res, req) => {
+  const url = __requestUrl(req);
   // A handler's result that is not a Response, whatever it is shaped like,
   // is refused as workerd refuses it (`__readResponse`).
   if (!__isPlainResponse(res)) throw new TypeError(__NOT_A_RESPONSE);
   // Response.error() represents a Fetch network error, not an HTTP response.
   // Letting status 0 cross this seam turns it into an ordinary response and
   // makes callers continue after the target explicitly reported failure.
-  if (res.type === "error" || res.status === 0) {
+  const status = __responseStatus(res);
+  if (__responseType(res) === "error" || status === 0) {
     throw new TypeError(__ERROR_RESPONSE_MESSAGE);
   }
   // A 101 that crossed isolates carries a client end the host joins to the
   // target, on the same terms as a Durable Object subrequest -- nothing binds
   // until `accept()`, so a response passed straight back out keeps the
   // direct route to the real client.
+  // Content-Encoding (`__gzipEncoded`), as if the response crossed HTTP: a
+  // target's response sent with "automatic" is compressed and a caller's
+  // fetch() with "automatic" decodes it, so the body passes as it is when
+  // both are "automatic" or both "manual"; a target's "manual" body is
+  // decoded for an "automatic" caller, and an "automatic" one compressed
+  // for a "manual" caller. A response another isolate answered arrives as
+  // "manual": its target already encoded it.
+  // The response to a HEAD request, or with a null body status, has none
+  // (`__receivedResponse`).
+  let body = __bodyBytesOf(res) !== null ? __bodyBytesOf(res) : __bodyStream(res);
+  const mode = __requestEncodeResponseBody(req);
+  if (body !== null && (__requestMethod(req) === "HEAD" || __nullBodyStatus(status))) {
+    if (__isReadableStream(body) && !body.locked) {
+      try {
+        __ignoreRejection(__ReflectApply(__StreamCancel, body, []));
+      } catch {}
+    }
+    body = null;
+  } else if (body !== null && __responseEncodeBody(res) !== mode &&
+      __gzipEncoded(__responseHeaders(res)))
+    body = mode === "automatic" ? new CelldGzipBodyStream(body) : __gzipBody(body);
   const wrapped = new __Response(
     // Buffered bodies re-stream (an empty buffer still yields a
     // stream, as over real HTTP); a streaming body passes through.
-    __bodyBytesOf(res) !== null ? __bodyBytesOf(res) : res.body,
+    body,
     __responseInit({
-      status: res.status,
+      status,
       statusText:
-        res.statusText || __STATUS_TEXT[res.status] || "",
-      headers: res.headers,
-      webSocket: res.webSocket,
+        __responseStatusText(res) || __STATUS_TEXT[status] || "",
+      headers: __responseHeaders(res),
+      webSocket: __responseWebSocket(res),
+      encodeBody: mode,
     }),
   );
   // The constructor copies headers, so mark the copy.
-  Object.defineProperty(wrapped.headers, "_immutable", { __proto__: null, value: true });
-  wrapped.url = url;
+  Object.defineProperty(__responseHeaders(wrapped), "_immutable", { __proto__: null, value: true });
+  __setResponseUrl(wrapped, url);
   // An upgraded pair whose both ends live in this isolate: link them
   // directly -- the host connection seam only reaches external
   // clients. Frames the handler queued before linking flush first.
@@ -4855,13 +5474,15 @@ __celld.__makeLoader = () => {
       const responseBody = r.streamId !== undefined
         ? new CelldHttpBodyStream(r.streamId)
         : r.body !== undefined ? r.body : Uint8Array.from(r.bodyBytes || []);
+      // As its target sent it (`__wrapServiceResponse`).
       return __wrapServiceResponse(
         new __Response(responseBody, __responseInit({
           status: r.status,
           headers: r.headers,
           webSocket: __responseSocket(r),
+          encodeBody: "manual",
         })),
-        req.url);
+        req);
     };
     const target = {
       async fetch(input, init) {
@@ -5214,35 +5835,45 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
         propsSc ?? null);
       const response = signal
         ? await __raceCallerAbort(dispatch, signal, () =>
-            requestController.abort(
-              new Error("The client has disconnected")))
+            requestController.abort(__clientDisconnected()))
         : await dispatch;
       __attachResponseRequestCancellation(
         response, requestController, true);
-      return __wrapServiceResponse(response, req.url);
+      return __wrapServiceResponse(response, req);
     }
     if (script === __cell.script && entrypoint === null &&
         typeof __cell.selfFetch === "function") {
       if (__cell.svcDepth >= 8)
         throw new Error(
           "Service binding recursion limit exceeded (8)");
+      // As above: the target gets an incoming request's signal and redirect
+      // mode (see __makeRequest), so it needs its own Request rather than
+      // the caller's, and an abandoned call rejects at once.
+      const requestController = new AbortController();
+      const incoming = framed(new __Request(req, __requestInit({
+        signal: requestController.signal,
+        redirect: "manual",
+        received: true,
+        incomingSignal: true,
+      })));
       __cell.svcDepth = (__cell.svcDepth || 0) + 1;
       const ctx = __beginEvent();
-      try {
-        // The target gets an incoming request's redirect mode (see
-        // __makeRequest), so it needs its own Request rather than the
-        // caller's.
-        const incoming = framed(new __Request(req, __requestInit({
-          redirect: "manual", received: true,
-        })));
-        return __wrapServiceResponse(
-          await __ctxRun(undefined,
-            () => __cell.selfFetch(incoming, __cell.env, ctx)),
-          req.url);
-      } finally {
-        __cell.svcDepth--;
-        __endEvent();
-      }
+      const dispatch = (async () => {
+        try {
+          return await __ctxRun(undefined,
+            () => __cell.selfFetch(incoming, __cell.env, ctx));
+        } finally {
+          __cell.svcDepth--;
+          __endEvent();
+        }
+      })();
+      const response = signal
+        ? await __raceCallerAbort(dispatch, signal, () =>
+            requestController.abort(__clientDisconnected()))
+        : await dispatch;
+      __attachResponseRequestCancellation(
+        response, requestController, true);
+      return __wrapServiceResponse(response, req);
     }
     // The verbatim header list; see the note on the outbound `fetch`. The
     // target isolate rebuilds a `Headers` from these pairs, so a repeat and
@@ -5267,12 +5898,14 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
       : r.body !== undefined
         ? r.body
         : Uint8Array.from(r.bodyBytes || []);
+    // As its target sent it (`__wrapServiceResponse`).
     return __wrapServiceResponse(
       new __Response(responseBody, __responseInit({
         status: r.status, headers: r.headers,
         webSocket: __responseSocket(r),
+        encodeBody: "manual",
       })),
-      req.url);
+      req);
   };
   const target = {
   async fetch(input, init) {
@@ -5554,12 +6187,10 @@ const __streamAcrossIsolates = () => new DOMException(
 // Request's or Response's parts: no body is null, and a buffered body is
 // its bytes and a stream body what `body(stream)` makes of it, or, with
 // `body` null (outside RPC), either is refused; a File and a CryptoKey are
-// refused, as in workerd. The bytes, a Blob's type and the header list are
-// the value's private state; a Request's and Response's other attributes
-// are its own properties in celld (plan 1.36), so each must have its type
-// or the value is refused. Nothing a script set can make a field the
-// receiver interprets (`__reviveHostValue` checks each again). undefined
-// for a kind that is not a value (a stream, a signal, an RpcTarget).
+// refused, as in workerd. Every part is the value's private state, so
+// nothing a script set can make a field the receiver interprets
+// (`__reviveHostValue` checks each again). undefined for a kind that is not
+// a value (a stream, a signal, an RpcTarget).
 const __hostValueMarker = (v, kind, body) => {
   switch (kind) {
     case "headers":
@@ -5567,28 +6198,29 @@ const __hostValueMarker = (v, kind, body) => {
     case "blob":
       return { "__celld$blob": __blobBytesOf(v), y: __blobTypeOf(v) };
     case "request": {
-      const { url, method, redirect } = v;
-      if (typeof url !== "string" || typeof method !== "string" ||
-          typeof redirect !== "string")
-        throw __rpcUnsupportedType(v);
-      const marker = { "__celld$req": url, m: method,
-                       h: __headerPairsOf(v.headers), r: redirect,
-                       c: __hostCf(v), b: __hostBody(v, body) };
+      const marker = { "__celld$req": __requestUrl(v), m: __requestMethod(v),
+                       h: __headerPairsOf(__requestHeaders(v)),
+                       r: __requestRedirect(v),
+                       c: __hostCf(v, __requestCf(v)), b: __hostBody(v, body) };
       const cache = __requestCache(v);
       if (cache !== undefined) marker.k = cache;
+      // Only "manual", as workerd's Request::serialize writes it.
+      if (__requestEncodeResponseBody(v) === "manual") marker.x = "manual";
       return marker;
     }
     case "response": {
       // Workerd serializes the socket too, and a WebSocket does not
       // serialize. Dropping it would revive a 101 with nothing to switch to.
-      if (v.webSocket) throw __rpcUnsupportedType(v.webSocket);
-      const { status, statusText, type } = v;
-      if (!__NumberIsInteger(status) || typeof statusText !== "string")
-        throw __rpcUnsupportedType(v);
-      return { "__celld$res": status,
-               t: statusText || __STATUS_TEXT[status] || "",
-               h: __headerPairsOf(v.headers), c: __hostCf(v),
-               e: type === "error", b: __hostBody(v, body) };
+      const webSocket = __responseWebSocket(v);
+      if (webSocket !== null) throw __rpcUnsupportedType(webSocket);
+      const status = __responseStatus(v);
+      const marker = { "__celld$res": status,
+               t: __responseStatusText(v) || __STATUS_TEXT[status] || "",
+               h: __headerPairsOf(__responseHeaders(v)),
+               c: __hostCf(v, __responseCf(v)),
+               e: __responseType(v) === "error", b: __hostBody(v, body) };
+      if (__responseEncodeBody(v) === "manual") marker.x = "manual";
+      return marker;
     }
     case "file":
     case "cryptokey":
@@ -5598,8 +6230,7 @@ const __hostValueMarker = (v, kind, body) => {
 };
 // A Request's or Response's `cf`: absent, or a plain object, which the
 // receiver hands to the constructor as data.
-const __hostCf = (v) => {
-  const cf = v.cf;
+const __hostCf = (v, cf) => {
   if (cf !== undefined && cf !== null &&
       (typeof cf !== "object" || __ObjectGetPrototypeOf(cf) !== __ObjectPrototype))
     throw __rpcUnsupportedType(v);
@@ -5609,7 +6240,7 @@ const __hostCf = (v) => {
 // private bytes, or what `body` makes of the stream it holds, which must be
 // a stream.
 const __hostBody = (v, body) => {
-  const stream = v.body;
+  const stream = __bodyStream(v);
   if (stream === null) return null;
   if (body === null) throw __streamOnlyForRpc("readable");
   const bytes = __bodyBytesOf(v);
@@ -5630,7 +6261,21 @@ const __hostValueOutsideRpc = (v, kind) => {
 // Every field must have the type the lift gave it, and a body is bytes, null
 // or, where `streams` (RPC), a stream marker the lift built: anything else
 // is a payload no lift wrote.
-const __reviveHostValue = (v, kind, revive, streams) => {
+// A marker's own string-keyed data, on a null-prototype copy, so a reviver
+// never reads a field a marker lacks through a getter a script put on
+// Object.prototype (an `x` there would make a Request "manual").
+const __ownRecord = (v) => {
+  const out = { __proto__: null };
+  const keys = __ObjectKeys(v);
+  for (let i = 0; i < keys.length; i++) {
+    const descriptor = __ObjectGetOwnPropertyDescriptor(v, keys[i]);
+    if (descriptor !== undefined && __ObjectHasOwn(descriptor, "value"))
+      out[keys[i]] = descriptor.value;
+  }
+  return out;
+};
+const __reviveHostValue = (marker, kind, revive, streams) => {
+  const v = __ownRecord(marker);
   const fail = () => {
     throw new Error("corrupt RPC or storage payload: a malformed " +
       kind + " marker.");
@@ -5673,13 +6318,15 @@ const __reviveHostValue = (v, kind, revive, streams) => {
       // workerd's Request::deserialize does.
       if (v.k !== undefined && v.k !== "no-store" && v.k !== "no-cache")
         fail();
+      if (v.x !== undefined && v.x !== "manual") fail();
       return __reviveRequest(v[kind], v.m, pairs(v.h), v.r, cf(v.c),
-        v.k, body(v.b));
+        v.k, body(v.b), v.x);
     case "__celld$res":
       if (!__NumberIsInteger(v[kind]) || typeof v.t !== "string" ||
           typeof v.e !== "boolean") fail();
+      if (v.x !== undefined && v.x !== "manual") fail();
       return __reviveResponse(v[kind], v.t, pairs(v.h), cf(v.c), v.e,
-        body(v.b));
+        body(v.b), v.x);
   }
   return undefined;
 };
@@ -6571,8 +7218,8 @@ const __reviveBlob = (type, bytes) => {
 };
 const __adoptBody = (target, bytes) => {
   __setBodyBytes(target, bytes);
-  target._body = undefined; // decoded lazily on the first text()/json()
-  const body = target.body;
+  __setBodyText(target, undefined); // decoded on the first text()/json()
+  const body = __bodyStream(target);
   if (body !== null) {
     body._st.bytes = bytes;
     body._expectedLength = bytes.byteLength;
@@ -6580,23 +7227,26 @@ const __adoptBody = (target, bytes) => {
 };
 // A body that is not bytes is a revived stream, which the constructor
 // adopts as a streaming body.
-const __reviveRequest = (url, method, headers, redirect, cf, cache, body) => {
+const __reviveRequest = (url, method, headers, redirect, cf, cache, body,
+  encodeResponseBody) => {
   if (!__isUint8Array(body))
     return new __Request(url, __requestInit({
       method, headersList: headers, redirect, cf, cache, hasBody: true, body,
+      encodeResponseBody,
     }));
   const req = new __Request(url, __requestInit({
-    method, headersList: headers, redirect, cf, cache,
+    method, headersList: headers, redirect, cf, cache, encodeResponseBody,
   }));
   __adoptBody(req, body);
   return req;
 };
-const __reviveResponse = (status, statusText, headers, cf, error, body) => {
+const __reviveResponse = (status, statusText, headers, cf, error, body,
+  encodeBody) => {
   const bytes = __isUint8Array(body);
   const res = new __Response(body === null ? null : bytes ? "" : body,
-    __responseInit({ status, statusText, headers, cf }));
+    __responseInit({ status, statusText, headers, cf, encodeBody }));
   if (bytes) __adoptBody(res, body);
-  if (error) res.type = "error";
+  if (error) __setResponseType(res, "error");
   return res;
 };
 // The classes of workerd's ErrorTag, captured before any script runs, and
@@ -6734,8 +7384,10 @@ const __reviveSignal = (marker, id) => {
 // a marker key: a lift escaped every key of a script's that starts with
 // `__celld$`. Such a key is unescaped here, onto a copy that keeps the key
 // order. Any other key with the prefix is refused: no lift wrote it.
+// `reviveMarker` gets the marker's own fields only (`__ownRecord`).
 const __reviveLifted = (value, reviveMarker, disposers) => {
   const seen = new __SafeMap();
+  const records = new __SafeMap();
   const cache = (v, out) => __ReflectApply(__MapSet, seen, [v, out]);
   const revive = (v) => {
     if (v === null || typeof v !== "object") return v;
@@ -6753,7 +7405,14 @@ const __reviveLifted = (value, reviveMarker, disposers) => {
     const first = keys.length === 0 ? "" : keys[0];
     if (__isMarkerKey(first) && first !== "__celld$disp" &&
         !__isEscapedKey(first)) {
-      const revived = reviveMarker(v, first, revive);
+      // One record per marker, so a reviver that tells markers apart by
+      // identity (an Error's cycle check) sees the same one each time.
+      let record = __ReflectApply(__MapGet, records, [v]);
+      if (record === undefined) {
+        record = __ownRecord(v);
+        __ReflectApply(__MapSet, records, [v, record]);
+      }
+      const revived = reviveMarker(record, first, revive);
       if (revived === undefined) throw __corruptLiftedPayload(first);
       cache(v, revived);
       return revived;
@@ -7119,10 +7778,7 @@ const __rpcNodes = new WeakMap();
 const __rpcNodeType = (v) => __ReflectApply(__WeakMapGet, __rpcNodes, [v]);
 const __isRpcNode = (v) => __ReflectApply(__WeakMapHas, __rpcNodes, [v]);
 // workerd's text for a method called on the wrong kind of object.
-const __illegalInvocation = () => new TypeError(
-  "Illegal invocation: function called with incorrect `this` " +
-  "reference. See https://developers.cloudflare.com/workers/" +
-  "observability/errors/#illegal-invocation-errors for details.");
+const __illegalInvocation = __celld.__illegalInvocation;
 const __rpcPromiseSession = (node) => {
   const session = __rpcPromiseSessions.get(node);
   if (session === undefined) throw __illegalInvocation();
@@ -7771,7 +8427,7 @@ __celld.__apiTag(__DurableObjectStub.prototype, "DurableObject");
 // names skip the byte count (< 256 chars is always <= 1020 bytes) to keep
 // the hot path alloc-free.
 const __dispatchName = (name) => name === undefined ? undefined
-  : name.length < 256 || new TextEncoder().encode(name).length <= 1024
+  : name.length < 256 || __encodeUtf8(name).length <= 1024
     ? name : undefined;
 // What a failed Durable Object call throws: a routing error as the
 // DurableObjectRoutingError it names, and an object's abort or exit as the
@@ -7935,12 +8591,12 @@ class DurableObjectNamespace {
         // body -- or a stream with no host id -- crosses as its bytes.
         if (__bodyBytesOf(req) === null) __unlockedBody(req);
         const bodyStreamId = __bodyBytesOf(req) === null
-          ? __hostStreamId(req.body)
+          ? __hostStreamId(__bodyStream(req))
           : undefined;
         const body_ = bodyStreamId !== undefined
           ? new Uint8Array()
           : __bodyBytesOf(req) === null
-            ? await req._consume()
+            ? await __consumeBody(req)
             : __bodyBytesOf(req);
         if (bodyStreamId !== undefined) {
           // The cell reads this upload through the same host stream id, so the
@@ -7948,9 +8604,9 @@ class DurableObjectNamespace {
           // instead of racing the cell over one host stream) and mark it used,
           // which is what awaiting the old _consume() did and what workerd
           // reports as request.bodyUsed after the forward.
-          req._bodyUsed = true;
-          req.body._disturbed = true;
-          req.body.getReader();
+          __setBodyRead(req, true);
+          __bodyStream(req)._disturbed = true;
+          __bodyStream(req).getReader();
         }
         // Forward the request's headers to the cell as JSON. When they were
         // never materialized -- a Worker that only routes to a cell reads
@@ -7962,9 +8618,7 @@ class DurableObjectNamespace {
         // the header list too, not the iterator; see the note on the
         // outbound `fetch`. Reading `.headers` on a forwarded request used
         // to change what the cell received.
-        const headersJson = req._headersJson !== undefined
-          ? req._headersJson
-          : JSON.stringify(req.headers.__celldHeaderList);
+        const headersJson = __requestHeadersJson(req);
         const r = __hostRecord(await invoke(() => {
           if (!signal) return __do_call(
             scope, dispatchName ?? null, req.url, req.method, body_,
@@ -7996,7 +8650,7 @@ class DurableObjectNamespace {
         }));
         // As a service binding's: the headers came from another Worker.
         Object.defineProperty(response.headers, "_immutable", { __proto__: null, value: true });
-        return response;
+        return __receivedResponse(response, req);
     };
     // Every cell RPC goes out through the host, whichever node owns the
     // target. Same-process dispatch re-enters this isolate, where the
@@ -8052,41 +8706,32 @@ const __attachResponseRequestCancellation = (
 ) => {
   if (!__isResponse(response) ||
       __bodyBytesOf(response) !== null ||
-      response.body === null) {
+      __bodyStream(response) === null) {
     return;
   }
-  const requestControllers = Array.isArray(
-    response.__celldRequestControllers,
-  )
-    ? response.__celldRequestControllers
-    : [requestController];
-  if (requestControllers !== response.__celldRequestControllers) {
-    Object.defineProperty(response, "__celldRequestControllers", {
-      __proto__: null,
-      value: requestControllers,
-    });
+  let requestControllers = __responseRequestControllers(response);
+  if (requestControllers === null) {
+    requestControllers = [requestController];
+    __setResponseRequestControllers(response, requestControllers);
   } else {
     requestControllers.push(requestController);
   }
-  if (!wrapBody || response.__celldCancellationWrapped) return;
+  if (!wrapBody || __responseCancellationWrapped(response)) return;
   // A platform stream, like the body it wraps, so a BYOB reader works on it.
-  const reader = response.body.getReader();
-  response.body = new CelldChunkStream(async () => {
+  const reader = __bodyStream(response).getReader();
+  __setBodyStream(response, new CelldChunkStream(async () => {
     const result = await reader.read();
     return result.done ? null : result.value;
   }, async () => {
-    const reason = new Error("The client has disconnected");
+    const reason = __clientDisconnected();
     for (const controller of requestControllers) {
       if (!controller.signal.aborted) controller.abort(reason);
     }
     try {
       await reader.cancel(reason);
     } catch {}
-  });
-  Object.defineProperty(response, "__celldCancellationWrapped", {
-    __proto__: null,
-    value: true,
-  });
+  }));
+  __setResponseCancellationWrapped(response);
 };
 // called on the owner node by the /__do/<scope> endpoint: run one object.
 // Returns the Response; Rust's read_response unwraps it (don't double-wrap).
@@ -8161,7 +8806,7 @@ const __dispatchTo = __celld.__dispatchTo = async (
     return response;
   } finally {
     if (requestId !== null)
-      __incomingRequestSignals.delete(String(requestId));
+      __ReflectApply(__MapDelete, __incomingRequestSignals, [String(requestId)]);
     __endActorEvent(actorEvent);
   }
 };
@@ -8524,11 +9169,12 @@ __celld.__dispatchEntrypointQueue = async (name, incoming) => {
     queue: incoming.queue,
     messages,
     metadata: {
-      metrics: {
-        backlogCount: incoming.metrics.backlogCount,
-        backlogBytes: incoming.metrics.backlogBytes,
-        oldestMessageTimestamp: oldest === undefined ? undefined : new Date(oldest),
-      },
+      metrics: __celld.__struct([
+        ["backlogCount", incoming.metrics.backlogCount],
+        ["backlogBytes", incoming.metrics.backlogBytes],
+        ["oldestMessageTimestamp", oldest === undefined || oldest === null
+          ? undefined : new Date(oldest), true],
+      ]),
     },
     ackAll() {
       checkActive();
@@ -8727,7 +9373,7 @@ __celld.__wsOpen = async (scope, wsId, protocol) => {
     if (state.readyState !== __WS_CONNECTING) return;
     state.protocol = protocol;
     state.readyState = __WS_OPEN;
-    socket.dispatchEvent(new Event("open"));
+    __wsFire(socket, new Event("open"), true);
   } finally {
     __endActorEvent(actorEvent);
   }
@@ -8949,7 +9595,19 @@ const __cell = __celld.__cell = {
     nodejsGlobalTimers: false, cacheOption: false, cacheNoCache: false,
     fetchIterable: false, fetchIterableOverrideAdjustment: false,
     encoderStreamBackpressure: false, transformStreamBackpressure: false,
-    blobStandardMimeType: false, setToStringTag: false,
+    blobStandardMimeType: false, setToStringTag: false, requestSignal: false,
+    workflowsFastEngineCreation: false,
+    specCompliantDispatchExceptions: false,
+    internalWritableStreamAbortClearsQueue: false,
+    bindAsyncLocalStorageSnapshot: false,
+    unhandledRejectionAfterMicrotaskCheckpoint: false,
+    queueExposeErrorCodes: false,
+    fastJsgStruct: false,
+    stripBomInReadAllText: false,
+    textDecoderReplaceSurrogates: false,
+    websocketCloseReasonByteLimit: false,
+    writableStreamSpecCompliantWriter: false,
+    workersApiGettersSettersOnPrototype: false,
   },
   // Applies the flags that change the global scope, once the compat
   // values above are set and before the Worker's modules evaluate.
@@ -9110,31 +9768,52 @@ const __queueDelay = (value, fallback = 0) => {
   return seconds;
 };
 
-const __queueBytes = (value) => {
-  if (value instanceof ArrayBuffer) {
-    return new Uint8Array(value.slice(0));
-  }
-  if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(
-      value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength),
-    );
-  }
-  throw __queueError("a bytes message must be an ArrayBuffer or a typed array");
+// A content type the binding takes, as workerd's validateContentType: any
+// casing of the four names, which it sends lower-cased.
+const __queueContentType = (type) => {
+  const name = `${type}`;
+  const lower = __ReflectApply(__StringToLowerCase, name, []);
+  if (lower === "text" || lower === "bytes" || lower === "json" || lower === "v8")
+    return lower;
+  throw new TypeError(`Unsupported queue message content type: ${name}`);
 };
 
-// Encode before entering the cell. The copy makes `sendBatch()` immune to a
-// caller resizing or reusing a backing buffer while the durable write awaits.
-const __queueEncode = (body, requestedType) => {
-  const contentType = requestedType ??
-    (__cell.compat.queueJsonMessages ? "json" : "v8");
+// A message body as workerd's binding serializes it (api/queue.c++
+// `serialize`), with its TypeErrors. A bytes body is copied: send() takes
+// its buffer (detaching it when it can, as workerd's DEEP_COPY does) and
+// sendBatch() copies the view, so a caller that reuses the buffer while the
+// durable write awaits changes nothing. sendBatch() serializes by the type
+// as given, not as validated, as workerd's does, so another casing of a
+// name fails there.
+const __queueEncode = (body, requestedType, take) => {
+  if (body === undefined) throw new TypeError("Message body cannot be undefined");
+  const contentType = requestedType === undefined
+    ? (__cell.compat.queueJsonMessages ? "json" : "v8")
+    : __queueContentType(requestedType);
+  const serializeAs = take || requestedType === undefined ? contentType : `${requestedType}`;
   let bytes;
-  switch (contentType) {
+  switch (serializeAs) {
     case "text":
-      bytes = __queueEncoder.encode(String(body));
+      if (typeof body !== "string")
+        throw new TypeError('Content Type "text" requires a value of type ' +
+          `string, but received: ${typeof body}`);
+      bytes = __queueEncoder.encode(body);
       break;
-    case "bytes":
-      bytes = __queueBytes(body);
+    case "bytes": {
+      if (!ArrayBuffer.isView(body))
+        throw new TypeError('Content Type "bytes" requires a value of type ' +
+          `ArrayBufferView, but received: ${typeof body}`);
+      const view = new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+      bytes = view.slice();
+      if (take && !body.buffer.detached && !(body.buffer instanceof SharedArrayBuffer)) {
+        try {
+          body.buffer.transfer();
+        } catch {
+          // A buffer that cannot detach (a Wasm memory's) is only copied.
+        }
+      }
       break;
+    }
     case "json": {
       let json;
       try {
@@ -9153,16 +9832,37 @@ const __queueEncode = (body, requestedType) => {
       bytes = __sc_encode(body);
       break;
     default:
-      throw __queueError(
-        `contentType must be "text", "bytes", "json", or "v8", got ${JSON.stringify(contentType)}`,
-      );
-  }
-  if (bytes.byteLength > __queueLimits().maxMessageBytes) {
-    throw __queueError(
-      `a message is at most ${__queueLimits().maxMessageBytes} bytes, got ${bytes.byteLength}`,
-    );
+      throw new TypeError(`Unsupported queue message content type: ${serializeAs}`);
   }
   return { body: bytes, contentType, size: bytes.byteLength };
+};
+
+// The queue service's refusal of a send or a batch, as workerd's binding
+// reports it (api/queue.c++ `buildQueueErrorMessage`): with
+// queue_expose_error_codes the service's cause and code, the ones
+// Cloudflare's queue documents; without it the operation and the HTTP status
+// text, which is Miniflare's message.
+const __queueRefusal = (operation, cause, code, statusText) => new Error(
+  __cell.compat.queueExposeErrorCodes
+    ? `${cause} (${code})`
+    : `Queue ${operation} failed: ${statusText}`);
+const __queueMessageTooLarge = (size) => __queueRefusal("send",
+  "Message size out of bounds", 10204,
+  `message length of ${size} bytes exceeds limit of ${__queueLimits().maxMessageBytes}`);
+// What the service checks of a batch, in its order: the count, the largest
+// message, then the total.
+const __queueCheckBatch = (count, largest, total) => {
+  const limits = __queueLimits();
+  if (count > limits.maxBatchMessages)
+    throw __queueRefusal("sendBatch", "Batch count out of bounds", 10206,
+      `batch message count of ${count} exceeds limit of ${limits.maxBatchMessages}`);
+  if (largest > limits.maxMessageBytes)
+    throw __queueRefusal("sendBatch", "Message size out of bounds", 10204,
+      `message in batch has length ${largest} bytes which exceeds single ` +
+      `message size limit of ${limits.maxMessageBytes}`);
+  if (total > limits.maxBatchBytes)
+    throw __queueRefusal("sendBatch", "Batch size out of bounds", 10205,
+      `batch size of ${total} bytes exceeds limit of ${limits.maxBatchBytes}`);
 };
 
 // A message body as the cell receives one: bytes (a producer's view, or the
@@ -9228,14 +9928,16 @@ const __queueReportLeaseLookupPlan = (sql, query, leaseId) => {
   __test_queue_lease_lookup_plan(plan);
 };
 
-const __queueMetricsView = (metrics) => ({
-  backlogCount: metrics.backlogCount,
-  backlogBytes: metrics.backlogBytes,
-  oldestMessageTimestamp: metrics.oldestMessageTimestamp === null ||
+// workerd's Metrics struct, whose oldest message's time is absent when the
+// queue has none.
+const __queueMetricsView = (metrics) => __celld.__struct([
+  ["backlogCount", metrics.backlogCount],
+  ["backlogBytes", metrics.backlogBytes],
+  ["oldestMessageTimestamp", metrics.oldestMessageTimestamp === null ||
       metrics.oldestMessageTimestamp === undefined
     ? undefined
-    : new Date(metrics.oldestMessageTimestamp),
-});
+    : new Date(metrics.oldestMessageTimestamp), true],
+]);
 
 class __QueueCell {
   constructor(ctx) {
@@ -9920,9 +10622,9 @@ class __QueueCell {
           expiryBySeq.get(lease.seq).action.kind === "exhausted" &&
           consumer.deadLetterQueue !== undefined
         )
-        .map((lease) => [lease.seq, crypto.randomUUID()]),
+        .map((lease) => [lease.seq, __cryptoRandomUUID()]),
     );
-    const leaseId = crypto.randomUUID();
+    const leaseId = __cryptoRandomUUID();
     const leasedUntil = Math.min(
       Number.MAX_SAFE_INTEGER,
       now + __cell.queueLeaseDurationMs,
@@ -10299,7 +11001,7 @@ class __QueueCell {
         .filter(({ row }) =>
           retryById.get(row.id).exhausted && consumer.deadLetterQueue !== undefined
         )
-        .map(({ row }) => [row.id, crypto.randomUUID()]),
+        .map(({ row }) => [row.id, __cryptoRandomUUID()]),
     );
     const sql = this._open();
     this.ctx.storage.transactionSync(() => {
@@ -10489,7 +11191,7 @@ class __QueueCell {
     ).toArray();
     const transfers = candidates.map((row) => ({
       ...row,
-      transferId: crypto.randomUUID(),
+      transferId: __cryptoRandomUUID(),
     }));
     this.ctx.storage.transactionSync(() => {
       for (const transfer of transfers) {
@@ -10598,46 +11300,39 @@ class Queue {
     return { metadata: { metrics: __queueMetricsView(metrics) } };
   }
 
-  send(body, options = {}) {
-    const encoded = __queueEncode(body, options.contentType);
-    return this.#send([{
-      ...encoded,
-      delaySeconds: __queueDelay(options.delaySeconds, this.#deliveryDelay),
-    }]);
+  async send(body, options = {}) {
+    const encoded = __queueEncode(body, options?.contentType, true);
+    const delaySeconds = __queueDelay(options?.delaySeconds, this.#deliveryDelay);
+    if (encoded.size > __queueLimits().maxMessageBytes)
+      throw __queueMessageTooLarge(encoded.size);
+    return this.#send([{ ...encoded, delaySeconds }]);
   }
 
-  sendBatch(messages, options = {}) {
+  async sendBatch(messages, options = {}) {
     if (messages === null || messages === undefined ||
         typeof messages[Symbol.iterator] !== "function") {
       throw __queueError("sendBatch() needs an iterable of messages");
     }
+    const batch = [...messages];
+    if (batch.length === 0)
+      throw new TypeError("sendBatch() requires at least one message");
     const entries = [];
-    let bytes = 0;
-    const batchDelay = __queueDelay(options.delaySeconds, this.#deliveryDelay);
-    for (const message of messages) {
-      if (entries.length >= __queueLimits().maxBatchMessages) {
-        throw __queueError(
-          `a batch has at most ${__queueLimits().maxBatchMessages} messages`,
-        );
-      }
-      if (message === null || typeof message !== "object" || !("body" in message)) {
+    let total = 0;
+    let largest = 0;
+    const batchDelay = __queueDelay(options?.delaySeconds, this.#deliveryDelay);
+    for (const message of batch) {
+      if (message === null || typeof message !== "object") {
         throw __queueError("each batch entry needs a body");
       }
-      const encoded = __queueEncode(message.body, message.contentType);
-      bytes += encoded.size;
-      if (bytes > __queueLimits().maxBatchBytes) {
-        throw __queueError(
-          `a batch is at most ${__queueLimits().maxBatchBytes} bytes, got ${bytes}`,
-        );
-      }
+      const encoded = __queueEncode(message.body, message.contentType, false);
+      total += encoded.size;
+      if (encoded.size > largest) largest = encoded.size;
       entries.push({
         ...encoded,
         delaySeconds: __queueDelay(message.delaySeconds, batchDelay),
       });
     }
-    if (entries.length === 0) {
-      throw __queueError("sendBatch() needs at least one message");
-    }
+    __queueCheckBatch(entries.length, largest, total);
     return this.#send(entries);
   }
 
@@ -11968,7 +12663,7 @@ const __WorkflowCell = (() => {
             JSON.stringify(meta.status),
         );
       }
-      const generation = crypto.randomUUID();
+      const generation = __cryptoRandomUUID();
       transaction.kv.put("__wf.meta", {
         workflowName,
         instanceId,
@@ -12116,7 +12811,7 @@ const __WorkflowCell = (() => {
           );
         }
       }
-      const generation = crypto.randomUUID();
+      const generation = __cryptoRandomUUID();
       const newPrefix = __wfLedgerPrefix(generation);
       if (targetOrdinal !== undefined) {
         const rows = transaction.kv.list({ prefix: oldPrefix + "step." });
@@ -12520,13 +13215,19 @@ __celld.__pythonHost = {
 const __wfValidInstanceId = (id) =>
   typeof id === "string" && id.length >= 1 && id.length <= 100 &&
   __WF_NAME_RE.test(id);
+// The id of an instance created without one. With
+// workflows_enable_fast_engine_creation Cloudflare names it with its engine
+// namespace's newUniqueId(), 64 hex digits; otherwise with a random UUID.
+const __wfNewInstanceId = () => __cell.compat.workflowsFastEngineCreation
+  ? __do_id(__cell.namespaceKeys["__Workflow." + __cell.script], "unique", "")
+  : __cryptoRandomUUID();
 const __wfCreateOptions = (options, what, validateParams = true) => {
   if (!__wfOwnObject(options)) {
     throw __wfError(`${what} needs an object`);
   }
   const retention = __wfRetentionOptions(options.retention, what);
   const locationHint = __wfLocationHint(options.locationHint, what);
-  const id = options.id === undefined ? crypto.randomUUID() : options.id;
+  const id = options.id === undefined ? __wfNewInstanceId() : options.id;
   if (!__wfValidInstanceId(id)) {
     throw __wfError(
       `invalid instance id ${JSON.stringify(id)}: use letters, digits, ` +
@@ -12910,21 +13611,55 @@ const __nodeStubFor = __celld.__nodeStubFor = (path) => {
   return stub;
 };
 __celld.__nodeStub = __nodeStubFor("node builtin");
+// The event dispatch's view of an Event (`__dispatchEvent`), and the
+// runtime's: an event the runtime fires is trusted. Kept off the prototype,
+// so a script can neither see nor replace them.
+let __eventBegin, __eventEnd, __eventDispatching, __eventStopImmediate,
+  __eventTrust, __eventType, __eventDefaultPrevented;
+// Whether the next Event's subclass defines its own instance properties
+// before Event's, as workerd's MessageEvent, CloseEvent and
+// PromiseRejectionEvent have them without
+// workers_api_getters_setters_on_prototype (`__instanceAttributes`).
+let __deferEventAttributes = false;
 if (!globalThis.Event) {
   globalThis.Event = class Event {
     // Private fields: stored in the object itself, so an Event costs no
     // side allocation and no defineProperty call at construction. The
     // public members are accessors because the DOM standard makes them
-    // read-only; EventTarget drives them through _begin/_end.
+    // read-only; the dispatch drives them through `__eventBegin` and
+    // `__eventEnd`.
     #type; #bubbles; #cancelable; #composed;
     #defaultPrevented = false;
     #eventPhase = 0;
-    #target; #currentTarget; #path;
+    #target = undefined; #path;
     #stop = false; #stopImmediate = false; #dispatching = false;
     // Workerd: events the runtime delivers are trusted; events a
     // script constructs and dispatches itself are not.
     #trusted = false;
+    static {
+      __eventDispatching = (event) => event.#dispatching;
+      __eventType = (event) => event.#type;
+      __eventDefaultPrevented = (event) => event.#defaultPrevented;
+      __eventStopImmediate = (event) => event.#stopImmediate;
+      __eventTrust = __celld.__eventTrust = (event) => { event.#trusted = true; };
+      __eventBegin = (event, target) => {
+        event.#dispatching = true;
+        event.#target = target;
+        event.#eventPhase = 2; // AT_TARGET
+        event.#path = [target];
+        event.#stop = false;
+        event.#stopImmediate = false;
+      };
+      // Workerd leaves currentTarget set after dispatch (the DOM standard
+      // nulls it); only the phase is reset.
+      __eventEnd = (event) => {
+        event.#eventPhase = 0;
+        event.#dispatching = false;
+      };
+    }
     constructor(type, init = {}) {
+      const defer = __deferEventAttributes;
+      __deferEventAttributes = false;
       if (arguments.length === 0)
         throw new TypeError(
           "Failed to construct 'Event': 1 argument required, but only " +
@@ -12941,69 +13676,123 @@ if (!globalThis.Event) {
       this.#bubbles = !!options.bubbles;
       this.#cancelable = !!options.cancelable;
       this.#composed = !!options.composed;
+      if (__oldAttributes && !defer) __instanceAttributes(this, __eventAttributes);
     }
-    get type() { return this.#type; }
-    get bubbles() { return this.#bubbles; }
-    get cancelable() { return this.#cancelable; }
-    get composed() { return this.#composed; }
-    get defaultPrevented() { return this.#defaultPrevented; }
-    get eventPhase() { return this.#eventPhase; }
-    get target() { return this.#target; }
-    get currentTarget() { return this.#currentTarget; }
-    get isTrusted() { return this.#trusted; }
-    get timeStamp() { return 0; }
-    get returnValue() { return !this.#defaultPrevented; }
+    get type() {
+      if (!(#type in this)) throw __illegalInvocation();
+      return this.#type;
+    }
+    get eventPhase() {
+      if (!(#type in this)) throw __illegalInvocation();
+      return this.#eventPhase;
+    }
+    get composed() {
+      if (!(#type in this)) throw __illegalInvocation();
+      return this.#composed;
+    }
+    get bubbles() {
+      if (!(#type in this)) throw __illegalInvocation();
+      return this.#bubbles;
+    }
+    get cancelable() {
+      if (!(#type in this)) throw __illegalInvocation();
+      return this.#cancelable;
+    }
+    get defaultPrevented() {
+      if (!(#type in this)) throw __illegalInvocation();
+      return this.#defaultPrevented;
+    }
+    get returnValue() {
+      if (!(#type in this)) throw __illegalInvocation();
+      return !this.#defaultPrevented;
+    }
+    // workerd's currentTarget is the target (it is non-pedantic).
+    get currentTarget() {
+      if (!(#type in this)) throw __illegalInvocation();
+      return this.#target;
+    }
+    get target() {
+      if (!(#type in this)) throw __illegalInvocation();
+      return this.#target;
+    }
+    // workerd's srcElement is the target, or before
+    // workers_api_getters_setters_on_prototype the current target: the
+    // target while the event is dispatched, and null otherwise.
+    get srcElement() {
+      if (!(#type in this)) throw __illegalInvocation();
+      if (!__oldAttributes) return this.#target;
+      return this.#dispatching ? this.#target : null;
+    }
+    get timeStamp() {
+      if (!(#type in this)) throw __illegalInvocation();
+      return 0;
+    }
+    get isTrusted() {
+      if (!(#type in this)) throw __illegalInvocation();
+      return this.#trusted;
+    }
     // The one writable member, per the DOM standard.
-    get cancelBubble() { return this.#stop; }
-    set cancelBubble(value) { if (value) this.#stop = true; }
-    composedPath() { return this.#path ? this.#path.slice() : []; }
-    preventDefault() {
-      if (this.#cancelable) this.#defaultPrevented = true;
+    get cancelBubble() {
+      if (!(#type in this)) throw __illegalInvocation();
+      return this.#stop;
     }
-    stopPropagation() { this.#stop = true; }
+    set cancelBubble(value) {
+      if (!(#type in this)) throw __illegalInvocation();
+      if (value) this.#stop = true;
+    }
     stopImmediatePropagation() {
       this.#stop = true;
       this.#stopImmediate = true;
     }
-    // Internal dispatch hooks used by EventTarget.
-    get _dispatching() { return this.#dispatching; }
-    get _stopImmediate() { return this.#stopImmediate; }
-    _trust() { this.#trusted = true; }
-    _begin(target) {
-      this.#dispatching = true;
-      this.#target = target;
-      this.#currentTarget = target;
-      this.#eventPhase = 2; // AT_TARGET
-      this.#path = [target];
-      this.#stop = false;
-      this.#stopImmediate = false;
+    preventDefault() {
+      if (this.#cancelable) this.#defaultPrevented = true;
     }
-    // Workerd leaves currentTarget set after dispatch (the DOM standard
-    // nulls it); only the phase is reset.
-    _end() {
-      this.#eventPhase = 0;
-      this.#dispatching = false;
-    }
+    stopPropagation() { this.#stop = true; }
+    composedPath() { return this.#path ? this.#path.slice() : []; }
   };
   {
     const phases = {
       NONE: 0, CAPTURING_PHASE: 1, AT_TARGET: 2, BUBBLING_PHASE: 3,
     };
     for (const [name, value] of Object.entries(phases)) {
-      const d = { value, writable: false, enumerable: true,
-        configurable: false };
+      // As workerd's JSG_STATIC_CONSTANT: read-only and configurable.
+      const d = { __proto__: null, value, writable: false, enumerable: true,
+        configurable: true };
       Object.defineProperty(globalThis.Event, name, d);
       Object.defineProperty(globalThis.Event.prototype, name, d);
     }
   }
 }
+// An Event's attributes, as workerd orders them on an instance
+// (`__attributeTable`).
+const __eventAttributes = __attributeTable([
+  "cancelBubble", "isTrusted", "timeStamp", "srcElement", "target",
+  "currentTarget", "returnValue", "defaultPrevented", "cancelable",
+  "bubbles", "composed", "eventPhase", "type",
+].map((name) => [Event.prototype, name]));
+// An Event subclass's own read-only instance properties, defined in order
+// before Event's (`__deferEventAttributes`).
+const __eventOwnProperties = (event, entries) => {
+  for (let i = 0; i < entries.length; i++)
+    __ObjectDefineProperty(event, entries[i][0], {
+      __proto__: null, value: entries[i][1], writable: false, enumerable: true,
+      configurable: true,
+    });
+  if (__oldAttributes) __instanceAttributes(event, __eventAttributes);
+};
 if (!globalThis.CustomEvent) {
   globalThis.CustomEvent = class CustomEvent extends Event {
+    #detail;
     constructor(type, init = {}) {
       super(type, init);
-      this.detail = init.detail === undefined ? null : init.detail;
+      this.#detail = init?.detail === undefined ? null : init.detail;
+    }
+    get detail() {
+      if (!(#detail in this)) throw __illegalInvocation();
+      return this.#detail;
     }
   };
+  __workerdAccessor(CustomEvent.prototype, "detail");
 }
 if (!globalThis.ExtendableEvent) {
   // Exists as a type but is not constructable from user code.
@@ -13013,31 +13802,145 @@ if (!globalThis.ExtendableEvent) {
     }
   };
 }
-// An event-handler IDL attribute occupies one listener-list position. Replacing
-// its callback must retain that position, or listeners added after `onabort`
-// run before it and observe an order that differs from the web platform.
-const __eventHandlerEntry = Symbol("eventHandlerEntry");
-const __getEventHandler = (target, type) =>
-  (target._listeners.get(type) || [])
-    .find((entry) => entry[__eventHandlerEntry])?.callback ?? null;
+// An event-handler IDL attribute occupies one listener-list position (an
+// entry with `handler`). Replacing its callback must retain that position,
+// or listeners added after `onabort` run before it and observe an order that
+// differs from the web platform.
+// A target's listener lists, by event type (EventTarget's private field).
+// The lists and their entries are celld's own, worked on with captured
+// functions and index loops only, so a dispatch the runtime makes (an abort,
+// a socket's event, a promise rejection's) runs nothing a script replaced
+// on Map.prototype or Array.prototype.
+let __listenersOf;
+const __listenerList = (target, type) =>
+  __ReflectApply(__MapGet, __listenersOf(target), [type]);
+// The index of the entry `match` accepts in `list`, or -1.
+const __listenerIndex = (list, match) => {
+  if (list === undefined) return -1;
+  for (let i = 0; i < list.length; i++) if (match(list[i])) return i;
+  return -1;
+};
+// Removes the entry at `index`, keeping the others' order.
+const __listenerRemoveAt = (list, index) => {
+  for (let i = index; i < list.length - 1; i++) list[i] = list[i + 1];
+  list.length = list.length - 1;
+};
+const __listenerAppend = (target, type, entry) => {
+  let list = __listenerList(target, type);
+  if (list === undefined) {
+    list = [];
+    __ReflectApply(__MapSet, __listenersOf(target), [type, list]);
+  }
+  list[list.length] = entry;
+};
+const __isHandlerEntry = (entry) => entry.handler === true;
+const __getEventHandler = (target, type) => {
+  const list = __listenerList(target, type);
+  const index = __listenerIndex(list, __isHandlerEntry);
+  return index < 0 ? null : list[index].callback;
+};
 const __setEventHandler = (target, type, callback) => {
-  const list = target._listeners.get(type) || [];
-  const entry = list.find((item) => item[__eventHandlerEntry]);
+  const list = __listenerList(target, type);
+  const index = __listenerIndex(list, __isHandlerEntry);
   if (typeof callback !== "function") {
-    if (entry) list.splice(list.indexOf(entry), 1);
+    if (index >= 0) __listenerRemoveAt(list, index);
     return;
   }
-  if (entry) {
-    entry.callback = callback;
-  } else {
-    list.push({ callback, once: false, [__eventHandlerEntry]: true });
-    target._listeners.set(type, list);
+  if (index >= 0) list[index].callback = callback;
+  else __listenerAppend(target, type,
+    { __proto__: null, callback, once: false, handler: true });
+};
+// How a dispatch treats a listener's exception (workerd's
+// EventTarget::DispatchExceptionPolicy): PROPAGATE ends the dispatch and
+// throws it; REPORT reports it (`__reportError`) and runs the rest.
+const __PROPAGATE = false;
+const __REPORT = true;
+// The policy of a dispatch the DOM standard makes report-and-continue
+// (EventTarget::effectiveExceptionPolicy): REPORT only under
+// spec_compliant_dispatch_exceptions, which every such surface reads: the
+// JS dispatchEvent(), an AbortSignal's abort, and the events the runtime
+// fires on a WebSocket, an EventSource and a MessagePort.
+const __specPolicy = () =>
+  __cell.compat.specCompliantDispatchExceptions ? __REPORT : __PROPAGATE;
+// Dispatches `event` at `target` (EventTarget::dispatchEventImpl). Returns
+// whether no listener cancelled it, and under REPORT the first exception a
+// listener threw, as `{ error }`, or null.
+let __dispatchEvent;
+// The global scope's error reporting (ServiceWorkerGlobalScope::reportError):
+// an ErrorEvent on the global scope, then, unless a listener cancelled it,
+// the console. An exception reported while that event is dispatched goes
+// straight to the console.
+let __inErrorReporting = false;
+const __reportError = (error) => {
+  if (!__inErrorReporting) {
+    __inErrorReporting = true;
+    try {
+      const [message, filename, lineno, colno] = __uncaught_message(error);
+      const event = new ErrorEvent("error",
+        { message, filename, lineno, colno, error });
+      if (!__dispatchEvent(__globalEventTarget, event, __specPolicy()).result)
+        return;
+    } finally {
+      __inErrorReporting = false;
+    }
   }
+  let text;
+  try {
+    const stack = error !== null && typeof error === "object"
+      ? error.stack : undefined;
+    text = stack !== undefined ? `${stack}` : undefined;
+  } catch {}
+  __log("error", text ?? __uncaught_message(error)[0]);
 };
 if (!globalThis.EventTarget) {
   globalThis.EventTarget = class EventTarget {
-    constructor() { this._listeners = new Map(); }
+    #listeners = new __SafeMap();
+    static {
+      __listenersOf = (target) => target.#listeners;
+      __dispatchEvent = (target, event, policy) => {
+        const listeners = target.#listeners;
+        let first = null;
+        const invoke = (call) => {
+          if (policy === __PROPAGATE) return call();
+          try {
+            call();
+          } catch (error) {
+            first ??= { error };
+            __reportError(error);
+          }
+        };
+        const type = __eventType(event);
+        __eventBegin(event, target);
+        try {
+          // Copy: a listener may add or remove listeners mid-dispatch.
+          const live = __ReflectApply(__MapGet, listeners, [type]);
+          const list = [];
+          if (live !== undefined)
+            for (let i = 0; i < live.length; i++) list[i] = live[i];
+          for (let i = 0; i < list.length; i++) {
+            const item = list[i];
+            if (__eventStopImmediate(event)) break;
+            if (item.once)
+              target.#remove(type, item.callback);
+            const callback = item.callback;
+            if (typeof callback === "function")
+              invoke(() => __ReflectApply(callback, target, [event]));
+            else invoke(() => callback.handleEvent(event));
+          }
+          const handler = target["on" + type];
+          const hasEventHandler = __listenerIndex(
+            __ReflectApply(__MapGet, listeners, [type]), __isHandlerEntry) >= 0;
+          if (!hasEventHandler && !__eventStopImmediate(event) &&
+              typeof handler === "function")
+            invoke(() => __ReflectApply(handler, target, [event]));
+        } finally {
+          __eventEnd(event);
+        }
+        return { __proto__: null, result: !__eventDefaultPrevented(event), first };
+      };
+    }
     addEventListener(type, callback, options = {}) {
+      if (!(#listeners in this)) throw __illegalInvocation();
       if (callback === null || callback === undefined) return;
       if (typeof callback !== "function" &&
           typeof callback.handleEvent !== "function")
@@ -13055,92 +13958,189 @@ if (!globalThis.EventTarget) {
       const signal = object ? options.signal : undefined;
       if (signal && signal.aborted) return;
       const key = String(type);
-      const list = this._listeners.get(key) || [];
-      if (list.some((e) => e.callback === callback)) return;
-      list.push({ callback, once: object && !!options.once });
-      this._listeners.set(key, list);
+      const list = __ReflectApply(__MapGet, this.#listeners, [key]);
+      if (__listenerIndex(list, (e) => e.callback === callback) >= 0) return;
+      __listenerAppend(this, key,
+        { __proto__: null, callback, once: object && !!options.once, handler: false });
       if (signal)
         signal.addEventListener("abort", () =>
-          this.removeEventListener(key, callback), { once: true });
+          this.#remove(key, callback), { once: true });
     }
     removeEventListener(type, callback, options = {}) {
+      if (!(#listeners in this)) throw __illegalInvocation();
       const object = typeof options === "object" && options !== null;
       if (object ? options.capture : !!options)
         throw new TypeError(
           "Cells does not support the 'capture' option on " +
           "removeEventListener().");
-      const list = this._listeners.get(String(type));
-      if (!list) return;
-      const index = list.findIndex((e) => e.callback === callback);
-      if (index >= 0) list.splice(index, 1);
+      this.#remove(String(type), callback);
+    }
+    #remove(type, callback) {
+      const list = __ReflectApply(__MapGet, this.#listeners, [type]);
+      const index = __listenerIndex(list, (e) => e.callback === callback);
+      if (index >= 0) __listenerRemoveAt(list, index);
     }
     dispatchEvent(event) {
+      if (!(#listeners in this)) throw __illegalInvocation();
       if (!(event instanceof Event))
         throw new TypeError("argument is not an Event");
-      if (event._dispatching)
+      if (__eventDispatching(event))
         throw new DOMException(
           "The event is already being dispatched.",
           "InvalidStateError");
-      event._begin(this);
-      // Copy: a listener may add or remove listeners mid-dispatch.
-      for (const item of (this._listeners.get(event.type) || []).slice()) {
-        if (event._stopImmediate) break;
-        if (item.once)
-          this.removeEventListener(event.type, item.callback);
-        if (typeof item.callback === "function")
-          item.callback.call(this, event);
-        else item.callback.handleEvent(event);
-      }
-      const handler = this["on" + event.type];
-      const hasEventHandler = (this._listeners.get(event.type) || [])
-        .some((item) => item[__eventHandlerEntry]);
-      if (!hasEventHandler && !event._stopImmediate &&
-          typeof handler === "function")
-        handler.call(this, event);
-      event._end();
-      return !event.defaultPrevented;
+      return __dispatchEvent(this, event, __specPolicy()).result;
     }
   };
 }
+__celld.__dispatchEvent = __dispatchEvent;
+__celld.__specPolicy = __specPolicy;
+__celld.__REPORT = __REPORT;
+__celld.__PROPAGATE = __PROPAGATE;
 // The global scope is itself an EventTarget.
+const __globalEventTarget = new EventTarget();
 if (typeof globalThis.addEventListener !== "function") {
-  const globalTarget = new EventTarget();
   for (const name of
     ["addEventListener", "removeEventListener", "dispatchEvent"])
-    globalThis[name] = globalTarget[name].bind(globalTarget);
+    globalThis[name] = __globalEventTarget[name].bind(__globalEventTarget);
 }
+// The event the global scope fires for a promise rejected with no handler
+// (`unhandledrejection`), and for one handled after that event
+// (`rejectionhandled`, whose `reason` is undefined, as workerd's). A script
+// cannot construct one. `promise` and `reason` are own, read-only
+// properties, in workerd's order.
+let __promiseRejectionEvent;
+globalThis.PromiseRejectionEvent = class PromiseRejectionEvent extends Event {
+  constructor() {
+    throw new TypeError("Illegal constructor");
+  }
+  static {
+    const make = (type, promise, reason) => {
+      // Event's own constructor, with this class's prototype.
+      __deferEventAttributes = true;
+      const event = __ReflectConstruct(Event, [type, { __proto__: null }],
+        PromiseRejectionEvent);
+      __eventOwnProperties(event, [["reason", reason], ["promise", promise]]);
+      __eventTrust(event);
+      return event;
+    };
+    __promiseRejectionEvent = make;
+  }
+};
+__celld.__apiTag(PromiseRejectionEvent.prototype, "PromiseRejectionEvent");
+// workerd's UnhandledRejectionHandler (jsg/promise.c++): only while the
+// global scope has a listener for either event (ServiceWorkerGlobalScope::
+// emitPromiseRejection, so one added after a rejection does not hear it), a
+// promise rejected with no handler is held, and looked at once the current microtask runs,
+// or, under unhandled_rejection_after_microtask_checkpoint, once the
+// microtask checkpoint completes (the host's `microtask_checkpoint`), so a
+// chain that handles it a few ticks later fires nothing. Each still
+// unhandled fires `unhandledrejection` in the async context it was rejected
+// in, and is then remembered weakly; a handler added to one of those fires
+// `rejectionhandled` at once.
+//
+// `__promiseRejection` runs inside V8's PromiseRejectCallback, so it, and
+// the bookkeeping `__processRejections` shares with it, use captured
+// functions, null-prototype records and index loops only: nothing a script
+// can replace runs there. Only the events' listeners are a script's.
+const __unhandledRejections = new __SafeMap();
+// The held promises in the order they were rejected; one handled since is
+// no longer in `__unhandledRejections`.
+const __rejectionOrder = [];
+const __warnedRejections = new __SafeWeakMap();
+let __rejectionsScheduled = false;
+const __rejectionEvent = (type, promise, reason, frame) => {
+  const prior = __als_get();
+  __als_set(frame);
+  try {
+    __dispatchEvent(__globalEventTarget,
+      __promiseRejectionEvent(type, promise, reason), __PROPAGATE);
+  } catch (error) {
+    __log("warn", `Exception while logging unhandled rejection: ${__uncaught_message(error)[0]}`);
+  } finally {
+    __als_set(prior);
+  }
+};
+const __processRejections = __celld.__processRejections = () => {
+  try {
+    // A listener may reject more; they join the end and are looked at here.
+    for (let i = 0; i < __rejectionOrder.length; i++) {
+      const promise = __rejectionOrder[i];
+      __rejectionOrder[i] = undefined;
+      const entry = __ReflectApply(__MapGet, __unhandledRejections, [promise]);
+      if (entry === undefined) continue;
+      __ReflectApply(__MapDelete, __unhandledRejections, [promise]);
+      __ReflectApply(__WeakMapSet, __warnedRejections, [promise, entry.frame]);
+      __rejectionEvent("unhandledrejection", promise, entry.reason, entry.frame);
+    }
+  } finally {
+    __rejectionOrder.length = 0;
+    __rejectionsScheduled = false;
+  }
+};
+// Answers whether the rejections wait for the end of the microtask
+// checkpoint, which the host then asks for.
+const __scheduleRejections = () => {
+  if (__rejectionsScheduled) return false;
+  __rejectionsScheduled = true;
+  if (__cell.compat.unhandledRejectionAfterMicrotaskCheckpoint) return true;
+  __ReflectApply(__PromiseThen, __PromiseResolve(), [__processRejections]);
+  return false;
+};
+const __rejectionListened = () => {
+  const unhandled = __listenerList(__globalEventTarget, "unhandledrejection");
+  const handled = __listenerList(__globalEventTarget, "rejectionhandled");
+  return (unhandled === undefined ? 0 : unhandled.length) +
+    (handled === undefined ? 0 : handled.length) > 0;
+};
+__celld.__promiseRejection = (kind, promise, reason) => {
+  if (!__rejectionListened()) return false;
+  if (kind === 0) {
+    if (__ReflectApply(__MapGet, __unhandledRejections, [promise]) === undefined)
+      __rejectionOrder[__rejectionOrder.length] = promise;
+    __ReflectApply(__MapSet, __unhandledRejections,
+      [promise, { __proto__: null, reason, frame: __als_get() }]);
+    return __scheduleRejections();
+  }
+  if (__ReflectApply(__MapDelete, __unhandledRejections, [promise]))
+    return __scheduleRejections();
+  if (__ReflectApply(__WeakMapHas, __warnedRejections, [promise])) {
+    const frame = __ReflectApply(__WeakMapGet, __warnedRejections, [promise]);
+    __ReflectApply(__WeakMapDelete, __warnedRejections, [promise]);
+    __rejectionEvent("rejectionhandled", promise, undefined, frame);
+  }
+  return __scheduleRejections();
+};
+// workerd's MessageEvent and CloseEvent carry their members as read-only
+// instance properties, in the reverse of their declaration order.
 if (!globalThis.MessageEvent) {
   globalThis.MessageEvent = class MessageEvent extends Event {
     constructor(type, init = {}) {
+      __deferEventAttributes = true;
       super(type, init);
-      this.data = init.data;
-      this.origin = String(init.origin || "");
-      this.lastEventId = String(init.lastEventId || "");
+      const options = init || {};
+      __eventOwnProperties(this, [
+        ["ports", []],
+        ["source", null],
+        ["lastEventId", String(options.lastEventId || "")],
+        ["origin", String(options.origin || "")],
+        ["data", options.data === undefined ? null : options.data],
+      ]);
     }
   };
 }
 if (!globalThis.CloseEvent) {
   globalThis.CloseEvent = class CloseEvent extends Event {
     constructor(type, init = {}) {
+      __deferEventAttributes = true;
       super(type, init);
-      this.code = Number(init.code || 0);
-      // `reason` is a USVString: a lone surrogate becomes U+FFFD rather than
-      // travelling as an unpaired code unit.
-      this.reason = String(init.reason || "").toWellFormed
-        ? String(init.reason || "").toWellFormed()
-        : String(init.reason || "").replace(
-          /[\uD800-\uDFFF]/g,
-          (unit, index, whole) => {
-            const code = unit.charCodeAt(0);
-            const next = whole.charCodeAt(index + 1);
-            const prev = whole.charCodeAt(index - 1);
-            const paired = code <= 0xDBFF
-              ? next >= 0xDC00 && next <= 0xDFFF
-              : prev >= 0xD800 && prev <= 0xDBFF;
-            return paired ? unit : "\uFFFD";
-          },
-        );
-      this.wasClean = !!init.wasClean;
+      const options = init || {};
+      __eventOwnProperties(this, [
+        ["wasClean", !!options.wasClean],
+        // `reason` is a USVString: a lone surrogate becomes U+FFFD rather
+        // than travelling as an unpaired code unit.
+        ["reason", String(options.reason || "").toWellFormed()],
+        ["code", Number(options.code || 0)],
+      ]);
     }
   };
 }
@@ -13206,14 +14206,19 @@ if (!globalThis.AbortSignal) {
   globalThis.AbortSignal = class AbortSignal extends EventTarget {
     // The brand the RPC envelope classifies by (`__hostKind`).
     #brand;
+    #aborted = false;
+    #reason = undefined;
     static {
       __recordBase(this);
       __isAbortSignal = (value) =>
         typeof value === "object" && value !== null && #brand in value;
+      // Aborting it (`__abortSignal`), as only its controller and the
+      // runtime may.
+      __setSignalAborted = (signal, reason) => {
+        signal.#aborted = true;
+        signal.#reason = reason;
+      };
     }
-    // The Headers/Blob clone-poisoning brand: V8's structured
-    // clone throws on functions, so a live signal reaches the
-    // RPC lift instead of silently flattening to plain data.
     constructor() {
       // Per spec AbortSignal has no constructor: it is only reachable
       // through AbortController, AbortSignal.abort/timeout/any. The internal
@@ -13227,13 +14232,20 @@ if (!globalThis.AbortSignal) {
       } finally {
         __unpinBase(AbortSignal, set);
       }
-      this.aborted = false;
-      this.reason = undefined;
-      // Fixed, as a Headers' is (headers.js).
-      __ObjectDefineProperty(this, "__celldHost",
-        { __proto__: null, value: __rpcNoClone, enumerable: true });
+      if (__oldAttributes) __instanceAttributes(this, __abortSignalAttributes);
     }
-    throwIfAborted() { if (this.aborted) throw this.reason; }
+    get aborted() {
+      if (!(#brand in this)) throw __illegalInvocation();
+      return this.#aborted;
+    }
+    get reason() {
+      if (!(#brand in this)) throw __illegalInvocation();
+      return this.#reason;
+    }
+    throwIfAborted() {
+      if (!(#brand in this)) throw __illegalInvocation();
+      if (this.#aborted) throw this.#reason;
+    }
     static abort(reason = new DOMException("The operation was aborted", "AbortError")) {
       const c = new AbortController(); c.abort(reason); return c.signal;
     }
@@ -13257,27 +14269,52 @@ if (!globalThis.AbortSignal) {
     __proto__: null,
     configurable: true,
     enumerable: true,
-    get() {
-      if (!(this instanceof globalThis.AbortSignal))
-        throw new TypeError("Illegal invocation");
+    get: [function () {
+      if (!__isAbortSignal(this)) throw __illegalInvocation();
       return __getEventHandler(this, "abort");
-    },
-    set(value) {
-      if (!(this instanceof globalThis.AbortSignal))
-        throw new TypeError("Illegal invocation");
+    }][0],
+    set: [function (value) {
+      if (!__isAbortSignal(this)) throw __illegalInvocation();
       __setEventHandler(this, "abort", value);
-    },
+    }][0],
   });
   globalThis.AbortController = class AbortController {
-    // A field, so no accessor a script put on Object.prototype runs.
-    signal;
-    constructor() { this.signal = new AbortSignal(__abortBrand); }
+    #signal;
+    constructor() {
+      this.#signal = new AbortSignal(__abortBrand);
+      if (__oldAttributes) __instanceAttributes(this, __abortControllerAttributes);
+    }
+    get signal() {
+      if (!(#signal in this)) throw __illegalInvocation();
+      return this.#signal;
+    }
     abort(reason = new DOMException("The operation was aborted", "AbortError")) {
-      __abortSignal(this.signal, reason);
+      if (!(#signal in this)) throw __illegalInvocation();
+      __abortSignal(this.#signal, reason);
     }
   };
 }
+// The serializers refuse an instance of a class whose state is private,
+// rather than write it as an empty object (storage_ops `HostClasses`):
+// storage lifts it into its marker instead, and the RPC lift finds it by its
+// brand before it clones.
+__register_host_classes(
+  (value) => __isAbortSignal(value) || __isRequest(value) || __isResponse(value),
+  (value) => __isAbortSignal(value) ? __signalOutsideRpc()
+    : new __DOMException("Unsupported object type", "DataCloneError"),
+  Request.prototype, Response.prototype, AbortSignal.prototype,
+);
+const __abortSignalAttributes = __attributeTable([
+  [AbortSignal.prototype, "reason"], [AbortSignal.prototype, "aborted"],
+]);
+const __abortControllerAttributes = __attributeTable([
+  [AbortController.prototype, "signal"],
+]);
 const __AbortController = AbortController;
+const __DOMException = DOMException;
+// Whether the Blob being constructed is a File's, which puts Blob's
+// attributes after its own (`__instanceAttributes`).
+let __deferBlobAttributes = false;
 if (!globalThis.Blob) {
   // Same clone-poisoning brand as Headers: an enumerable
   // function-valued property makes V8's structured clone throw, so
@@ -13306,6 +14343,11 @@ if (!globalThis.Blob) {
       };
     }
     constructor(parts = [], options = {}) {
+      // A File defines its own attributes first, then these
+      // (`__deferBlobAttributes`).
+      const defer = __deferBlobAttributes;
+      __deferBlobAttributes = false;
+      if (__oldAttributes && !defer) __instanceAttributes(this, __blobAttributes);
       if (options && options.endings !== undefined)
         throw new Error(
           "The 'endings' field on 'Options' is not implemented.");
@@ -13331,7 +14373,7 @@ if (!globalThis.Blob) {
         if (__isBlob(part)) sources.push(__blobBytesOf(part));
         else if (part instanceof ArrayBuffer ||
                  ArrayBuffer.isView(part)) sources.push(part);
-        else sources.push(new TextEncoder().encode(String(part)));
+        else sources.push(__encodeUtf8(String(part)));
       }
       const chunks = sources.map((source) =>
         source instanceof Uint8Array ? source
@@ -13356,7 +14398,8 @@ if (!globalThis.Blob) {
     get type() { return this.#type; }
     async arrayBuffer() { return this.#bytes.slice().buffer; }
     async bytes() { return this.#bytes.slice(); }
-    async text() { return new TextDecoder().decode(this.#bytes); }
+    // workerd's Blob::text keeps a leading byte order mark.
+    async text() { return __utf8(this.#bytes, false); }
     // A platform stream, as in workerd, so a BYOB reader works on it. Each
     // chunk is a copy: the Blob's bytes stay its own.
     stream() {
@@ -13905,11 +14948,13 @@ if (!globalThis.File) {
           "Failed to construct 'File': 2 arguments required, but " +
           `only ${arguments.length} present.`);
       const set = __pinBase(File);
+      __deferBlobAttributes = true;
       try {
         super(parts, options);
       } finally {
         __unpinBase(File, set);
       }
+      if (__oldAttributes) __instanceAttributes(this, __fileAttributes);
       this.#name = String(name);
       const lm = options == null ? undefined : options.lastModified;
       if (lm === undefined) this.#lastModified = Date.now();
@@ -13926,13 +14971,16 @@ if (!globalThis.File) {
         `type: '${this.type}' }`;
     }
   };
-  for (const key of ["name", "lastModified"]) {
-    const desc =
-      Object.getOwnPropertyDescriptor(File.prototype, key);
-    desc.enumerable = true;
-    Object.defineProperty(File.prototype, key, desc);
-  }
 }
+// The attributes of a Blob and a File, as workerd orders them on an
+// instance (`__attributeTable`).
+const __blobAttributes = __attributeTable([
+  [Blob.prototype, "type"], [Blob.prototype, "size"],
+]);
+const __fileAttributes = __attributeTable([
+  [File.prototype, "lastModified"], [File.prototype, "name"],
+  [Blob.prototype, "type"], [Blob.prototype, "size"],
+]);
 if (!globalThis.FormData) {
 // Byte offsets the multipart scanner compares against. A part body is
 // arbitrary bytes, so every framing decision below is made on bytes.
@@ -14004,7 +15052,7 @@ __celld.__parseFormData = (bytes, contentType) => {
       "Content-Type header.");
   const boundary = (found[1] !== undefined ? found[1] : found[2]).trim();
   const form = new FormData();
-  const delimiter = new TextEncoder().encode("--" + boundary);
+  const delimiter = __encodeUtf8("--" + boundary);
   // Walk the delimiters rather than splitting on them, so that a body whose
   // framing is truncated or corrupt is refused instead of silently yielding
   // the parts that happened to parse. Only the framing is checked; a part's
@@ -14169,8 +15217,8 @@ __celld.__parseFormData = (bytes, contentType) => {
       const iterator = {
         next() {
           if (index >= self._entries.length)
-            return { value: undefined, done: true };
-          return { value: pick(self._entries[index++]), done: false };
+            return __celld.__iterResult(true);
+          return __celld.__iterResult(false, pick(self._entries[index++]));
         },
         [Symbol.iterator]() { return iterator; },
       };
@@ -14195,15 +15243,43 @@ const __FormData = FormData;
 // lazily (LAZY_GLOBALS / LAZY_MODULES) on first use.
 if (!globalThis.ErrorEvent) {
   globalThis.ErrorEvent = class ErrorEvent extends Event {
+    #filename;
+    #message;
+    #lineno;
+    #colno;
+    #error;
     constructor(type, init = {}) {
       super(type, init);
-      this.message = String(init.message ?? "");
-      this.filename = String(init.filename ?? "");
-      this.lineno = Number(init.lineno ?? 0);
-      this.colno = Number(init.colno ?? 0);
-      this.error = init.error;
+      const options = init || {};
+      this.#message = String(options.message ?? "");
+      this.#filename = String(options.filename ?? "");
+      this.#lineno = Number(options.lineno ?? 0);
+      this.#colno = Number(options.colno ?? 0);
+      this.#error = options.error;
+    }
+    get filename() {
+      if (!(#error in this)) throw __illegalInvocation();
+      return this.#filename;
+    }
+    get message() {
+      if (!(#error in this)) throw __illegalInvocation();
+      return this.#message;
+    }
+    get lineno() {
+      if (!(#error in this)) throw __illegalInvocation();
+      return this.#lineno;
+    }
+    get colno() {
+      if (!(#error in this)) throw __illegalInvocation();
+      return this.#colno;
+    }
+    get error() {
+      if (!(#error in this)) throw __illegalInvocation();
+      return this.#error;
     }
   };
+  for (const name of ["filename", "message", "lineno", "colno", "error"])
+    __workerdAccessor(ErrorEvent.prototype, name);
 }
 // Web API globals a real bundle references at module scope but that the
 // prelude doesn't provide. Stub as empty classes (guarded so we never
@@ -14293,17 +15369,16 @@ const __wsSetId = (state, id) => {
   state.id = id;
   if (state.peer !== null) __wsState(state.peer).id = id;
 };
+// A WebSocket event the runtime fires (web-socket.c++): 'open' and
+// 'message' fail fast, so under spec_compliant_dispatch_exceptions the
+// first exception a listener threw is thrown once every listener has run
+// (and been reported); 'close' and 'error' are report-only. Without the
+// flag the first exception ends the dispatch and is thrown.
+const __wsFire = (socket, event, failFast) => {
+  const { first } = __dispatchEvent(socket, event, __specPolicy());
+  if (failFast && first !== null) throw first.error;
+};
 const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
-  // The spec names, which workerd exposes and real bundles use. celld only
-  // had the READY_STATE_* aliases, which no other runtime defines.
-  static CONNECTING = 0;
-  static OPEN = 1;
-  static CLOSING = 2;
-  static CLOSED = 3;
-  static READY_STATE_CONNECTING = 0;
-  static READY_STATE_OPEN = 1;
-  static READY_STATE_CLOSING = 2;
-  static READY_STATE_CLOSED = 3;
   // All of a socket's state. Private, so application code can neither read
   // nor write the host id, the peer, the target or the owner.
   #s;
@@ -14416,6 +15491,7 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       extensions: "",
     };
     this.#s = s;
+    if (__oldAttributes) __instanceAttributes(this, __webSocketAttributes);
     if (!dialed) return;
     const target = String(url);
     // workerd validates the URL in the constructor and throws synchronously;
@@ -14482,7 +15558,7 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       if (s.readyState !== __WS_CONNECTING) return;
       s.protocol = protocol;
       s.readyState = __WS_OPEN;
-      this.dispatchEvent(new Event("open"));
+      __wsFire(this, new Event("open"), true);
     }, (error) => {
       if (s.readyState === __WS_CLOSED) return;
       s.readyState = __WS_CLOSED;
@@ -14490,10 +15566,10 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       // The connection's own error, then the abnormal close. Not through
       // #dispatchClose, which returns for a closed socket and would add its
       // generic error event: a failed dial fired the error and never the close.
-      this.dispatchEvent(new ErrorEvent("error", { message: String(error?.message || error), error }));
+      __wsFire(this, new ErrorEvent("error", { message: String(error?.message || error), error }), false);
       const event = new CloseEvent("close", { code: 1006, reason: "", wasClean: false });
-      event._trust();
-      this.dispatchEvent(event);
+      __eventTrust(event);
+      __wsFire(this, event, false);
     });
   }
   // A socket that a pair or a response made is OPEN until it closes, as in
@@ -14555,7 +15631,7 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
         if (s.readyState === __WS_CONNECTING) {
           s.protocol = new TextDecoder().decode(body);
           s.readyState = __WS_OPEN;
-          this.dispatchEvent(new Event("open"));
+          __wsFire(this, new Event("open"), true);
         }
       } else {
         const info = __jsonParse(new TextDecoder().decode(body));
@@ -14717,9 +15793,11 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
     // RFC 6455 5.5: the close frame body is at most 125 bytes, two of which
     // are the code. Measured in UTF-8, so a multibyte reason can exceed the
     // cap at well under 123 characters.
+    // Only under websocket_close_reason_byte_limit, as in workerd.
     if (reason !== undefined) {
       reason = String(reason);
-      if (new TextEncoder().encode(reason).length > 123) {
+      if (__cell.compat.websocketCloseReasonByteLimit &&
+          __encodeUtf8(reason).length > 123) {
         throw new DOMException(
           "WebSocket close reason must not be longer than 123 bytes when UTF-8 encoded.",
           "SyntaxError");
@@ -14813,8 +15891,8 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       data = new Blob([data]);
     }
     const event = new MessageEvent("message", { data });
-    event._trust();
-    this.dispatchEvent(event);
+    __eventTrust(event);
+    __wsFire(this, event, true);
   }
   // The peer's Close arrived, or the connection ended without one
   // (`wasClean` false). Unless the socket is half-open, it replies with the
@@ -14839,21 +15917,47 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
     // the standard onerror never ran otherwise, which matters most for an
     // outbound socket: its peer is a remote server that can simply vanish.
     if (!wasClean) {
-      this.dispatchEvent(new ErrorEvent("error", {
+      __wsFire(this, new ErrorEvent("error", {
         message: reason
           ? `WebSocket closed abnormally: ${reason}`
           : "WebSocket closed abnormally",
-      }));
+      }), false);
     }
     const event = new CloseEvent("close", { code, reason, wasClean });
-    event._trust();
-    this.dispatchEvent(event);
+    __eventTrust(event);
+    __wsFire(this, event, false);
   }
 };
+// workerd's ready-state constants, on the class and its prototype in its
+// order, read-only and configurable (JSG_STATIC_CONSTANT). The spec's names
+// and workerd's READY_STATE_* aliases.
+{
+  const constants = [
+    ["READY_STATE_CONNECTING", 0], ["CONNECTING", 0],
+    ["READY_STATE_OPEN", 1], ["OPEN", 1],
+    ["READY_STATE_CLOSING", 2], ["CLOSING", 2],
+    ["READY_STATE_CLOSED", 3], ["CLOSED", 3],
+  ];
+  for (let i = 0; i < constants.length; i++) {
+    const descriptor = { __proto__: null, value: constants[i][1], writable: false,
+      enumerable: true, configurable: true };
+    __ObjectDefineProperty(__WebSocket, constants[i][0], descriptor);
+    __ObjectDefineProperty(__WebSocket.prototype, constants[i][0], descriptor);
+  }
+  // workerd's member order: the methods, the constants, the attributes.
+  __reorderOwnKeys(__WebSocket.prototype, [
+    "accept", "send", "close", "serializeAttachment", "deserializeAttachment",
+    ...constants.map((constant) => constant[0]),
+    "readyState", "url", "protocol", "extensions", "binaryType",
+  ]);
+}
 // A Worker that replaced WebSocket's prototype could run its own code as the
 // `super()` of every socket the harness makes. Subclasses still work: they
 // change their own prototype, not this one.
 Object.preventExtensions(__WebSocket);
+const __webSocketAttributes = __attributeTable([
+  "binaryType", "extensions", "protocol", "url", "readyState",
+].map((name) => [__WebSocket.prototype, name]));
 // The internal factory: a socket that names a host socket, a pair end, or
 // the client end of a subrequest's upgrade. Never reachable from
 // application code, which can only dial.
@@ -14934,24 +16038,49 @@ globalThis.WebSocketRequestResponsePair =
     get request() { return this.#request; }
     get response() { return this.#response; }
   };
+// workerd's WebSocketPair: its two ends as own read-only properties 0 and 1,
+// and iterable, with a PairIterator, so `const [client, server] = new
+// WebSocketPair()` and `Object.values()` both give the ends.
+class PairIterator {
+  #ends;
+  #index = 0;
+  constructor(ends) { this.#ends = ends; }
+  next() {
+    return this.#index < 2
+      ? __celld.__iterResult(false, this.#ends[this.#index++])
+      : __celld.__iterResult(true);
+  }
+}
+__ObjectSetPrototypeOf(PairIterator.prototype,
+  __ObjectGetPrototypeOf(__ObjectGetPrototypeOf([][Symbol.iterator]())));
+__celld.__apiTag(PairIterator.prototype, "PairIterator");
+const __pairEnds = new __SafeWeakMap();
 globalThis.WebSocketPair = function WebSocketPair() {
+  if (new.target === undefined)
+    throw new TypeError("Failed to construct 'WebSocketPair': Please use the " +
+      "'new' operator, this object constructor cannot be called as a function.");
   // Both ends take the id the host allocates when one of them is registered:
   // accepted by a Durable Object, or returned by a Worker.
   const client = __wsCreate({ __proto__: null });
   const server = __wsCreate({ __proto__: null });
   __wsState(client).peer = server;
   __wsState(server).peer = client;
-  // Indexed AND iterable: `const [client, server] = new WebSocketPair()` is
-  // the form most Cloudflare code uses.
-  return {
-    0: client,
-    1: server,
-    length: 2,
-    [Symbol.iterator]() {
-      return [client, server][Symbol.iterator]();
-    },
-  };
+  __ReflectApply(__WeakMapSet, __pairEnds, [this, [client, server]]);
+  for (const [key, value] of [["0", client], ["1", server]])
+    __ObjectDefineProperty(this, key, {
+      __proto__: null, value, writable: false, enumerable: true, configurable: true,
+    });
 };
+{
+  const [entries] = [function () {
+    const ends = __ReflectApply(__WeakMapGet, __pairEnds, [this]);
+    if (ends === undefined) throw __illegalInvocation();
+    return new PairIterator(ends);
+  }];
+  __ObjectDefineProperty(WebSocketPair.prototype, Symbol.iterator, {
+    __proto__: null, value: entries, writable: true, enumerable: false, configurable: true,
+  });
+}
 // Cloudflare exposes the time of the last I/O, not a clock that advances
 // while JavaScript runs. Keep Date and performance on one turn timestamp so
 // neither becomes a timing side channel and the two APIs cannot disagree.
@@ -15123,6 +16252,20 @@ if (!globalThis.structuredClone) {
   defineHostType(AbortSignal.prototype, function() {
     throw __signalOutsideRpc();
   });
+  // A Request and a Response serialize as workerd's do outside RPC: by
+  // value, and a body is refused (`__hostValueOutsideRpc`).
+  defineHostType(Request.prototype, function() {
+    if (!__isRequest(this)) throw __rpcUnsupportedType(this);
+    return { type: "Request", marker: __hostValueOutsideRpc(this, "request") };
+  });
+  defineHostType(Response.prototype, function() {
+    if (!__isResponse(this)) throw __rpcUnsupportedType(this);
+    return { type: "Response", marker: __hostValueOutsideRpc(this, "response") };
+  });
+  deserializers.Request = (data) =>
+    __reviveHostValue(data.marker, "__celld$req", null, false);
+  deserializers.Response = (data) =>
+    __reviveHostValue(data.marker, "__celld$res", null, false);
   defineHostType(DOMException.prototype, function() {
     return {
       type: "DOMException", message: this.message,
@@ -15165,7 +16308,7 @@ if (!globalThis.structuredClone) {
         };
       });
     for (const constructor of [
-      URL, URLSearchParams, Headers, FormData, Request, Response,
+      URL, URLSearchParams, Headers, FormData,
       typeof MessagePort === "function" ? MessagePort : undefined,
     ]) defineUnsupportedType(constructor);
 
@@ -15723,7 +16866,7 @@ const __bridgeResponseStream = (body, requestControllers) => {
         ? { consumerClosed: true }
         : new Promise(() => {}));
     const cancelProducer = async () => {
-      const reason = new Error("The client has disconnected");
+      const reason = __clientDisconnected();
       for (const controller of requestControllers || []) {
         if (!controller.signal.aborted) controller.abort(reason);
       }
@@ -15776,10 +16919,10 @@ __celld.__readResponse = (r) => {
   // Keep the network-error marker out of the HTTP response fields. If status
   // zero reaches Rust as an ordinary response, the outer server can report
   // only a generic invalid status instead of the Worker contract failure.
-  if (r.type === "error" || r.status === 0)
+  if (__responseType(r) === "error" || __responseStatus(r) === 0)
     return __ObjectSetPrototypeOf({ error: __ERROR_RESPONSE_MESSAGE }, null);
   let workerSocketId = 0;
-  const socket = r.webSocket;
+  const socket = __responseWebSocket(r);
   const state = socket === null ? null : __wsState(socket);
   // A socket from another request or Durable Object cannot leave in this
   // one's response, as in workerd.
@@ -15788,20 +16931,20 @@ __celld.__readResponse = (r) => {
   // when it couples to the receiver: the receiver's connection ends with
   // 1006. The host gives the response a socket that is already gone. A
   // client end bound to a Durable Object's socket is the same case.
-  const acceptedWebSocket = r.status === 101 && state !== null &&
+  const acceptedWebSocket = __responseStatus(r) === 101 && state !== null &&
     (state.handoffAccepted || state.bound);
   // The Durable Object socket this response names. The host admits it only
   // under a grant this request holds, or as the running object's own.
   const wsTarget = state !== null && !acceptedWebSocket ? state.target : null;
   // This end now belongs to whoever receives the response.
-  if (r.status === 101 && state !== null) state.returned = true;
+  if (__responseStatus(r) === 101 && state !== null) state.returned = true;
   // A socket another isolate holds, handed to this request by a subrequest
   // and returned here without being accepted: the host passes that socket
   // on, so its server end reaches this response's client.
-  const workerHandoff = r.status === 101 && state !== null
+  const workerHandoff = __responseStatus(r) === 101 && state !== null
     ? state.handoff ?? null
     : null;
-  if (r.status === 101 && state !== null && wsTarget === null && workerHandoff === null &&
+  if (__responseStatus(r) === 101 && state !== null && wsTarget === null && workerHandoff === null &&
       !acceptedWebSocket) {
     const server = state.peer;
     const serverState = server === null ? null : __wsState(server);
@@ -15818,33 +16961,49 @@ __celld.__readResponse = (r) => {
       __wsFlushPending(server);
     }
   }
-  const hostStreamId = r.__celldRequestControllers
+  // Content-Encoding (`__gzipEncoded`): a body sent with "automatic" and
+  // `Content-Encoding: gzip` goes out compressed, unless it is a gzip body
+  // that arrived so and that nothing read, which goes out as it came.
+  let stream = __bodyStream(r);
+  let bytes = __bodyBytesOf(r);
+  const status = __responseStatus(r);
+  if (stream !== null && __responseEncodeBody(r) === "automatic" &&
+      !__nullBodyStatus(status) && __gzipEncoded(__responseHeaders(r))) {
+    const raw = __gzipRawBody(stream);
+    if (raw !== undefined && __isReadableStream(raw)) {
+      stream = raw;
+      bytes = null;
+    } else if (raw !== undefined) {
+      bytes = raw;
+    } else {
+      stream = __gzipBody(bytes !== null ? bytes : stream);
+      bytes = null;
+    }
+  }
+  const requestControllers = __responseRequestControllers(r);
+  const hostStreamId = requestControllers !== null
     ? undefined
-    : __hostStreamId(r.body);
-  const bodyStreamId = __bodyBytesOf(r) === null
-    ? hostStreamId ?? __bridgeResponseStream(
-      r.body,
-      r.__celldRequestControllers,
-    )
+    : __hostStreamId(stream);
+  const bodyStreamId = bytes === null
+    ? hostStreamId ?? __bridgeResponseStream(stream, requestControllers)
     : 0;
   if (bodyStreamId) {
     return __ObjectSetPrototypeOf({
-      status: r.status,
+      status,
       bodyBytes: new Uint8Array(),
       bodyStreamId,
-      headersJson: JSON.stringify(Array.from(r.headers)),
+      headersJson: JSON.stringify(Array.from(__responseHeaders(r))),
       wsTargetJson: (wsTarget === null ? "null" : __wsTargetJson(wsTarget)),
       workerSocketId,
       workerHandoff,
       acceptedWebSocket,
     }, null);
   }
-  const bytes = __bodyBytesOf(r);
   return __ObjectSetPrototypeOf({
-    status: r.status,
+    status,
     bodyBytes: bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
     bodyStreamId: 0,
-    headersJson: JSON.stringify(Array.from(r.headers)),
+    headersJson: JSON.stringify(Array.from(__responseHeaders(r))),
     wsTargetJson: (wsTarget === null ? "null" : __wsTargetJson(wsTarget)),
     workerSocketId,
     workerHandoff,
@@ -15857,7 +17016,7 @@ const __NOT_A_RESPONSE =
 // harness defines, by the names workerd gives them: an RPC stub's classes
 // are its JsRpc* types.
 for (const name of [
-  "AbortController", "AbortSignal", "Blob", "CloseEvent", "CustomEvent",
+  "AbortController", "AbortSignal", "Blob", "Body", "CloseEvent", "CustomEvent",
   "DOMException", "ErrorEvent", "Event", "EventTarget", "ExtendableEvent",
   "File", "FormData", "MessageEvent", "Request", "Response", "WebSocket",
   "WebSocketPair", "WebSocketRequestResponsePair",
@@ -15869,11 +17028,19 @@ __celld.__apiTag(__cf.RpcProperty.prototype, "JsRpcProperty");
 // `inject_storage_compatibility` before the Worker's modules evaluate.
 function __applyCompat() {
   const compat = __cell.compat;
-  __celld.__applyApiTags(compat.setToStringTag);
+  __oldAttributes = __celld.__oldAttributes =
+    !compat.workersApiGettersSettersOnPrototype;
+  if (__oldAttributes) {
+    for (const [prototype, name] of __attributeOwners)
+      __ReflectDeleteProperty(prototype, name);
+    // The global crypto object, made before the flags were known.
+    __celld.__installAttributes(__celld.__crypto, "Crypto");
+  }
+  __celld.__fastJsgStruct = compat.fastJsgStruct;
   if (compat.nodejsGlobalTimers) __installNodeGlobalTimers();
   // Request.prototype.cache exists only with cache_option_enabled, as a
   // getter without a name, like workerd's prototype properties.
-  if (compat.cacheOption) {
+  if (compat.cacheOption && !__oldAttributes) {
     const [get] = [function () {
       if (!__isRequest(this)) throw __illegalInvocation();
       return __requestCache(this);
@@ -15881,4 +17048,6 @@ function __applyCompat() {
     __ObjectDefineProperty(__Request.prototype, "cache",
       { __proto__: null, get, enumerable: true, configurable: true });
   }
+  // Last, once the prototypes are complete (api_tags.js).
+  __celld.__applyApiTags(compat.setToStringTag);
 }

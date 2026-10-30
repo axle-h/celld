@@ -1,0 +1,6 @@
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "services": [{ "binding": "SELF", "service": "front" }]
+}

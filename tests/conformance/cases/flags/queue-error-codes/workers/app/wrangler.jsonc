@@ -1,0 +1,9 @@
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "queues": {
+    "producers": [{ "binding": "QUEUE", "queue": "codes-queue" }],
+    "consumers": [{ "queue": "codes-queue" }]
+  }
+}

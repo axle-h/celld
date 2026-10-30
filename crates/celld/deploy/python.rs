@@ -125,6 +125,14 @@ pub fn python_compat(object: &Map<String, Value>) -> anyhow::Result<PythonCompat
             );
         }
     }
+    // From 2026-09-08 python_workers turns python_workers_314 on.
+    if computed.get(id("python_workers_314")) {
+        bail!(
+            "celld runs Python Workers on Pyodide {PYODIDE_VERSION} (Python 3.13); from \
+             2026-09-08 a Python Worker runs on Python 3.14, so add the \
+             `no_python_workers_314` compatibility flag or use an earlier compatibility_date"
+        );
+    }
     // Each of these is on by date or by python_workers from 2026-04-21 at the
     // latest, so each check rejects only an explicit opt-out or an older date.
     let required = [
@@ -712,6 +720,9 @@ mod tests {
             message("2026-09-04", &["python_workers", "python_workers_314"])
                 .ends_with("remove the `python_workers_314` compatibility flag")
         );
+        assert!(message("2026-09-08", &["python_workers"])
+            .contains("add the `no_python_workers_314` compatibility flag"));
+        assert!(compat("2026-09-08", &["python_workers", "no_python_workers_314"]).is_ok());
         assert!(message("2026-04-20", &["python_workers"])
             .contains("only with the vendored Workers SDK (enable_python_external_sdk)"));
         assert!(message(

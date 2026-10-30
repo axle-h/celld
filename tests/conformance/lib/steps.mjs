@@ -300,6 +300,7 @@ function webSocketStep(session, step) {
       if (!opened) finish(null, refused());
       else {
         const result = { frames, close: { code: event.code, reason: event.reason } };
+        if (step.extensions) result.extensions = socket.extensions;
         finish(step.protocols === undefined ? result : { protocol: socket.protocol, ...result });
       }
     });

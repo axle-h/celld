@@ -1,0 +1,304 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "dispatch": {
+          "log": [
+            "first",
+            "second",
+            "third"
+          ],
+          "returned": true,
+          "errors": [
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught Error: second failed",
+              "error": "second failed",
+              "cancelable": false
+            },
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught TypeError: third failed",
+              "error": "third failed",
+              "cancelable": false
+            }
+          ]
+        },
+        "handler": {
+          "log": [
+            "listener",
+            "after"
+          ],
+          "returned": true,
+          "errors": [
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught Error: prevented",
+              "error": "prevented",
+              "cancelable": false
+            }
+          ]
+        },
+        "abort": {
+          "log": [
+            "first",
+            "second",
+            "third",
+            "onabort"
+          ],
+          "returned": true,
+          "errors": [
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught Error: second failed",
+              "error": "second failed",
+              "cancelable": false
+            },
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught TypeError: third failed",
+              "error": "third failed",
+              "cancelable": false
+            }
+          ]
+        },
+        "timeout": {
+          "log": [
+            "first",
+            "second",
+            "third"
+          ],
+          "returned": true,
+          "errors": [
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught Error: second failed",
+              "error": "second failed",
+              "cancelable": false
+            },
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught TypeError: third failed",
+              "error": "third failed",
+              "cancelable": false
+            }
+          ]
+        },
+        "message": {
+          "log": [
+            "first hello",
+            "second hello",
+            "messageerror port failed"
+          ],
+          "returned": "sent",
+          "errors": [
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught Error: port failed",
+              "error": "port failed",
+              "cancelable": false
+            }
+          ]
+        },
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "dispatch": {
+          "log": [
+            "first",
+            "second"
+          ],
+          "threw": "Error: second failed",
+          "errors": []
+        },
+        "handler": {
+          "log": [
+            "listener"
+          ],
+          "threw": "Error: prevented",
+          "errors": []
+        },
+        "abort": {
+          "log": [
+            "first",
+            "second"
+          ],
+          "threw": "Error: second failed",
+          "errors": []
+        },
+        "timeout": {
+          "log": [
+            "first",
+            "second"
+          ],
+          "returned": true,
+          "errors": []
+        },
+        "message": {
+          "log": [
+            "first hello",
+            "first Error: port failed"
+          ],
+          "returned": "sent",
+          "errors": []
+        },
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "dispatch": {
+          "log": [
+            "first",
+            "second",
+            "third"
+          ],
+          "returned": true,
+          "errors": [
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught Error: second failed",
+              "error": "second failed",
+              "cancelable": false
+            },
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught TypeError: third failed",
+              "error": "third failed",
+              "cancelable": false
+            }
+          ]
+        },
+        "handler": {
+          "log": [
+            "listener",
+            "after"
+          ],
+          "returned": true,
+          "errors": [
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught Error: prevented",
+              "error": "prevented",
+              "cancelable": false
+            }
+          ]
+        },
+        "abort": {
+          "log": [
+            "first",
+            "second",
+            "third",
+            "onabort"
+          ],
+          "returned": true,
+          "errors": [
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught Error: second failed",
+              "error": "second failed",
+              "cancelable": false
+            },
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught TypeError: third failed",
+              "error": "third failed",
+              "cancelable": false
+            }
+          ]
+        },
+        "timeout": {
+          "log": [
+            "first",
+            "second",
+            "third"
+          ],
+          "returned": true,
+          "errors": [
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught Error: second failed",
+              "error": "second failed",
+              "cancelable": false
+            },
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught TypeError: third failed",
+              "error": "third failed",
+              "cancelable": false
+            }
+          ]
+        },
+        "message": {
+          "log": [
+            "first hello",
+            "second hello",
+            "messageerror port failed"
+          ],
+          "returned": "sent",
+          "errors": [
+            {
+              "type": "ErrorEvent",
+              "message": "Uncaught Error: port failed",
+              "error": "port failed",
+              "cancelable": false
+            }
+          ]
+        },
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "dispatch": {
+          "log": [
+            "first",
+            "second"
+          ],
+          "threw": "Error: second failed",
+          "errors": []
+        },
+        "handler": {
+          "log": [
+            "listener"
+          ],
+          "threw": "Error: prevented",
+          "errors": []
+        },
+        "abort": {
+          "log": [
+            "first",
+            "second"
+          ],
+          "threw": "Error: second failed",
+          "errors": []
+        },
+        "timeout": {
+          "log": [
+            "first",
+            "second"
+          ],
+          "returned": true,
+          "errors": []
+        },
+        "message": {
+          "log": [
+            "first hello",
+            "first Error: port failed"
+          ],
+          "returned": "sent",
+          "errors": []
+        },
+        "reported": false
+      }
+    }
+  ]
+}

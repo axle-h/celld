@@ -1,0 +1,69 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "bundled": "function",
+        "bundledDynamic": "function",
+        "on": {
+          "static": "Error: Failed to start Worker:\nUncaught Error: Unrecognized import attributes specified",
+          "dynamic": {
+            "type": "Error: Unrecognized import attributes specified",
+            "json": "Error: Unrecognized import attributes specified",
+            "empty": "loaded",
+            "builtin": "Error: Unrecognized import attributes specified",
+            "plain": "loaded"
+          }
+        },
+        "before": {
+          "static": {
+            "value": 1,
+            "type": "loaded",
+            "json": "loaded",
+            "empty": "loaded",
+            "builtin": "loaded",
+            "plain": "loaded",
+            "reported": false
+          },
+          "dynamic": {
+            "type": "loaded",
+            "json": "loaded",
+            "empty": "loaded",
+            "builtin": "loaded",
+            "plain": "loaded"
+          }
+        },
+        "enable": {
+          "static": "Error: Failed to start Worker:\nUncaught Error: Unrecognized import attributes specified",
+          "dynamic": {
+            "type": "Error: Unrecognized import attributes specified",
+            "json": "Error: Unrecognized import attributes specified",
+            "empty": "loaded",
+            "builtin": "Error: Unrecognized import attributes specified",
+            "plain": "loaded"
+          }
+        },
+        "disable": {
+          "static": {
+            "value": 1,
+            "type": "loaded",
+            "json": "loaded",
+            "empty": "loaded",
+            "builtin": "loaded",
+            "plain": "loaded",
+            "reported": false
+          },
+          "dynamic": {
+            "type": "loaded",
+            "json": "loaded",
+            "empty": "loaded",
+            "builtin": "loaded",
+            "plain": "loaded"
+          }
+        }
+      }
+    }
+  ]
+}

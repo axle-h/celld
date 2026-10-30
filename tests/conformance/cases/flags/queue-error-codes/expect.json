@@ -1,0 +1,13 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "large": "Error: Message size out of bounds (10204)",
+        "batchCount": "Error: Batch count out of bounds (10206)",
+        "batchLarge": "Error: Message size out of bounds (10204)",
+        "batchTotal": "Error: Batch size out of bounds (10205)"
+      }
+    }
+  ]
+}

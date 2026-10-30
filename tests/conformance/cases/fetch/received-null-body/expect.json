@@ -1,0 +1,47 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "204": [
+          204,
+          "yes",
+          true,
+          ""
+        ],
+        "205": [
+          205,
+          "yes",
+          true,
+          ""
+        ],
+        "304": [
+          304,
+          "yes",
+          true,
+          ""
+        ],
+        "head": [
+          200,
+          "yes",
+          true,
+          ""
+        ],
+        "headGzip": [
+          200,
+          "yes",
+          true,
+          ""
+        ],
+        "get": [
+          200,
+          "yes",
+          false,
+          "target body"
+        ]
+      }
+    }
+  ]
+}
