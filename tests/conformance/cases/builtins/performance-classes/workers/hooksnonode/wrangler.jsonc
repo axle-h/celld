@@ -1,0 +1,8 @@
+{
+  "name": "hooksnonode",
+  "main": "index.js",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": [
+    "enable_nodejs_perf_hooks_module"
+  ]
+}

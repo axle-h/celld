@@ -1,0 +1,50 @@
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "services": [
+    {
+      "binding": "BASE",
+      "service": "base"
+    },
+    {
+      "binding": "BASEOLD",
+      "service": "baseold"
+    },
+    {
+      "binding": "B0317",
+      "service": "b0317"
+    },
+    {
+      "binding": "GLOBALONLY",
+      "service": "globalonly"
+    },
+    {
+      "binding": "HOOKSNONODE",
+      "service": "hooksnonode"
+    },
+    {
+      "binding": "HOOKSONLY",
+      "service": "hooksonly"
+    },
+    {
+      "binding": "NOGLOBAL",
+      "service": "noglobal"
+    },
+    {
+      "binding": "OLDGLOBAL",
+      "service": "oldglobal"
+    },
+    {
+      "binding": "OLD",
+      "service": "old"
+    },
+    {
+      "binding": "PLAIN",
+      "service": "plain"
+    }
+  ]
+}

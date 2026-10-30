@@ -1,0 +1,19 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "number": "EvalError: Code generation from strings disallowed for this context",
+        "object": "EvalError: Code generation from strings disallowed for this context",
+        "undefined": "undefined",
+        "none": "undefined",
+        "emptyFunction": "function",
+        "emptyCall": "function",
+        "subclass": "function",
+        "emptyAsync": "EvalError: Code generation from strings disallowed for this context"
+      }
+    }
+  ]
+}

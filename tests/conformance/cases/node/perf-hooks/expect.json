@@ -1,0 +1,566 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "flags": {
+          "nodejs_compat": true,
+          "enable_nodejs_perf_hooks_module": true
+        },
+        "namespace": [
+          [
+            "Performance",
+            "fn:Performance/0 ew"
+          ],
+          [
+            "PerformanceEntry",
+            "fn:PerformanceEntry/0 ew"
+          ],
+          [
+            "PerformanceMark",
+            "fn:PerformanceMark/0 ew"
+          ],
+          [
+            "PerformanceMeasure",
+            "fn:PerformanceMeasure/0 ew"
+          ],
+          [
+            "PerformanceObserver",
+            "fn:PerformanceObserver/0 ew"
+          ],
+          [
+            "PerformanceObserverEntryList",
+            "fn:PerformanceObserverEntryList/0 ew"
+          ],
+          [
+            "PerformanceResourceTiming",
+            "fn:PerformanceResourceTiming/0 ew"
+          ],
+          [
+            "constants",
+            "value:object ew"
+          ],
+          [
+            "createHistogram",
+            "fn:createHistogram/0 ew"
+          ],
+          [
+            "default",
+            "value:object ew"
+          ],
+          [
+            "eventLoopUtilization",
+            "fn:eventLoopUtilization/2 ew"
+          ],
+          [
+            "monitorEventLoopDelay",
+            "fn:monitorEventLoopDelay/0 ew"
+          ],
+          [
+            "performance",
+            "value:object ew"
+          ],
+          [
+            "timerify",
+            "fn:timerify/1 ew"
+          ],
+          [
+            "Symbol(Symbol.toStringTag)",
+            "value:string "
+          ]
+        ],
+        "default": [
+          [
+            "Performance",
+            "fn:Performance/0 ewc"
+          ],
+          [
+            "PerformanceEntry",
+            "fn:PerformanceEntry/0 ewc"
+          ],
+          [
+            "PerformanceMark",
+            "fn:PerformanceMark/0 ewc"
+          ],
+          [
+            "PerformanceMeasure",
+            "fn:PerformanceMeasure/0 ewc"
+          ],
+          [
+            "PerformanceObserver",
+            "fn:PerformanceObserver/0 ewc"
+          ],
+          [
+            "PerformanceObserverEntryList",
+            "fn:PerformanceObserverEntryList/0 ewc"
+          ],
+          [
+            "PerformanceResourceTiming",
+            "fn:PerformanceResourceTiming/0 ewc"
+          ],
+          [
+            "monitorEventLoopDelay",
+            "fn:monitorEventLoopDelay/0 ewc"
+          ],
+          [
+            "createHistogram",
+            "fn:createHistogram/0 ewc"
+          ],
+          [
+            "eventLoopUtilization",
+            "fn:eventLoopUtilization/2 ewc"
+          ],
+          [
+            "timerify",
+            "fn:timerify/1 ewc"
+          ],
+          [
+            "performance",
+            "value:object ewc"
+          ],
+          [
+            "constants",
+            "value:object ewc"
+          ]
+        ],
+        "defaultIsNamespaceMember": true,
+        "globals": {
+          "performance": true,
+          "named": true,
+          "defaultPerformance": true,
+          "classes": [
+            [
+              "Performance",
+              true,
+              true
+            ],
+            [
+              "PerformanceEntry",
+              true,
+              true
+            ],
+            [
+              "PerformanceMark",
+              true,
+              true
+            ],
+            [
+              "PerformanceMeasure",
+              true,
+              true
+            ],
+            [
+              "PerformanceObserver",
+              true,
+              true
+            ],
+            [
+              "PerformanceObserverEntryList",
+              true,
+              true
+            ],
+            [
+              "PerformanceResourceTiming",
+              true,
+              true
+            ]
+          ]
+        },
+        "constants": [
+          {
+            "NODE_PERFORMANCE_GC_MAJOR": 4,
+            "NODE_PERFORMANCE_GC_MINOR": 1,
+            "NODE_PERFORMANCE_GC_INCREMENTAL": 8,
+            "NODE_PERFORMANCE_GC_WEAKCB": 16,
+            "NODE_PERFORMANCE_GC_FLAGS_NO": 0,
+            "NODE_PERFORMANCE_GC_FLAGS_CONSTRUCT_RETAINED": 2,
+            "NODE_PERFORMANCE_GC_FLAGS_FORCED": 4,
+            "NODE_PERFORMANCE_GC_FLAGS_SYNCHRONOUS_PHANTOM_PROCESSING": 8,
+            "NODE_PERFORMANCE_GC_FLAGS_ALL_AVAILABLE_GARBAGE": 16,
+            "NODE_PERFORMANCE_GC_FLAGS_ALL_EXTERNAL_MEMORY": 32,
+            "NODE_PERFORMANCE_GC_FLAGS_SCHEDULE_IDLE": 64,
+            "NODE_PERFORMANCE_ENTRY_TYPE_GC": 0,
+            "NODE_PERFORMANCE_ENTRY_TYPE_HTTP": 1,
+            "NODE_PERFORMANCE_ENTRY_TYPE_HTTP2": 2,
+            "NODE_PERFORMANCE_ENTRY_TYPE_NET": 3,
+            "NODE_PERFORMANCE_ENTRY_TYPE_DNS": 4,
+            "NODE_PERFORMANCE_MILESTONE_TIME_ORIGIN_TIMESTAMP": 0,
+            "NODE_PERFORMANCE_MILESTONE_TIME_ORIGIN": 1,
+            "NODE_PERFORMANCE_MILESTONE_ENVIRONMENT": 2,
+            "NODE_PERFORMANCE_MILESTONE_NODE_START": 3,
+            "NODE_PERFORMANCE_MILESTONE_V8_START": 4,
+            "NODE_PERFORMANCE_MILESTONE_LOOP_START": 5,
+            "NODE_PERFORMANCE_MILESTONE_LOOP_EXIT": 6,
+            "NODE_PERFORMANCE_MILESTONE_BOOTSTRAP_COMPLETE": 7
+          },
+          true,
+          true
+        ],
+        "eventLoopUtilization": [
+          {
+            "idle": 0,
+            "active": 0,
+            "utilization": 0
+          },
+          {
+            "idle": 0,
+            "active": 0,
+            "utilization": 0
+          },
+          true,
+          false
+        ],
+        "timerify": [
+          true,
+          5,
+          null,
+          false
+        ],
+        "createHistogram": [
+          "ERR_METHOD_NOT_IMPLEMENTED/Error/ERR_METHOD_NOT_IMPLEMENTED: The createHistogram method is not implemented",
+          [
+            "code",
+            "name"
+          ],
+          "Error [ERR_METHOD_NOT_IMPLEMENTED]: The createHistogram method is not implemented",
+          true,
+          "NodeErrorAbstraction"
+        ],
+        "monitorEventLoopDelay": [
+          "ERR_METHOD_NOT_IMPLEMENTED/Error/ERR_METHOD_NOT_IMPLEMENTED: The monitorEventLoopDelay method is not implemented",
+          [
+            "code",
+            "name"
+          ],
+          "Error [ERR_METHOD_NOT_IMPLEMENTED]: The monitorEventLoopDelay method is not implemented",
+          true,
+          "NodeErrorAbstraction"
+        ],
+        "dynamic": [
+          [
+            "Performance",
+            "PerformanceEntry",
+            "PerformanceMark",
+            "PerformanceMeasure",
+            "PerformanceObserver",
+            "PerformanceObserverEntryList",
+            "PerformanceResourceTiming",
+            "constants",
+            "createHistogram",
+            "default",
+            "eventLoopUtilization",
+            "monitorEventLoopDelay",
+            "performance",
+            "timerify"
+          ],
+          true,
+          true
+        ],
+        "bare": [
+          true,
+          true
+        ],
+        "builtin": [
+          true,
+          [
+            "Performance",
+            "PerformanceEntry",
+            "PerformanceMark",
+            "PerformanceMeasure",
+            "PerformanceObserver",
+            "PerformanceObserverEntryList",
+            "PerformanceResourceTiming",
+            "monitorEventLoopDelay",
+            "createHistogram",
+            "eventLoopUtilization",
+            "timerify",
+            "performance",
+            "constants"
+          ]
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "flags": {
+          "nodejs_compat": true,
+          "enable_nodejs_perf_hooks_module": true
+        },
+        "namespace": [
+          [
+            "Performance",
+            "fn:Performance/0 ew"
+          ],
+          [
+            "PerformanceEntry",
+            "fn:PerformanceEntry/0 ew"
+          ],
+          [
+            "PerformanceMark",
+            "fn:PerformanceMark/0 ew"
+          ],
+          [
+            "PerformanceMeasure",
+            "fn:PerformanceMeasure/0 ew"
+          ],
+          [
+            "PerformanceObserver",
+            "fn:PerformanceObserver/0 ew"
+          ],
+          [
+            "PerformanceObserverEntryList",
+            "fn:PerformanceObserverEntryList/0 ew"
+          ],
+          [
+            "PerformanceResourceTiming",
+            "fn:PerformanceResourceTiming/0 ew"
+          ],
+          [
+            "constants",
+            "value:object ew"
+          ],
+          [
+            "createHistogram",
+            "fn:createHistogram/0 ew"
+          ],
+          [
+            "default",
+            "value:object ew"
+          ],
+          [
+            "eventLoopUtilization",
+            "fn:eventLoopUtilization/2 ew"
+          ],
+          [
+            "monitorEventLoopDelay",
+            "fn:monitorEventLoopDelay/0 ew"
+          ],
+          [
+            "performance",
+            "value:object ew"
+          ],
+          [
+            "timerify",
+            "fn:timerify/1 ew"
+          ],
+          [
+            "Symbol(Symbol.toStringTag)",
+            "value:string "
+          ]
+        ],
+        "default": [
+          [
+            "Performance",
+            "fn:Performance/0 ewc"
+          ],
+          [
+            "PerformanceEntry",
+            "fn:PerformanceEntry/0 ewc"
+          ],
+          [
+            "PerformanceMark",
+            "fn:PerformanceMark/0 ewc"
+          ],
+          [
+            "PerformanceMeasure",
+            "fn:PerformanceMeasure/0 ewc"
+          ],
+          [
+            "PerformanceObserver",
+            "fn:PerformanceObserver/0 ewc"
+          ],
+          [
+            "PerformanceObserverEntryList",
+            "fn:PerformanceObserverEntryList/0 ewc"
+          ],
+          [
+            "PerformanceResourceTiming",
+            "fn:PerformanceResourceTiming/0 ewc"
+          ],
+          [
+            "monitorEventLoopDelay",
+            "fn:monitorEventLoopDelay/0 ewc"
+          ],
+          [
+            "createHistogram",
+            "fn:createHistogram/0 ewc"
+          ],
+          [
+            "eventLoopUtilization",
+            "fn:eventLoopUtilization/2 ewc"
+          ],
+          [
+            "timerify",
+            "fn:timerify/1 ewc"
+          ],
+          [
+            "performance",
+            "value:object ewc"
+          ],
+          [
+            "constants",
+            "value:object ewc"
+          ]
+        ],
+        "defaultIsNamespaceMember": true,
+        "globals": {
+          "performance": true,
+          "named": true,
+          "defaultPerformance": true,
+          "classes": [
+            [
+              "Performance",
+              true,
+              true
+            ],
+            [
+              "PerformanceEntry",
+              true,
+              true
+            ],
+            [
+              "PerformanceMark",
+              true,
+              true
+            ],
+            [
+              "PerformanceMeasure",
+              true,
+              true
+            ],
+            [
+              "PerformanceObserver",
+              true,
+              true
+            ],
+            [
+              "PerformanceObserverEntryList",
+              true,
+              true
+            ],
+            [
+              "PerformanceResourceTiming",
+              true,
+              true
+            ]
+          ]
+        },
+        "constants": [
+          {
+            "NODE_PERFORMANCE_GC_MAJOR": 4,
+            "NODE_PERFORMANCE_GC_MINOR": 1,
+            "NODE_PERFORMANCE_GC_INCREMENTAL": 8,
+            "NODE_PERFORMANCE_GC_WEAKCB": 16,
+            "NODE_PERFORMANCE_GC_FLAGS_NO": 0,
+            "NODE_PERFORMANCE_GC_FLAGS_CONSTRUCT_RETAINED": 2,
+            "NODE_PERFORMANCE_GC_FLAGS_FORCED": 4,
+            "NODE_PERFORMANCE_GC_FLAGS_SYNCHRONOUS_PHANTOM_PROCESSING": 8,
+            "NODE_PERFORMANCE_GC_FLAGS_ALL_AVAILABLE_GARBAGE": 16,
+            "NODE_PERFORMANCE_GC_FLAGS_ALL_EXTERNAL_MEMORY": 32,
+            "NODE_PERFORMANCE_GC_FLAGS_SCHEDULE_IDLE": 64,
+            "NODE_PERFORMANCE_ENTRY_TYPE_GC": 0,
+            "NODE_PERFORMANCE_ENTRY_TYPE_HTTP": 1,
+            "NODE_PERFORMANCE_ENTRY_TYPE_HTTP2": 2,
+            "NODE_PERFORMANCE_ENTRY_TYPE_NET": 3,
+            "NODE_PERFORMANCE_ENTRY_TYPE_DNS": 4,
+            "NODE_PERFORMANCE_MILESTONE_TIME_ORIGIN_TIMESTAMP": 0,
+            "NODE_PERFORMANCE_MILESTONE_TIME_ORIGIN": 1,
+            "NODE_PERFORMANCE_MILESTONE_ENVIRONMENT": 2,
+            "NODE_PERFORMANCE_MILESTONE_NODE_START": 3,
+            "NODE_PERFORMANCE_MILESTONE_V8_START": 4,
+            "NODE_PERFORMANCE_MILESTONE_LOOP_START": 5,
+            "NODE_PERFORMANCE_MILESTONE_LOOP_EXIT": 6,
+            "NODE_PERFORMANCE_MILESTONE_BOOTSTRAP_COMPLETE": 7
+          },
+          true,
+          true
+        ],
+        "eventLoopUtilization": [
+          {
+            "idle": 0,
+            "active": 0,
+            "utilization": 0
+          },
+          {
+            "idle": 0,
+            "active": 0,
+            "utilization": 0
+          },
+          true,
+          false
+        ],
+        "timerify": [
+          true,
+          5,
+          null,
+          false
+        ],
+        "createHistogram": [
+          "ERR_METHOD_NOT_IMPLEMENTED/Error/ERR_METHOD_NOT_IMPLEMENTED: The createHistogram method is not implemented",
+          [
+            "code",
+            "name"
+          ],
+          "Error [ERR_METHOD_NOT_IMPLEMENTED]: The createHistogram method is not implemented",
+          true,
+          "NodeErrorAbstraction"
+        ],
+        "monitorEventLoopDelay": [
+          "ERR_METHOD_NOT_IMPLEMENTED/Error/ERR_METHOD_NOT_IMPLEMENTED: The monitorEventLoopDelay method is not implemented",
+          [
+            "code",
+            "name"
+          ],
+          "Error [ERR_METHOD_NOT_IMPLEMENTED]: The monitorEventLoopDelay method is not implemented",
+          true,
+          "NodeErrorAbstraction"
+        ],
+        "dynamic": [
+          [
+            "Performance",
+            "PerformanceEntry",
+            "PerformanceMark",
+            "PerformanceMeasure",
+            "PerformanceObserver",
+            "PerformanceObserverEntryList",
+            "PerformanceResourceTiming",
+            "constants",
+            "createHistogram",
+            "default",
+            "eventLoopUtilization",
+            "monitorEventLoopDelay",
+            "performance",
+            "timerify"
+          ],
+          true,
+          true
+        ],
+        "bare": [
+          true,
+          true
+        ],
+        "builtin": [
+          true,
+          [
+            "Performance",
+            "PerformanceEntry",
+            "PerformanceMark",
+            "PerformanceMeasure",
+            "PerformanceObserver",
+            "PerformanceObserverEntryList",
+            "PerformanceResourceTiming",
+            "monitorEventLoopDelay",
+            "createHistogram",
+            "eventLoopUtilization",
+            "timerify",
+            "performance",
+            "constants"
+          ]
+        ]
+      }
+    }
+  ]
+}

@@ -117,6 +117,23 @@ Only the binding types in the [services table](#services) are available.
   request.
 - `restore` is the symbol that names a `[restore]()` method, as on Cloudflare,
   but celld never calls that method.
+- `env` holds the Worker's bindings from module scope on, and `exports` is
+  `ctx.exports` once the main module has evaluated (empty before), as on
+  Cloudflare. I/O at module scope, there, in the microtasks it queued, or in
+  a getter or Proxy trap that Cloudflare reads the default export's
+  handlers through while the Worker starts, is refused with Cloudflare's
+  global-scope error and starts nothing: a KV, R2, Queue, D1 or Workflow
+  call, a service binding's `fetch()` or RPC, a Durable Object namespace's
+  `get()`, a Worker Loader's `get()` or `load()`, the Cache API's `put()`,
+  `match()` and `delete()`, and the global `fetch()`, `connect()` and
+  `new WebSocket()`. They throw or reject as Cloudflare's do, ahead of the
+  checks Cloudflare's make after it. R2's `resumeMultipartUpload()` and
+  `caches.open()` start no I/O and work there. Timers, random values and
+  body reads there still run (plan item 1.39). Cloudflare reads every
+  handler of every object export while the Worker starts, and celld only
+  the default export's `fetch`, `queue` and `scheduled`, so a getter on
+  another one runs in a request on celld (plan item 1.65). The env lists
+  its names in another order than Cloudflare's, which lists the vars first.
 
 ### [Custom spans](https://developers.cloudflare.com/workers/observability/traces/custom-spans/)
 
@@ -182,9 +199,6 @@ The `tail` and `email` handlers are unavailable.
 - A Durable Object stub's `connect()` throws "Fetcher.connect() is not
   implemented in celld". workerd hands the object's `connect` handler a
   socket.
-- celld's service bindings and `ctx.exports` stubs always have
-  `getRpcMethodForTestOnly()`. workerd has it only under the `experimental`
-  flag.
 - An `AbortSignal` in a Durable Object RPC call does not cross a node boundary.
 - A `DOMException` returned over RPC, passed as a param, or written to
   Durable Object storage arrives as an `Error` named `"Error"` without a
@@ -323,6 +337,16 @@ The `tail` and `email` handlers are unavailable.
   of all zero bytes, so `deriveBits()` rejects that key instead.
 - An Ed25519 or X25519 public key uses its 32-byte point for the `raw` format,
   so `importKey()` and `exportKey()` both carry the point alone.
+- An HMAC key imported from `raw` data has the data's length in bits, or a
+  `length` up to 7 bits shorter, whose extra bits are zeroed. An empty key
+  is refused, as on Cloudflare.
+- `generateKey()` makes an RSA key with the public exponent 3 or 65537 and a
+  modulus of 512 to 16384 bits in steps of 128, and refuses anything else,
+  an unknown hash and a usage the algorithm lacks included, with
+  Cloudflare's errors in Cloudflare's order. The key reports the exponent as
+  it was given.
+- RSA-PSS `sign()` and `verify()` require `saltLength`, as Cloudflare does,
+  and use exactly the length given.
 
 ### [Web standards](https://developers.cloudflare.com/workers/runtime-apis/web-standards/)
 
@@ -331,17 +355,47 @@ The `tail` and `email` handlers are unavailable.
   are plain objects in celld, and an RPC stub or property a function and an
   RPC promise a Promise, so `Object.prototype.toString()` gives none of them
   workerd's class name. celld lacks the global classes `Crypto`,
-  `FetchEvent`, `Navigator`, the `Performance` classes,
-  `ScheduledEvent`, `ServiceWorkerGlobalScope`,
+  `FetchEvent`, `Navigator`, `ScheduledEvent`, `ServiceWorkerGlobalScope`,
   `TailEvent`, `TraceEvent` and `WorkerGlobalScope`, and has a global
   `DigestStream` and `Temporal`, which workerd does not. No API prototype
   has workerd's `Symbol.for("cloudflare:internal-class")` mark.
+- `eval()`, `new Function()` and compiling WebAssembly from bytes throw in a
+  request and in a Durable Object, its constructor included, with V8's
+  `EvalError` and `CompileError`, as on Cloudflare; they work while the main
+  module evaluates and its handlers are read (see
+  `allow_eval_during_startup` in [Honoured flags](#honoured-flags)). Two
+  edge cases differ: `eval()` of a
+  value that is not a string returns it, where Cloudflare throws, and
+  `new Function()` with no arguments throws, where Cloudflare makes an empty
+  function (plan item 1.65).
+- `reportError()` fires an `ErrorEvent` at the global scope and then logs the
+  error, and `navigator.sendBeacon()` POSTs its body in the background and
+  answers `true` in a request, `false` at module scope.
 
 ### [Performance and timers](https://developers.cloudflare.com/workers/runtime-apis/performance/)
 
 `performance.timeOrigin` is `0`, and `performance.now()` matches `Date.now()`.
 Both clocks advance at an I/O boundary and stay fixed during JavaScript
 execution.
+
+With `enable_global_performance_classes` or `enable_nodejs_perf_hooks_module`
+(see [Compatibility flags](#compatibility-flags)), `performance` is an
+`EventTarget` with workerd's user-timing methods (`mark()`, `measure()`,
+`getEntries()`, `getEntriesByName()`, `getEntriesByType()`, `clearMarks()`,
+`clearMeasures()`, `clearResourceTimings()`, `setResourceTimingBufferSize()`,
+`toJSON()` and `eventCounts`), and `Performance`, `PerformanceEntry`,
+`PerformanceMark`, `PerformanceMeasure`, `PerformanceResourceTiming`,
+`PerformanceObserver` and `PerformanceObserverEntryList` are globals. As in
+workerd, nothing is measured: marks and measures are only recorded, for the
+isolate's life, an observer is never called, and `eventCounts` is empty.
+`enable_nodejs_perf_hooks_module` adds workerd's Node.js stubs:
+`nodeTiming`, `eventLoopUtilization()`, `markResourceTiming()` and
+`timerify()`. Without either flag `performance` has only `timeOrigin` and
+`now()`.
+
+The global `setImmediate()` and `clearImmediate()` exist with
+`nodejs_compat_v2`, as in workerd. `setImmediate()` answers with an
+`Immediate`, which `clearImmediate()` and `Symbol.dispose` cancel.
 
 `scheduler.wait(ms, { signal })` honours its signal: an abort rejects the
 wait, and an already-aborted signal rejects it at once. celld rejects with
@@ -354,7 +408,19 @@ the global `scheduler.wait`, as on workerd.
 
 - celld implements `node:assert`, `node:async_hooks`, `node:buffer`,
   `node:diagnostics_channel`, `node:events`, `node:fs`, `node:os`, `node:path`,
-  `node:stream`, `node:timers/promises`, and `node:util`.
+  `node:perf_hooks`, `node:stream`, `node:timers`, `node:timers/promises`, and
+  `node:util`.
+- `node:perf_hooks` resolves with Node.js compatibility and
+  `enable_nodejs_perf_hooks_module`, as in workerd; otherwise it is a module
+  whose first call throws, as below. workerd refuses the import then, and
+  Wrangler bundles unenv's polyfill in its place, which celld does not.
+- `node:timers` has workerd's `Timeout`, which the global timers return under
+  `enable_nodejs_global_timers`. Its `promises` stands in for workerd's
+  internal namespace of `node:timers/promises` with an object that has a
+  namespace's prototype, tag, keys and attributes; a script can assign to its
+  members, which a namespace refuses.
+- `import()` of a Node.js built-in module gives a namespace other than the
+  one a static import of it gives, though its members are the same values.
 - `node:diagnostics_channel` does not export messages to a tail Worker.
 - `node:crypto` does not implement Diffie-Hellman, streaming signatures,
   ciphers, RSA-PSS, or DSA signatures and key generation.
@@ -423,6 +489,9 @@ the global `scheduler.wait`, as on workerd.
 celld provides an always-miss cache because it has no shared edge cache.
 `put()` validates and consumes a response but stores nothing, `match()` returns
 `undefined`, and `delete()` returns `false`.
+`put()` validates the key's URL before its method and the response's status
+and `Vary` header, where Cloudflare validates it last, so a key that breaks
+two rules gets another TypeError (plan item 1.65).
 
 ### [TCP sockets](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/)
 
@@ -492,9 +561,10 @@ celld follows these flags and the dates that turn them on:
   `nodejs_compat_v2` and `no_nodejs_compat_v2` (on from 2026-08-04, or from
   2024-09-23 with `nodejs_compat`). They turn on
   `nodejs_compat_populate_process_env` and decide whether `process.env` is
-  filled (see [Node.js compatibility](#nodejs-compatibility)). celld offers
-  its Node.js modules and the `process` and `Buffer` globals with or without
-  them.
+  filled (see [Node.js compatibility](#nodejs-compatibility)), whether
+  `node:perf_hooks` resolves, and whether the global `setImmediate()` and
+  `clearImmediate()` exist. celld offers its other Node.js modules and the
+  `process` and `Buffer` globals with or without them.
 - `nodejs_compat_populate_process_env` and
   `nodejs_compat_do_not_populate_process_env`, which `nodejs_compat` turns on
   from 2025-04-01. With Node.js compatibility, `process.env` holds the env's
@@ -511,6 +581,11 @@ celld follows these flags and the dates that turn them on:
   rejects (see [Context](#context)). Stubs still cannot be stored.
 - `disallow_importable_env` and `allow_importable_env`. With the flag, `env`
   and `exports` from `cloudflare:workers` read every name as `undefined`.
+- `allow_eval_during_startup` and `disallow_eval_during_startup` (on from
+  2025-06-01): `eval()`, `new Function()` and compiling WebAssembly from
+  bytes work while the main module evaluates and its handlers are read. They
+  never work in a request
+  or a Durable Object (see [Web standards](#web-standards)).
 - `service_binding_extra_handlers`, an experimental flag that celld honours
   only in part. With it, a service binding has `scheduled()` and `queue()`. `scheduled()` runs the target's
   `scheduled` handler for a binding to the Worker's own default export and
@@ -557,6 +632,13 @@ celld follows these flags and the dates that turn them on:
   `setInterval()` return Node.js `Timeout` objects, which `clearTimeout()`
   and `clearInterval()` take, as do the ids they convert to. Otherwise
   they return numbers.
+- `enable_global_performance_classes` and
+  `disable_global_performance_classes`, and `enable_nodejs_perf_hooks_module`
+  and `disable_nodejs_perf_hooks_module` (each on from 2026-03-17 with
+  `nodejs_compat`): `performance` is an `EventTarget` with the user-timing
+  methods and the Performance classes are globals, under either flag; the
+  second adds `performance`'s Node.js stubs and, with Node.js compatibility,
+  `node:perf_hooks` (see [Performance and timers](#performance-and-timers)).
 - `cache_option_enabled` and `cache_option_disabled` (on from 2024-11-11),
   and `cache_no_cache_enabled` and `cache_no_cache_disabled` (on from
   2025-08-07 with `cache_option_enabled`): a Request takes `cache:
@@ -754,7 +836,6 @@ behaves as these flags select:
 - `enable_weak_ref`: WeakRef and FinalizationRegistry are defined.
 - `no_request_signal_passthrough`: an incoming request's signal never reaches a subrequest.
 - `enable_navigator_language`: navigator.language is defined.
-- `allow_eval_during_startup`: eval() and new Function() work while the Worker starts.
 - `set_event_target_this`: an event listener runs with the EventTarget as `this`.
 - `non_pedantic_wpt`: celld does not implement workerd's pedantic WPT mode.
 - `expose_global_message_channel`: MessageChannel and MessagePort are globals.
@@ -777,7 +858,7 @@ These flags do not apply to celld:
 - `dynamic_dispatch_tunnel_exceptions`, `dynamic_dispatch_treat_exceptions_as_500`: it applies to dispatch namespace bindings, which celld does not support.
 - `vectorize_query_metadata_optional`, `vectorize_query_original`: it applies to Vectorize bindings, which celld does not support.
 - `global_fetch_strictly_public`, `global_fetch_private_origin`: it chooses how Cloudflare routes a fetch() to the Worker's own zone, and celld has no zone; the egress policy applies whatever the flag says.
-- `nodejs_zlib`, `no_nodejs_zlib`, `enable_nodejs_process_v2`, `disable_nodejs_process_v2`, `enable_nodejs_http_modules`, `disable_nodejs_http_modules`, `enable_nodejs_http_server_modules`, `disable_nodejs_http_server_modules`, `enable_nodejs_fs_module`, `disable_nodejs_fs_module`, `enable_nodejs_os_module`, `disable_nodejs_os_module`, `remove_nodejs_compat_eol`, `add_nodejs_compat_eol`, `enable_nodejs_http2_module`, `disable_nodejs_http2_module`, `remove_nodejs_compat_eol_v22`, `add_nodejs_compat_eol_v22`, `remove_nodejs_compat_eol_v23`, `add_nodejs_compat_eol_v23`, `remove_nodejs_compat_eol_v24`, `add_nodejs_compat_eol_v24`, `enable_nodejs_console_module`, `disable_nodejs_console_module`, `enable_nodejs_vm_module`, `disable_nodejs_vm_module`, `enable_nodejs_perf_hooks_module`, `disable_nodejs_perf_hooks_module`, `enable_global_performance_classes`, `disable_global_performance_classes`, `enable_nodejs_domain_module`, `disable_nodejs_domain_module`, `enable_nodejs_v8_module`, `disable_nodejs_v8_module`, `enable_nodejs_tty_module`, `disable_nodejs_tty_module`, `enable_nodejs_punycode_module`, `disable_nodejs_punycode_module`, `enable_nodejs_cluster_module`, `disable_nodejs_cluster_module`, `enable_nodejs_child_process_module`, `disable_nodejs_child_process_module`, `enable_nodejs_worker_threads_module`, `disable_nodejs_worker_threads_module`, `enable_nodejs_stream_wrap_module`, `disable_nodejs_stream_wrap_module`, `enable_nodejs_wasi_module`, `disable_nodejs_wasi_module`, `enable_nodejs_dgram_module`, `disable_nodejs_dgram_module`, `enable_nodejs_inspector_module`, `disable_nodejs_inspector_module`, `enable_nodejs_trace_events_module`, `disable_nodejs_trace_events_module`, `enable_nodejs_readline_module`, `disable_nodejs_readline_module`, `enable_nodejs_repl_module`, `disable_nodejs_repl_module`, `enable_nodejs_sqlite_module`, `disable_nodejs_sqlite_module`, `throw_on_not_implemented_tls_options`, `no_throw_on_not_implemented_tls_options`: celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility).
+- `nodejs_zlib`, `no_nodejs_zlib`, `enable_nodejs_process_v2`, `disable_nodejs_process_v2`, `enable_nodejs_http_modules`, `disable_nodejs_http_modules`, `enable_nodejs_http_server_modules`, `disable_nodejs_http_server_modules`, `enable_nodejs_fs_module`, `disable_nodejs_fs_module`, `enable_nodejs_os_module`, `disable_nodejs_os_module`, `remove_nodejs_compat_eol`, `add_nodejs_compat_eol`, `enable_nodejs_http2_module`, `disable_nodejs_http2_module`, `remove_nodejs_compat_eol_v22`, `add_nodejs_compat_eol_v22`, `remove_nodejs_compat_eol_v23`, `add_nodejs_compat_eol_v23`, `remove_nodejs_compat_eol_v24`, `add_nodejs_compat_eol_v24`, `enable_nodejs_console_module`, `disable_nodejs_console_module`, `enable_nodejs_vm_module`, `disable_nodejs_vm_module`, `enable_nodejs_domain_module`, `disable_nodejs_domain_module`, `enable_nodejs_v8_module`, `disable_nodejs_v8_module`, `enable_nodejs_tty_module`, `disable_nodejs_tty_module`, `enable_nodejs_punycode_module`, `disable_nodejs_punycode_module`, `enable_nodejs_cluster_module`, `disable_nodejs_cluster_module`, `enable_nodejs_child_process_module`, `disable_nodejs_child_process_module`, `enable_nodejs_worker_threads_module`, `disable_nodejs_worker_threads_module`, `enable_nodejs_stream_wrap_module`, `disable_nodejs_stream_wrap_module`, `enable_nodejs_wasi_module`, `disable_nodejs_wasi_module`, `enable_nodejs_dgram_module`, `disable_nodejs_dgram_module`, `enable_nodejs_inspector_module`, `disable_nodejs_inspector_module`, `enable_nodejs_trace_events_module`, `disable_nodejs_trace_events_module`, `enable_nodejs_readline_module`, `disable_nodejs_readline_module`, `enable_nodejs_repl_module`, `disable_nodejs_repl_module`, `enable_nodejs_sqlite_module`, `disable_nodejs_sqlite_module`, `throw_on_not_implemented_tls_options`, `no_throw_on_not_implemented_tls_options`: celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility).
 - `python_external_packages`: it is obsolete.
 - `disable_top_level_await_in_require`, `enable_top_level_await_in_require`, `require_returns_default_export`, `require_returns_namespace`: celld has no run-time require() of a module; esbuild resolves it when it bundles.
 - `request_cf_overrides_cache_rules`, `no_request_cf_overrides_cache_rules`: it changes only Cloudflare's cache rules, and celld has no edge cache.
@@ -798,7 +879,7 @@ These flags do not apply to celld:
 `celld deploy` refuses these flags, and the Worker Loader refuses them in a
 Dynamic Worker's code. celld always behaves as the flag named after each:
 
-- `formdata_parser_converts_files_to_strings` (as formdata_parser_supports_files), `fetch_treats_unknown_protocols_as_http` (as fetch_refuses_unknown_protocols), `durable_object_fetch_allows_relative_url` (as durable_object_fetch_requires_full_url), `streams_byob_reader_does_not_detach_buffer` (as streams_byob_reader_detaches_buffer), `streams_disable_constructors` (as streams_enable_constructors), `url_original` (as url_standard), `no_global_navigator` (as global_navigator), `do_not_capture_async_api_throws` (as capture_async_api_throws), `r2_internal_beta_bindings` (as r2_public_beta_bindings), `substitute_null_on_type_error` (as dont_substitute_null_on_type_error), `transformstream_disable_standard_constructor` (as transformstream_enable_standard_constructor), `response_redirect_url_original` (as response_redirect_url_standard), `no_http_headers_getsetcookie` (as http_headers_getsetcookie), `cf_botmanagement_default` (as no_cf_botmanagement_default), `no_urlsearchparams_delete_has_value_arg` (as urlsearchparams_delete_has_value_arg), `no_strict_compression_checks` (as strict_compression_checks), `no_strict_crypto_checks` (as strict_crypto_checks), `no_crypto_preserve_public_exponent` (as crypto_preserve_public_exponent), `global_importscripts` (as no_global_importscripts), `no_unwrap_custom_thenables` (as unwrap_custom_thenables), `no_rpc` (as rpc), `internal_stream_byob_return_undefined` (as internal_stream_byob_return_view), `fetch_legacy_url` (as fetch_standard_url), `ignore_custom_ports` (as allow_custom_ports), `no_upper_case_all_http_methods` (as upper_case_all_http_methods), `urlpattern_original` (as urlpattern_standard), `disable_weak_ref` (as enable_weak_ref), `disable_navigator_language` (as enable_navigator_language), `disallow_eval_during_startup` (as allow_eval_during_startup), `no_set_event_target_this` (as set_event_target_this), `no_expose_global_message_channel` (as expose_global_message_channel), `retain_authorization_on_cross_origin_redirect` (as strip_authorization_on_cross_origin_redirect), `disable_ctx_exports` (as enable_ctx_exports), `no_containers_pid_namespace` (as containers_pid_namespace), `disable_text_decoder_cjk_decoder` (as text_decoder_cjk_decoder), `workflows_replace_non_retryable_error_message` (as workflows_preserve_non_retryable_error_message), `no_diagnostics_channel_has_subscribers_getter` (as diagnostics_channel_has_subscribers_getter).
+- `formdata_parser_converts_files_to_strings` (as formdata_parser_supports_files), `fetch_treats_unknown_protocols_as_http` (as fetch_refuses_unknown_protocols), `durable_object_fetch_allows_relative_url` (as durable_object_fetch_requires_full_url), `streams_byob_reader_does_not_detach_buffer` (as streams_byob_reader_detaches_buffer), `streams_disable_constructors` (as streams_enable_constructors), `url_original` (as url_standard), `no_global_navigator` (as global_navigator), `do_not_capture_async_api_throws` (as capture_async_api_throws), `r2_internal_beta_bindings` (as r2_public_beta_bindings), `substitute_null_on_type_error` (as dont_substitute_null_on_type_error), `transformstream_disable_standard_constructor` (as transformstream_enable_standard_constructor), `response_redirect_url_original` (as response_redirect_url_standard), `no_http_headers_getsetcookie` (as http_headers_getsetcookie), `cf_botmanagement_default` (as no_cf_botmanagement_default), `no_urlsearchparams_delete_has_value_arg` (as urlsearchparams_delete_has_value_arg), `no_strict_compression_checks` (as strict_compression_checks), `no_strict_crypto_checks` (as strict_crypto_checks), `no_crypto_preserve_public_exponent` (as crypto_preserve_public_exponent), `global_importscripts` (as no_global_importscripts), `no_unwrap_custom_thenables` (as unwrap_custom_thenables), `no_rpc` (as rpc), `internal_stream_byob_return_undefined` (as internal_stream_byob_return_view), `fetch_legacy_url` (as fetch_standard_url), `ignore_custom_ports` (as allow_custom_ports), `no_upper_case_all_http_methods` (as upper_case_all_http_methods), `urlpattern_original` (as urlpattern_standard), `disable_weak_ref` (as enable_weak_ref), `disable_navigator_language` (as enable_navigator_language), `no_set_event_target_this` (as set_event_target_this), `no_expose_global_message_channel` (as expose_global_message_channel), `retain_authorization_on_cross_origin_redirect` (as strip_authorization_on_cross_origin_redirect), `disable_ctx_exports` (as enable_ctx_exports), `no_containers_pid_namespace` (as containers_pid_namespace), `disable_text_decoder_cjk_decoder` (as text_decoder_cjk_decoder), `workflows_replace_non_retryable_error_message` (as workflows_preserve_non_retryable_error_message), `no_diagnostics_channel_has_subscribers_getter` (as diagnostics_channel_has_subscribers_getter).
 
 celld lacks the behaviour these flags select:
 
@@ -838,7 +919,7 @@ behaves as before the date:
 Before these dates Cloudflare gives a Worker the behaviour without the
 flag. celld behaves as from the date:
 
-- `formdata_parser_supports_files` (2021-11-03), `fetch_refuses_unknown_protocols` (2021-11-10), `durable_object_fetch_requires_full_url` (2021-11-10), `streams_byob_reader_detaches_buffer` (2021-11-10), `streams_enable_constructors` (2022-11-30), `url_standard` (2022-10-31), `global_navigator` (2022-03-21), `capture_async_api_throws` (2022-10-31), `dont_substitute_null_on_type_error` (2022-06-01), `transformstream_enable_standard_constructor` (2022-11-30), `r2_list_honor_include` (2022-08-04), `response_redirect_url_standard` (2023-03-14), `http_headers_getsetcookie` (2023-03-01), `no_cf_botmanagement_default` (2023-08-01), `urlsearchparams_delete_has_value_arg` (2023-07-01), `strict_compression_checks` (2023-08-01), `strict_crypto_checks` (2023-08-01), `crypto_preserve_public_exponent` (2023-12-01), `no_global_importscripts` (2024-03-04), `unwrap_custom_thenables` (2024-04-01), `rpc` (2024-04-03), `internal_stream_byob_return_view` (2024-05-13), `fetch_standard_url` (2024-06-03), `allow_custom_ports` (2024-09-02), `upper_case_all_http_methods` (2024-10-14), `urlpattern_standard` (2025-05-01), `enable_weak_ref` (2025-05-05), `enable_navigator_language` (2025-05-19), `allow_eval_during_startup` (2025-06-01), `set_event_target_this` (2025-08-01), `expose_global_message_channel` (2025-08-15), `strip_authorization_on_cross_origin_redirect` (2025-09-01), `enable_ctx_exports` (2025-11-17), `containers_pid_namespace` (2026-04-01), `text_decoder_cjk_decoder` (2026-03-03), `workflows_preserve_non_retryable_error_message` (2026-05-14), `diagnostics_channel_has_subscribers_getter` (2026-05-19).
+- `formdata_parser_supports_files` (2021-11-03), `fetch_refuses_unknown_protocols` (2021-11-10), `durable_object_fetch_requires_full_url` (2021-11-10), `streams_byob_reader_detaches_buffer` (2021-11-10), `streams_enable_constructors` (2022-11-30), `url_standard` (2022-10-31), `global_navigator` (2022-03-21), `capture_async_api_throws` (2022-10-31), `dont_substitute_null_on_type_error` (2022-06-01), `transformstream_enable_standard_constructor` (2022-11-30), `r2_list_honor_include` (2022-08-04), `response_redirect_url_standard` (2023-03-14), `http_headers_getsetcookie` (2023-03-01), `no_cf_botmanagement_default` (2023-08-01), `urlsearchparams_delete_has_value_arg` (2023-07-01), `strict_compression_checks` (2023-08-01), `strict_crypto_checks` (2023-08-01), `crypto_preserve_public_exponent` (2023-12-01), `no_global_importscripts` (2024-03-04), `unwrap_custom_thenables` (2024-04-01), `rpc` (2024-04-03), `internal_stream_byob_return_view` (2024-05-13), `fetch_standard_url` (2024-06-03), `allow_custom_ports` (2024-09-02), `upper_case_all_http_methods` (2024-10-14), `urlpattern_standard` (2025-05-01), `enable_weak_ref` (2025-05-05), `enable_navigator_language` (2025-05-19), `set_event_target_this` (2025-08-01), `expose_global_message_channel` (2025-08-15), `strip_authorization_on_cross_origin_redirect` (2025-09-01), `enable_ctx_exports` (2025-11-17), `containers_pid_namespace` (2026-04-01), `text_decoder_cjk_decoder` (2026-03-03), `workflows_preserve_non_retryable_error_message` (2026-05-14), `diagnostics_channel_has_subscribers_getter` (2026-05-19).
 
 ## Wrangler configuration
 

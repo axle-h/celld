@@ -1,0 +1,35 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": [
+        [
+          "node:events",
+          true,
+          true,
+          true
+        ],
+        [
+          "node:timers",
+          true,
+          true,
+          true
+        ],
+        [
+          "node:util",
+          true,
+          true,
+          true
+        ],
+        [
+          "node:perf_hooks",
+          true,
+          true,
+          true
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "workers": ["front", "nonode", "v1"],
+  "steps": [
+    {"path": "/"},
+    {"path": "/nonode"},
+    {"path": "/v1"}
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "oldglobal",
+  "main": "index.js",
+  "compatibility_date": "2021-01-01",
+  "compatibility_flags": [
+    "enable_global_performance_classes"
+  ]
+}

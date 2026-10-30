@@ -1,0 +1,254 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "reported": true,
+        "moduleScope": {
+          "eval": 2,
+          "indirectEval": 4,
+          "globalEval": 3,
+          "newFunction": 4,
+          "callFunction": 5,
+          "emptyBody": "function",
+          "asyncFunction": "function",
+          "generatorFunction": "function",
+          "wasmModule": "[object WebAssembly.Module]",
+          "wasmValidate": true
+        },
+        "microtask": 6,
+        "request": {
+          "eval": "EvalError: Code generation from strings disallowed for this context",
+          "indirectEval": "EvalError: Code generation from strings disallowed for this context",
+          "globalEval": "EvalError: Code generation from strings disallowed for this context",
+          "newFunction": "EvalError: Code generation from strings disallowed for this context",
+          "callFunction": "EvalError: Code generation from strings disallowed for this context",
+          "emptyBody": "EvalError: Code generation from strings disallowed for this context",
+          "asyncFunction": "EvalError: Code generation from strings disallowed for this context",
+          "generatorFunction": "EvalError: Code generation from strings disallowed for this context",
+          "wasmModule": "CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder",
+          "wasmValidate": true,
+          "wasmCompile": "CompileError: WebAssembly.compile(): Wasm code generation disallowed by embedder",
+          "wasmInstantiate": "CompileError: WebAssembly.instantiate(): Wasm code generation disallowed by embedder"
+        },
+        "durableObject": {
+          "constructor": {
+            "eval": "EvalError: Code generation from strings disallowed for this context",
+            "indirectEval": "EvalError: Code generation from strings disallowed for this context",
+            "globalEval": "EvalError: Code generation from strings disallowed for this context",
+            "newFunction": "EvalError: Code generation from strings disallowed for this context",
+            "callFunction": "EvalError: Code generation from strings disallowed for this context",
+            "emptyBody": "EvalError: Code generation from strings disallowed for this context",
+            "asyncFunction": "EvalError: Code generation from strings disallowed for this context",
+            "generatorFunction": "EvalError: Code generation from strings disallowed for this context",
+            "wasmModule": "CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder",
+            "wasmValidate": true
+          },
+          "method": {
+            "eval": "EvalError: Code generation from strings disallowed for this context",
+            "indirectEval": "EvalError: Code generation from strings disallowed for this context",
+            "globalEval": "EvalError: Code generation from strings disallowed for this context",
+            "newFunction": "EvalError: Code generation from strings disallowed for this context",
+            "callFunction": "EvalError: Code generation from strings disallowed for this context",
+            "emptyBody": "EvalError: Code generation from strings disallowed for this context",
+            "asyncFunction": "EvalError: Code generation from strings disallowed for this context",
+            "generatorFunction": "EvalError: Code generation from strings disallowed for this context",
+            "wasmModule": "CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder",
+            "wasmValidate": true
+          },
+          "wasmCompile": "CompileError: WebAssembly.compile(): Wasm code generation disallowed by embedder",
+          "wasmInstantiate": "CompileError: WebAssembly.instantiate(): Wasm code generation disallowed by embedder"
+        },
+        "later": "EvalError: Code generation from strings disallowed for this context"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "reported": false,
+        "moduleScope": {
+          "eval": "EvalError: Code generation from strings disallowed for this context",
+          "indirectEval": "EvalError: Code generation from strings disallowed for this context",
+          "globalEval": "EvalError: Code generation from strings disallowed for this context",
+          "newFunction": "EvalError: Code generation from strings disallowed for this context",
+          "callFunction": "EvalError: Code generation from strings disallowed for this context",
+          "emptyBody": "EvalError: Code generation from strings disallowed for this context",
+          "asyncFunction": "EvalError: Code generation from strings disallowed for this context",
+          "generatorFunction": "EvalError: Code generation from strings disallowed for this context",
+          "wasmModule": "CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder",
+          "wasmValidate": true
+        },
+        "microtask": "EvalError: Code generation from strings disallowed for this context",
+        "request": {
+          "eval": "EvalError: Code generation from strings disallowed for this context",
+          "indirectEval": "EvalError: Code generation from strings disallowed for this context",
+          "globalEval": "EvalError: Code generation from strings disallowed for this context",
+          "newFunction": "EvalError: Code generation from strings disallowed for this context",
+          "callFunction": "EvalError: Code generation from strings disallowed for this context",
+          "emptyBody": "EvalError: Code generation from strings disallowed for this context",
+          "asyncFunction": "EvalError: Code generation from strings disallowed for this context",
+          "generatorFunction": "EvalError: Code generation from strings disallowed for this context",
+          "wasmModule": "CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder",
+          "wasmValidate": true,
+          "wasmCompile": "CompileError: WebAssembly.compile(): Wasm code generation disallowed by embedder",
+          "wasmInstantiate": "CompileError: WebAssembly.instantiate(): Wasm code generation disallowed by embedder"
+        },
+        "durableObject": {
+          "constructor": {
+            "eval": "EvalError: Code generation from strings disallowed for this context",
+            "indirectEval": "EvalError: Code generation from strings disallowed for this context",
+            "globalEval": "EvalError: Code generation from strings disallowed for this context",
+            "newFunction": "EvalError: Code generation from strings disallowed for this context",
+            "callFunction": "EvalError: Code generation from strings disallowed for this context",
+            "emptyBody": "EvalError: Code generation from strings disallowed for this context",
+            "asyncFunction": "EvalError: Code generation from strings disallowed for this context",
+            "generatorFunction": "EvalError: Code generation from strings disallowed for this context",
+            "wasmModule": "CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder",
+            "wasmValidate": true
+          },
+          "method": {
+            "eval": "EvalError: Code generation from strings disallowed for this context",
+            "indirectEval": "EvalError: Code generation from strings disallowed for this context",
+            "globalEval": "EvalError: Code generation from strings disallowed for this context",
+            "newFunction": "EvalError: Code generation from strings disallowed for this context",
+            "callFunction": "EvalError: Code generation from strings disallowed for this context",
+            "emptyBody": "EvalError: Code generation from strings disallowed for this context",
+            "asyncFunction": "EvalError: Code generation from strings disallowed for this context",
+            "generatorFunction": "EvalError: Code generation from strings disallowed for this context",
+            "wasmModule": "CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder",
+            "wasmValidate": true
+          },
+          "wasmCompile": "CompileError: WebAssembly.compile(): Wasm code generation disallowed by embedder",
+          "wasmInstantiate": "CompileError: WebAssembly.instantiate(): Wasm code generation disallowed by embedder"
+        },
+        "later": "EvalError: Code generation from strings disallowed for this context"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "reported": false,
+        "moduleScope": {
+          "eval": "EvalError: Code generation from strings disallowed for this context",
+          "indirectEval": "EvalError: Code generation from strings disallowed for this context",
+          "globalEval": "EvalError: Code generation from strings disallowed for this context",
+          "newFunction": "EvalError: Code generation from strings disallowed for this context",
+          "callFunction": "EvalError: Code generation from strings disallowed for this context",
+          "emptyBody": "EvalError: Code generation from strings disallowed for this context",
+          "asyncFunction": "EvalError: Code generation from strings disallowed for this context",
+          "generatorFunction": "EvalError: Code generation from strings disallowed for this context",
+          "wasmModule": "CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder",
+          "wasmValidate": true
+        },
+        "microtask": "EvalError: Code generation from strings disallowed for this context",
+        "request": {
+          "eval": "EvalError: Code generation from strings disallowed for this context",
+          "indirectEval": "EvalError: Code generation from strings disallowed for this context",
+          "globalEval": "EvalError: Code generation from strings disallowed for this context",
+          "newFunction": "EvalError: Code generation from strings disallowed for this context",
+          "callFunction": "EvalError: Code generation from strings disallowed for this context",
+          "emptyBody": "EvalError: Code generation from strings disallowed for this context",
+          "asyncFunction": "EvalError: Code generation from strings disallowed for this context",
+          "generatorFunction": "EvalError: Code generation from strings disallowed for this context",
+          "wasmModule": "CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder",
+          "wasmValidate": true,
+          "wasmCompile": "CompileError: WebAssembly.compile(): Wasm code generation disallowed by embedder",
+          "wasmInstantiate": "CompileError: WebAssembly.instantiate(): Wasm code generation disallowed by embedder"
+        },
+        "durableObject": {
+          "constructor": {
+            "eval": "EvalError: Code generation from strings disallowed for this context",
+            "indirectEval": "EvalError: Code generation from strings disallowed for this context",
+            "globalEval": "EvalError: Code generation from strings disallowed for this context",
+            "newFunction": "EvalError: Code generation from strings disallowed for this context",
+            "callFunction": "EvalError: Code generation from strings disallowed for this context",
+            "emptyBody": "EvalError: Code generation from strings disallowed for this context",
+            "asyncFunction": "EvalError: Code generation from strings disallowed for this context",
+            "generatorFunction": "EvalError: Code generation from strings disallowed for this context",
+            "wasmModule": "CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder",
+            "wasmValidate": true
+          },
+          "method": {
+            "eval": "EvalError: Code generation from strings disallowed for this context",
+            "indirectEval": "EvalError: Code generation from strings disallowed for this context",
+            "globalEval": "EvalError: Code generation from strings disallowed for this context",
+            "newFunction": "EvalError: Code generation from strings disallowed for this context",
+            "callFunction": "EvalError: Code generation from strings disallowed for this context",
+            "emptyBody": "EvalError: Code generation from strings disallowed for this context",
+            "asyncFunction": "EvalError: Code generation from strings disallowed for this context",
+            "generatorFunction": "EvalError: Code generation from strings disallowed for this context",
+            "wasmModule": "CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder",
+            "wasmValidate": true
+          },
+          "wasmCompile": "CompileError: WebAssembly.compile(): Wasm code generation disallowed by embedder",
+          "wasmInstantiate": "CompileError: WebAssembly.instantiate(): Wasm code generation disallowed by embedder"
+        },
+        "later": "EvalError: Code generation from strings disallowed for this context"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "reported": true,
+        "moduleScope": {
+          "eval": 2,
+          "indirectEval": 4,
+          "globalEval": 3,
+          "newFunction": 4,
+          "callFunction": 5,
+          "emptyBody": "function",
+          "asyncFunction": "function",
+          "generatorFunction": "function",
+          "wasmModule": "[object WebAssembly.Module]",
+          "wasmValidate": true
+        },
+        "microtask": 6,
+        "request": {
+          "eval": "EvalError: Code generation from strings disallowed for this context",
+          "indirectEval": "EvalError: Code generation from strings disallowed for this context",
+          "globalEval": "EvalError: Code generation from strings disallowed for this context",
+          "newFunction": "EvalError: Code generation from strings disallowed for this context",
+          "callFunction": "EvalError: Code generation from strings disallowed for this context",
+          "emptyBody": "EvalError: Code generation from strings disallowed for this context",
+          "asyncFunction": "EvalError: Code generation from strings disallowed for this context",
+          "generatorFunction": "EvalError: Code generation from strings disallowed for this context",
+          "wasmModule": "CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder",
+          "wasmValidate": true,
+          "wasmCompile": "CompileError: WebAssembly.compile(): Wasm code generation disallowed by embedder",
+          "wasmInstantiate": "CompileError: WebAssembly.instantiate(): Wasm code generation disallowed by embedder"
+        },
+        "durableObject": {
+          "constructor": {
+            "eval": "EvalError: Code generation from strings disallowed for this context",
+            "indirectEval": "EvalError: Code generation from strings disallowed for this context",
+            "globalEval": "EvalError: Code generation from strings disallowed for this context",
+            "newFunction": "EvalError: Code generation from strings disallowed for this context",
+            "callFunction": "EvalError: Code generation from strings disallowed for this context",
+            "emptyBody": "EvalError: Code generation from strings disallowed for this context",
+            "asyncFunction": "EvalError: Code generation from strings disallowed for this context",
+            "generatorFunction": "EvalError: Code generation from strings disallowed for this context",
+            "wasmModule": "CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder",
+            "wasmValidate": true
+          },
+          "method": {
+            "eval": "EvalError: Code generation from strings disallowed for this context",
+            "indirectEval": "EvalError: Code generation from strings disallowed for this context",
+            "globalEval": "EvalError: Code generation from strings disallowed for this context",
+            "newFunction": "EvalError: Code generation from strings disallowed for this context",
+            "callFunction": "EvalError: Code generation from strings disallowed for this context",
+            "emptyBody": "EvalError: Code generation from strings disallowed for this context",
+            "asyncFunction": "EvalError: Code generation from strings disallowed for this context",
+            "generatorFunction": "EvalError: Code generation from strings disallowed for this context",
+            "wasmModule": "CompileError: WebAssembly.Module(): Wasm code generation disallowed by embedder",
+            "wasmValidate": true
+          },
+          "wasmCompile": "CompileError: WebAssembly.compile(): Wasm code generation disallowed by embedder",
+          "wasmInstantiate": "CompileError: WebAssembly.instantiate(): Wasm code generation disallowed by embedder"
+        },
+        "later": "EvalError: Code generation from strings disallowed for this context"
+      }
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "queueSend": "rejected Error: <global scope>",
+        "queueSendUndefined": "rejected Error: <global scope>",
+        "queueSendBadType": "rejected Error: <global scope>",
+        "queueSendBatch": "rejected Error: <global scope>",
+        "queueSendBatchEmpty": "rejected Error: <global scope>",
+        "queueSendBadOptions": "rejected TypeError: Failed to execute 'send' on 'WorkerQueue': parameter 2 is not of type 'SendOptions'.",
+        "queueSendBatchBadEntry": "rejected TypeError: Incorrect type: the provided value is not of type 'MessageSendRequest'.",
+        "r2Put": "rejected Error: <global scope>",
+        "r2Get": "rejected Error: <global scope>",
+        "r2Head": "rejected Error: <global scope>",
+        "r2List": "rejected Error: <global scope>",
+        "r2Delete": "rejected Error: <global scope>",
+        "r2CreateMultipart": "rejected Error: <global scope>",
+        "r2ResumeMultipart": "object",
+        "r2ResumedAbort": "rejected Error: <global scope>",
+        "d1Run": "rejected Error: <global scope>",
+        "d1First": "rejected Error: <global scope>",
+        "d1Exec": "rejected Error: <global scope>",
+        "d1Batch": "rejected Error: <global scope>",
+        "d1BatchNull": "rejected TypeError: Cannot read properties of null (reading 'map')",
+        "d1ExecUndefined": "rejected TypeError: Cannot read properties of undefined (reading 'trim')",
+        "d1Session": "rejected Error: <global scope>",
+        "kvGetWithMetadata": "threw Error: <global scope>",
+        "cachePut": "rejected Error: <global scope>",
+        "cachePutNotResponse": "rejected TypeError: Failed to execute 'put' on 'Cache': parameter 2 is not of type 'Response'.",
+        "cachePutBadKey": "rejected Error: <global scope>",
+        "cachePutError": "rejected TypeError: Cache is unable to store an error response",
+        "cachePutIllegalThis": "threw TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+        "cacheMatch": "rejected Error: <global scope>",
+        "cacheMatchBadKey": "rejected Error: <global scope>",
+        "cacheMatchIllegalThis": "threw TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+        "cacheDelete": "rejected Error: <global scope>",
+        "cacheOpen": "resolved",
+        "getterKvPut": "rejected Error: <global scope>",
+        "getterR2Put": "rejected Error: <global scope>",
+        "getterEval": 2
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "kvPut": "rejected Error: <global scope>",
+        "eval": 2
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "kv": null,
+        "kvFromProxy": null,
+        "r2": null,
+        "r2FromGetter": null
+      }
+    }
+  ]
+}

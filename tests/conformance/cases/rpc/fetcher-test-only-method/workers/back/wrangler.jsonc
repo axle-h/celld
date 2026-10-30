@@ -1,0 +1,6 @@
+// Entrypoints with a method named getRpcMethodForTestOnly.
+{
+  "name": "back",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04"
+}

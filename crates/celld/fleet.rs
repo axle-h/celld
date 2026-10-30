@@ -939,6 +939,7 @@ async fn load_worker_at_pointer(
     }
     let containers = manifest.containers.clone();
     let fence_image = manifest.fence_image.clone();
+    let python_runtime = python_runtime(&manifest, &compat)?;
     Ok(LoadedDeployment {
         options: WorkerConfigOptions {
             src,
@@ -967,6 +968,7 @@ async fn load_worker_at_pointer(
         cpu_ms,
         containers,
         fence_image,
+        python_runtime,
     })
 }
 
@@ -992,6 +994,36 @@ pub struct LoadedDeployment {
     pub containers: Vec<crate::container::ContainerSpec>,
     /// See `Manifest::fence_image`.
     pub fence_image: Option<String>,
+    /// The manifest requires `python-workers-v1`: `celld deploy` built the
+    /// bundle from a `.py` main (`WorkerConfig::with_python_runtime`).
+    pub python_runtime: bool,
+}
+
+/// Whether `manifest` is a Python Worker's, which its isolates' Python
+/// runtime (`celld:python` and its startup window) is granted to.
+///
+/// The manifest is the deployer's upload, so its `python-workers-v1` alone
+/// grants nothing: the deployment must also run under `python_workers` and
+/// carry the interpreter `celld deploy` embeds, as a `.py` main's build
+/// always does, or it does not load.
+fn python_runtime(manifest: &Manifest, compat: &crate::js::Compat) -> anyhow::Result<bool> {
+    if !manifest
+        .required_features
+        .iter()
+        .any(|feature| feature == crate::protocol::FEATURE_PYTHON_WORKERS_V1)
+    {
+        return Ok(false);
+    }
+    anyhow::ensure!(
+        compat.flags.get(crate::compat_flags::id("python_workers"))
+            && crate::deploy::carries_python_runtime(&manifest.modules),
+        "the manifest requires {}, but the deployment is not a Python Worker that celld \
+         deploy built: it needs the python_workers compatibility flag and the Pyodide {} \
+         interpreter celld embeds",
+        crate::protocol::FEATURE_PYTHON_WORKERS_V1,
+        crate::deploy::PYODIDE_VERSION,
+    );
+    Ok(true)
 }
 
 fn bindings<'a>(
@@ -1101,6 +1133,47 @@ mod tests {
             "raw_metadata": { "bindings": [binding] },
         }))
         .unwrap()
+    }
+
+    /// A manifest's `python-workers-v1` grants the Python runtime only to a
+    /// deployment under `python_workers` that carries the interpreter
+    /// `celld deploy` embeds; any other such deployment fails its load.
+    #[test]
+    fn only_a_python_bundle_gets_the_python_runtime() {
+        let compat = |flags: serde_json::Value| {
+            crate::worker_compat(&json!({
+                "compatibility_date": "2026-09-04",
+                "compatibility_flags": flags,
+            }))
+        };
+        let python = compat(json!(["python_workers", "no_python_workers_314"]));
+        let javascript = compat(json!([]));
+        let runtime = crate::deploy::python_runtime_modules_for_test();
+        let mut manifest = manifest(json!(null));
+        assert!(!python_runtime(&manifest, &python).unwrap());
+        manifest.required_features = vec![crate::protocol::FEATURE_PYTHON_WORKERS_V1.to_string()];
+        let refused = "the manifest requires python-workers-v1, but the deployment is not a \
+             Python Worker that celld deploy built";
+        let error = python_runtime(&manifest, &python).unwrap_err().to_string();
+        assert!(error.starts_with(refused), "{error}");
+        manifest.modules = runtime.clone();
+        assert!(python_runtime(&manifest, &python).unwrap());
+        assert!(python_runtime(&manifest, &javascript).is_err());
+        // Each module must be the pinned one, as Wasm.
+        for index in 0..runtime.len() {
+            let mut modules = runtime.clone();
+            modules[index].sha256 = "0".repeat(64);
+            manifest.modules = modules;
+            assert!(python_runtime(&manifest, &python).is_err());
+            let mut modules = runtime.clone();
+            modules[index].kind = None;
+            manifest.modules = modules;
+            assert!(python_runtime(&manifest, &python).is_err());
+            let mut modules = runtime.clone();
+            modules.remove(index);
+            manifest.modules = modules;
+            assert!(python_runtime(&manifest, &python).is_err());
+        }
     }
 
     fn refusal(binding: serde_json::Value) -> String {

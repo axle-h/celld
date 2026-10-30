@@ -43,6 +43,10 @@ mod alias;
 mod esbuild;
 mod python;
 
+#[cfg(test)]
+pub(crate) use python::runtime_modules_for_test as python_runtime_modules_for_test;
+pub(crate) use python::{carries_runtime as carries_python_runtime, PYODIDE_VERSION};
+
 /// Config keys we understand. Anything else is an error: refusing is
 /// compat-safe, guessing produces confusing activation failures later.
 const SUPPORTED_KEYS: &[&str] = &[

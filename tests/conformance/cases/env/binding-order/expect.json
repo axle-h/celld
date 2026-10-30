@@ -1,0 +1,23 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "atModuleScope": [
+          "CONFIG",
+          "GREETING",
+          "OBJ",
+          "KV"
+        ],
+        "handler": [
+          "CONFIG",
+          "GREETING",
+          "OBJ",
+          "KV"
+        ]
+      }
+    }
+  ]
+}

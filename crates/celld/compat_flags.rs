@@ -224,6 +224,7 @@ fn field_index(field: &str) -> usize {
 }
 
 pub const ABORTSIGNAL_RPC: FlagId = id("enable_abortsignal_rpc");
+pub const ALLOW_EVAL_DURING_STARTUP: FlagId = id("allow_eval_during_startup");
 pub const ALLOW_IRREVOCABLE_STUB_STORAGE: FlagId = id("allow_irrevocable_stub_storage");
 pub const ASSETS_NAVIGATION_PREFERS_ASSET_SERVING: FlagId =
     id("assets_navigation_prefers_asset_serving");
@@ -235,7 +236,9 @@ pub const CACHE_OPTION_ENABLED: FlagId = id("cache_option_enabled");
 pub const DELETE_ALL_DELETES_ALARM: FlagId = id("delete_all_deletes_alarm");
 pub const DISALLOW_IMPORTABLE_ENV: FlagId = id("disallow_importable_env");
 pub const ENABLE_FAST_JSG_STRUCT: FlagId = id("enable_fast_jsg_struct");
+pub const ENABLE_GLOBAL_PERFORMANCE_CLASSES: FlagId = id("enable_global_performance_classes");
 pub const ENABLE_NODEJS_GLOBAL_TIMERS: FlagId = id("enable_nodejs_global_timers");
+pub const ENABLE_NODEJS_PERF_HOOKS_MODULE: FlagId = id("enable_nodejs_perf_hooks_module");
 pub const ENABLE_REQUEST_SIGNAL: FlagId = id("enable_request_signal");
 pub const ENCODER_STREAM_SPEC_COMPLIANT_BACKPRESSURE: FlagId =
     id("encoder_stream_spec_compliant_backpressure");
@@ -1284,7 +1287,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2025, 6, 1)),
         implied: None,
         experimental: false,
-        support: On("eval() and new Function() work while the Worker starts"),
+        support: Honoured,
     },
     Flag {
         field: "enableRequestSignal",
@@ -1572,7 +1575,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2026, 3, 17) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableGlobalPerformanceClasses",
@@ -1581,7 +1584,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2026, 3, 17) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsDomainModule",
@@ -2805,6 +2808,33 @@ mod tests {
         let flags = compile_lenient(Some("not a date"), &["bogus", "nodejs_als"]);
         assert!(flags.get(NODEJS_ALS));
         assert!(!flags.get(NODEJS_COMPAT));
+    }
+
+    #[test]
+    fn the_performance_flags_follow_nodejs_compat_from_their_date() {
+        for flag in [
+            ENABLE_GLOBAL_PERFORMANCE_CLASSES,
+            ENABLE_NODEJS_PERF_HOOKS_MODULE,
+        ] {
+            assert!(!values("2026-03-16", &["nodejs_compat"]).get(flag));
+            assert!(values("2026-03-17", &["nodejs_compat"]).get(flag));
+            assert!(!values("2026-09-04", &["no_nodejs_compat"]).get(flag));
+        }
+        let alone = values("2025-01-01", &["enable_global_performance_classes"]);
+        assert!(alone.get(ENABLE_GLOBAL_PERFORMANCE_CLASSES));
+        assert!(!alone.get(ENABLE_NODEJS_PERF_HOOKS_MODULE));
+        let without = values("2026-09-04", &["disable_nodejs_perf_hooks_module"]);
+        assert!(without.get(ENABLE_GLOBAL_PERFORMANCE_CLASSES));
+        assert!(!without.get(ENABLE_NODEJS_PERF_HOOKS_MODULE));
+        let reported: std::collections::HashMap<_, _> = without.reported().collect();
+        assert_eq!(
+            reported.get("enable_global_performance_classes"),
+            Some(&true)
+        );
+        assert_eq!(
+            reported.get("enable_nodejs_perf_hooks_module"),
+            Some(&false)
+        );
     }
 
     #[test]

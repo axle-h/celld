@@ -1,0 +1,2 @@
+// Without nodejs_compat: no setImmediate.
+{ "name": "nonode", "main": "index.js", "compatibility_date": "2025-01-01" }

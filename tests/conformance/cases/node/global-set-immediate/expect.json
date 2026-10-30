@@ -1,0 +1,78 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "flags": {
+          "nodejs_compat": true,
+          "nodejs_compat_v2": true,
+          "enable_nodejs_global_timers": true
+        },
+        "setImmediate": "function",
+        "clearImmediate": "function",
+        "returns": [
+          "object",
+          "[object Immediate]",
+          false,
+          "Immediate"
+        ],
+        "functions": [
+          "setImmediate",
+          0,
+          "clearImmediate",
+          0
+        ],
+        "refused": [
+          "threw TypeError: Failed to execute 'setImmediate' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+          "threw TypeError: Failed to execute 'setImmediate' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+          "threw TypeError: Failed to execute 'clearImmediate' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'Immediate'.",
+          "threw TypeError: Failed to execute 'clearImmediate' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'Immediate'.",
+          "threw TypeError: Failed to execute 'clearImmediate' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'Immediate'."
+        ],
+        "accepted": [
+          "undefined",
+          "undefined"
+        ],
+        "fires": [
+          "x",
+          "y"
+        ],
+        "cleared": [
+          false,
+          false
+        ],
+        "order": [
+          "microtask",
+          "immediate",
+          "timeout"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "flags": {
+          "nodejs_compat": false,
+          "nodejs_compat_v2": false,
+          "enable_nodejs_global_timers": false
+        },
+        "setImmediate": "undefined",
+        "clearImmediate": "undefined"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "flags": {
+          "nodejs_compat": true,
+          "nodejs_compat_v2": false,
+          "enable_nodejs_global_timers": false
+        },
+        "setImmediate": "undefined",
+        "clearImmediate": "undefined"
+      }
+    }
+  ]
+}

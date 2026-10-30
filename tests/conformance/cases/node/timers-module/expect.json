@@ -1,0 +1,770 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "flags": {
+          "nodejs_compat": true,
+          "enable_nodejs_global_timers": true
+        },
+        "namespace": [
+          [
+            "Timeout",
+            "fn:Timeout/1 ew"
+          ],
+          [
+            "active",
+            "fn:active/1 ew"
+          ],
+          [
+            "clearImmediate",
+            "fn:bound clearImmediate/0 ew"
+          ],
+          [
+            "clearInterval",
+            "fn:clearInterval/1 ew"
+          ],
+          [
+            "clearTimeout",
+            "fn:clearTimeout/1 ew"
+          ],
+          [
+            "default",
+            "value:object ew"
+          ],
+          [
+            "enroll",
+            "fn:enroll/2 ew"
+          ],
+          [
+            "promises",
+            "value:object ew"
+          ],
+          [
+            "setImmediate",
+            "fn:bound setImmediate/0 ew"
+          ],
+          [
+            "setInterval",
+            "fn:setInterval/2 ew"
+          ],
+          [
+            "setTimeout",
+            "fn:setTimeout/2 ew"
+          ],
+          [
+            "unenroll",
+            "fn:unenroll/1 ew"
+          ],
+          [
+            "Symbol(Symbol.toStringTag)",
+            "value:string "
+          ]
+        ],
+        "namespaceTag": "[object Module]",
+        "default": [
+          [
+            "promises",
+            "value:object ewc"
+          ],
+          [
+            "setTimeout",
+            "fn:setTimeout/2 ewc"
+          ],
+          [
+            "clearTimeout",
+            "fn:clearTimeout/1 ewc"
+          ],
+          [
+            "setImmediate",
+            "fn:bound setImmediate/0 ewc"
+          ],
+          [
+            "clearImmediate",
+            "fn:bound clearImmediate/0 ewc"
+          ],
+          [
+            "setInterval",
+            "fn:setInterval/2 ewc"
+          ],
+          [
+            "clearInterval",
+            "fn:clearInterval/1 ewc"
+          ],
+          [
+            "active",
+            "fn:active/1 ewc"
+          ],
+          [
+            "unenroll",
+            "fn:unenroll/1 ewc"
+          ],
+          [
+            "enroll",
+            "fn:enroll/2 ewc"
+          ]
+        ],
+        "defaultPrototype": true,
+        "defaultIsNamespaceMember": true,
+        "named": true,
+        "sameAsGlobal": {
+          "setTimeout": true,
+          "clearTimeout": true,
+          "setInterval": true,
+          "clearInterval": true,
+          "defaultSetTimeout": true,
+          "defaultSetImmediate": true
+        },
+        "promises": {
+          "imported": false,
+          "default": true,
+          "tag": "[object Module]",
+          "prototype": null,
+          "keys": [
+            [
+              "scheduler",
+              "value:object ew"
+            ],
+            [
+              "setImmediate",
+              "fn:setImmediate/1 ew"
+            ],
+            [
+              "setInterval",
+              "fn:setInterval/2 ew"
+            ],
+            [
+              "setTimeout",
+              "fn:setTimeout/2 ew"
+            ],
+            [
+              "Symbol(Symbol.toStringTag)",
+              "value:string "
+            ]
+          ],
+          "extensible": false,
+          "members": [
+            true,
+            true,
+            true,
+            true
+          ]
+        },
+        "timeoutClass": {
+          "name": "Timeout",
+          "length": 1,
+          "prototype": [
+            [
+              "constructor",
+              "fn:Timeout/1 wc"
+            ],
+            [
+              "refresh",
+              "fn:refresh/0 wc"
+            ],
+            [
+              "unref",
+              "fn:unref/0 wc"
+            ],
+            [
+              "ref",
+              "fn:ref/0 wc"
+            ],
+            [
+              "hasRef",
+              "fn:hasRef/0 wc"
+            ],
+            [
+              "close",
+              "fn:close/0 wc"
+            ],
+            [
+              "Symbol(Symbol.dispose)",
+              "fn:[Symbol.dispose]/0 wc"
+            ],
+            [
+              "Symbol(Symbol.toPrimitive)",
+              "fn:[Symbol.toPrimitive]/0 wc"
+            ]
+          ],
+          "statics": [
+            [
+              "length",
+              "value:number c"
+            ],
+            [
+              "name",
+              "value:string c"
+            ],
+            [
+              "prototype",
+              "value:object "
+            ]
+          ],
+          "fromGlobal": [
+            "object",
+            true
+          ]
+        },
+        "timeout": {
+          "tag": "[object Object]",
+          "own": [],
+          "instance": true,
+          "primitive": "number",
+          "hasRef": true,
+          "unref": true,
+          "hasRefAfterUnref": false,
+          "ref": true,
+          "refresh": true,
+          "close": true
+        },
+        "fires": [
+          "x",
+          "y"
+        ],
+        "cleared": {
+          "timeout": false,
+          "number": false,
+          "string": true,
+          "unenroll": false
+        },
+        "interval": 3,
+        "active": [
+          "undefined",
+          1
+        ],
+        "enroll": "threw Error/Error/undefined: Not implemented. Please use setTimeout() instead.",
+        "badCallbacks": [
+          "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received undefined",
+          "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received null",
+          "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received type number (5)",
+          "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received type string ('s')",
+          "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received an instance of Object",
+          "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received an instance of Array",
+          "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received type symbol (Symbol(q))"
+        ],
+        "badInterval": "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received undefined",
+        "delayString": "number",
+        "functions": {
+          "Timeout": [
+            "Timeout",
+            1
+          ],
+          "active": [
+            "active",
+            1
+          ],
+          "clearImmediate": [
+            "bound clearImmediate",
+            0
+          ],
+          "clearInterval": [
+            "clearInterval",
+            1
+          ],
+          "clearTimeout": [
+            "clearTimeout",
+            1
+          ],
+          "enroll": [
+            "enroll",
+            2
+          ],
+          "setImmediate": [
+            "bound setImmediate",
+            0
+          ],
+          "setInterval": [
+            "setInterval",
+            2
+          ],
+          "setTimeout": [
+            "setTimeout",
+            2
+          ],
+          "unenroll": [
+            "unenroll",
+            1
+          ]
+        },
+        "immediate": [
+          "i",
+          "j",
+          "object",
+          "[object Immediate]"
+        ],
+        "immediateClass": {
+          "name": "Immediate",
+          "length": 0,
+          "prototype": [
+            [
+              "ref",
+              "fn:ref/0 ewc"
+            ],
+            [
+              "unref",
+              "fn:unref/0 ewc"
+            ],
+            [
+              "hasRef",
+              "fn:hasRef/0 ewc"
+            ],
+            [
+              "constructor",
+              "fn:Immediate/0 wc"
+            ],
+            [
+              "Symbol(Symbol.toStringTag)",
+              "value:string wc"
+            ],
+            [
+              "Symbol(Symbol.dispose)",
+              "fn:/0 wc"
+            ]
+          ],
+          "own": [],
+          "construct": "threw TypeError/TypeError/undefined: Illegal constructor",
+          "call": "threw TypeError/TypeError/undefined: Illegal constructor",
+          "hasRef": false,
+          "ref": "undefined",
+          "unref": "undefined",
+          "other": "threw TypeError/TypeError/undefined: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "immediateCleared": {
+          "clear": false,
+          "dispose": false,
+          "undefined": "undefined",
+          "null": "undefined",
+          "none": "threw TypeError/TypeError/undefined: Failed to execute 'clearImmediate' on 'TimersUtil': parameter 1 is not of type 'Immediate'.",
+          "number": "threw TypeError/TypeError/undefined: Failed to execute 'clearImmediate' on 'TimersUtil': parameter 1 is not of type 'Immediate'.",
+          "object": "threw TypeError/TypeError/undefined: Failed to execute 'clearImmediate' on 'TimersUtil': parameter 1 is not of type 'Immediate'."
+        },
+        "immediateArguments": [
+          "threw TypeError/TypeError/undefined: Failed to execute 'setImmediate' on 'TimersUtil': parameter 1 is not of type 'function'.",
+          "threw TypeError/TypeError/undefined: Failed to execute 'setImmediate' on 'TimersUtil': parameter 1 is not of type 'function'."
+        ],
+        "dynamic": [
+          true,
+          true,
+          [
+            "Timeout",
+            "active",
+            "clearImmediate",
+            "clearInterval",
+            "clearTimeout",
+            "default",
+            "enroll",
+            "promises",
+            "setImmediate",
+            "setInterval",
+            "setTimeout",
+            "unenroll"
+          ]
+        ],
+        "bare": [
+          true,
+          true
+        ],
+        "builtin": [
+          true,
+          [
+            "promises",
+            "setTimeout",
+            "clearTimeout",
+            "setImmediate",
+            "clearImmediate",
+            "setInterval",
+            "clearInterval",
+            "active",
+            "unenroll",
+            "enroll"
+          ]
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "flags": {
+          "nodejs_compat": true,
+          "enable_nodejs_global_timers": false
+        },
+        "namespace": [
+          [
+            "Timeout",
+            "fn:Timeout/1 ew"
+          ],
+          [
+            "active",
+            "fn:active/1 ew"
+          ],
+          [
+            "clearImmediate",
+            "fn:bound clearImmediate/0 ew"
+          ],
+          [
+            "clearInterval",
+            "fn:clearInterval/1 ew"
+          ],
+          [
+            "clearTimeout",
+            "fn:clearTimeout/1 ew"
+          ],
+          [
+            "default",
+            "value:object ew"
+          ],
+          [
+            "enroll",
+            "fn:enroll/2 ew"
+          ],
+          [
+            "promises",
+            "value:object ew"
+          ],
+          [
+            "setImmediate",
+            "fn:bound setImmediate/0 ew"
+          ],
+          [
+            "setInterval",
+            "fn:setInterval/2 ew"
+          ],
+          [
+            "setTimeout",
+            "fn:setTimeout/2 ew"
+          ],
+          [
+            "unenroll",
+            "fn:unenroll/1 ew"
+          ],
+          [
+            "Symbol(Symbol.toStringTag)",
+            "value:string "
+          ]
+        ],
+        "namespaceTag": "[object Module]",
+        "default": [
+          [
+            "promises",
+            "value:object ewc"
+          ],
+          [
+            "setTimeout",
+            "fn:setTimeout/2 ewc"
+          ],
+          [
+            "clearTimeout",
+            "fn:clearTimeout/1 ewc"
+          ],
+          [
+            "setImmediate",
+            "fn:bound setImmediate/0 ewc"
+          ],
+          [
+            "clearImmediate",
+            "fn:bound clearImmediate/0 ewc"
+          ],
+          [
+            "setInterval",
+            "fn:setInterval/2 ewc"
+          ],
+          [
+            "clearInterval",
+            "fn:clearInterval/1 ewc"
+          ],
+          [
+            "active",
+            "fn:active/1 ewc"
+          ],
+          [
+            "unenroll",
+            "fn:unenroll/1 ewc"
+          ],
+          [
+            "enroll",
+            "fn:enroll/2 ewc"
+          ]
+        ],
+        "defaultPrototype": true,
+        "defaultIsNamespaceMember": true,
+        "named": true,
+        "sameAsGlobal": {
+          "setTimeout": false,
+          "clearTimeout": false,
+          "setInterval": false,
+          "clearInterval": false,
+          "defaultSetTimeout": true,
+          "defaultSetImmediate": true
+        },
+        "promises": {
+          "imported": false,
+          "default": true,
+          "tag": "[object Module]",
+          "prototype": null,
+          "keys": [
+            [
+              "scheduler",
+              "value:object ew"
+            ],
+            [
+              "setImmediate",
+              "fn:setImmediate/1 ew"
+            ],
+            [
+              "setInterval",
+              "fn:setInterval/2 ew"
+            ],
+            [
+              "setTimeout",
+              "fn:setTimeout/2 ew"
+            ],
+            [
+              "Symbol(Symbol.toStringTag)",
+              "value:string "
+            ]
+          ],
+          "extensible": false,
+          "members": [
+            true,
+            true,
+            true,
+            true
+          ]
+        },
+        "timeoutClass": {
+          "name": "Timeout",
+          "length": 1,
+          "prototype": [
+            [
+              "constructor",
+              "fn:Timeout/1 wc"
+            ],
+            [
+              "refresh",
+              "fn:refresh/0 wc"
+            ],
+            [
+              "unref",
+              "fn:unref/0 wc"
+            ],
+            [
+              "ref",
+              "fn:ref/0 wc"
+            ],
+            [
+              "hasRef",
+              "fn:hasRef/0 wc"
+            ],
+            [
+              "close",
+              "fn:close/0 wc"
+            ],
+            [
+              "Symbol(Symbol.dispose)",
+              "fn:[Symbol.dispose]/0 wc"
+            ],
+            [
+              "Symbol(Symbol.toPrimitive)",
+              "fn:[Symbol.toPrimitive]/0 wc"
+            ]
+          ],
+          "statics": [
+            [
+              "length",
+              "value:number c"
+            ],
+            [
+              "name",
+              "value:string c"
+            ],
+            [
+              "prototype",
+              "value:object "
+            ]
+          ],
+          "fromGlobal": [
+            "number",
+            false
+          ]
+        },
+        "timeout": {
+          "tag": "[object Object]",
+          "own": [],
+          "instance": true,
+          "primitive": "number",
+          "hasRef": true,
+          "unref": true,
+          "hasRefAfterUnref": false,
+          "ref": true,
+          "refresh": true,
+          "close": true
+        },
+        "fires": [
+          "x",
+          "y"
+        ],
+        "cleared": {
+          "timeout": false,
+          "number": false,
+          "string": true,
+          "unenroll": false
+        },
+        "interval": 3,
+        "active": [
+          "undefined",
+          1
+        ],
+        "enroll": "threw Error/Error/undefined: Not implemented. Please use setTimeout() instead.",
+        "badCallbacks": [
+          "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received undefined",
+          "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received null",
+          "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received type number (5)",
+          "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received type string ('s')",
+          "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received an instance of Object",
+          "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received an instance of Array",
+          "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received type symbol (Symbol(q))"
+        ],
+        "badInterval": "threw TypeError/TypeError/ERR_INVALID_ARG_TYPE: The \"callback\" argument must be of type function. Received undefined",
+        "delayString": "number",
+        "functions": {
+          "Timeout": [
+            "Timeout",
+            1
+          ],
+          "active": [
+            "active",
+            1
+          ],
+          "clearImmediate": [
+            "bound clearImmediate",
+            0
+          ],
+          "clearInterval": [
+            "clearInterval",
+            1
+          ],
+          "clearTimeout": [
+            "clearTimeout",
+            1
+          ],
+          "enroll": [
+            "enroll",
+            2
+          ],
+          "setImmediate": [
+            "bound setImmediate",
+            0
+          ],
+          "setInterval": [
+            "setInterval",
+            2
+          ],
+          "setTimeout": [
+            "setTimeout",
+            2
+          ],
+          "unenroll": [
+            "unenroll",
+            1
+          ]
+        },
+        "immediate": [
+          "i",
+          "j",
+          "object",
+          "[object Immediate]"
+        ],
+        "immediateClass": {
+          "name": "Immediate",
+          "length": 0,
+          "prototype": [
+            [
+              "ref",
+              "fn:ref/0 ewc"
+            ],
+            [
+              "unref",
+              "fn:unref/0 ewc"
+            ],
+            [
+              "hasRef",
+              "fn:hasRef/0 ewc"
+            ],
+            [
+              "constructor",
+              "fn:Immediate/0 wc"
+            ],
+            [
+              "Symbol(Symbol.toStringTag)",
+              "value:string wc"
+            ],
+            [
+              "Symbol(Symbol.dispose)",
+              "fn:/0 wc"
+            ]
+          ],
+          "own": [],
+          "construct": "threw TypeError/TypeError/undefined: Illegal constructor",
+          "call": "threw TypeError/TypeError/undefined: Illegal constructor",
+          "hasRef": false,
+          "ref": "undefined",
+          "unref": "undefined",
+          "other": "threw TypeError/TypeError/undefined: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "immediateCleared": {
+          "clear": false,
+          "dispose": false,
+          "undefined": "undefined",
+          "null": "undefined",
+          "none": "threw TypeError/TypeError/undefined: Failed to execute 'clearImmediate' on 'TimersUtil': parameter 1 is not of type 'Immediate'.",
+          "number": "threw TypeError/TypeError/undefined: Failed to execute 'clearImmediate' on 'TimersUtil': parameter 1 is not of type 'Immediate'.",
+          "object": "threw TypeError/TypeError/undefined: Failed to execute 'clearImmediate' on 'TimersUtil': parameter 1 is not of type 'Immediate'."
+        },
+        "immediateArguments": [
+          "threw TypeError/TypeError/undefined: Failed to execute 'setImmediate' on 'TimersUtil': parameter 1 is not of type 'function'.",
+          "threw TypeError/TypeError/undefined: Failed to execute 'setImmediate' on 'TimersUtil': parameter 1 is not of type 'function'."
+        ],
+        "dynamic": [
+          true,
+          true,
+          [
+            "Timeout",
+            "active",
+            "clearImmediate",
+            "clearInterval",
+            "clearTimeout",
+            "default",
+            "enroll",
+            "promises",
+            "setImmediate",
+            "setInterval",
+            "setTimeout",
+            "unenroll"
+          ]
+        ],
+        "bare": [
+          true,
+          true
+        ],
+        "builtin": [
+          true,
+          [
+            "promises",
+            "setTimeout",
+            "clearTimeout",
+            "setImmediate",
+            "clearImmediate",
+            "setInterval",
+            "clearInterval",
+            "active",
+            "unenroll",
+            "enroll"
+          ]
+        ]
+      }
+    }
+  ]
+}

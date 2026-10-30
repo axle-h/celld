@@ -53,7 +53,10 @@
           "strip_bom_in_read_all_text": true,
           "text_decoder_replace_surrogates": true,
           "websocket_close_reason_byte_limit": true,
-          "writable_stream_spec_compliant_writer": true
+          "writable_stream_spec_compliant_writer": true,
+          "enable_nodejs_perf_hooks_module": true,
+          "enable_global_performance_classes": true,
+          "allow_eval_during_startup": true
         },
         "alwaysOn": {
           "url_standard": true,
@@ -125,7 +128,10 @@
           "strip_bom_in_read_all_text": false,
           "text_decoder_replace_surrogates": false,
           "websocket_close_reason_byte_limit": false,
-          "writable_stream_spec_compliant_writer": false
+          "writable_stream_spec_compliant_writer": false,
+          "enable_nodejs_perf_hooks_module": false,
+          "enable_global_performance_classes": false,
+          "allow_eval_during_startup": false
         },
         "alwaysOn": {
           "url_standard": true,
@@ -197,7 +203,10 @@
           "strip_bom_in_read_all_text": true,
           "text_decoder_replace_surrogates": true,
           "websocket_close_reason_byte_limit": true,
-          "writable_stream_spec_compliant_writer": true
+          "writable_stream_spec_compliant_writer": true,
+          "enable_nodejs_perf_hooks_module": false,
+          "enable_global_performance_classes": false,
+          "allow_eval_during_startup": true
         },
         "alwaysOn": {
           "url_standard": true,

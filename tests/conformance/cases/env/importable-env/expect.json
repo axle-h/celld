@@ -1,0 +1,89 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "atModuleScope": {
+          "keys": [
+            "CONFIG",
+            "GREETING",
+            "KV",
+            "OBJ",
+            "OFF"
+          ],
+          "greeting": "hi",
+          "config": {
+            "a": 1
+          },
+          "kv": "function",
+          "id": 64,
+          "has": true,
+          "exportsKeys": [],
+          "exportsDefault": "undefined",
+          "hasDefault": false
+        },
+        "request": {
+          "same": false,
+          "keys": [
+            "ADDED",
+            "CONFIG",
+            "GREETING",
+            "KV",
+            "OBJ",
+            "OFF"
+          ],
+          "handlerKeys": [
+            "ADDED",
+            "CONFIG",
+            "GREETING",
+            "KV",
+            "OBJ",
+            "OFF"
+          ],
+          "added": "at module scope",
+          "sameBinding": true,
+          "exportsKeys": [
+            "Named",
+            "Obj",
+            "default"
+          ],
+          "sameExports": [
+            true,
+            true,
+            true
+          ],
+          "exportsDefault": "function",
+          "hasDefault": true,
+          "written": null,
+          "named": "named",
+          "object": "Obj",
+          "descriptor": {
+            "value": "hi",
+            "writable": true,
+            "enumerable": true,
+            "configurable": true
+          },
+          "deleted": true,
+          "afterDelete": null
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "atModuleScope": {
+          "keys": [],
+          "greeting": null,
+          "has": false
+        },
+        "keys": [],
+        "greeting": null,
+        "added": null,
+        "exports": [],
+        "exportsDefault": "undefined"
+      }
+    }
+  ]
+}

@@ -593,6 +593,7 @@ impl Generation {
                 cpu_ms,
                 containers,
                 fence_image: fence,
+                python_runtime,
                 ..
             } = deployment;
             all_containers.extend(containers.iter().cloned());
@@ -609,6 +610,7 @@ impl Generation {
                     .with_crons(if is_primary { crons } else { Vec::new() })
                     .with_cpu_limit_ms(cpu_ms)
                     .with_containers(containers)
+                    .with_python_runtime(python_runtime)
                     .with_generation(id),
             );
             let pool = crate::runtime::StatelessRuntime::start(
@@ -732,6 +734,7 @@ mod tests {
             cpu_ms: None,
             containers: Vec::new(),
             fence_image: None,
+            python_runtime: false,
         }
     }
 

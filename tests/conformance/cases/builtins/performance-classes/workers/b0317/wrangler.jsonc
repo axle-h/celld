@@ -1,0 +1,8 @@
+{
+  "name": "b0317",
+  "main": "index.js",
+  "compatibility_date": "2026-03-17",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
+}

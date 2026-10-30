@@ -1,0 +1,7 @@
+// A JavaScript Worker with python_workers.
+{
+  "name": "python",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["python_workers", "no_python_workers_314"]
+}

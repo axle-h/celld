@@ -1,0 +1,8 @@
+// enable_nodejs_global_timers is on: the global timers are node:timers'.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "services": [{ "binding": "EARLY", "service": "early" }]
+}

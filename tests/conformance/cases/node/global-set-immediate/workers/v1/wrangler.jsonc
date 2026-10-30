@@ -1,0 +1,2 @@
+// nodejs_compat before the date that implies nodejs_compat_v2.
+{ "name": "v1", "main": "index.js", "compatibility_date": "2024-09-22", "compatibility_flags": ["nodejs_compat"] }

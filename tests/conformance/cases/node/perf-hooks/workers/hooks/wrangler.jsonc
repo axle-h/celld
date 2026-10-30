@@ -1,0 +1,8 @@
+// The flag set before its date, without enable_global_performance_classes:
+// it turns the classes on too.
+{
+  "name": "hooks",
+  "main": "index.js",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat", "enable_nodejs_perf_hooks_module"]
+}

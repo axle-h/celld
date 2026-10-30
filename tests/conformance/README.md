@@ -105,6 +105,9 @@ without the experimental `enable_abortsignal_rpc` flag.
   `/redirect?to=<url>&status=<code>` answers that status (302 by default) to
   that URL, `/chain?n=<n>` redirects `n` times and lands, `/loop` redirects
   to itself, `/echo` answers JSON describing the request it received,
+  `/beacon?id=<id>` records that description and answers 204,
+  `/beacon/log?id=<id>` answers `{"received": [...]}`, the descriptions
+  recorded under the id, once there is one or after 3 s,
   `/big?kib=<n>` answers `n` KiB, `/encoded?as=<gzip|br|GZIP|bad>&text=<text>`
   answers `text` with that `Content-Encoding` (compressed, except for `bad`,
   which claims gzip), and every other path answers `upstream`. A WebSocket upgrade to

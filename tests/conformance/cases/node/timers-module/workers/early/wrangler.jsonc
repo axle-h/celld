@@ -1,0 +1,7 @@
+// Before 2026-02-10: the global timers return numbers.
+{
+  "name": "early",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"]
+}

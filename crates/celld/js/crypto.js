@@ -135,6 +135,135 @@
     }
   }
 
+  // A WebIDL `long`, as workerd's JSG converts one: a value that is not
+  // finite is 0, anything else is truncated and must fit 32 bits.
+  function _webIdlLong(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 0;
+    const long = Math.trunc(number);
+    if (long < -0x8000_0000 || long > 0x7fff_ffff) {
+      throw new TypeError(
+        "Value out of range. Must be between -2147483648 and 2147483647 (inclusive).");
+    }
+    return long + 0;
+  }
+
+  // RSA key generation's parameters and usages, as workerd's generateRsa,
+  // validateRsaParams (api/crypto/rsa.c++) and generateKey (crypto.c++)
+  // check them under strict_crypto_checks, in their order: the exponent, the
+  // hash and the modulus are required, the modulus positive, the hash a
+  // digest workerd knows (lookupDigestAlgorithm), each usage one the
+  // algorithm has (CryptoKeyUsageSet::validate), then the modulus's range,
+  // the exponent and the modulus's multiple. Only 3 and 65537 are legal
+  // exponents, so no other reaches the prime search, and the modulus is
+  // bounded before it does. Key generation refuses a modulus under 512 bits
+  // (BoringSSL), and only then does workerd find a private key without
+  // usages.
+  function _rsaGenerateParams(name, algorithm, usages) {
+    const rawModulus = algorithm?.modulusLength;
+    const modulusLength = rawModulus === undefined ? undefined : _webIdlLong(rawModulus);
+    const rawExponent = algorithm?.publicExponent;
+    if (rawExponent === undefined) {
+      throw new TypeError('Missing field "publicExponent" in "algorithm".');
+    }
+    const exponentBytes = _toBuf(rawExponent).slice();
+    if (algorithm?.hash === undefined) {
+      throw new TypeError('Missing field "hash" in "algorithm".');
+    }
+    if (modulusLength === undefined) {
+      throw new TypeError('Missing field "modulusLength" in "algorithm".');
+    }
+    if (modulusLength <= 0) {
+      throw _operationError(
+        `modulusLength must be greater than zero (requested ${modulusLength}).`);
+    }
+    if (!_DIGEST_ALGS.has(_hashName(algorithm.hash))) {
+      throw _notSupported("Unrecognized or unimplemented digest algorithm requested.");
+    }
+    const normalizedName = _ASYM_NAMES[name];
+    const valid = name === "RSA-OAEP" ? _RSA_OAEP_USAGES : _RSA_SIGN_USAGES;
+    for (const usage of usages) {
+      if (!valid.includes(usage)) {
+        throw new DOMException(
+          `Attempt to generate ${normalizedName} key with invalid usage "${usage}".`,
+          "SyntaxError");
+      }
+    }
+    if (modulusLength % 8 !== 0 || modulusLength < 256 || modulusLength > 16384) {
+      throw _operationError(
+        "The modulus length must be a multiple of 8 and between 256 and 16k, " +
+          `but ${modulusLength} was requested.`);
+    }
+    // The exponent as an unsigned 32-bit number, as workerd's fromBignum
+    // reads its big-endian bytes: one whose bytes reach past four is larger.
+    let publicExponent = 0;
+    for (let i = 0; i < exponentBytes.byteLength; i++) {
+      if (exponentBytes.byteLength - i - 1 >= 4 && exponentBytes[i] !== 0) {
+        throw _operationError(
+          'The "publicExponent" must be either 3 or 65537, but got a number ' +
+            "larger than 2^32.");
+      }
+      publicExponent = publicExponent * 256 + exponentBytes[i];
+    }
+    if (publicExponent !== 3 && publicExponent !== 65537) {
+      throw _operationError(
+        `The "publicExponent" must be either 3 or 65537, but got ${publicExponent}.`);
+    }
+    if (modulusLength % 128 !== 0) {
+      throw _operationError(
+        "Can't generate key: RSA key size is required to be a multiple of 128");
+    }
+    if (modulusLength < 512) throw _operationError("RSA key size is too small.");
+    if (!usages.some((usage) => _PRIVATE_KEY_USAGES.includes(usage))) {
+      throw new DOMException(
+        "Attempt to generate asymmetric keys with no valid private key usages.",
+        "SyntaxError");
+    }
+    return { modulusLength, publicExponent, exponentBytes };
+  }
+
+  const _RSA_OAEP_USAGES = ["encrypt", "decrypt", "wrapKey", "unwrapKey"];
+  const _RSA_SIGN_USAGES = ["sign", "verify"];
+  // Which half of a generated pair each usage goes to (workerd's
+  // CryptoKeyUsageSet publicKeyMask and privateKeyMask).
+  const _PUBLIC_KEY_USAGES = ["encrypt", "verify", "wrapKey"];
+  const _PRIVATE_KEY_USAGES = ["decrypt", "sign", "unwrapKey", "deriveKey", "deriveBits"];
+
+  // RSA-PSS's salt length, as workerd's RsaPssKey::addSalt takes it: given,
+  // converted as a WebIDL long, and not negative. sign() reports a missing
+  // one as a DataError and verify() as a TypeError, as workerd's do.
+  function _rsaPssSaltLength(algorithm, signing) {
+    const raw = algorithm?.saltLength;
+    if (raw === undefined) {
+      const message = "Failed to provide salt for RSA-PSS key operation which requires a salt";
+      throw signing ? new DOMException(message, "DataError") : new TypeError(message);
+    }
+    const saltLength = _webIdlLong(raw);
+    if (saltLength < 0) {
+      throw new DOMException(
+        `SaltLength for RSA-PSS must be non-negative (provided ${saltLength}).`, "DataError");
+    }
+    return saltLength;
+  }
+
+  // The length of an HMAC key imported from `raw`, as workerd's importHmac
+  // (api/crypto/digest.c++) checks it: the data's bits, or fewer by at most
+  // 7, and never none, so an empty key is refused. The bits past it are
+  // zeroed in `raw`.
+  function _hmacImportLength(requested, raw) {
+    const keySize = raw.byteLength * 8;
+    const length = requested === undefined ? keySize : _webIdlLong(requested);
+    if (length <= 0 || length > keySize || length <= keySize - 8) {
+      throw new DOMException(
+        `Imported HMAC key length (${length}) must be a non-zero value up to 7 ` +
+          "bits less than, and no greater than, the bit length of the raw key " +
+          `data (${keySize}).`,
+        "DataError");
+    }
+    if (length % 8 !== 0) raw[raw.byteLength - 1] &= 0xff << (8 - length % 8);
+    return length;
+  }
+
   function _makeKey(type, algorithm, extractable, usages, material) {
     return new CryptoKey(type, algorithm, extractable, usages, material);
   }
@@ -260,11 +389,17 @@
       }
       if (format === "raw" && _SECRET_KEY_ALGS.has(name)) {
         const raw = _toBuf(keyData).slice();
-        const normalized = name === "HMAC"
-          ? { name, hash: { name: _hashName(algorithm?.hash) }, length: raw.byteLength * 8 }
-          : { name, length: raw.byteLength * 8 };
+        if (name === "HMAC") {
+          const hash = _hashName(algorithm?.hash);
+          const length = _hmacImportLength(algorithm?.length, raw);
+          return _makeKey(
+            "secret", { name, hash: { name: hash }, length }, extractable, usages,
+            { bytes: raw },
+          );
+        }
         return _makeKey(
-          "secret", normalized, extractable, usages, { bytes: raw },
+          "secret", { name, length: raw.byteLength * 8 }, extractable, usages,
+          { bytes: raw },
         );
       }
       // A Secure Curves public key has a `raw` form: the 32-byte point on
@@ -540,35 +675,12 @@
       const kind = ASYM_GENERATE[name];
       if (kind !== undefined) {
         const options = { type: kind };
+        let exponentBytes;
         if (kind === "rsa") {
-          // Only 3 and 65537 are legal exponents, and celld generates with
-          // 65537. Rejecting the rest here is what stops a pathological
-          // exponent reaching the prime search at all.
-          const raw = algorithm?.publicExponent;
-          const bytes = raw ? Array.from(_toBuf(raw)) : [1, 0, 1];
-          let exponent = 0;
-          for (const byte of bytes) exponent = exponent * 256 + byte;
-          if (exponent !== 3 && exponent !== 65537) {
-            throw new DOMException(
-              `The "publicExponent" must be either 3 or 65537, but got ` +
-                `${exponent}.`,
-              "OperationError",
-            );
-          }
-          if (exponent !== 65537) {
-            throw _notSupported("publicExponent 3 is not implemented");
-          }
-          options.modulusLength = Number(algorithm?.modulusLength ?? 2048);
-          if (
-            !Number.isInteger(options.modulusLength) ||
-            options.modulusLength < 1024 ||
-            options.modulusLength > 16384 ||
-            options.modulusLength % 8 !== 0
-          ) {
-            throw _operationError(
-              "RSA modulusLength must be a multiple of 8 from 1024 to 16384",
-            );
-          }
+          const params = _rsaGenerateParams(name, algorithm, [...(usages || [])]);
+          options.modulusLength = params.modulusLength;
+          options.publicExponent = params.publicExponent;
+          exponentBytes = params.exponentBytes;
           const hash = _hashName(algorithm?.hash);
           if (name === "RSA-OAEP" && !_RSA_OAEP_HASHES.has(hash)) {
             throw _notSupported("unsupported RSA-OAEP hash: " + hash);
@@ -585,19 +697,22 @@
         // hash is what sign() then hashes with, so a caller that mutates
         // `publicKey.algorithm.hash.name` on a shared object would change
         // what the private key signs.
-        const half = (der, type, allowed) =>
-          _makeKey(type,
-            _keyAlgorithm(name, algorithm, pair.keyType, pair.details),
+        const half = (der, type, allowed) => {
+          const reported = _keyAlgorithm(name, algorithm, pair.keyType, pair.details);
+          // The exponent as the caller gave it, leading zeros and all, as
+          // workerd reports it.
+          if (exponentBytes !== undefined) reported.publicExponent = exponentBytes.slice();
+          return _makeKey(type, reported,
             type === "public" ? true : extractable,
             (usages || []).filter((usage) => allowed.includes(usage)), {
               bytes: Uint8Array.from(der),
               keyType: pair.keyType,
               details: pair.details,
             });
+        };
         return {
-          publicKey: half(pair.publicDer, "public", ["verify", "encrypt"]),
-          privateKey: half(pair.privateDer, "private",
-            ["sign", "decrypt", "deriveKey", "deriveBits"]),
+          publicKey: half(pair.publicDer, "public", _PUBLIC_KEY_USAGES),
+          privateKey: half(pair.privateDer, "private", _PRIVATE_KEY_USAGES),
         };
       }
       throw _notSupported("unsupported key algorithm: " + name);
@@ -635,8 +750,11 @@
         data: Array.from(bytes),
         // RSA carries its hash on the key; the others ignore the field.
         hash: _hashName(key?.algorithm?.hash),
-        saltLength: Number(algorithm?.saltLength ?? 0),
+        saltLength: name === "RSA-PSS" ? _rsaPssSaltLength(algorithm, true) : undefined,
       });
+      if (result.saltTooLong) {
+        throw _operationError("key too small for signing with given digest and salt length");
+      }
       return Uint8Array.from(result.bytes).buffer;
     }
 
@@ -684,6 +802,9 @@
         hash: _hashName(
           name === "ECDSA" ? algorithm?.hash : key?.algorithm?.hash,
         ),
+        // RSA-PSS verifies with the salt length it signed with; the others
+        // have none.
+        saltLength: name === "RSA-PSS" ? _rsaPssSaltLength(algorithm, false) : undefined,
       }).ok;
     }
 

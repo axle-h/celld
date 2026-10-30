@@ -1,0 +1,9 @@
+{
+  "workers": ["app"],
+  "env": { "CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}" },
+  "upstream": true,
+  "steps": [
+    {"path": "/send?port=${UPSTREAM_PORT}"},
+    {"path": "/log?port=${UPSTREAM_PORT}"}
+  ]
+}

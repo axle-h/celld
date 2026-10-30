@@ -1,0 +1,8 @@
+{
+  "name": "globalonly",
+  "main": "index.js",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": [
+    "enable_global_performance_classes"
+  ]
+}

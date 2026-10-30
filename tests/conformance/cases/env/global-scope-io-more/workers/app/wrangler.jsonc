@@ -1,0 +1,16 @@
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "kv_namespaces": [{ "binding": "KV", "id": "global-scope-io-more-kv" }],
+  "r2_buckets": [{ "binding": "R2", "bucket_name": "global-scope-io-more" }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "global-scope-io-more",
+      "database_id": "00000000-0000-0000-0000-000000000137"
+    }
+  ],
+  "queues": { "producers": [{ "binding": "Q", "queue": "global-scope-io-more" }] },
+  "services": [{ "binding": "PROXIED", "service": "proxied" }]
+}

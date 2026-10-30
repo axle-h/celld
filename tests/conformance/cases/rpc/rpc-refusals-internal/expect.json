@@ -3,48 +3,6 @@
     {
       "status": 200,
       "body": {
-        "local": {
-          "constructor": "TypeError: 'constructor' is a reserved method and cannot be called over RPC.",
-          "fetch": "TypeError: 'fetch' is a reserved method and cannot be called over RPC.",
-          "connect": "TypeError: 'connect' is a reserved method and cannot be called over RPC.",
-          "toString": "TypeError: The RPC receiver does not implement the method \"toString\".",
-          "valueOf": "TypeError: The RPC receiver does not implement the method \"valueOf\".",
-          "hasOwnProperty": "TypeError: The RPC receiver does not implement the method \"hasOwnProperty\".",
-          "isPrototypeOf": "TypeError: The RPC receiver does not implement the method \"isPrototypeOf\".",
-          "__proto__": "TypeError: The RPC receiver does not implement the method \"__proto__\".",
-          "__defineGetter__": "TypeError: The RPC receiver does not implement the method \"__defineGetter__\".",
-          "__lookupGetter__": "TypeError: The RPC receiver does not implement the method \"__lookupGetter__\"."
-        },
-        "entry": {
-          "constructor": "TypeError: 'constructor' is a reserved method and cannot be called over RPC.",
-          "fetch": "TypeError: 'fetch' is a reserved method and cannot be called over RPC.",
-          "connect": "TypeError: 'connect' is a reserved method and cannot be called over RPC.",
-          "toString": "TypeError: The RPC receiver does not implement the method \"toString\".",
-          "valueOf": "TypeError: The RPC receiver does not implement the method \"valueOf\".",
-          "hasOwnProperty": "TypeError: The RPC receiver does not implement the method \"hasOwnProperty\".",
-          "isPrototypeOf": "TypeError: The RPC receiver does not implement the method \"isPrototypeOf\".",
-          "__proto__": "TypeError: The RPC receiver does not implement the method \"__proto__\".",
-          "__defineGetter__": "TypeError: The RPC receiver does not implement the method \"__defineGetter__\".",
-          "__lookupGetter__": "TypeError: The RPC receiver does not implement the method \"__lookupGetter__\"."
-        },
-        "object": {
-          "constructor": "TypeError: 'constructor' is a reserved method and cannot be called over RPC.",
-          "fetch": "TypeError: 'fetch' is a reserved method and cannot be called over RPC.",
-          "connect": "TypeError: 'connect' is a reserved method and cannot be called over RPC.",
-          "toString": "TypeError: The RPC receiver does not implement the method \"toString\".",
-          "valueOf": "TypeError: The RPC receiver does not implement the method \"valueOf\".",
-          "hasOwnProperty": "TypeError: The RPC receiver does not implement the method \"hasOwnProperty\".",
-          "isPrototypeOf": "TypeError: The RPC receiver does not implement the method \"isPrototypeOf\".",
-          "__proto__": "TypeError: The RPC receiver does not implement the method \"__proto__\".",
-          "__defineGetter__": "TypeError: The RPC receiver does not implement the method \"__defineGetter__\".",
-          "__lookupGetter__": "TypeError: The RPC receiver does not implement the method \"__lookupGetter__\"."
-        },
-        "localGet": "TypeError: 'constructor' is a reserved method and cannot be called over RPC."
-      }
-    },
-    {
-      "status": 200,
-      "body": {
         "kv": [],
         "queue": [],
         "db": [],

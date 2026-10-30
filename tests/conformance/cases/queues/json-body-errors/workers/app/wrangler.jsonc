@@ -1,0 +1,7 @@
+// A producer only: the bodies JSON cannot serialize never reach a queue.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "queues": { "producers": [{ "binding": "QUEUE", "queue": "json-errors-queue" }] }
+}

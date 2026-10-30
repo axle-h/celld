@@ -1,0 +1,7 @@
+{
+  "workers": ["front", "hooks"],
+  "steps": [
+    {"path": "/"},
+    {"path": "/hooks"}
+  ]
+}

@@ -1,0 +1,12 @@
+// At a date with allow_eval_during_startup; routes the other steps.
+{
+  "name": "front",
+  "main": "front.js",
+  "compatibility_date": "2026-09-04",
+  "durable_objects": { "bindings": [{ "name": "PROBE", "class_name": "Probe" }] }, "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Probe"] }],
+  "services": [
+    { "binding": "BEFORE", "service": "before" },
+    { "binding": "DISABLE", "service": "disable" },
+    { "binding": "ENABLE", "service": "enable" }
+  ]
+}

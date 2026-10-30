@@ -1,13 +1,8 @@
-// Refusals only, for names no workerd client sends: celld's test hook, and
-// the private state of the KV, Queue and D1 bindings.
+// The private state of the KV, Queue and D1 bindings.
 {
   "name": "front",
   "main": "index.js",
   "compatibility_date": "2026-01-01",
-  "services": [
-    { "binding": "ENTRY", "service": "back", "entrypoint": "Entry" },
-    { "binding": "OBJECT", "service": "back" }
-  ],
   "kv_namespaces": [{ "binding": "KV", "id": "refusals-kv" }],
   "queues": { "producers": [{ "binding": "QUEUE", "queue": "refusals-queue" }] },
   "d1_databases": [{ "binding": "DB", "database_name": "refusals-db", "database_id": "refusals-db" }]

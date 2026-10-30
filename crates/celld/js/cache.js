@@ -10,6 +10,7 @@
 // replace the miss without changing any observable contract.
 (function () {
   const kCreate = Symbol("celld.Cache.create");
+  let isCache;
 
   // A key is a Request or URL string, and it must parse as an absolute
   // http(s) URL -- the same rule and message as Workerd's validateUrl.
@@ -27,52 +28,87 @@
     return __celld.__isRequest(request) ? request : new __celld.__Request(url);
   };
 
+  // celld validates the key's URL before the method, status and Vary checks;
+  // workerd checks those first and the URL last (plan 1.65).
+  const putChecked = async (request, response) => {
+    __require_io_context();
+    const key = asKey(request);
+    if (key.method !== "GET") {
+      throw new TypeError("Cannot cache response to non-GET request.");
+    }
+    if (response.status === 206) {
+      throw new TypeError(
+        "Cannot cache response to a range request (206 Partial Content).");
+    }
+    const vary = response.headers.get("vary");
+    if (vary !== null && vary.includes("*")) {
+      throw new TypeError("Cannot cache response with 'Vary: *' header.");
+    }
+    if (response.bodyUsed) {
+      throw new TypeError(
+        "Cannot cache a response whose body is already used.");
+    }
+    // Consume the body even though nothing is stored: put()'s contract
+    // is that the response is disturbed when it returns, and a
+    // streaming producer must see its stream pulled to completion
+    // instead of hanging on a reader that never comes.
+    if (response.body) await response.arrayBuffer();
+  };
+
+  const matchChecked = async (request, options) => {
+    __require_io_context();
+    const key = asKey(request);
+    // A non-GET key cannot match without ignoreMethod; celld misses
+    // either way, and the option is accepted for compatibility.
+    void key;
+    void options;
+    return undefined;
+  };
+
+  const deleteChecked = async (request, options) => {
+    __require_io_context();
+    asKey(request);
+    void options;
+    return false;
+  };
+
   class Cache {
+    #brand;
+    static {
+      isCache = (value) =>
+        (typeof value === "object" || typeof value === "function") &&
+        value !== null && #brand in value;
+    }
+
     constructor(token = undefined) {
       if (token !== kCreate) throw new TypeError("Illegal constructor");
     }
 
-    async put(request, response) {
-      const key = asKey(request);
-      if (!(response instanceof Response)) {
-        throw new TypeError(
-          "Cache.put() requires a Response as its second argument.");
+    // workerd checks the receiver first and throws. A response that does
+    // not convert, or an error response, rejects before put() asks for the
+    // current request, whose global-scope error rejects too; match() and
+    // delete() ask for it before they read the key (api/cache.c++).
+    put(request, response) {
+      if (!isCache(this)) throw __celld.__illegalInvocation();
+      if (!__celld.__isResponse(response)) {
+        return Promise.reject(new TypeError(
+          "Failed to execute 'put' on 'Cache': parameter 2 is not of type 'Response'."));
       }
-      if (key.method !== "GET") {
-        throw new TypeError("Cannot cache response to non-GET request.");
+      if (__celld.__responseType(response) === "error") {
+        return Promise.reject(new TypeError(
+          "Cache is unable to store an error response"));
       }
-      if (response.status === 206) {
-        throw new TypeError(
-          "Cannot cache response to a range request (206 Partial Content).");
-      }
-      const vary = response.headers.get("vary");
-      if (vary !== null && vary.includes("*")) {
-        throw new TypeError("Cannot cache response with 'Vary: *' header.");
-      }
-      if (response.bodyUsed) {
-        throw new TypeError(
-          "Cannot cache a response whose body is already used.");
-      }
-      // Consume the body even though nothing is stored: put()'s contract
-      // is that the response is disturbed when it returns, and a
-      // streaming producer must see its stream pulled to completion
-      // instead of hanging on a reader that never comes.
-      if (response.body) await response.arrayBuffer();
+      return putChecked(request, response);
     }
 
-    async match(request, options = undefined) {
-      const key = asKey(request);
-      // A non-GET key cannot match without ignoreMethod; celld misses
-      // either way, and the option is accepted for compatibility.
-      void key;
-      void options;
-      return undefined;
+    match(request, options = undefined) {
+      if (!isCache(this)) throw __celld.__illegalInvocation();
+      return matchChecked(request, options);
     }
 
-    async delete(request, options = undefined) {
-      asKey(request);
-      void options;
-      return false;
+    delete(request, options = undefined) {
+      if (!isCache(this)) throw __celld.__illegalInvocation();
+      return deleteChecked(request, options);
     }
   }
 

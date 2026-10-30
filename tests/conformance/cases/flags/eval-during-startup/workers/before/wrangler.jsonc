@@ -1,0 +1,2 @@
+// The day before allow_eval_during_startup's date.
+{ "name": "before", "main": "index.js", "compatibility_date": "2025-05-31", "durable_objects": { "bindings": [{ "name": "PROBE", "class_name": "ProbeBefore" }] }, "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProbeBefore"] }] }

@@ -1,0 +1,7 @@
+// A JavaScript Worker without python_workers.
+{
+  "name": "plain",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "services": [{ "binding": "PYTHON", "service": "python" }]
+}

@@ -1,0 +1,53 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "bigint": {
+          "json": "rejected TypeError: Do not know how to serialize a BigInt",
+          "default": "rejected TypeError: Do not know how to serialize a BigInt",
+          "batch": "rejected TypeError: Do not know how to serialize a BigInt",
+          "batchDefault": "rejected TypeError: Do not know how to serialize a BigInt"
+        },
+        "nested": {
+          "json": "rejected TypeError: Do not know how to serialize a BigInt",
+          "default": "rejected TypeError: Do not know how to serialize a BigInt",
+          "batch": "rejected TypeError: Do not know how to serialize a BigInt",
+          "batchDefault": "rejected TypeError: Do not know how to serialize a BigInt"
+        },
+        "cyclic": {
+          "json": "rejected TypeError: Converting circular structure to JSON\n    --> starting at object with constructor 'Object'\n    --- property 'self' closes the circle",
+          "default": "rejected TypeError: Converting circular structure to JSON\n    --> starting at object with constructor 'Object'\n    --- property 'self' closes the circle",
+          "batch": "rejected TypeError: Converting circular structure to JSON\n    --> starting at object with constructor 'Object'\n    --- property 'self' closes the circle",
+          "batchDefault": "rejected TypeError: Converting circular structure to JSON\n    --> starting at object with constructor 'Object'\n    --- property 'self' closes the circle"
+        },
+        "toJSON": {
+          "json": "rejected RangeError: from toJSON",
+          "default": "rejected RangeError: from toJSON",
+          "batch": "rejected RangeError: from toJSON",
+          "batchDefault": "rejected RangeError: from toJSON"
+        },
+        "function": {
+          "json": "sent",
+          "default": "sent",
+          "batch": "sent",
+          "batchDefault": "sent"
+        },
+        "symbol": {
+          "json": "sent",
+          "default": "sent",
+          "batch": "sent",
+          "batchDefault": "sent"
+        },
+        "plain": {
+          "json": "sent",
+          "default": "sent",
+          "batch": "sent",
+          "batchDefault": "sent"
+        }
+      }
+    }
+  ]
+}

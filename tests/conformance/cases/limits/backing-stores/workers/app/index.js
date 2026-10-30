@@ -2,15 +2,15 @@
 // stores past the isolate's budget, and a stateless Worker (hog) that does
 // in a request. What is refused throws V8's RangeError; what is held past
 // the budget fails as the heap limit does. The node keeps serving.
-import { buffers } from "../hog/buffers.js";
+import { buffers, prelude } from "../hog/buffers.js";
 
 function source(at, kind) {
   // A method's text, `name() { … }`, is a function declaration's tail.
   const work = `(function ${buffers[kind]})();`;
   const answer = `new Response("ran " + (globalThis.result ?? ""))`;
   return at === "load"
-    ? `${work}\nexport default { fetch() { return ${answer}; } };`
-    : `export default { fetch() { ${work}\nreturn ${answer}; } };`;
+    ? `${prelude}\n${work}\nexport default { fetch() { return ${answer}; } };`
+    : `${prelude}\nexport default { fetch() { ${work}\nreturn ${answer}; } };`;
 }
 
 async function outcome(call) {

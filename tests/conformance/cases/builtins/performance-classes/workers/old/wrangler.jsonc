@@ -1,0 +1,9 @@
+{
+  "name": "old",
+  "main": "index.js",
+  "compatibility_date": "2021-01-01",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "enable_nodejs_perf_hooks_module"
+  ]
+}

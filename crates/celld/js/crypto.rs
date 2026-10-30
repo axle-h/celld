@@ -624,6 +624,15 @@ fn key_from_jwk(jwk: &serde_json::Value, want_private: bool) -> Result<Vec<u8>> 
     }
 }
 
+/// An RSA-PSS operation's salt length, which Web Crypto's JS always sends.
+fn pss_salt_length(args: &serde_json::Value) -> Result<usize> {
+    let salt_len = args
+        .get("saltLength")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| anyhow!("RSA-PSS needs a saltLength"))?;
+    Ok(usize::try_from(salt_len)?)
+}
+
 fn crypto_operation(operation: &str, args: &serde_json::Value) -> Result<serde_json::Value> {
     match operation {
         "hmac-sign" => {
@@ -861,32 +870,40 @@ fn crypto_operation(operation: &str, args: &serde_json::Value) -> Result<serde_j
             };
             Ok(serde_json::json!({ "ok": ok }))
         }
-        // Web Crypto RSA-PSS. Signing takes the caller's salt length —
-        // the spec makes it an explicit parameter — and verification
-        // recovers the salt length from the signature, which accepts
-        // every salt the signer could legally have used.
+        // Web Crypto RSA-PSS. Signing and verifying take the caller's salt
+        // length, which the spec makes an explicit parameter and its JS
+        // requires (`_rsaPssSaltLength`); rsa 0.9's verifier checks exactly
+        // the length it is given, so a signature made with another salt
+        // length does not verify, as in workerd.
         "rsa-pss-sign" => {
             use rsa::pkcs8::DecodePrivateKey;
             use rsa::signature::RandomizedSigner;
             use rsa::signature::SignatureEncoding;
+            use rsa::traits::PublicKeyParts;
             let key = crypto_bytes(args, "key")?;
             let data = crypto_bytes(args, "data")?;
-            let salt_len = args
-                .get("saltLength")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0) as usize;
+            let salt_len = pss_salt_length(args)?;
             let hash = args
                 .get("hash")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("SHA-256");
             let key = rsa::RsaPrivateKey::from_pkcs8_der(&key)
                 .map_err(|_| anyhow!("invalid RSA private key"))?;
+            // The encoded message holds the digest, the salt and two more
+            // bytes (RFC 8017 9.1.1); a longer salt is the caller's error,
+            // which its JS reports as workerd's OperationError.
+            let encoded_len = (key.n().bits() - 1).div_ceil(8);
             macro_rules! sign {
-                ($hash:ty) => {
+                ($hash:ty) => {{
+                    let digest_len = <$hash as sha2::Digest>::output_size();
+                    if encoded_len < digest_len + salt_len + 2 {
+                        return Ok(serde_json::json!({ "saltTooLong": true }));
+                    }
                     rsa::pss::SigningKey::<$hash>::new_with_salt_len(key, salt_len)
-                        .sign_with_rng(&mut rand::rngs::OsRng, &data)
+                        .try_sign_with_rng(&mut rand::rngs::OsRng, &data)
+                        .map_err(|error| anyhow!("RSA-PSS sign failed: {error}"))?
                         .to_vec()
-                };
+                }};
             }
             let bytes = match hash {
                 "SHA-256" => sign!(sha2::Sha256),
@@ -909,9 +926,10 @@ fn crypto_operation(operation: &str, args: &serde_json::Value) -> Result<serde_j
                 .to_string();
             let key = rsa::RsaPublicKey::from_public_key_der(&key)
                 .map_err(|_| anyhow!("invalid RSA SPKI key"))?;
+            let salt_len = pss_salt_length(args)?;
             macro_rules! verify {
                 ($hash:ty) => {{
-                    let key = rsa::pss::VerifyingKey::<$hash>::new(key);
+                    let key = rsa::pss::VerifyingKey::<$hash>::new_with_salt_len(key, salt_len);
                     rsa::pss::Signature::try_from(signature.as_slice())
                         .map(|signature| key.verify(&data, &signature).is_ok())
                         .unwrap_or(false)
@@ -1135,7 +1153,20 @@ fn crypto_operation(operation: &str, args: &serde_json::Value) -> Result<serde_j
                         .and_then(serde_json::Value::as_u64)
                         .ok_or_else(|| anyhow!("missing modulusLength"))?
                         as usize;
-                    let mut key = rsa::RsaPrivateKey::new(&mut rng, bits)?;
+                    // Web Crypto generates with 3 or 65537 only (its JS
+                    // refuses any other first); node:crypto with 65537.
+                    let exponent = match args.get("publicExponent") {
+                        None => 65537,
+                        Some(value) => value
+                            .as_u64()
+                            .filter(|exponent| matches!(exponent, 3 | 65537))
+                            .ok_or_else(|| anyhow!("unsupported RSA public exponent"))?,
+                    };
+                    let mut key = rsa::RsaPrivateKey::new_with_exp(
+                        &mut rng,
+                        bits,
+                        &rsa::BigUint::from(exponent),
+                    )?;
                     key.precompute()?;
                     let public = rsa::RsaPublicKey::from(&key);
                     (

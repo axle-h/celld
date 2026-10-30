@@ -1,0 +1,73 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "atModuleScope": false,
+        "text": true,
+        "none": true,
+        "form": true,
+        "bytes": true,
+        "replaced": true,
+        "object": true,
+        "badUrl": true,
+        "badScheme": true,
+        "symbol": "TypeError: Cannot convert a Symbol value to a string",
+        "noArguments": "TypeError: Failed to execute 'sendBeacon' on 'Navigator': parameter 1 is not of type 'string'.",
+        "undefinedUrl": true,
+        "nullUrl": true,
+        "detached": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+        "replacedCalls": 0,
+        "keys": false,
+        "name": "sendBeacon",
+        "length": 0
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "text": [
+          {
+            "method": "POST",
+            "body": "hello"
+          }
+        ],
+        "none": [
+          {
+            "method": "POST",
+            "contentType": null,
+            "body": ""
+          }
+        ],
+        "form": [
+          {
+            "method": "POST",
+            "contentType": "application/x-www-form-urlencoded;charset=UTF-8",
+            "body": "x=1"
+          }
+        ],
+        "bytes": [
+          {
+            "method": "POST",
+            "contentType": null,
+            "body": "hi"
+          }
+        ],
+        "replaced": [
+          {
+            "method": "POST",
+            "body": "via"
+          }
+        ],
+        "object": [
+          {
+            "method": "POST",
+            "body": "converted"
+          }
+        ]
+      }
+    }
+  ]
+}

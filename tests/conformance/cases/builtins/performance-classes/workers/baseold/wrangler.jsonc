@@ -1,0 +1,6 @@
+{
+  "name": "baseold",
+  "main": "index.js",
+  "compatibility_date": "2021-01-01",
+  "compatibility_flags": []
+}

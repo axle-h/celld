@@ -39,6 +39,7 @@ static_source!(COMPRESSION_STREAMS_SOURCE, "compression_streams.js");
 static_source!(BYTE_STREAMS_SOURCE, "byte_streams.js");
 static_source!(SET_IMMEDIATE_SOURCE, "set_immediate.js");
 static_source!(URL_PATTERN_SOURCE, "url_pattern.js");
+static_source!(PERFORMANCE_SOURCE, "performance.js");
 
 #[cfg(all(test, celld_internal_tests))]
 static INTERNAL_MODULE_SOURCES: &[(&str, &v8::OneByteConst)] = &[
@@ -66,6 +67,7 @@ static INTERNAL_MODULE_SOURCES: &[(&str, &v8::OneByteConst)] = &[
     ("byte_streams.js", &BYTE_STREAMS_SOURCE),
     ("set_immediate.js", &SET_IMMEDIATE_SOURCE),
     ("url_pattern.js", &URL_PATTERN_SOURCE),
+    ("performance.js", &PERFORMANCE_SOURCE),
 ];
 
 #[cfg(all(test, celld_internal_tests))]
@@ -184,7 +186,8 @@ impl ModuleRegistry {
 const INTERNALS_SPECIFIER: &str = "celld:internals";
 
 /// The host module of the Python Worker bundle that `celld deploy` builds.
-/// Its one export condemns the calling isolate; see `op_isolate_condemn`.
+/// Its exports condemn the calling isolate (`op_isolate_condemn`) and start
+/// the interpreter in the isolate's startup window (`op_python_startup`).
 const PYTHON_HOST_SPECIFIER: &str = "celld:python";
 
 /// One synthetic module per isolate whose default export is the internals
@@ -220,8 +223,12 @@ fn internals_evaluation_steps<'s>(
 }
 
 /// Compile a host-generated stub that imports `celld:internals` and register
-/// it under `spec` as a trusted referrer.
+/// it under `spec` as a trusted referrer. `celld:python` outside a Python
+/// Worker is left out, so it links as no module at all.
 fn register_internal_stub(scope: &mut v8::PinScope, spec: &str, source: &str) {
+    if spec == PYTHON_HOST_SPECIFIER && !python_host(scope) {
+        return;
+    }
     let Some(module) = compile_module(scope, spec, source) else {
         tracing::warn!(%spec, "module stub failed to compile");
         return;
@@ -340,6 +347,13 @@ struct LazyModule {
     specs: &'static [&'static str],
     global: &'static str,
     source: &'static v8::OneByteConst,
+    /// The internals property that holds the module's default export, when
+    /// it is not the namespace's backing object itself (workerd's modules
+    /// that `export default` an object of their own).
+    default: Option<&'static str>,
+    /// Resolves only with nodejs_compat and enable_nodejs_perf_hooks_module
+    /// ([`BuiltinModules`]); otherwise the specifier is an unsupported builtin.
+    perf_hooks: bool,
 }
 
 const LAZY_MODULES: &[LazyModule] = &[
@@ -347,26 +361,52 @@ const LAZY_MODULES: &[LazyModule] = &[
         specs: &["assert", "node:assert"],
         global: "__assertModule",
         source: &NODE_ASSERT_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     LazyModule {
         specs: &["assert/strict", "node:assert/strict"],
         global: "__assertStrictModule",
         source: &NODE_ASSERT_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     LazyModule {
         specs: &["timers/promises", "node:timers/promises"],
         global: "__timersPromises",
         source: &NODE_TIMERS_SOURCE,
+        default: None,
+        perf_hooks: false,
+    },
+    // Same source as node:timers/promises, whose namespace it carries.
+    LazyModule {
+        specs: &["timers", "node:timers"],
+        global: "__timersModule",
+        source: &NODE_TIMERS_SOURCE,
+        default: Some("__timersDefault"),
+        perf_hooks: false,
+    },
+    // Shares its source with the `performance` LAZY_GLOBALS entry.
+    LazyModule {
+        specs: &["perf_hooks", "node:perf_hooks"],
+        global: "__perfHooksModule",
+        source: &PERFORMANCE_SOURCE,
+        default: Some("__perfHooksDefault"),
+        perf_hooks: true,
     },
     LazyModule {
         specs: &["test", "node:test", "node:test/reporters"],
         global: "__nodeTest",
         source: &NODE_TEST_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     LazyModule {
         specs: &["util", "node:util"],
         global: "__utilModule",
         source: &NODE_UTIL_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     // Same source, different namespace: node:util/types has the type
     // predicates as its named exports. The shared source defines both
@@ -375,32 +415,44 @@ const LAZY_MODULES: &[LazyModule] = &[
         specs: &["util/types", "node:util/types"],
         global: "__utilTypesModule",
         source: &NODE_UTIL_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     LazyModule {
         specs: &["events", "node:events"],
         global: "__eventsModule",
         source: &NODE_EVENTS_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     LazyModule {
         specs: &["zlib", "node:zlib"],
         global: "__zlibModule",
         source: &NODE_ZLIB_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     LazyModule {
         specs: &["os", "node:os"],
         global: "__osModule",
         source: &NODE_OS_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     LazyModule {
         specs: &["path", "node:path", "path/posix", "node:path/posix"],
         global: "__pathModule",
         source: &NODE_PATH_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     // Same source; either entry's guard covers the other.
     LazyModule {
         specs: &["path/win32", "node:path/win32"],
         global: "__pathWin32Module",
         source: &NODE_PATH_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     // Shares its source with the `Buffer` LAZY_GLOBALS entry; the script
     // is self-guarded, so whichever seam runs first wins and the other
@@ -409,21 +461,29 @@ const LAZY_MODULES: &[LazyModule] = &[
         specs: &["buffer", "node:buffer"],
         global: "__buffer",
         source: &NODE_BUFFER_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     LazyModule {
         specs: &["crypto", "node:crypto"],
         global: "__cryptoModule",
         source: &NODE_CRYPTO_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     LazyModule {
         specs: &["async_hooks", "node:async_hooks"],
         global: "__asyncHooksModule",
         source: &NODE_ASYNC_HOOKS_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     LazyModule {
         specs: &["diagnostics_channel", "node:diagnostics_channel"],
         global: "__diagnosticsChannelModule",
         source: &NODE_DIAGNOSTICS_CHANNEL_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     // One source defines the whole stream family; whichever entry runs
     // first, its guard covers the others.
@@ -431,21 +491,29 @@ const LAZY_MODULES: &[LazyModule] = &[
         specs: &["stream", "node:stream"],
         global: "__streamModule",
         source: &NODE_STREAM_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     LazyModule {
         specs: &["stream/promises", "node:stream/promises"],
         global: "__streamPromises",
         source: &NODE_STREAM_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     LazyModule {
         specs: &["stream/web", "node:stream/web"],
         global: "__streamWeb",
         source: &NODE_STREAM_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
     LazyModule {
         specs: &["stream/consumers", "node:stream/consumers"],
         global: "__streamConsumers",
         source: &NODE_STREAM_SOURCE,
+        default: None,
+        perf_hooks: false,
     },
 ];
 
@@ -488,6 +556,22 @@ const LAZY_GLOBALS: &[LazyGlobal] = &[
         names: &["URLPattern"],
         source: &URL_PATTERN_SOURCE,
     },
+    // The classes are taken off the global scope without their flags
+    // (harness.js `__applyCompat`), and the script then exports only
+    // `performance`.
+    LazyGlobal {
+        names: &[
+            "performance",
+            "Performance",
+            "PerformanceEntry",
+            "PerformanceMark",
+            "PerformanceMeasure",
+            "PerformanceResourceTiming",
+            "PerformanceObserver",
+            "PerformanceObserverEntryList",
+        ],
+        source: &PERFORMANCE_SOURCE,
+    },
 ];
 
 /// Runs once per group, the first time one of its names is read. V8 then
@@ -507,11 +591,14 @@ fn lazy_global_getter(
     let exports: v8::Local<v8::Object> = exports.try_into().unwrap();
     // The group's other names are still lazy; define them now or reading one
     // would compile the same script again. Not this one — V8 asserts the
-    // property is still an accessor when the getter returns.
+    // property is still an accessor when the getter returns. A name the
+    // script does not export stays off the global scope.
     let global = scope.get_current_context().global(scope);
     for other in group.names {
         let key = v8::String::new(scope, other).unwrap();
-        if name.strict_equals(key.into()) {
+        if name.strict_equals(key.into())
+            || exports.has_own_property(scope, key.into()) != Some(true)
+        {
             continue;
         }
         let value = exports.get(scope, key.into()).unwrap();
@@ -552,13 +639,42 @@ fn eager_module_global(spec: &str) -> Option<&'static str> {
     })
 }
 
+/// Which gated builtin modules this isolate has, set before the main module
+/// links (`inject_storage_compatibility`): the node modules its flags make
+/// available, as workerd's `registerNodeJsCompatModules` filters its bundle,
+/// and `celld:python`, which only a deployed Python Worker's bundle can
+/// import (`WorkerConfig::with_python_runtime`).
+#[derive(Default)]
+pub(super) struct BuiltinModules {
+    pub(super) perf_hooks: bool,
+    pub(super) python_host: bool,
+}
+
+/// Whether this isolate's Worker is a deployed Python Worker, whose bundle
+/// imports `celld:python`. For any other Worker the specifier names no module.
+fn python_host(scope: &v8::Isolate) -> bool {
+    scope
+        .get_slot::<BuiltinModules>()
+        .is_some_and(|modules| modules.python_host)
+}
+
+/// The lazy module `spec` names, unless its flags leave it out.
+fn lazy_module(scope: &v8::Isolate, spec: &str) -> Option<&'static LazyModule> {
+    let module = LAZY_MODULES
+        .iter()
+        .find(|module| module.specs.contains(&spec))?;
+    let available = !module.perf_hooks
+        || scope
+            .get_slot::<BuiltinModules>()
+            .is_some_and(|modules| modules.perf_hooks);
+    available.then_some(module)
+}
+
 /// Materialize an imported builtin from its external source before its small
 /// ES module wrapper links. The old wrapper concatenated the full setup text,
 /// which turned a shared static source back into one owned string per isolate.
 fn install_lazy_module(scope: &mut v8::PinScope, spec: &str) -> Option<&'static LazyModule> {
-    let module = LAZY_MODULES
-        .iter()
-        .find(|module| module.specs.contains(&spec))?;
+    let module = lazy_module(scope, spec)?;
     if internal_value(scope, module.global).is_some() {
         return Some(module);
     }
@@ -630,8 +746,13 @@ fn builtin_stub_keys(spec: &str) -> Vec<String> {
 /// A stub ES module for `spec` that binds each scanned name from the
 /// builtin's backing object in `__celld`. `cloudflare:workers` always gets its
 /// fixed surface. An unsupported builtin binds a stub that throws on first
-/// call.
-fn stub_source(spec: &str, names: &std::collections::BTreeSet<String>) -> String {
+/// call. `lazy` is the lazy module `spec` names, if the flags make it
+/// available (`lazy_module`).
+fn stub_source(
+    spec: &str,
+    names: &std::collections::BTreeSet<String>,
+    lazy: Option<&'static LazyModule>,
+) -> String {
     if spec == CLOUDFLARE_WORKERS {
         return cloudflare_workers_source();
     }
@@ -642,7 +763,6 @@ fn stub_source(spec: &str, names: &std::collections::BTreeSet<String>) -> String
     // the retry policy cannot recognize — the step would retry, silently.
     let cf_workflows = spec == "cloudflare:workflows";
     let python_host = spec == PYTHON_HOST_SPECIFIER;
-    let lazy = LAZY_MODULES.iter().find(|m| m.specs.contains(&spec));
     let eager = eager_module_global(spec);
     let base = if cf_sockets {
         "__celld.__cfSockets".to_string()
@@ -668,7 +788,10 @@ fn stub_source(spec: &str, names: &std::collections::BTreeSet<String>) -> String
         if n == "*" {
             continue; // namespace imports take the full-surface path
         } else if n == "default" {
-            out.push_str(&format!("export default {base};\n"));
+            match lazy.and_then(|module| module.default) {
+                Some(default) => out.push_str(&format!("export default __celld.{default};\n")),
+                None => out.push_str(&format!("export default {base};\n")),
+            }
         } else {
             out.push_str(&format!("export const {n} = {base}.{n};\n"));
         }
@@ -694,9 +817,10 @@ pub(super) fn register_stubs(scope: &mut v8::PinScope, config: &WorkerConfig) {
         // must be the module's full surface — probed from the backing
         // object, like dynamic import() — not just the scanned names.
         let s = if names.contains("*") {
-            full_surface_source(scope, spec, names).unwrap_or_else(|| stub_source(spec, names))
+            full_surface_source(scope, spec, names)
+                .unwrap_or_else(|| stub_source(spec, names, lazy_module(scope, spec)))
         } else {
-            stub_source(spec, names)
+            stub_source(spec, names, lazy_module(scope, spec))
         };
         register_internal_stub(scope, spec, &s);
     }
@@ -903,9 +1027,10 @@ pub(super) fn register_loader_modules(
             }
             install_lazy_module(scope, spec);
             let s = if names.contains("*") {
-                full_surface_source(scope, spec, names).unwrap_or_else(|| stub_source(spec, names))
+                full_surface_source(scope, spec, names)
+                    .unwrap_or_else(|| stub_source(spec, names, lazy_module(scope, spec)))
             } else {
-                stub_source(spec, names)
+                stub_source(spec, names, lazy_module(scope, spec))
             };
             register_internal_stub(scope, spec, &s);
         }
@@ -1079,7 +1204,7 @@ fn builtin_source(scope: &mut v8::PinScope, spec: &str) -> Option<String> {
         return Some("__celld.__cfWorkflows".into());
     }
     if spec == PYTHON_HOST_SPECIFIER {
-        return Some("__celld.__pythonHost".into());
+        return python_host(scope).then(|| "__celld.__pythonHost".into());
     }
     if let Some(module) = install_lazy_module(scope, spec) {
         return Some(format!("__celld.{}", module.global));
@@ -1117,8 +1242,9 @@ fn full_surface_source(
             names.push(name.clone());
         }
     }
+    let default = builtin_default(scope, spec).unwrap_or_else(|| "__b".to_string());
     let mut src = internals_import();
-    src.push_str(&format!("const __b = {expr};\nexport default __b;\n"));
+    src.push_str(&format!("const __b = {expr};\nexport default {default};\n"));
     for (i, name) in names.iter().enumerate() {
         if name == "default" {
             continue;
@@ -1131,8 +1257,16 @@ fn full_surface_source(
     Some(src)
 }
 
-/// `process.getBuiltinModule(id)`: the builtin's backing object, or
-/// undefined for anything that is not a node builtin.
+/// The default export of a lazy module that has one of its own, once
+/// `builtin_source` installed it.
+fn builtin_default(scope: &v8::Isolate, spec: &str) -> Option<String> {
+    let default = lazy_module(scope, spec)?.default?;
+    Some(format!("__celld.{default}"))
+}
+
+/// `process.getBuiltinModule(id)`: the builtin's default export (its backing
+/// object, unless it has a default of its own), or undefined for anything
+/// that is not a node builtin.
 pub(super) fn op_builtin_module(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -1145,6 +1279,7 @@ pub(super) fn op_builtin_module(
     let Some(expr) = builtin_source(scope, &spec) else {
         return;
     };
+    let expr = builtin_default(scope, &spec).unwrap_or(expr);
     if let Some(value) = run_internal_snippet(scope, &format!("return {expr};")) {
         rv.set(value);
     }
@@ -1300,7 +1435,7 @@ mod tests {
             names(&["*"]),
             names(&["DurableObject", "tracing", "NotAnExport", "default"]),
         ] {
-            assert_eq!(stub_source(CLOUDFLARE_WORKERS, &scanned), expected);
+            assert_eq!(stub_source(CLOUDFLARE_WORKERS, &scanned, None), expected);
         }
     }
 
@@ -1315,7 +1450,7 @@ mod tests {
 
     #[test]
     fn other_builtins_export_only_the_scanned_names() {
-        let source = stub_source("cloudflare:sockets", &names(&["connect", "default"]));
+        let source = stub_source("cloudflare:sockets", &names(&["connect", "default"]), None);
         assert!(source.contains("export const connect = __celld.__cfSockets.connect;\n"));
         assert!(source.contains("export default __celld.__cfSockets;\n"));
     }

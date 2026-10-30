@@ -1,0 +1,9 @@
+{
+  "kind": "celld-only",
+  "reason": "celld:python is celld's host module for the Python Worker bundle, which workerd does not have",
+  "workers": ["plain", "python"],
+  "steps": [
+    {"path": "/"},
+    {"path": "/python"}
+  ]
+}

@@ -4,6 +4,17 @@
 // takes nothing, so the isolate lives on (plan 1.35); what the isolate comes
 // to hold past it condemns the isolate. The Dynamic Workers run the same
 // functions from their source text.
+// The functions' text runs in Dynamic Workers too, so each module that runs
+// them declares `growerModule` at its module scope from `prelude`: Wasm
+// compiles from bytes only while a module evaluates, as in workerd.
+// (memory 1) (func "grow" (param i32) (result i32) memory.grow)
+// (func "touch" fills the whole memory with memory.fill)
+const GROWER = "AGFzbQEAAAABCQJgAX8Bf2AAAAMDAgABBQMBAAEHEAIEZ3JvdwAABXRvdWNoAAEKFwIGACAAQAALDgBBAEEBPwBBEHT8CwAL";
+export const prelude = "const growerModule = new WebAssembly.Module(Uint8Array.from(" +
+  `atob(${JSON.stringify(GROWER)}), (character) => character.charCodeAt(0)));`;
+const growerModule = new WebAssembly.Module(Uint8Array.from(
+  atob(GROWER), (character) => character.charCodeAt(0)));
+
 export const buffers = {
   // Many buffers of 64 MiB, about 2.5 GB in all.
   many() {
@@ -53,11 +64,7 @@ export const buffers = {
   // Ten instances of a module whose memory is its own, which Wasm code grows
   // with `memory.grow` and fills, where no JavaScript sees it.
   wasmInternal() {
-    const module = new WebAssembly.Module(Uint8Array.from(
-      // (memory 1) (func "grow" (param i32) (result i32) memory.grow)
-      // (func "touch" fills the whole memory with memory.fill)
-      atob("AGFzbQEAAAABCQJgAX8Bf2AAAAMDAgABBQMBAAEHEAIEZ3JvdwAABXRvdWNoAAEKFwIGACAAQAALDgBBAEEBPwBBEHT8CwAL"),
-      (character) => character.charCodeAt(0)));
+    const module = growerModule;
     const keep = [];
     for (let i = 0; i < 10; i++) {
       const instance = new WebAssembly.Instance(module);
@@ -72,9 +79,7 @@ export const buffers = {
   // The same growth from inside a memory descriptor's getter, which V8
   // would read while the memory is made: the watch still sees it.
   wasmInDescriptor() {
-    const module = new WebAssembly.Module(Uint8Array.from(
-      atob("AGFzbQEAAAABCQJgAX8Bf2AAAAMDAgABBQMBAAEHEAIEZ3JvdwAABXRvdWNoAAEKFwIGACAAQAALDgBBAEEBPwBBEHT8CwAL"),
-      (character) => character.charCodeAt(0)));
+    const module = growerModule;
     const instances = [];
     for (let i = 0; i < 10; i++) instances.push(new WebAssembly.Instance(module));
     globalThis.keep = instances;

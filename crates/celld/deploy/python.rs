@@ -61,6 +61,47 @@ const RUNTIME_FILES: &[(&str, u64, &str)] = &[
 /// The GC sentinel program that `pyodide.mjs` carries as base64.
 const SENTINEL_SHA256: &str = "d22ea2a6a2cb1afea8157d6e4570887a06e5af9e388c5f0fa5a984a8e9bb1021";
 
+/// Whether a deployment's modules carry the interpreter [`build`] embeds:
+/// the pinned `pyodide.asm.wasm` and its GC sentinel, as Wasm modules with
+/// those exact SHA-256 digests. A node grants a deployment the Python
+/// runtime (`celld:python` and its startup window) only then, rather than on
+/// the manifest's word alone; the loader has checked each module's bytes
+/// against its digest.
+pub(crate) fn carries_runtime(modules: &[crate::protocol::ModuleRef]) -> bool {
+    let wasm = |name: &str, sha256: &str| {
+        modules.iter().any(|module| {
+            module.name == name
+                && module.kind == Some(crate::protocol::ModuleKind::Wasm)
+                && module.sha256 == sha256
+        })
+    };
+    wasm("pyodide.asm.wasm", interpreter_sha256()) && wasm("sentinel.wasm", SENTINEL_SHA256)
+}
+
+fn interpreter_sha256() -> &'static str {
+    RUNTIME_FILES
+        .iter()
+        .find(|(name, _, _)| *name == "pyodide.asm.wasm")
+        .map(|(_, _, sha256)| *sha256)
+        .expect("the interpreter is a runtime file")
+}
+
+/// The Wasm module references of a bundle [`build`] made, for tests of
+/// [`carries_runtime`]'s callers.
+#[cfg(test)]
+pub(crate) fn runtime_modules_for_test() -> Vec<crate::protocol::ModuleRef> {
+    let wasm = |name: &str, sha256: &str| crate::protocol::ModuleRef {
+        name: name.to_string(),
+        bytes: 0,
+        sha256: sha256.to_string(),
+        kind: Some(crate::protocol::ModuleKind::Wasm),
+    };
+    vec![
+        wasm("pyodide.asm.wasm", interpreter_sha256()),
+        wasm("sentinel.wasm", SENTINEL_SHA256),
+    ]
+}
+
 const SHIMS_JS: &str = include_str!("../python/shims.js");
 const FATAL_JS: &str = include_str!("../python/fatal.js");
 const WORKER_JS: &str = include_str!("../python/worker.js");

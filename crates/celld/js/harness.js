@@ -1911,6 +1911,7 @@ const __dataUrlResponse = (url) => {
 const __Request = __celld.__Request = Request;
 __celld.__isRequest = (value) => __isRequest(value);
 __celld.__isResponse = (value) => __isResponse(value);
+__celld.__responseType = (response) => __responseType(response);
 const __URL = URL;
 const __URLHref = Object.getOwnPropertyDescriptor(URL.prototype, "href").get;
 const __URLOrigin = Object.getOwnPropertyDescriptor(URL.prototype, "origin").get;
@@ -2046,6 +2047,9 @@ globalThis.fetch = async (input, init) => {
   }
   return __fetchThrough(new __Request(input, init), __fetchNetwork);
 };
+// The global fetch(), for celld's own callers (navigator.sendBeacon), so a
+// Worker that replaces globalThis.fetch changes none of them.
+const __globalFetch = globalThis.fetch;
 // One request to the network, which never follows a redirect: global fetch(),
 // and the fetch() of a container's getTcpPort(), which names its port as
 // `container`: the host then lets that port of the running object's own
@@ -2520,9 +2524,10 @@ const __r2PutStream = async (bucketName, key, stream, options) => {
   }
   return JSON.parse(await __r2_put_end(id, false));
 };
-// One open multipart upload. `id` resolves to the host's upload id, so
-// `resumeMultipartUpload` can hand back a handle without awaiting -- as R2
-// does -- and surface a bad id on the first method that uses it.
+// One open multipart upload. `id.host` resolves to the host's upload id,
+// and only the methods read it, so `resumeMultipartUpload` can hand back a
+// handle without awaiting -- as R2 does -- and surface a bad id on the first
+// method that uses it.
 const __r2Multipart = (binding, bucketName, key, id) => ({
   key,
   get uploadId() {
@@ -2651,16 +2656,20 @@ __celld.__makeR2Bucket = (binding, bucketName) => ({
       host: Promise.resolve(Number(uploadId)),
     });
   },
-  // R2 hands back a handle without checking it; so does this, and the
-  // first method that uses it says whether the upload is still open.
+  // R2 hands back a handle without checking it, and starts no I/O, so it
+  // works in global scope too; so does this. The first method that uses it
+  // looks the upload up, and says whether it is still open.
   resumeMultipartUpload(key, uploadId) {
     const name = __r2Key(binding, "resumeMultipartUpload", key);
     const id = String(uploadId);
-    const host = __r2_mp_resume(bucketName, name, id).then(Number);
-    // A handle nobody uses must not become an unhandled rejection; the
-    // first method that awaits `host` still sees the failure.
-    host.catch(() => {});
-    return __r2Multipart(binding, bucketName, name, { value: id, host });
+    let host;
+    return __r2Multipart(binding, bucketName, name, {
+      value: id,
+      get host() {
+        host ??= __r2_mp_resume(bucketName, name, id).then(Number);
+        return host;
+      },
+    });
   },
 });
 // A host timer op resolves once, so an interval arms a new one after every
@@ -2791,7 +2800,16 @@ const __inspectShallow = (value) => {
     return constructor === "Object" && tag === "" ? "{}" : `${prefix}{}`;
   return constructor === null ? prefix.slice(0, -1) : `[${prefix.slice(0, -1)}]`;
 };
-const __installNodeGlobalTimers = () => {
+// The timers of node:timers (workerd's internal_timers.ts), made once:
+// enable_nodejs_global_timers puts four of them on the global scope, so the
+// module's Timeout and functions are the globals' then.
+let __nodeTimersMade = null;
+// Captured: the timers may be made after a script replaced `Symbol`.
+const __SymbolDispose = Symbol.dispose;
+const __SymbolToPrimitive = Symbol.toPrimitive;
+const __nodeTimers = () => __nodeTimersMade ??= __makeNodeTimers();
+__celld.__nodeTimers = __nodeTimers;
+const __makeNodeTimers = () => {
   let clear;
   class Timeout {
     #timer;
@@ -2838,10 +2856,10 @@ const __installNodeGlobalTimers = () => {
       this.#clearTimeout();
       return this;
     }
-    [Symbol.dispose]() {
+    [__SymbolDispose]() {
       this.#clearTimeout();
     }
-    [Symbol.toPrimitive]() {
+    [__SymbolToPrimitive]() {
       return this.#timer;
     }
     static {
@@ -2876,6 +2894,98 @@ const __installNodeGlobalTimers = () => {
     if (timer instanceof Timeout) clear(timer);
     else if (typeof timer === "number") __clearTimer(timer);
   };
+  // workerd's Immediate (api/global-scope.h): a zero-delay timer whose
+  // ref() and unref() do nothing and whose hasRef() is false. It has no
+  // constructor ("Illegal constructor"); its timer is in a private field of
+  // the object itself, which a field class stamps on it.
+  function Immediate() { throw new TypeError("Illegal constructor"); }
+  const ImmediatePrototype = Immediate.prototype;
+  let isImmediate, cancelImmediate;
+  class ImmediateFields extends __Stamp {
+    #timer;
+    constructor(target, timer) {
+      super(target);
+      this.#timer = timer;
+    }
+    static {
+      isImmediate = (value) =>
+        typeof value === "object" && value !== null && #timer in value;
+      cancelImmediate = (immediate) => __clearTimer(immediate.#timer);
+    }
+  }
+  const immediateMethods = {
+    ref() { if (!isImmediate(this)) throw __illegalInvocation(); },
+    unref() { if (!isImmediate(this)) throw __illegalInvocation(); },
+    hasRef() {
+      if (!isImmediate(this)) throw __illegalInvocation();
+      return false;
+    },
+  };
+  const immediateKeys = __ReflectOwnKeys(immediateMethods);
+  for (let i = 0; i < immediateKeys.length; i++) {
+    const key = immediateKeys[i];
+    __ObjectDefineProperty(Immediate.prototype, key, {
+      __proto__: null, value: immediateMethods[key], writable: true, enumerable: true,
+      configurable: true,
+    });
+  }
+  __ObjectDefineProperty(Immediate, "length", { __proto__: null, value: 0 });
+  __celld.__apiTag(Immediate.prototype, "Immediate");
+  __ObjectDefineProperty(Immediate.prototype, __SymbolDispose, {
+    __proto__: null,
+    value: [function () {
+      if (!isImmediate(this)) throw __illegalInvocation();
+      cancelImmediate(this);
+    }][0],
+    writable: true, configurable: true,
+  });
+  const newImmediate = (timer) =>
+    new ImmediateFields(__ObjectCreate(ImmediatePrototype), timer);
+  // The global scope's setImmediate and clearImmediate, which workerd has
+  // under nodejs_compat_v2 (set_immediate.js, a lazy global), and
+  // node-internal:timers' TimersUtil, whose two methods node:timers binds:
+  // the same timers, refused in the name of their owner.
+  const arm = (owner, args) => {
+    const callback = args[0];
+    if (typeof callback !== "function") {
+      throw new TypeError(`Failed to execute 'setImmediate' on '${owner}': ` +
+        "parameter 1 is not of type 'function'.");
+    }
+    const rest = [];
+    for (let i = 1; i < args.length; i++) {
+      __ObjectDefineProperty(rest, i - 1, {
+        __proto__: null, value: args[i], writable: true, enumerable: true,
+        configurable: true,
+      });
+    }
+    return newImmediate(__armTimeout(callback, 0, rest));
+  };
+  // An Immediate, or undefined or null given explicitly.
+  const cancel = (owner, args) => {
+    const immediate = args[0];
+    if (args.length > 0 && (immediate === undefined || immediate === null)) return;
+    if (!isImmediate(immediate)) {
+      throw new TypeError(`Failed to execute 'clearImmediate' on '${owner}': ` +
+        "parameter 1 is not of type 'Immediate'.");
+    }
+    cancelImmediate(immediate);
+  };
+  const globalImmediate = {
+    setImmediate(...args) { return arm("ServiceWorkerGlobalScope", args); },
+    clearImmediate(...args) { cancel("ServiceWorkerGlobalScope", args); },
+  };
+  // node-internal:timers' TimersUtil, whose two methods node:timers binds.
+  const timersUtil = {};
+  const timersUtilMethods = {
+    setImmediate(...args) {
+      if (this !== timersUtil) throw __illegalInvocation();
+      return arm("TimersUtil", args);
+    },
+    clearImmediate(...args) {
+      if (this !== timersUtil) throw __illegalInvocation();
+      cancel("TimersUtil", args);
+    },
+  };
   const timers = {
     setTimeout(callback, delay, ...args) {
       validateFunction(callback);
@@ -2887,7 +2997,23 @@ const __installNodeGlobalTimers = () => {
     },
     clearTimeout(timer) { clearTimer(timer); },
     clearInterval(timer) { clearTimer(timer); },
+    active(timer) {
+      if (timer instanceof Timeout) timer.refresh();
+    },
+    unenroll(timer) { clearTimer(timer); },
+    enroll(_item, _msecs) {
+      throw new Error("Not implemented. Please use setTimeout() instead.");
+    },
+    setImmediate: __ReflectApply(__FunctionBind, timersUtilMethods.setImmediate, [timersUtil]),
+    clearImmediate:
+      __ReflectApply(__FunctionBind, timersUtilMethods.clearImmediate, [timersUtil]),
+    Timeout,
+    globalImmediate,
   };
+  return timers;
+};
+const __installNodeGlobalTimers = () => {
+  const timers = __nodeTimers();
   globalThis.setTimeout = timers.setTimeout;
   globalThis.setInterval = timers.setInterval;
   globalThis.clearTimeout = timers.clearTimeout;
@@ -4296,6 +4422,12 @@ __celld.__intrinsics = Object.freeze({
   ReaderCancel: ReadableStreamDefaultReader.prototype.cancel,
   ReaderClosed:
     Object.getOwnPropertyDescriptor(ReadableStreamDefaultReader.prototype, "closed").get,
+  ReflectConstruct: __ReflectConstruct, ObjectCreate: Object.create,
+  ObjectDefineProperty: __ObjectDefineProperty, ObjectFreeze: Object.freeze,
+  ArrayIsArray: Array.isArray, ObjectPreventExtensions: Object.preventExtensions,
+  ObjectPrototype: Object.prototype, Error, SymbolIterator: Symbol.iterator,
+  SymbolToStringTag: Symbol.toStringTag,
+  IteratorPrototype: Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]())),
 });
 const __containerEnvList = (env) => {
   const list = [];
@@ -5753,9 +5885,15 @@ __celld.__makeLoader = () => {
           envRoutes, tails.length !== 0);
         return { id, tails };
       });
+  // workerd's WorkerLoader asks for the current request first, so both
+  // throw in global scope.
   return {
-    load(code) { return makeStub(track(loadFrom(() => code))); },
+    load(code) {
+      __require_io_context();
+      return makeStub(track(loadFrom(() => code)));
+    },
     get(name, getCode) {
+      __require_io_context();
       let ref = byName.get(name);
       let loadPromise = ref?.deref();
       if (loadPromise === undefined) {
@@ -5982,10 +6120,9 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
     if (__cell.compat.fetcherGetPutDelete &&
         (prop === "get" || prop === "put" || prop === "delete"))
       return __fetcherHelper(base.fetch, prop);
-    // Workerd's test hook: the named method as a callable handle,
-    // resolved -- and refused -- on the receiver side.
-    if (prop === "getRpcMethodForTestOnly")
-      return (name) => __makeNode(session, [String(name)], null);
+    // workerd's getRpcMethodForTestOnly() exists only under the
+    // experimental flag, which celld refuses, so the name is an RPC method
+    // like any other.
     return __makeNode(session, [prop], null);
   }});
   __outboundMeta.set(binding, { script, entrypoint, propsSc });
@@ -6739,8 +6876,9 @@ const __rpcReservedError = (prop) => new TypeError("'" + prop +
 // answers too) stays hidden, and a read of undefined is a missing method.
 // Object.prototype's names are refused before any user code runs. Workerd
 // reads them and compares with Object.prototype's, but no stub sends one:
-// celld's stubs answer them locally, as workerd's do, so only a peer or the
-// test hook can ask, and the stricter refusal runs nothing for them.
+// celld's stubs answer them locally, as workerd's do, so only a peer can
+// ask, and the stricter refusal runs nothing for them
+// (`js::rpc_params_tests::reserved_and_object_prototype_names_are_refused`).
 const __rpcClassMember = (target, prop) => {
   if (prop in Object.prototype || __ObjectHasOwn(target, prop))
     throw __rpcNoSuchMethod(prop);
@@ -7792,23 +7930,31 @@ const __stubSession = (meta) => ({
 // isolate of a cross-script call does, so no call sees another's changes.
 const __localProps = (propsSc) =>
   propsSc === undefined ? undefined : __sc_decode(propsSc);
+// A call or a property read asks for the current request first, as
+// workerd's JsRpcProperty does, so in global scope it throws.
 const __entrypointSession = (name, local, script, propsSc) => ({
-  get: (path) => local
-    ? (async () => __rpcDes(
-        await __entrypointOp(
-          name, path, null, true, __localProps(propsSc))))()
-    : (async () => __rpcDes(
+  get: (path) => {
+    __require_io_context();
+    return local
+      ? (async () => __rpcDes(
+          await __entrypointOp(
+            name, path, null, true, __localProps(propsSc))))()
+      : (async () => __rpcDes(
+          await __svc_rpc(
+            script, name, JSON.stringify(path), null, propsSc)))();
+  },
+  call: (path, args) => {
+    __require_io_context();
+    return (async () => {
+      const argsSc = __rpcOut(args, local, true);
+      if (local)
+        return __rpcDes(await __entrypointOp(
+          name, path, argsSc, true, __localProps(propsSc)));
+      return __rpcDes(
         await __svc_rpc(
-          script, name, JSON.stringify(path), null, propsSc)))(),
-  call: (path, args) => (async () => {
-    const argsSc = __rpcOut(args, local, true);
-    if (local)
-      return __rpcDes(await __entrypointOp(
-        name, path, argsSc, true, __localProps(propsSc)));
-    return __rpcDes(
-      await __svc_rpc(
-        script, name, JSON.stringify(path), argsSc, propsSc));
-  })(),
+          script, name, JSON.stringify(path), argsSc, propsSc));
+    })();
+  },
 });
 // Workerd's JsRpcPromise/JsRpcProperty: awaitable, callable, and
 // property access extends a path resolved at the far end, so
@@ -7925,8 +8071,6 @@ const __entrypointStub = (name, props) => {
       // the stub's own, as on a workerd Fetcher.
       if (__rpcLocalName(prop, __cf.ServiceStub.prototype))
         return Reflect.get(__cf.ServiceStub.prototype, prop, receiver);
-      if (prop === "getRpcMethodForTestOnly")
-        return (n) => __makeNode(session, [String(n)], null);
       // A Fetcher's fetch() is an HTTP request, as a service binding's is.
       if (prop === "fetch")
         return (input, init) => __makeServiceBinding(
@@ -8497,10 +8641,15 @@ class DurableObjectNamespace {
   // replaces them on the prototype changes only its own calls: the harness
   // never calls a method a script can reach with a namespace, an id or a
   // stub of its own (`__namespaceGet`, `__cellRpc`).
+  // A stub belongs to a request, so workerd's getImpl asks for the current
+  // one and throws in global scope.
   getByName(name, options) {
-    return this.#get(this.#idFromName(name));
+    const id = this.#idFromName(name);
+    __require_io_context();
+    return this.#get(id);
   }
   get(id) {
+    __require_io_context();
     return this.#get(id);
   }
   static {
@@ -9678,6 +9827,7 @@ const {
   // behaviour.
   btoa: (bytes) => $$btoa(bytes),
   atob: (text) => $$atob(text, true),
+  requireIoContext: () => __require_io_context(),
 });
 
 __runtimeClass("__KvNamespace", __KvNamespaceCell,
@@ -9698,7 +9848,6 @@ const __QUEUE_MESSAGES = "__queue_messages";
 const __QUEUE_META = "__queue_meta";
 const __QUEUE_STATS = "__queue_stats";
 const __QUEUE_TRANSFER_RECEIPTS = "__queue_transfer_receipts";
-const __queueEncoder = new TextEncoder();
 
 // Independent send() calls share the same economics as sendBatch() without
 // changing the public promise boundary. The first call opens a four-millisecond
@@ -9797,7 +9946,7 @@ const __queueEncode = (body, requestedType, take) => {
       if (typeof body !== "string")
         throw new TypeError('Content Type "text" requires a value of type ' +
           `string, but received: ${typeof body}`);
-      bytes = __queueEncoder.encode(body);
+      bytes = __encodeUtf8(body);
       break;
     case "bytes": {
       if (!ArrayBuffer.isView(body))
@@ -9814,19 +9963,12 @@ const __queueEncode = (body, requestedType, take) => {
       }
       break;
     }
-    case "json": {
-      let json;
-      try {
-        json = JSON.stringify(body);
-      } catch (error) {
-        throw __queueError("the JSON message body cannot be serialized", error);
-      }
-      if (json === undefined) {
-        throw __queueError("the JSON message body cannot be undefined");
-      }
-      bytes = __queueEncoder.encode(json);
+    case "json":
+      // V8's JSON::Stringify, as workerd's JsValue::toJson calls it: its
+      // own errors (a BigInt, a cycle, a throwing toJSON) as they are, and a
+      // value it leaves out (a function, a Symbol) as the text "undefined".
+      bytes = __encodeUtf8(`${__jsonStringify(body)}`);
       break;
-    }
     case "v8":
       // V8's DataCloneError, as workerd throws it.
       bytes = __sc_encode(body);
@@ -11281,6 +11423,16 @@ __runtimeClass("__Queue", __QueueCell,
 // ("Illegal constructor"), and its cell is private, so a script reaches the
 // Queue cell only through these methods.
 const __kQueue = Symbol("Queue");
+const __queueIsObject = (value) =>
+  (typeof value === "object" && value !== null) || typeof value === "function";
+// A JSG dictionary argument: absent, null or an object.
+const __queueOptions = (options, method, type) => {
+  if (options !== undefined && options !== null && !__queueIsObject(options)) {
+    throw new TypeError(
+      `Failed to execute '${method}' on 'WorkerQueue': ` +
+      `parameter 2 is not of type '${type}'.`);
+  }
+};
 class Queue {
   #cellName;
   #deliveryDelay;
@@ -11300,7 +11452,13 @@ class Queue {
     return { metadata: { metrics: __queueMetricsView(metrics) } };
   }
 
+  // workerd's send() and sendBatch() convert their arguments to the
+  // dictionaries and sequence they declare (api/queue.h), then ask for the
+  // current request before they check the body (queue.c++), so in global
+  // scope that refusal comes after the conversions and before the checks.
   async send(body, options = {}) {
+    __queueOptions(options, "send", "SendOptions");
+    __require_io_context();
     const encoded = __queueEncode(body, options?.contentType, true);
     const delaySeconds = __queueDelay(options?.delaySeconds, this.#deliveryDelay);
     if (encoded.size > __queueLimits().maxMessageBytes)
@@ -11309,11 +11467,27 @@ class Queue {
   }
 
   async sendBatch(messages, options = {}) {
-    if (messages === null || messages === undefined ||
+    if (!__queueIsObject(messages) ||
         typeof messages[Symbol.iterator] !== "function") {
-      throw __queueError("sendBatch() needs an iterable of messages");
+      throw new TypeError(
+        "Failed to execute 'sendBatch' on 'WorkerQueue': " +
+        "parameter 1 is not of type 'Sequence'.");
     }
     const batch = [...messages];
+    for (const message of batch) {
+      if (message === null || message === undefined) {
+        // JSG names the struct by its mangled C++ type here.
+        throw new TypeError(
+          "Cannot initialize N7workerd3api11WorkerQueue18MessageSendRequestE " +
+          "with required members from an undefined or null value.");
+      }
+      if (!__queueIsObject(message)) {
+        throw new TypeError(
+          "Incorrect type: the provided value is not of type 'MessageSendRequest'.");
+      }
+    }
+    __queueOptions(options, "sendBatch", "SendBatchOptions");
+    __require_io_context();
     if (batch.length === 0)
       throw new TypeError("sendBatch() requires at least one message");
     const entries = [];
@@ -11321,9 +11495,6 @@ class Queue {
     let largest = 0;
     const batchDelay = __queueDelay(options?.delaySeconds, this.#deliveryDelay);
     for (const message of batch) {
-      if (message === null || typeof message !== "object") {
-        throw __queueError("each batch entry needs a body");
-      }
       const encoded = __queueEncode(message.body, message.contentType, false);
       total += encoded.size;
       if (encoded.size > largest) largest = encoded.size;
@@ -11688,7 +11859,10 @@ class D1Database {
   #call(method, args) {
     return __cellRpc("__D1Database", this.#databaseName, method, args);
   }
+  // workerd's D1 client wraps the answer's errors, not the request's
+  // (d1-api.ts `_send`), so the global-scope refusal reaches the caller bare.
   async #query(statements) {
+    __require_io_context();
     try {
       return await this.#call("__d1Query", [statements]);
     } catch (error) {
@@ -11696,10 +11870,14 @@ class D1Database {
       throw __d1Error(String(error && error.message || error), error);
     }
   }
+  // workerd's batch() and exec() read their argument (`statements.map`,
+  // `query.trim()`) before the request is asked for (d1-api.ts), so their
+  // TypeErrors come before the global-scope refusal.
   async #batch(statements) {
+    const parts = statements.map(__d1StatementParts);
+    __require_io_context();
     try {
-      const results = await this.#call(
-        "__d1Batch", [statements.map(__d1StatementParts)]);
+      const results = await this.#call("__d1Batch", [parts]);
       return results.map(__d1PublicResult);
     } catch (error) {
       if (__d1IsFamilyError(error && error.message)) throw error;
@@ -11710,8 +11888,10 @@ class D1Database {
     return new D1PreparedStatement(__kD1, this, String(sql), []);
   }
   async exec(sql) {
+    const query = String(sql.trim());
+    __require_io_context();
     try {
-      return await this.#call("__d1Exec", [String(sql)]);
+      return await this.#call("__d1Exec", [query]);
     } catch (error) {
       if (__d1IsFamilyError(error && error.message)) throw error;
       throw __d1Error(String(error && error.message || error), error);
@@ -12981,7 +13161,7 @@ const __WorkflowCell = (() => {
       return true;
     });
     const className = __cell.workflows[meta.workflowName];
-    const cls = className === undefined ? undefined : __cf.exports[className];
+    const cls = className === undefined ? undefined : __celld.__moduleExports[className];
     if (typeof cls !== "function" ||
         typeof (cls.prototype && cls.prototype.run) !== "function") {
       // Deploy cannot see inside the bundle, so a missing export fails
@@ -13210,6 +13390,23 @@ __celld.__cfWorkflows = { NonRetryableError };
 // `celld:python`, imported only by the Python Worker bundle.
 __celld.__pythonHost = {
   condemnIsolate: (reason) => __isolate_condemn(String(reason)),
+  // Run the interpreter's start, which workerd runs while the Worker
+  // starts, inside the isolate's one startup window: eval() and Wasm
+  // compilation are allowed until it settles, or its deadline passes
+  // (`op_python_startup`).
+  startInterpreter: (start) => {
+    __python_startup(true);
+    const close = () => __python_startup(false);
+    try {
+      const started = start();
+      // A native promise only: PromiseThen refuses anything else.
+      __ReflectApply(__PromiseThen, started, [close, close]);
+      return started;
+    } catch (error) {
+      close();
+      throw error;
+    }
+  },
 };
 
 const __wfValidInstanceId = (id) =>
@@ -13526,8 +13723,6 @@ const __cf = __celld.__cf = {
         "Disallowed operation called within global scope.");
     __registerWaitUntil(promise);
   },
-  exports: {},
-  get env() { return __cell.env; },
   // The key of a `[restore]()` method. Like workerd's (an API symbol,
   // workers-module.c++ getRestoreSymbol) it is described as
   // "cloudflare:workers:restore" and is absent from the Symbol.for registry.
@@ -13540,30 +13735,83 @@ const __cf = __celld.__cf = {
 };
 // What `__rpcStubType` looks for in a presented prototype chain.
 const __RpcTargetPrototype = __cf.RpcTarget.prototype;
-// `import { env, exports } from "cloudflare:workers"`. Under
-// disallow_importable_env workerd has no Worker env or exports to give them
-// (modules.c++ EnvModule::getCurrentEnv and getCurrentExports), so its
-// proxies (cloudflare/workers.ts) read every name as undefined, list none,
-// and ignore writes to `env`.
-const __cfNoEnv = new Proxy({}, {
-  get: () => undefined,
-  set: () => true,
-  has: () => false,
-  ownKeys: () => [],
-  deleteProperty: () => true,
-  defineProperty: () => true,
-  getOwnPropertyDescriptor: () => undefined,
-});
-const __cfNoExports = new Proxy({}, {
-  get: () => undefined,
-  has: () => false,
-  ownKeys: () => [],
-  getOwnPropertyDescriptor: () => undefined,
-});
-__celld.__cfImportable = (name) => {
-  if (!__cell.compat.disallowImportableEnv) return __cf[name];
-  return name === "env" ? __cfNoEnv : __cfNoExports;
+// The main module's exports, by name, as the module gave them (a Durable
+// Object class as its namespace), for celld's own lookups
+// (`populate_cf_exports`).
+__celld.__moduleExports = { __proto__: null };
+// `import { env, exports } from "cloudflare:workers"`: workerd's proxies
+// (cloudflare/workers.ts) over the current env and exports (modules.c++
+// EnvModule::getCurrentEnv and getCurrentExports). The env is the Worker's
+// own, whole before the main module evaluates, and a write through the
+// proxy changes it. The exports are ctx.exports, from once the main module
+// has evaluated (`__publishWorkerExports`); the proxy has no write traps, so
+// a write lands on its target, which no read consults. Under
+// disallow_importable_env neither has an object: every name reads as
+// undefined and none is listed. celld has no withEnv() or withExports().
+const __ReflectGet = Reflect.get;
+const __ReflectHas = Reflect.has;
+const __ReflectDefineProperty = Reflect.defineProperty;
+const __ReflectGetOwnPropertyDescriptor = Reflect.getOwnPropertyDescriptor;
+let __workerExportsPublished = false;
+__celld.__publishWorkerExports = () => {
+  __workerExportsPublished = true;
 };
+const __currentEnv = () =>
+  __cell.compat.disallowImportableEnv ? null : __cell.env;
+const __currentExports = () =>
+  __cell.compat.disallowImportableEnv || !__workerExportsPublished
+    ? null : __ctxExports();
+const __cfEnv = new Proxy({}, {
+  __proto__: null,
+  get: (_, prop) => {
+    const inner = __currentEnv();
+    return inner ? __ReflectGet(inner, prop) : undefined;
+  },
+  set: (_, prop, value) => {
+    const inner = __currentEnv();
+    return inner ? __ReflectSet(inner, prop, value) : true;
+  },
+  has: (_, prop) => {
+    const inner = __currentEnv();
+    return inner ? __ReflectHas(inner, prop) : false;
+  },
+  ownKeys: () => {
+    const inner = __currentEnv();
+    return inner ? __ReflectOwnKeys(inner) : [];
+  },
+  deleteProperty: (_, prop) => {
+    const inner = __currentEnv();
+    return inner ? __ReflectDeleteProperty(inner, prop) : true;
+  },
+  defineProperty: (_, prop, attributes) => {
+    const inner = __currentEnv();
+    return inner ? __ReflectDefineProperty(inner, prop, attributes) : true;
+  },
+  getOwnPropertyDescriptor: (_, prop) => {
+    const inner = __currentEnv();
+    return inner ? __ReflectGetOwnPropertyDescriptor(inner, prop) : undefined;
+  },
+});
+const __cfExports = new Proxy({}, {
+  __proto__: null,
+  get: (_, prop) => {
+    const inner = __currentExports();
+    return inner ? __ReflectGet(inner, prop) : undefined;
+  },
+  has: (_, prop) => {
+    const inner = __currentExports();
+    return inner ? __ReflectHas(inner, prop) : false;
+  },
+  ownKeys: () => {
+    const inner = __currentExports();
+    return inner ? __ReflectOwnKeys(inner) : [];
+  },
+  getOwnPropertyDescriptor: (_, prop) => {
+    const inner = __currentExports();
+    return inner ? __ReflectGetOwnPropertyDescriptor(inner, prop) : undefined;
+  },
+});
+__celld.__cfImportable = (name) => name === "env" ? __cfEnv : __cfExports;
 // workerd adds ctx.restore() to ExecutionContext and DurableObjectState
 // under allow_irrevocable_stub_storage. celld can't restore yet, so the
 // method rejects: a Worker that relies on it fails at first use. The method
@@ -13876,8 +14124,9 @@ const __reportError = (error) => {
     __inErrorReporting = true;
     try {
       const [message, filename, lineno, colno] = __uncaught_message(error);
-      const event = new ErrorEvent("error",
-        { message, filename, lineno, colno, error });
+      const event = new __ErrorEvent("error",
+        { __proto__: null, message, filename, lineno, colno, error });
+      __eventTrust(event);
       if (!__dispatchEvent(__globalEventTarget, event, __specPolicy()).result)
         return;
     } finally {
@@ -13996,6 +14245,9 @@ __celld.__dispatchEvent = __dispatchEvent;
 __celld.__specPolicy = __specPolicy;
 __celld.__REPORT = __REPORT;
 __celld.__PROPAGATE = __PROPAGATE;
+// What Performance extends (performance.js), whatever a script later puts
+// at globalThis.EventTarget.
+__celld.__EventTarget = EventTarget;
 // The global scope is itself an EventTarget.
 const __globalEventTarget = new EventTarget();
 if (typeof globalThis.addEventListener !== "function") {
@@ -14003,6 +14255,23 @@ if (typeof globalThis.addEventListener !== "function") {
     ["addEventListener", "removeEventListener", "dispatchEvent"])
     globalThis[name] = __globalEventTarget[name].bind(__globalEventTarget);
 }
+// reportError(error) (ServiceWorkerGlobalScope::reportError): the global
+// scope's error reporting, which a listener's exception escapes only when
+// the dispatch propagates it. A method of workerd's global scope prototype,
+// so not enumerable here, and callable without a receiver.
+__ObjectDefineProperty(globalThis, "reportError", {
+  __proto__: null,
+  value: {
+    reportError(...args) {
+      if (args.length === 0) {
+        throw new TypeError("Failed to execute 'reportError' on " +
+          "'ServiceWorkerGlobalScope': parameter 1 is not of type 'Value'.");
+      }
+      __reportError(args[0]);
+    },
+  }.reportError,
+  writable: true, enumerable: false, configurable: true,
+});
 // The event the global scope fires for a promise rejected with no handler
 // (`unhandledrejection`), and for one handled after that event
 // (`rejectionhandled`, whose `reason` is undefined, as workerd's). A script
@@ -15281,6 +15550,7 @@ if (!globalThis.ErrorEvent) {
   for (const name of ["filename", "message", "lineno", "colno", "error"])
     __workerdAccessor(ErrorEvent.prototype, name);
 }
+const __ErrorEvent = globalThis.ErrorEvent;
 // Web API globals a real bundle references at module scope but that the
 // prelude doesn't provide. Stub as empty classes (guarded so we never
 // clobber a real prelude implementation). Enough to LOAD; every name in
@@ -16122,12 +16392,8 @@ Object.defineProperty(__NativeDate.prototype, "constructor", {
   configurable: true,
 });
 globalThis.Date = __CloudflareDate;
-globalThis.performance = {
-  now: () => __ioTimestamp,
-  timeOrigin: 0,
-  mark() {},
-  measure() {},
-};
+// `performance.now()` (performance.js, a lazy global) reads the same time.
+__celld.__ioNow = () => __ioTimestamp;
 __celld.__advanceIoTime = (timestamp) => {
   __ioTimestamp = timestamp;
 };
@@ -16139,6 +16405,34 @@ if (!globalThis.navigator) globalThis.navigator = {
   userAgent: "Cloudflare-Workers", hardwareConcurrency: 1,
   language: "en", languages: ["en"],
 };
+// navigator.sendBeacon(url, body) (api/global-scope.c++
+// Navigator::sendBeacon): in a request, POST the body with the global
+// fetch() as work the request waits for, whatever that fetch does, and
+// answer true; outside one, send nothing and answer false. A method of
+// workerd's Navigator prototype, so not enumerable here.
+{
+  const navigatorObject = globalThis.navigator;
+  __ObjectDefineProperty(navigatorObject, "sendBeacon", {
+    __proto__: null,
+    value: {
+      sendBeacon(...args) {
+        if (this !== navigatorObject) throw __celld.__illegalInvocation();
+        if (args.length === 0) {
+          throw new TypeError(
+            "Failed to execute 'sendBeacon' on 'Navigator': parameter 1 is not of type 'string'.");
+        }
+        const url = `${args[0]}`;
+        const body = args[1];
+        if (!__wait_until_active()) return false;
+        // An async function: a bad URL or body rejects, which is ignored.
+        const sent = __globalFetch(url, { __proto__: null, method: "POST", body });
+        __wait_until(__ReflectApply(__PromiseThen, sent, [undefined, () => {}]));
+        return true;
+      },
+    }.sendBeacon,
+    writable: true, enumerable: false, configurable: true,
+  });
+}
 if (!globalThis.queueMicrotask)
   globalThis.queueMicrotask = (f) => Promise.resolve().then(f);
 // A test hook that exists only on a node started with
@@ -17038,6 +17332,18 @@ function __applyCompat() {
   }
   __celld.__fastJsgStruct = compat.fastJsgStruct;
   if (compat.nodejsGlobalTimers) __installNodeGlobalTimers();
+  // setImmediate and clearImmediate are globals only with nodejs_compat_v2,
+  // and the Performance classes only with one of their flags. They are lazy
+  // (set_immediate.js, performance.js), so taking them off compiles nothing.
+  if (!compat.nodejsCompatV2) {
+    __ReflectDeleteProperty(globalThis, "setImmediate");
+    __ReflectDeleteProperty(globalThis, "clearImmediate");
+  }
+  if (!compat.globalPerformanceClasses && !compat.nodejsPerfHooksModule) {
+    for (const name of ["Performance", "PerformanceEntry", "PerformanceMark",
+      "PerformanceMeasure", "PerformanceResourceTiming", "PerformanceObserver",
+      "PerformanceObserverEntryList"]) __ReflectDeleteProperty(globalThis, name);
+  }
   // Request.prototype.cache exists only with cache_option_enabled, as a
   // getter without a name, like workerd's prototype properties.
   if (compat.cacheOption && !__oldAttributes) {

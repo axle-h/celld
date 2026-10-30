@@ -13,7 +13,10 @@
 // starts on the first invocation of the isolate instead of at load. Every
 // concurrent first invocation shares that one start. A failed start is kept:
 // the interpreter is never started twice in one isolate, so a callback of an
-// earlier interpreter can never reach a later one.
+// earlier interpreter can never reach a later one. The start runs in the
+// isolate's one startup window (`startInterpreter`), where eval() and Wasm
+// compilation are allowed as while workerd starts a Worker: Pyodide's loader
+// needs both.
 import { WorkerEntrypoint } from "cloudflare:workers";
 import * as cloudflareWorkers from "cloudflare:workers";
 import * as cloudflareSockets from "cloudflare:sockets";
@@ -24,7 +27,7 @@ import files from "./files.bin";
 import { COMPATIBILITY_FLAGS, LOCK, MAIN_MODULE, PROCESS_PTH_FILES } from "./config.js";
 import { RUNTIME_URL } from "./shims.js";
 import { fatalGate } from "./fatal.js";
-import { condemnIsolate } from "celld:python";
+import { condemnIsolate, startInterpreter } from "celld:python";
 
 // A hard termination inside Wasm abandons the interpreter's frames, and
 // celld keeps the isolate in use afterwards, so the next entry would run
@@ -158,7 +161,7 @@ async function start() {
 
 function runtime() {
   if (fatal.error !== null) throw fatal.error;
-  return started ??= start();
+  return started ??= startInterpreter(start);
 }
 
 // Release a proxy after a call. A release that throws in `finally` would

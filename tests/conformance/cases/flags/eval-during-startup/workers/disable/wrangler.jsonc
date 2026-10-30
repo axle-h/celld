@@ -1,0 +1,1 @@
+{ "name": "disable", "main": "index.js", "compatibility_date": "2026-09-04", "compatibility_flags": ["disallow_eval_during_startup"], "durable_objects": { "bindings": [{ "name": "PROBE", "class_name": "ProbeDisable" }] }, "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProbeDisable"] }] }

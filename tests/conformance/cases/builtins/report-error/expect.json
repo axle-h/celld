@@ -1,0 +1,208 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "calls": {
+          "error": {
+            "returned": null
+          },
+          "string": {
+            "returned": null
+          },
+          "number": {
+            "returned": null
+          },
+          "undefined": {
+            "returned": null
+          },
+          "noArguments": "TypeError: Failed to execute 'reportError' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'Value'.",
+          "object": {
+            "returned": null
+          }
+        },
+        "events": [
+          {
+            "type": "error",
+            "constructor": "ErrorEvent",
+            "message": "Uncaught TypeError: boom",
+            "lineno": "number",
+            "colno": "number",
+            "filename": "string",
+            "error": "TypeError: boom",
+            "cancelable": false,
+            "bubbles": false,
+            "isTrusted": true
+          },
+          {
+            "type": "error",
+            "constructor": "ErrorEvent",
+            "message": "Uncaught text",
+            "lineno": "number",
+            "colno": "number",
+            "filename": "string",
+            "error": "text",
+            "cancelable": false,
+            "bubbles": false,
+            "isTrusted": true
+          },
+          {
+            "type": "error",
+            "constructor": "ErrorEvent",
+            "message": "Uncaught 42",
+            "lineno": "number",
+            "colno": "number",
+            "filename": "string",
+            "error": 42,
+            "cancelable": false,
+            "bubbles": false,
+            "isTrusted": true
+          },
+          {
+            "type": "error",
+            "constructor": "ErrorEvent",
+            "message": "Uncaught undefined",
+            "lineno": "number",
+            "colno": "number",
+            "filename": "string",
+            "error": null,
+            "cancelable": false,
+            "bubbles": false,
+            "isTrusted": true
+          },
+          {
+            "type": "error",
+            "constructor": "ErrorEvent",
+            "message": "Uncaught #<Object>",
+            "lineno": "number",
+            "colno": "number",
+            "filename": "string",
+            "error": {
+              "stack": "custom stack"
+            },
+            "cancelable": false,
+            "bubbles": false,
+            "isTrusted": true
+          }
+        ],
+        "throwing": "Error: from listener",
+        "nested": [
+          "outer"
+        ],
+        "unheard": {
+          "returned": null
+        },
+        "detached": {
+          "returned": null
+        },
+        "name": "reportError",
+        "length": 0,
+        "enumerable": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "calls": {
+          "error": {
+            "returned": null
+          },
+          "string": {
+            "returned": null
+          },
+          "number": {
+            "returned": null
+          },
+          "undefined": {
+            "returned": null
+          },
+          "noArguments": "TypeError: Failed to execute 'reportError' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'Value'.",
+          "object": {
+            "returned": null
+          }
+        },
+        "events": [
+          {
+            "type": "error",
+            "constructor": "ErrorEvent",
+            "message": "Uncaught TypeError: boom",
+            "lineno": "number",
+            "colno": "number",
+            "filename": "string",
+            "error": "TypeError: boom",
+            "cancelable": false,
+            "bubbles": false,
+            "isTrusted": true
+          },
+          {
+            "type": "error",
+            "constructor": "ErrorEvent",
+            "message": "Uncaught text",
+            "lineno": "number",
+            "colno": "number",
+            "filename": "string",
+            "error": "text",
+            "cancelable": false,
+            "bubbles": false,
+            "isTrusted": true
+          },
+          {
+            "type": "error",
+            "constructor": "ErrorEvent",
+            "message": "Uncaught 42",
+            "lineno": "number",
+            "colno": "number",
+            "filename": "string",
+            "error": 42,
+            "cancelable": false,
+            "bubbles": false,
+            "isTrusted": true
+          },
+          {
+            "type": "error",
+            "constructor": "ErrorEvent",
+            "message": "Uncaught undefined",
+            "lineno": "number",
+            "colno": "number",
+            "filename": "string",
+            "error": null,
+            "cancelable": false,
+            "bubbles": false,
+            "isTrusted": true
+          },
+          {
+            "type": "error",
+            "constructor": "ErrorEvent",
+            "message": "Uncaught #<Object>",
+            "lineno": "number",
+            "colno": "number",
+            "filename": "string",
+            "error": {
+              "stack": "custom stack"
+            },
+            "cancelable": false,
+            "bubbles": false,
+            "isTrusted": true
+          }
+        ],
+        "throwing": {
+          "returned": null
+        },
+        "nested": [
+          "outer"
+        ],
+        "unheard": {
+          "returned": null
+        },
+        "detached": {
+          "returned": null
+        },
+        "name": "reportError",
+        "length": 0,
+        "enumerable": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "putError": "rejected TypeError: Cache is unable to store an error response",
+        "putErrorBadKey": "rejected TypeError: Cache is unable to store an error response",
+        "putErrorPost": "rejected TypeError: Cache is unable to store an error response",
+        "putIllegalThis": "threw TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+        "putIllegalThisPrimitive": "threw TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+        "matchIllegalThis": "threw TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+        "deleteIllegalThis": "threw TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+      }
+    }
+  ]
+}

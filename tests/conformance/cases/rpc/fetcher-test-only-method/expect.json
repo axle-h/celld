@@ -1,0 +1,22 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "object": {
+          "answered": "default: constructor"
+        },
+        "entry": {
+          "answered": "Entry: constructor"
+        },
+        "local": {
+          "answered": "Local: toString"
+        },
+        "bare": "TypeError: The RPC receiver does not implement the method \"getRpcMethodForTestOnly\".",
+        "own": false
+      }
+    }
+  ]
+}

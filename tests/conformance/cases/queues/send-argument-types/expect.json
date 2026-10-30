@@ -1,0 +1,19 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "sendOptionsNumber": "rejected TypeError: Failed to execute 'send' on 'WorkerQueue': parameter 2 is not of type 'SendOptions'.",
+        "sendOptionsString": "rejected TypeError: Failed to execute 'send' on 'WorkerQueue': parameter 2 is not of type 'SendOptions'.",
+        "sendOptionsNull": "sent",
+        "batchNumber": "rejected TypeError: Failed to execute 'sendBatch' on 'WorkerQueue': parameter 1 is not of type 'Sequence'.",
+        "batchNull": "rejected TypeError: Failed to execute 'sendBatch' on 'WorkerQueue': parameter 1 is not of type 'Sequence'.",
+        "batchEntryNumber": "rejected TypeError: Incorrect type: the provided value is not of type 'MessageSendRequest'.",
+        "batchEntryNull": "rejected TypeError: Cannot initialize N7workerd3api11WorkerQueue18MessageSendRequestE with required members from an undefined or null value.",
+        "batchOptionsNumber": "rejected TypeError: Failed to execute 'sendBatch' on 'WorkerQueue': parameter 2 is not of type 'SendBatchOptions'."
+      }
+    }
+  ]
+}

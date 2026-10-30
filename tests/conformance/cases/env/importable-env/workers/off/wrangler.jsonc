@@ -1,0 +1,7 @@
+{
+  "name": "off",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["disallow_importable_env"],
+  "vars": { "GREETING": "hi" }
+}

@@ -555,6 +555,9 @@ const LIFTED_TEST_HOOK: &str = r#"__celld.__liftedForTest = {
   revive: (tree) => __stubRevive(tree).value,
   storedRevive: __storedRevive,
   service: () => __entrypointStub("default", undefined),
+  // A receiver's walk of a call's path, as a peer's call reaches it.
+  atEntrypoint: (root, kind, path, args) => __rpcAtEntrypoint(
+    root, kind, path, args, kind === "own" ? { props: undefined } : undefined),
   bodyBytes: __bodyBytesOf,
   // A call's params out with a transit, and in as its callee takes them.
   params: (value) => {
@@ -700,20 +703,17 @@ pub(super) fn unexported_class_error(class: &str) -> anyhow::Error {
     )
 }
 
-/// Populate `cloudflare:workers` `exports` with the worker module's own exports:
-/// a Durable Object class is exposed as its namespace (idFromName/get/RPC), any
-/// other export by value. `default` is omitted (it is the fetch entrypoint, not
-/// an importable export). Mirrors Workerd's `import { exports }` surface.
+/// Record the worker module's own exports in `__moduleExports`, for celld's
+/// own lookups (a Workflow's class): a Durable Object class as its namespace,
+/// any other export by value, `default` left out. Then publish ctx.exports as
+/// `cloudflare:workers` `exports`, as workerd does once the module has
+/// evaluated.
 pub(super) fn populate_cf_exports(
     scope: &mut v8::PinScope,
     ns: v8::Local<v8::Object>,
     do_classes: &[String],
 ) -> Result<()> {
-    let cf = internal_object(scope, "__cf")?;
-    let exports = cf
-        .get(scope, v8::String::new(scope, "exports").unwrap().into())
-        .and_then(|value| value.to_object(scope))
-        .ok_or_else(|| anyhow!("missing __cf.exports"))?;
+    let exports = internal_object(scope, "__moduleExports")?;
     let cell = cell_state(scope)?;
     let make_ns: v8::Local<v8::Function> = cell
         .get(
@@ -744,6 +744,13 @@ pub(super) fn populate_cf_exports(
         let key = v8::String::new(scope, &name).unwrap();
         exports.set(scope, key.into(), export_value);
     }
+    // `exports` from cloudflare:workers is ctx.exports from now on, as
+    // workerd gives it once the main module has evaluated.
+    let publish = internal_function(scope, "__publishWorkerExports")?;
+    let receiver = v8::undefined(scope).into();
+    publish
+        .call(scope, receiver, &[])
+        .ok_or_else(|| anyhow!("publishing the Worker's exports failed"))?;
     Ok(())
 }
 
@@ -1274,7 +1281,7 @@ pub(super) fn register_entrypoints(
 /// `class_name` must be a module export that extends `WorkflowEntrypoint`
 /// from `cloudflare:workers`, so a wrong class fails the load loudly,
 /// exactly as a Durable Object export does. The per-replay resolution off
-/// `__cell.workflows` and `__cf.exports` is unchanged; this checks the same
+/// `__cell.workflows` and `__moduleExports` is unchanged; this checks the same
 /// names once, up front, instead of erroring the first instance at run time.
 pub(super) fn validate_workflow_classes(
     scope: &mut v8::PinScope,
@@ -1519,7 +1526,11 @@ fn finish_cell_adoption(tc: &mut v8::PinScope, cell: &str, owned: bool) -> Resul
     Ok(storage::get_alarm(cell))
 }
 
-pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Compat) -> Result<()> {
+pub(super) fn inject_storage_compatibility(
+    scope: &mut v8::PinScope,
+    compat: Compat,
+    python_runtime: bool,
+) -> Result<()> {
     use crate::compat_flags as f;
     let flags = compat.flags;
     // Every serializer of the isolate reads this (`storage_ops`).
@@ -1529,6 +1540,12 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
     // The module resolver reads this (`modules::resolve_external`).
     scope.set_slot(super::modules::ImportAttributes {
         refuse: flags.get(f::THROW_ON_UNRECOGNIZED_IMPORT_ASSERTION),
+    });
+    // And this, for the node modules a flag gates (`modules::lazy_module`)
+    // and celld:python.
+    scope.set_slot(super::modules::BuiltinModules {
+        perf_hooks: compat.nodejs_compat && flags.get(f::ENABLE_NODEJS_PERF_HOOKS_MODULE),
+        python_host: python_runtime,
     });
     let source = format!(
         "const c = __celld.__cell;\n\
@@ -1566,6 +1583,9 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
          c.compat.websocketCloseReasonByteLimit = {};\n\
          c.compat.writableStreamSpecCompliantWriter = {};\n\
          c.compat.workersApiGettersSettersOnPrototype = {};\n\
+         c.compat.globalPerformanceClasses = {};\n\
+         c.compat.nodejsPerfHooksModule = {};\n\
+         c.compat.nodejsCompatV2 = {};\n\
          c.applyCompat();",
         compat.delete_all_deletes_alarm,
         compat.js_rpc,
@@ -1601,6 +1621,9 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
         flags.get(f::WEBSOCKET_CLOSE_REASON_BYTE_LIMIT),
         flags.get(f::WRITABLE_STREAM_SPEC_COMPLIANT_WRITER),
         flags.get(f::WORKERS_API_GETTERS_SETTERS_ON_PROTOTYPE),
+        flags.get(f::ENABLE_GLOBAL_PERFORMANCE_CLASSES),
+        flags.get(f::ENABLE_NODEJS_PERF_HOOKS_MODULE),
+        flags.get(f::NODEJS_COMPAT_V2),
     );
     run_internal_snippet(scope, &source).ok_or_else(|| anyhow!("compatibility install failed"))?;
     Ok(())
@@ -2167,10 +2190,20 @@ mod tests {
              const k = []; for (let i = 0; i < 10; i++) {{ const x = new WebAssembly.Instance(m); \
              for (let p = 0; p < 1900; p += 50) {{ x.exports.grow(50); x.exports.touch(); }} k.push(x); }}"
         );
-        assert_eq!(
-            load(&format!("{grows_itself}\n{HANDLER}"), &[]),
-            Err(STARTUP_MEMORY_EXCEEDED.to_string())
+        // Wasm compiles from bytes at module scope only with
+        // allow_eval_during_startup, which this date turns on.
+        let mut config = config(&format!("{grows_itself}\n{HANDLER}"), &[], Vec::new());
+        Arc::get_mut(&mut config).unwrap().compat = Compat::from_flags(
+            crate::compat_flags::compile_lenient(Some("2026-09-04"), &[]),
         );
+        let loaded = std::thread::spawn(move || {
+            Worker::load_config(config)
+                .map(drop)
+                .map_err(|error| error.to_string())
+        })
+        .join()
+        .expect("load thread panicked");
+        assert_eq!(loaded, Err(STARTUP_MEMORY_EXCEEDED.to_string()));
         let fits = "const m = new WebAssembly.Memory({ initial: 16 }); m.grow(16);\n";
         assert_eq!(load(&format!("{fits}{HANDLER}"), &[]), Ok(()));
     }

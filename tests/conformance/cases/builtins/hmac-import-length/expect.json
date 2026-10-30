@@ -1,0 +1,177 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "empty": "DOMException DataError: Imported HMAC key length (0) must be a non-zero value up to 7 bits less than, and no greater than, the bit length of the raw key data (0).",
+        "emptyLength0": "DOMException DataError: Imported HMAC key length (0) must be a non-zero value up to 7 bits less than, and no greater than, the bit length of the raw key data (0).",
+        "emptyLength8": "DOMException DataError: Imported HMAC key length (8) must be a non-zero value up to 7 bits less than, and no greater than, the bit length of the raw key data (0).",
+        "emptySha1": "DOMException DataError: Imported HMAC key length (0) must be a non-zero value up to 7 bits less than, and no greater than, the bit length of the raw key data (0).",
+        "oneByte": {
+          "algorithm": {
+            "name": "HMAC",
+            "hash": {
+              "name": "SHA-256"
+            },
+            "length": 8
+          },
+          "raw": "ff",
+          "mac": "2f44ba3f8e9b6e4a139d61286971c6638278480ce91a91b21f57b5158dbac6d7"
+        },
+        "oneByteLength1": {
+          "algorithm": {
+            "name": "HMAC",
+            "hash": {
+              "name": "SHA-256"
+            },
+            "length": 1
+          },
+          "raw": "80",
+          "mac": "68ffd3eb108a8fa5f0c1d97dc9524d33a750f4e6855d27b34c70b2085f61eea4"
+        },
+        "oneByteLength0": "DOMException DataError: Imported HMAC key length (0) must be a non-zero value up to 7 bits less than, and no greater than, the bit length of the raw key data (8).",
+        "lengths": [
+          [
+            "32",
+            "number",
+            {
+              "algorithm": {
+                "name": "HMAC",
+                "hash": {
+                  "name": "SHA-256"
+                },
+                "length": 32
+              },
+              "raw": "ffffffff",
+              "mac": "42114cca6db01619ac95a3f715fb1fa7f850e08aa7c6b310c54607bac9aa6d97"
+            }
+          ],
+          [
+            "31",
+            "number",
+            {
+              "algorithm": {
+                "name": "HMAC",
+                "hash": {
+                  "name": "SHA-256"
+                },
+                "length": 31
+              },
+              "raw": "fffffffe",
+              "mac": "5332bfc378e0d29ee9f54a4ca777ce2e86beac0999f3243bbe7d3b69f1bb0694"
+            }
+          ],
+          [
+            "25",
+            "number",
+            {
+              "algorithm": {
+                "name": "HMAC",
+                "hash": {
+                  "name": "SHA-256"
+                },
+                "length": 25
+              },
+              "raw": "ffffff80",
+              "mac": "208ff3fa0c63f4c2b986ede846d5e711f9ea7dc3d5128a725529ba9595c1abd9"
+            }
+          ],
+          [
+            "24",
+            "number",
+            "DOMException DataError: Imported HMAC key length (24) must be a non-zero value up to 7 bits less than, and no greater than, the bit length of the raw key data (32)."
+          ],
+          [
+            "33",
+            "number",
+            "DOMException DataError: Imported HMAC key length (33) must be a non-zero value up to 7 bits less than, and no greater than, the bit length of the raw key data (32)."
+          ],
+          [
+            "0",
+            "number",
+            "DOMException DataError: Imported HMAC key length (0) must be a non-zero value up to 7 bits less than, and no greater than, the bit length of the raw key data (32)."
+          ],
+          [
+            "40",
+            "number",
+            "DOMException DataError: Imported HMAC key length (40) must be a non-zero value up to 7 bits less than, and no greater than, the bit length of the raw key data (32)."
+          ],
+          [
+            "25",
+            "string",
+            {
+              "algorithm": {
+                "name": "HMAC",
+                "hash": {
+                  "name": "SHA-256"
+                },
+                "length": 25
+              },
+              "raw": "ffffff80",
+              "mac": "208ff3fa0c63f4c2b986ede846d5e711f9ea7dc3d5128a725529ba9595c1abd9"
+            }
+          ],
+          [
+            "25.9",
+            "number",
+            {
+              "algorithm": {
+                "name": "HMAC",
+                "hash": {
+                  "name": "SHA-256"
+                },
+                "length": 25
+              },
+              "raw": "ffffff80",
+              "mac": "208ff3fa0c63f4c2b986ede846d5e711f9ea7dc3d5128a725529ba9595c1abd9"
+            }
+          ],
+          [
+            "-0.5",
+            "number",
+            "DOMException DataError: Imported HMAC key length (0) must be a non-zero value up to 7 bits less than, and no greater than, the bit length of the raw key data (32)."
+          ],
+          [
+            "-7",
+            "number",
+            "DOMException DataError: Imported HMAC key length (-7) must be a non-zero value up to 7 bits less than, and no greater than, the bit length of the raw key data (32)."
+          ],
+          [
+            "NaN",
+            "number",
+            "DOMException DataError: Imported HMAC key length (0) must be a non-zero value up to 7 bits less than, and no greater than, the bit length of the raw key data (32)."
+          ],
+          [
+            "Infinity",
+            "number",
+            "DOMException DataError: Imported HMAC key length (0) must be a non-zero value up to 7 bits less than, and no greater than, the bit length of the raw key data (32)."
+          ],
+          [
+            "2147483648",
+            "number",
+            "TypeError TypeError: Value out of range. Must be between -2147483648 and 2147483647 (inclusive)."
+          ],
+          [
+            "4294967321",
+            "number",
+            "TypeError TypeError: Value out of range. Must be between -2147483648 and 2147483647 (inclusive)."
+          ],
+          [
+            "null",
+            "object",
+            "DOMException DataError: Imported HMAC key length (0) must be a non-zero value up to 7 bits less than, and no greater than, the bit length of the raw key data (32)."
+          ]
+        ],
+        "derived": {
+          "name": "HMAC",
+          "hash": {
+            "name": "SHA-256"
+          },
+          "length": 256
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+// Before spec_compliant_dispatch_exceptions (2026-09-15).
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "services": [{ "binding": "SPEC", "service": "spec" }]
+}

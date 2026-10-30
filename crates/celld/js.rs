@@ -2320,6 +2320,10 @@ pub struct WorkerConfig {
     /// `containers` from the deployment: the classes whose `ctx.container`
     /// exists. Empty for a loaded worker.
     pub containers: Vec<crate::container::ContainerSpec>,
+    /// Whether this is a deployed Python Worker's bundle
+    /// ([`WorkerConfig::with_python_runtime`]). Never set for a Dynamic
+    /// Worker or a local script.
+    python_runtime: bool,
     /// The application generation this configuration belongs to. Every
     /// isolate built from it carries the value as a slot, so its host calls
     /// resolve against the deployment graph it was built with.
@@ -2460,6 +2464,7 @@ impl WorkerConfig {
             tail_reporting: false,
             crons: Vec::new(),
             containers: Vec::new(),
+            python_runtime: false,
             generation: 0,
             main_imports,
             module_imports,
@@ -2551,6 +2556,14 @@ impl WorkerConfig {
 
     pub fn with_containers(mut self, containers: Vec<crate::container::ContainerSpec>) -> Self {
         self.containers = containers;
+        self
+    }
+
+    /// Mark this Worker as the Python Worker bundle `celld deploy` built,
+    /// whose manifest requires `python-workers-v1`: only its isolates resolve
+    /// `celld:python` and have a startup window ([`op_python_startup`]).
+    pub fn with_python_runtime(mut self, python_runtime: bool) -> Self {
+        self.python_runtime = python_runtime;
         self
     }
 
@@ -2778,9 +2791,17 @@ impl WorkerIsolate {
     /// forgot cloned two `Global`s a line too early; the panic happened
     /// inside a spawned request task, where tokio swallowed it and it
     /// surfaced only as a poisoned mutex on every later request.
+    ///
+    /// Every turn begins here, so this is also where a Python startup window
+    /// past its deadline closes (`expire_python_startup`).
     fn realm<'s>(&self, hs: &mut v8::PinScope<'s, '_, ()>) -> Entered<'s> {
+        let context = v8::Local::new(hs, &self.realm.context);
+        // One load per turn while no Python startup window is open.
+        if self.runtime_state.python_startup.load(Ordering::Relaxed) == PYTHON_STARTUP_OPEN {
+            expire_python_startup(&self.runtime_state, context);
+        }
         Entered {
-            context: v8::Local::new(hs, &self.realm.context),
+            context,
             fetch: v8::Local::new(hs, &self.realm.fetch),
         }
     }
@@ -3803,6 +3824,14 @@ struct ActorRuntimeState {
     event_hooks: OnceLock<EventHooks>,
     /// See [`internals`].
     internals: OnceLock<v8::Global<v8::Object>>,
+    /// Set while the main module evaluates, with the microtasks it queued:
+    /// workerd's global scope, where no request is current, so the ops of
+    /// [`GLOBAL_SCOPE_IO_OPS`] refuse.
+    global_scope: AtomicBool,
+    /// See [`op_python_startup`].
+    python_startup: AtomicU8,
+    /// See [`PythonStartupWindow`].
+    python_startup_open: Mutex<Option<PythonStartupWindow>>,
     /// Set once a patch is installed, so an unpatched isolate pays one
     /// relaxed load per op and not a lock: the patch check runs on every op
     /// call of every test, and the lock cost 18% on an op-bound loop.
@@ -3842,6 +3871,16 @@ struct EventHooks {
 /// Rejections the harness holds for its next look after a microtask
 /// checkpoint (`microtask_checkpoint`).
 struct RejectionsPending;
+
+/// Whether `WebAssembly.Module()`, `compile()` or `instantiate()` may compile
+/// bytes: only where eval() may, as workerd's `allowWasmCallback` answers
+/// (jsg/setup.c++). It reads the context's switch and runs nothing else.
+unsafe extern "C" fn allow_wasm_code_generation(
+    context: v8::Local<v8::Context>,
+    _source: v8::Local<v8::String>,
+) -> bool {
+    context.is_code_generation_from_strings_allowed()
+}
 
 /// V8's report of a promise rejected with no handler, or of a handler added
 /// to one after that, which the harness turns into the global scope's
@@ -8540,6 +8579,42 @@ fn settle_isolate_heap(isolate: &mut v8::Isolate) {
     isolate.low_memory_notification();
 }
 
+/// The main module's evaluation, with the microtasks it queued and the
+/// reading of its exports: workerd's global scope, which ends on every exit
+/// from the load when this drops.
+///
+/// eval(), new Function() and compiling Wasm from bytes run only here, and
+/// then only with allow_eval_during_startup, as in workerd (io/worker.c++ and
+/// jsg/setup.c++ modifyCodeGenCallback and allowWasmCallback); V8 refuses
+/// them with workerd's errors. The context's switch is the one record of it:
+/// no script can reach it, and `allow_wasm_code_generation` reads it for
+/// Wasm. celld's own code compiles through the embedder API, which the switch
+/// does not gate. The ops that start I/O refuse here
+/// ([`ActorRuntimeState::global_scope`]).
+struct ModuleEvaluation<'s> {
+    context: v8::Local<'s, v8::Context>,
+    state: Arc<ActorRuntimeState>,
+}
+
+impl<'s> ModuleEvaluation<'s> {
+    fn begin(
+        context: v8::Local<'s, v8::Context>,
+        state: Arc<ActorRuntimeState>,
+        eval: bool,
+    ) -> Self {
+        context.set_allow_generation_from_strings(eval);
+        state.global_scope.store(true, Ordering::Relaxed);
+        Self { context, state }
+    }
+}
+
+impl Drop for ModuleEvaluation<'_> {
+    fn drop(&mut self) {
+        self.context.set_allow_generation_from_strings(false);
+        self.state.global_scope.store(false, Ordering::Relaxed);
+    }
+}
+
 impl Worker {
     /// Compile the worker module, wire the DO harness, and extract the entry
     /// `fetch`. `do_classes` come from the manifest; `bindings` maps a binding
@@ -8564,6 +8639,7 @@ impl Worker {
         // Dynamic `import()` of builtin specifiers; per-import()-call only.
         isolate.set_host_import_module_dynamically_callback(host_import_module_dynamically);
         isolate.set_promise_reject_callback(promise_reject_callback);
+        isolate.set_allow_wasm_code_generation_callback(allow_wasm_code_generation);
         let original_heap_limit = isolate.get_heap_statistics().heap_size_limit();
         let cpu_condemned = Arc::new(AtomicBool::new(false));
         let heap_limit_state = Arc::new(HeapLimitState {
@@ -8588,6 +8664,11 @@ impl Worker {
             tail_reporting: config.tail_reporting,
             script_name: script_name.to_string(),
             grant: config.scope_grant(),
+            python_startup: AtomicU8::new(if config.python_runtime {
+                PYTHON_STARTUP_AVAILABLE
+            } else {
+                PYTHON_STARTUP_CLOSED
+            }),
             ..Default::default()
         });
         let loader_owner = LoaderOwner::fresh(script_name, config.generation);
@@ -8646,8 +8727,9 @@ impl Worker {
                 //   `Send + Sync`;
                 // - `near_heap_limit`, a bare fn pointer whose only captured
                 //   state is a raw pointer into the `HeapLimitState` above;
-                // - `host_import_module_dynamically`, a bare fn pointer that
-                //   captures nothing;
+                // - `host_import_module_dynamically` and
+                //   `allow_wasm_code_generation`, bare fn pointers that
+                //   capture nothing;
                 // - a default `CreateParams` allocator, owned by V8.
                 //
                 // Nothing else is attached, and the assertion fails the build
@@ -8700,11 +8782,25 @@ impl Worker {
         // A global, so it must exist before the module evaluates: bundles
         // read Cloudflare.compatibilityFlags at module scope.
         inject_compatibility_flags(scope, compat)?;
-        inject_storage_compatibility(scope, compat)?;
+        inject_storage_compatibility(scope, compat, config.python_runtime)?;
         install_loader_env(scope, config)?;
         if compat.populate_process_env && compat.nodejs_compat {
             populate_process_env(scope, config)?;
         }
+        // The env is whole before the main module evaluates, as workerd
+        // binds it then (io/worker.c++), so `env` from cloudflare:workers
+        // holds every binding at module scope. Nothing here reads the
+        // module: a Durable Object namespace needs only its key, and a
+        // service binding its script.
+        inject_namespace_keys(scope, script_name, do_classes)?;
+        inject_crons(scope, &config.crons)?;
+        inject_workflows(scope, script_name, &config.workflow_bindings)?;
+        inject_containers(scope, &config.containers)?;
+        inject_kv_limits(scope)?;
+        inject_queue_config(scope, config)?;
+        build_env(scope, config)?;
+        // tell the harness which cells are local (route the rest cross-node)
+        inject_routing(scope, node)?;
 
         let module = match compile_module(scope, &config.main_module_name, src) {
             Some(m) => m,
@@ -8718,6 +8814,17 @@ impl Worker {
         if module.instantiate_module(scope, resolve_external).is_none() {
             return Err(uncaught!(scope));
         }
+        // Global scope lasts until the exports are read, as workerd reads
+        // them (`unwrapExports`) before it leaves the Worker's startup with
+        // eval() still switched as above: a getter on the default export, or
+        // a Proxy one, runs there too.
+        let _evaluation = ModuleEvaluation::begin(
+            context,
+            actor_runtime_state(scope),
+            compat
+                .flags
+                .get(crate::compat_flags::ALLOW_EVAL_DURING_STARTUP),
+        );
         let ev = match module.evaluate(scope) {
             Some(value) => value,
             None => {
@@ -8790,19 +8897,9 @@ impl Worker {
                 .ok_or_else(|| unexported_class_error(cn))?;
             register_class(scope, cn, cls)?;
         }
-        inject_namespace_keys(scope, script_name, do_classes)?;
-        inject_crons(scope, &config.crons)?;
-        inject_workflows(scope, script_name, &config.workflow_bindings)?;
-        inject_containers(scope, &config.containers)?;
-        inject_kv_limits(scope)?;
-        inject_queue_config(scope, config)?;
         populate_cf_exports(scope, ns, do_classes)?;
         register_entrypoints(scope, ns)?;
         validate_workflow_classes(scope, ns, &config.workflow_bindings)?;
-        // build env from bindings and stash it in the harness
-        build_env(scope, config)?;
-        // tell the harness which cells are local (route the rest cross-node)
-        inject_routing(scope, node)?;
 
         // entry fetch. A loaded Worker often exists for its Durable
         // Object class alone, and workerd loads such a module without a
@@ -9266,6 +9363,100 @@ impl Worker {
 
 // ---- native ops exposed to JS ----
 
+/// The ops that start I/O through a binding or the network: a subrequest, a
+/// service binding's fetch or RPC, a Durable Object or runtime cell call
+/// (KV, Queues, Workflows), R2, a Worker Loader, a socket. workerd asks each
+/// for the current request (`IoContext::current()`), which global scope does
+/// not have, so it throws its global-scope error there and starts nothing.
+/// celld refuses them the same way while the main module evaluates
+/// ([`ActorRuntimeState::global_scope`]), before the op runs, so nothing is
+/// enqueued for a later request to start. `__require_io_context` does
+/// nothing else: the harness calls it where workerd's method throws
+/// synchronously ahead of an op of its own, or refuses ahead of its checks
+/// of its arguments. Timers, random values and body reads stay with plan
+/// item 1.39.
+const GLOBAL_SCOPE_IO_OPS: &[&str] = &[
+    "__require_io_context",
+    "__op_fetch",
+    "__asset_fetch",
+    "__svc_call",
+    "__svc_call_cancellable",
+    "__svc_rpc",
+    "__do_call",
+    "__do_call_cancellable",
+    "__rpc_call",
+    "__queue_dispatch",
+    "__kv_blob",
+    "__r2_head",
+    "__r2_get",
+    "__r2_put",
+    "__r2_put_begin",
+    "__r2_put_chunk",
+    "__r2_put_end",
+    "__r2_delete",
+    "__r2_list",
+    "__r2_mp_begin",
+    "__r2_mp_resume",
+    "__r2_mp_part",
+    "__r2_mp_complete",
+    "__r2_mp_abort",
+    "__loader_load",
+    "__loader_fetch",
+    "__loader_rpc",
+    "__tcp_connect",
+    "__ws_connect",
+];
+
+/// workerd's error for an operation that needs a request, thrown in global
+/// scope (io/io-context.c++ `kAsyncIoErrorMessage`).
+const GLOBAL_SCOPE_ERROR: &str = "Disallowed operation called within global scope. \
+     Asynchronous I/O (ex: fetch() or connect()), setting a timeout, and generating random \
+     values are not allowed within global scope. To fix this error, perform this operation \
+     within a handler. https://developers.cloudflare.com/workers/runtime-apis/handlers/";
+
+/// Whether `name` is in [`GLOBAL_SCOPE_IO_OPS`], for the op table to decide at
+/// compile time.
+const fn refused_in_global_scope(name: &str) -> bool {
+    let name = name.as_bytes();
+    let mut op = 0;
+    while op < GLOBAL_SCOPE_IO_OPS.len() {
+        let listed = GLOBAL_SCOPE_IO_OPS[op].as_bytes();
+        if listed.len() == name.len() {
+            let mut byte = 0;
+            while byte < name.len() && listed[byte] == name[byte] {
+                byte += 1;
+            }
+            if byte == name.len() {
+                return true;
+            }
+        }
+        op += 1;
+    }
+    false
+}
+
+fn in_global_scope(scope: &v8::Isolate) -> bool {
+    scope
+        .get_slot::<Arc<ActorRuntimeState>>()
+        .is_some_and(|state| state.global_scope.load(Ordering::Relaxed))
+}
+
+/// Throw workerd's global-scope error, an `Error` as its `ThrowError` makes.
+fn throw_global_scope_error(scope: &mut v8::PinScope) {
+    let message = v8::String::new(scope, GLOBAL_SCOPE_ERROR).unwrap();
+    let exception = v8::Exception::error(scope, message);
+    scope.throw_exception(exception);
+}
+
+/// `__require_io_context()`: nothing in a request; in global scope the op
+/// table refuses it ([`GLOBAL_SCOPE_IO_OPS`]).
+fn op_require_io_context(
+    _scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+}
+
 /// One host op per entry. The macro names the table and the installer
 /// together, so the parameter list every internal script is compiled with
 /// and the functions it is called with come from one source and cannot
@@ -9275,6 +9466,9 @@ impl Worker {
 /// globalThis) new globalThis[k]()` once reached `__actor_abort` and killed
 /// the actor, and a loaded worker once reached `__do_call` around its
 /// `globalOutbound: null` (denoland/celld#192).
+///
+/// An op in [`GLOBAL_SCOPE_IO_OPS`] refuses, before it runs, while the main
+/// module evaluates.
 macro_rules! ops {
     ($names:ident, $install:ident, $($name:literal => $op:path),* $(,)?) => {
         const $names: &[&str] = &[$($name),*];
@@ -9293,6 +9487,13 @@ macro_rules! ops {
                     args: v8::FunctionCallbackArguments<'s>,
                     rv: v8::ReturnValue<'s, v8::Value>,
                 ) {
+                    // Resolved at compile time, so an op that starts no I/O
+                    // pays nothing for the check.
+                    const REFUSED_IN_GLOBAL_SCOPE: bool = refused_in_global_scope($name);
+                    if REFUSED_IN_GLOBAL_SCOPE && in_global_scope(scope) {
+                        throw_global_scope_error(scope);
+                        return;
+                    }
                     #[cfg(celld_internal_tests)]
                     let mut rv = rv;
                     #[cfg(celld_internal_tests)]
@@ -9711,6 +9912,8 @@ ops! { OP_NAMES, install_op_functions,
         "__response_stream_close" => op_response_stream_close,
         "__op_timer" => op_timer,
         "__isolate_condemn" => op_isolate_condemn,
+        "__python_startup" => op_python_startup,
+        "__require_io_context" => op_require_io_context,
         "__timer_alloc" => op_timer_alloc,
         "__io_context_id" => op_io_context_id,
         "__io_context_poll" => op_io_context_poll,
@@ -13756,6 +13959,56 @@ mod rpc_params_tests {
         );
     }
 
+    /// A receiver refuses an entrypoint's reserved names and Object.prototype's
+    /// before any member runs. No stub sends them (celld has no
+    /// getRpcMethodForTestOnly(), as workerd has none without the
+    /// experimental flag), so the walk is driven as a peer's call reaches it.
+    #[test]
+    fn reserved_and_object_prototype_names_are_refused() {
+        let out = eval(
+            r#"const t = __celld.__liftedForTest;
+            const reached = () => "REACHED";
+            class Entry {
+              fetch() { return reached(); }
+              connect() { return reached(); }
+              toString() { return reached(); }
+              valueOf() { return reached(); }
+            }
+            const handler = { fetch: reached, connect: reached, constructor: reached };
+            const names = ["constructor", "fetch", "connect", "toString", "valueOf",
+              "hasOwnProperty", "isPrototypeOf", "__proto__", "__defineGetter__",
+              "__lookupGetter__"];
+            const call = (root, kind, name) => {
+              try {
+                return String(t.atEntrypoint(root, kind, [name], [1]));
+              } catch (error) {
+                return `${error.name}: ${error.message}`;
+              }
+            };
+            return JSON.stringify(names.map((name) =>
+              [name, call(new Entry(), "class", name), call(handler, "own", name)]));"#,
+        )
+        .unwrap();
+        let reserved = |name: &str| {
+            format!("TypeError: '{name}' is a reserved method and cannot be called over RPC.")
+        };
+        let missing = |name: &str| {
+            format!("TypeError: The RPC receiver does not implement the method \"{name}\".")
+        };
+        let rows: Vec<(String, String, String)> = serde_json::from_str(&out).unwrap();
+        for (name, class, own) in rows {
+            if matches!(name.as_str(), "constructor" | "fetch" | "connect") {
+                assert_eq!(
+                    (&class, &own),
+                    (&reserved(&name), &reserved(&name)),
+                    "{name}"
+                );
+            } else {
+                assert_eq!((&class, &own), (&missing(&name), &missing(&name)), "{name}");
+            }
+        }
+    }
+
     #[test]
     fn another_isolates_params_claim_nothing_here() {
         // The same params as another isolate's lift writes them: its token on
@@ -15445,6 +15698,428 @@ fn op_isolate_condemn(
 }
 
 const MAX_CONDEMN_REASON_CHARS: usize = 256;
+
+/// [`ActorRuntimeState::python_startup`]: a Python Worker's isolate has one
+/// startup window, which it opens once and closes for good.
+const PYTHON_STARTUP_CLOSED: u8 = 0;
+const PYTHON_STARTUP_AVAILABLE: u8 = 1;
+const PYTHON_STARTUP_OPEN: u8 = 2;
+
+/// How long a Python Worker's interpreter start may hold the startup window.
+/// Pyodide 0.28's start with the vendored SDK and a small application takes
+/// about a second on a developer machine (`celld dev`, lab build); thirty
+/// times that leaves room for a loaded node and an application that imports
+/// more at start, and still bounds how long eval() stays on in an isolate
+/// whose start does not settle.
+const PYTHON_STARTUP_WINDOW: Duration = Duration::from_secs(30);
+
+/// The node log's reason for condemning an isolate whose start outlived the
+/// window ([`python_startup_expired`]).
+const PYTHON_STARTUP_EXPIRED: &str = "Python Worker startup did not finish within 30 s";
+
+#[cfg(not(test))]
+fn python_startup_window() -> Duration {
+    PYTHON_STARTUP_WINDOW
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's shorter [`PYTHON_STARTUP_WINDOW`], for windows opened on
+    /// this thread.
+    static PYTHON_STARTUP_WINDOW_FOR_TEST: std::cell::Cell<Duration> =
+        const { std::cell::Cell::new(PYTHON_STARTUP_WINDOW) };
+}
+
+#[cfg(test)]
+fn python_startup_window() -> Duration {
+    PYTHON_STARTUP_WINDOW_FOR_TEST.get()
+}
+
+/// `__python_startup(open)`: open or close the Python interpreter's startup
+/// window, during which eval() and Wasm compilation are allowed.
+///
+/// workerd starts a Python Worker's interpreter while the Worker starts, when
+/// eval() is allowed, and Pyodide's loader evaluates code and compiles Wasm
+/// then. celld starts it on the first invocation (celld cannot evaluate an
+/// asynchronous module top level), so the Python bundle opens this window
+/// around that start. Only the isolates of a Python Worker that `celld
+/// deploy` built have one ([`WorkerConfig::with_python_runtime`]); it opens
+/// once, in a request and not at module scope, and never again. It closes
+/// when the start settles (`close_python_startup`), or at
+/// [`PYTHON_STARTUP_WINDOW`] after it opened (`python_startup_expired`, or
+/// the first turn after it), whichever is first, whatever
+/// becomes of the request that opened it: the start is the isolate's, and
+/// every first invocation shares it. A start that has not settled by then
+/// cannot finish as it should, so the deadline condemns the isolate too
+/// ([`python_startup_expired`]). A call that cannot open the window throws.
+fn op_python_startup(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let state = actor_runtime_state(scope);
+    let context = scope.get_current_context();
+    if !args.get(0).is_true() {
+        close_python_startup(&state, context);
+        return;
+    }
+    let opened = !in_global_scope(scope)
+        && state
+            .python_startup
+            .compare_exchange(
+                PYTHON_STARTUP_AVAILABLE,
+                PYTHON_STARTUP_OPEN,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok();
+    if !opened {
+        return loader_throw(scope, "the Python startup window is not available");
+    }
+    let (wake, deadline) = std::sync::mpsc::channel::<()>();
+    let isolate = scope.thread_safe_handle();
+    let slot = crate::pool::current_slot_weak();
+    let tokio = tokio::runtime::Handle::try_current().ok();
+    let window = python_startup_window();
+    let watch = std::thread::Builder::new()
+        .name("celld-python-startup".to_string())
+        .spawn(move || {
+            // The sender drops when the window closes first.
+            if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = deadline.recv_timeout(window) {
+                python_startup_expired(&isolate, slot, tokio);
+            }
+        });
+    if watch.is_err() {
+        state
+            .python_startup
+            .store(PYTHON_STARTUP_CLOSED, Ordering::Release);
+        return loader_throw(scope, "the Python startup window has no deadline");
+    }
+    *state.python_startup_open.lock().unwrap() = Some(PythonStartupWindow {
+        realm: v8::Global::new(scope, context),
+        deadline: Instant::now() + window,
+        _wake: wake,
+    });
+    context.set_allow_generation_from_strings(true);
+}
+
+/// An open Python startup window ([`ActorRuntimeState::python_startup_open`]).
+struct PythonStartupWindow {
+    /// The realm whose switch it turned on, for the deadline to turn off.
+    realm: v8::Global<v8::Context>,
+    deadline: Instant,
+    /// Dropped when the window closes, which ends the deadline thread.
+    _wake: std::sync::mpsc::Sender<()>,
+}
+
+/// The Python startup window outlived [`PYTHON_STARTUP_WINDOW`]: condemn the
+/// isolate, so that no new invocation waits on its start, and close the
+/// window. A running turn closes it at once, from V8's interrupt, before any
+/// more code it could generate; V8 keeps no interrupt for an isolate no
+/// thread holds, so a turn that begins later closes it as it enters the
+/// realm (`expire_python_startup`).
+///
+/// The condemnation runs on the turn's runtime, as the CPU watchdog's does
+/// (`CpuCondemnation::carry_out`): its hooks expect Tokio, and the slot's
+/// last reference, which owns the isolate, must not drop on this thread.
+fn python_startup_expired(
+    isolate: &v8::IsolateHandle,
+    slot: Option<Weak<crate::pool::Slot>>,
+    tokio: Option<tokio::runtime::Handle>,
+) {
+    if let Some(slot) = slot {
+        let condemn = move || {
+            if let Some(slot) = slot.upgrade() {
+                slot.condemn(PYTHON_STARTUP_EXPIRED);
+            }
+        };
+        match tokio {
+            Some(handle) => {
+                handle.spawn(async move { condemn() });
+            }
+            None => condemn(),
+        }
+    }
+    isolate.request_interrupt(python_startup_deadline_interrupt, std::ptr::null_mut());
+}
+
+unsafe extern "C" fn python_startup_deadline_interrupt(
+    mut isolate: v8::UnsafeRawIsolatePtr,
+    _data: *mut std::ffi::c_void,
+) {
+    // SAFETY: V8 runs an interrupt on the isolate's thread, inside a turn
+    // that holds its lock, with the isolate it was requested for.
+    let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut isolate) };
+    let Some(state) = isolate.get_slot::<Arc<ActorRuntimeState>>().cloned() else {
+        return;
+    };
+    let Some(realm) = state
+        .python_startup_open
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|window| window.realm.clone())
+    else {
+        return;
+    };
+    v8::scope!(let scope, isolate);
+    let context = v8::Local::new(scope, &realm);
+    close_python_startup(&state, context);
+}
+
+/// Close the Python startup window if its deadline has passed. Every turn
+/// calls this as it enters the realm, while the window is open.
+fn expire_python_startup(state: &ActorRuntimeState, context: v8::Local<v8::Context>) {
+    let expired = state
+        .python_startup_open
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|window| Instant::now() >= window.deadline);
+    if expired {
+        close_python_startup(state, context);
+    }
+}
+
+/// Close the Python startup window if it is open; it never opens again.
+fn close_python_startup(state: &ActorRuntimeState, context: v8::Local<v8::Context>) {
+    let closed = state
+        .python_startup
+        .compare_exchange(
+            PYTHON_STARTUP_OPEN,
+            PYTHON_STARTUP_CLOSED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_ok();
+    if closed {
+        context.set_allow_generation_from_strings(false);
+        state.python_startup_open.lock().unwrap().take();
+    }
+}
+
+#[cfg(test)]
+mod python_startup_tests {
+    //! The Python startup window (`op_python_startup`) on a Python Worker's
+    //! configuration, which no conformance case can build: `celld:python`
+    //! resolves only for it, the window opens once and in a request, closes
+    //! when the start settles or at its deadline, and the end of the event
+    //! that opened it leaves it open.
+    use super::*;
+
+    const HANDLER: &str = "export default { fetch() { return new Response(); } };\n";
+
+    fn load(src: &str, python_runtime: bool) -> Result<Worker> {
+        let config = WorkerConfig::new(WorkerConfigOptions {
+            src: src.into(),
+            script_name: "python".into(),
+            do_classes: Vec::new(),
+            bindings: Vec::new(),
+            r2_bindings: Vec::new(),
+            d1_bindings: Vec::new(),
+            kv_bindings: Vec::new(),
+            queue_bindings: Vec::new(),
+            queue_consumers: Vec::new(),
+            workflow_bindings: Vec::new(),
+            vars: Vec::new(),
+            node: String::new(),
+            modules: Vec::new(),
+            compat: Compat::default(),
+        })
+        .with_python_runtime(python_runtime);
+        Worker::load_config(Arc::new(config))
+    }
+
+    /// Run `test` on a thread started after V8, as `runtime::init_v8`
+    /// requires.
+    fn on_isolate_thread<R: Send + 'static>(test: impl FnOnce() -> R + Send + 'static) -> R {
+        let _ = crate::asyncrt::test_host_runtime();
+        Engine::init();
+        std::thread::spawn(move || {
+            let _runtime = crate::asyncrt::test_host_runtime().enter();
+            test()
+        })
+        .join()
+        .unwrap()
+    }
+
+    /// Run `body` as celld's own code, then the microtasks it queued, and
+    /// answer what it returned as text, or the message it threw.
+    fn run(worker: &mut Worker, body: &str) -> Result<String, String> {
+        worker.with_scope_for_test(|scope| {
+            let tc = std::pin::pin!(v8::TryCatch::new(scope));
+            let tc = &mut tc.init();
+            let outcome = match run_internal_snippet(tc, body) {
+                Some(value) => Ok(value.to_rust_string_lossy(tc)),
+                None => Err(tc
+                    .exception()
+                    .map(|error| error.to_rust_string_lossy(tc))
+                    .unwrap_or_default()),
+            };
+            microtask_checkpoint(tc);
+            outcome
+        })
+    }
+
+    const EVAL: &str = "try { return String(eval('1 + 1')); } \
+        catch (error) { return `${error.name}: ${error.message}`; }";
+    const OPEN_HUNG: &str =
+        "__celld.__pythonHost.startInterpreter(() => new Promise(() => {})); return 'open';";
+    const EVAL_REFUSED: &str =
+        "EvalError: Code generation from strings disallowed for this context";
+    const UNAVAILABLE: &str = "Error: the Python startup window is not available";
+
+    #[test]
+    fn only_a_python_worker_imports_celld_python() {
+        on_isolate_thread(|| {
+            let src = format!("import {{ startInterpreter }} from \"celld:python\";\n{HANDLER}");
+            assert!(load(&src, true).is_ok());
+            let error = load(&src, false)
+                .err()
+                .expect("celld:python links")
+                .to_string();
+            assert!(
+                error.starts_with("Uncaught Error: No such module \"celld:python\"."),
+                "{error}"
+            );
+            // A Worker that is not one has no window to open either.
+            let mut worker = load(HANDLER, false).unwrap();
+            assert_eq!(
+                run(
+                    &mut worker,
+                    "return __celld.__pythonHost.startInterpreter(async () => 1);"
+                ),
+                Err(UNAVAILABLE.to_string())
+            );
+            assert_eq!(run(&mut worker, EVAL).unwrap(), EVAL_REFUSED);
+        });
+    }
+
+    #[test]
+    fn the_window_opens_once_and_closes_when_the_start_settles() {
+        on_isolate_thread(|| {
+            let mut worker = load(HANDLER, true).unwrap();
+            assert_eq!(run(&mut worker, EVAL).unwrap(), EVAL_REFUSED);
+            assert_eq!(
+                run(
+                    &mut worker,
+                    "__celld.__pythonHost.startInterpreter(
+                       () => new Promise((resolve) => { globalThis.settle = resolve; }));
+                     return 'open';"
+                ),
+                Ok("open".to_string())
+            );
+            // The opening event's end does not close it: the start is the
+            // isolate's, whatever becomes of that request.
+            assert_eq!(
+                run(
+                    &mut worker,
+                    "__celld.__event_begin(); __celld.__event_end(); return 1;"
+                ),
+                Ok("1".to_string())
+            );
+            assert_eq!(run(&mut worker, EVAL).unwrap(), "2");
+            assert_eq!(
+                run(&mut worker, "globalThis.settle(); return 1;"),
+                Ok("1".to_string())
+            );
+            assert_eq!(run(&mut worker, EVAL).unwrap(), EVAL_REFUSED);
+            assert_eq!(run(&mut worker, OPEN_HUNG), Err(UNAVAILABLE.to_string()));
+            assert_eq!(run(&mut worker, EVAL).unwrap(), EVAL_REFUSED);
+        });
+    }
+
+    #[test]
+    fn the_deadline_closes_a_window_whose_start_never_settles() {
+        on_isolate_thread(|| {
+            PYTHON_STARTUP_WINDOW_FOR_TEST.set(Duration::from_millis(50));
+            let mut worker = load(HANDLER, true).unwrap();
+            assert_eq!(run(&mut worker, OPEN_HUNG), Ok("open".to_string()));
+            assert_eq!(run(&mut worker, EVAL).unwrap(), "2");
+            std::thread::sleep(Duration::from_millis(200));
+            // No thread held the isolate at the deadline: the next turn
+            // closes the window before the body runs.
+            assert_eq!(run(&mut worker, EVAL).unwrap(), EVAL_REFUSED);
+            assert_eq!(run(&mut worker, OPEN_HUNG), Err(UNAVAILABLE.to_string()));
+        });
+    }
+
+    /// The deadline condemns the slot whose turn opened the window, on that
+    /// turn's runtime rather than the deadline's own thread, which must not
+    /// hold the slot's last reference.
+    #[test]
+    fn the_deadline_condemns_the_slot_on_the_turns_runtime() {
+        on_isolate_thread(|| {
+            PYTHON_STARTUP_WINDOW_FOR_TEST.set(Duration::from_millis(50));
+            let slot = crate::pool::Slot::for_test(load(HANDLER, true).unwrap());
+            let (condemned_on, condemnation) = std::sync::mpsc::channel();
+            let condemned_on = Mutex::new(condemned_on);
+            slot.on_condemn(Box::new(move |_| {
+                let _ = condemned_on
+                    .lock()
+                    .unwrap()
+                    .send(std::thread::current().id());
+            }));
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let opened = slot.turn(|worker| run(worker, OPEN_HUNG)).await;
+                assert_eq!(opened, Ok("open".to_string()));
+                for _ in 0..200 {
+                    if slot.is_condemned() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            });
+            assert!(slot.is_condemned());
+            let thread = condemnation
+                .recv_timeout(Duration::from_secs(1))
+                .expect("the condemnation hook ran");
+            // The runtime is this thread's, which drove the condemnation.
+            assert_eq!(thread, std::thread::current().id());
+            drop(runtime);
+            drop(slot);
+        });
+    }
+
+    #[test]
+    fn the_deadline_closes_the_window_in_a_running_turn() {
+        on_isolate_thread(|| {
+            PYTHON_STARTUP_WINDOW_FOR_TEST.set(Duration::from_millis(50));
+            let mut worker = load(HANDLER, true).unwrap();
+            // One turn, open past the deadline: V8's interrupt closes it.
+            // Time stands still within a turn, so the body counts evals.
+            let body = "__celld.__pythonHost.startInterpreter(() => new Promise(() => {}));
+                 for (let evals = 0; evals < 10_000_000; evals++) {
+                   try { eval('1'); } catch (error) { return `${evals > 0} ${error.name}`; }
+                 }
+                 return 'still open';";
+            assert_eq!(run(&mut worker, body), Ok("true EvalError".to_string()));
+        });
+    }
+
+    #[test]
+    fn module_scope_cannot_open_the_window() {
+        on_isolate_thread(|| {
+            let src = format!(
+                "import {{ startInterpreter }} from \"celld:python\";\n\
+                 try {{ startInterpreter(async () => 1); globalThis.atLoad = 'open'; }}\n\
+                 catch (error) {{ globalThis.atLoad = error.message; }}\n{HANDLER}"
+            );
+            let mut worker = load(&src, true).unwrap();
+            assert_eq!(
+                run(&mut worker, "return globalThis.atLoad;"),
+                Ok("the Python startup window is not available".to_string())
+            );
+            // Still there for the first request.
+            assert_eq!(run(&mut worker, OPEN_HUNG), Ok("open".to_string()));
+            assert_eq!(run(&mut worker, EVAL).unwrap(), "2");
+        });
+    }
+}
 
 /// Whether this isolate is too close to its heap limit to retain more state.
 fn op_heap_over_admission_share(

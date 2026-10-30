@@ -1,0 +1,303 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "exponent3": {
+          "algorithm": {
+            "name": "RSASSA-PKCS1-v1_5",
+            "modulusLength": 512,
+            "publicExponent": [
+              3
+            ],
+            "hash": {
+              "name": "SHA-256"
+            }
+          },
+          "verified": true,
+          "e": "Aw"
+        },
+        "exponent3Pss": true,
+        "pssSaltLengths": [
+          [
+            0,
+            0,
+            true
+          ],
+          [
+            20,
+            20,
+            true
+          ],
+          [
+            32,
+            32,
+            true
+          ],
+          [
+            0,
+            32,
+            false
+          ],
+          [
+            32,
+            0,
+            false
+          ]
+        ],
+        "exponent3Oaep": [
+          7,
+          8
+        ],
+        "paddedExponent": [
+          0,
+          0,
+          1,
+          0,
+          1
+        ],
+        "exponents": [
+          [
+            [
+              5
+            ],
+            "DOMException OperationError: The \"publicExponent\" must be either 3 or 65537, but got 5."
+          ],
+          [
+            [],
+            "DOMException OperationError: The \"publicExponent\" must be either 3 or 65537, but got 0."
+          ],
+          [
+            [
+              0
+            ],
+            "DOMException OperationError: The \"publicExponent\" must be either 3 or 65537, but got 0."
+          ],
+          [
+            [
+              1,
+              0,
+              0,
+              0,
+              0,
+              1
+            ],
+            "DOMException OperationError: The \"publicExponent\" must be either 3 or 65537, but got a number larger than 2^32."
+          ],
+          [
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              3
+            ],
+            "generated"
+          ],
+          [
+            [
+              255,
+              255,
+              255,
+              255
+            ],
+            "DOMException OperationError: The \"publicExponent\" must be either 3 or 65537, but got 4294967295."
+          ],
+          [
+            [
+              1,
+              0,
+              0,
+              0,
+              0
+            ],
+            "DOMException OperationError: The \"publicExponent\" must be either 3 or 65537, but got a number larger than 2^32."
+          ]
+        ],
+        "moduli": [
+          [
+            0,
+            "DOMException OperationError: modulusLength must be greater than zero (requested 0)."
+          ],
+          [
+            -1,
+            "DOMException OperationError: modulusLength must be greater than zero (requested -1)."
+          ],
+          [
+            128,
+            "DOMException OperationError: The modulus length must be a multiple of 8 and between 256 and 16k, but 128 was requested."
+          ],
+          [
+            248,
+            "DOMException OperationError: The modulus length must be a multiple of 8 and between 256 and 16k, but 248 was requested."
+          ],
+          [
+            256,
+            "DOMException OperationError: The \"publicExponent\" must be either 3 or 65537, but got 7."
+          ],
+          [
+            264,
+            "DOMException OperationError: The \"publicExponent\" must be either 3 or 65537, but got 7."
+          ],
+          [
+            384,
+            "DOMException OperationError: The \"publicExponent\" must be either 3 or 65537, but got 7."
+          ],
+          [
+            520,
+            "DOMException OperationError: The \"publicExponent\" must be either 3 or 65537, but got 7."
+          ],
+          [
+            16392,
+            "DOMException OperationError: The modulus length must be a multiple of 8 and between 256 and 16k, but 16392 was requested."
+          ],
+          [
+            2147483648,
+            "TypeError TypeError: Value out of range. Must be between -2147483648 and 2147483647 (inclusive)."
+          ]
+        ],
+        "sizes": [
+          [
+            256,
+            "DOMException OperationError: RSA key size is too small."
+          ],
+          [
+            264,
+            "DOMException OperationError: Can't generate key: RSA key size is required to be a multiple of 128"
+          ],
+          [
+            384,
+            "DOMException OperationError: RSA key size is too small."
+          ],
+          [
+            448,
+            "DOMException OperationError: Can't generate key: RSA key size is required to be a multiple of 128"
+          ],
+          [
+            512,
+            512
+          ],
+          [
+            520,
+            "DOMException OperationError: Can't generate key: RSA key size is required to be a multiple of 128"
+          ],
+          [
+            640,
+            640
+          ],
+          [
+            "512",
+            512
+          ],
+          [
+            512.9,
+            512
+          ]
+        ],
+        "missingExponent": "TypeError TypeError: Missing field \"publicExponent\" in \"algorithm\".",
+        "missingModulus": "TypeError TypeError: Missing field \"modulusLength\" in \"algorithm\".",
+        "missingBoth": "TypeError TypeError: Missing field \"publicExponent\" in \"algorithm\".",
+        "missingHash": "TypeError TypeError: Missing field \"hash\" in \"algorithm\".",
+        "order": [
+          [
+            "unknown hash, bad modulus",
+            "DOMException NotSupportedError: Unrecognized or unimplemented digest algorithm requested."
+          ],
+          [
+            "MD5 hash, bad modulus",
+            "DOMException OperationError: The modulus length must be a multiple of 8 and between 256 and 16k, but 100 was requested."
+          ],
+          [
+            "zero modulus, unknown hash",
+            "DOMException OperationError: modulusLength must be greater than zero (requested 0)."
+          ],
+          [
+            "bad usage, bad modulus",
+            "DOMException SyntaxError: Attempt to generate RSA-PSS key with invalid usage \"encrypt\"."
+          ],
+          [
+            "bad usage, bad exponent",
+            "DOMException SyntaxError: Attempt to generate RSA-OAEP key with invalid usage \"sign\"."
+          ],
+          [
+            "unknown usage",
+            "DOMException SyntaxError: Attempt to generate RSASSA-PKCS1-v1_5 key with invalid usage \"bogus\"."
+          ],
+          [
+            "unknown hash, bad usage",
+            "DOMException NotSupportedError: Unrecognized or unimplemented digest algorithm requested."
+          ],
+          [
+            "no private usage",
+            "DOMException SyntaxError: Attempt to generate asymmetric keys with no valid private key usages."
+          ],
+          [
+            "no usages",
+            "DOMException SyntaxError: Attempt to generate asymmetric keys with no valid private key usages."
+          ],
+          [
+            "no private usage, small modulus",
+            "DOMException OperationError: RSA key size is too small."
+          ],
+          [
+            "hash in lower case",
+            {
+              "hash": "SHA-384",
+              "public": [
+                "verify"
+              ],
+              "private": [
+                "sign"
+              ]
+            }
+          ]
+        ],
+        "pssSalt": [
+          [
+            "missing",
+            "DOMException DataError: Failed to provide salt for RSA-PSS key operation which requires a salt",
+            "TypeError TypeError: Failed to provide salt for RSA-PSS key operation which requires a salt"
+          ],
+          [
+            "negative",
+            "DOMException DataError: SaltLength for RSA-PSS must be non-negative (provided -1).",
+            "DOMException DataError: SaltLength for RSA-PSS must be non-negative (provided -1)."
+          ],
+          [
+            "fraction",
+            128,
+            true
+          ],
+          [
+            "string",
+            128,
+            true
+          ],
+          [
+            "NaN",
+            128,
+            false
+          ],
+          [
+            "past a long",
+            "TypeError TypeError: Value out of range. Must be between -2147483648 and 2147483647 (inclusive).",
+            "TypeError TypeError: Value out of range. Must be between -2147483648 and 2147483647 (inclusive)."
+          ],
+          [
+            "largest",
+            128,
+            false
+          ],
+          [
+            "too long",
+            "DOMException OperationError: key too small for signing with given digest and salt length",
+            false
+          ]
+        ]
+      }
+    }
+  ]
+}

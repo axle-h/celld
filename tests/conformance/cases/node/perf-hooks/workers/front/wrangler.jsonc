@@ -1,0 +1,8 @@
+// nodejs_compat implies enable_nodejs_perf_hooks_module from 2026-03-17.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "services": [{ "binding": "HOOKS", "service": "hooks" }]
+}

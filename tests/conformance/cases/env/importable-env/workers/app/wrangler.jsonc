@@ -1,0 +1,10 @@
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "vars": { "GREETING": "hi", "CONFIG": { "a": 1 } },
+  "kv_namespaces": [{ "binding": "KV", "id": "importable-env-kv" }],
+  "services": [{ "binding": "OFF", "service": "off" }],
+  "durable_objects": { "bindings": [{ "name": "OBJ", "class_name": "Obj" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Obj"] }]
+}

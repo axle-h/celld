@@ -29,6 +29,9 @@ import { BINARY, CLOSE, TEXT, acceptKey, closePayload, encodeFrame, frameReader,
  * - `/echo` answers JSON describing the request it received: its method,
  *   path, body, and the headers in `ECHOED`. A `HEAD` response has no body,
  *   so the same JSON is also the `x-echo` header.
+ * - `/beacon?id=<id>` records the request it received as `/echo` describes
+ *   it, and answers 204. `/beacon/log?id=<id>` answers JSON `{"received":
+ *   [...]}`, the records under that id, once there is one or after 3 s.
  * - A WebSocket upgrade to `/redirect?to=<url>` answers 302 to that URL, and
  *   one to `/chain?n=<n>` redirects `n` times and lands on
  *   `/ws/close-first?id=chain`.
@@ -50,15 +53,19 @@ const ECHOED = [
   "content-type", "content-length", "transfer-encoding",
 ];
 
-async function echo(request, url, response) {
+async function describe(request, url) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
-  const report = JSON.stringify({
+  return {
     method: request.method,
     path: url.pathname + url.search,
     headers: Object.fromEntries(ECHOED.map((name) => [name, request.headers[name] ?? null])),
     body: Buffer.concat(chunks).toString(),
-  });
+  };
+}
+
+async function echo(request, url, response) {
+  const report = JSON.stringify(await describe(request, url));
   response.writeHead(200, { "content-type": "application/json", "x-echo": report }).end(report);
 }
 
@@ -72,9 +79,31 @@ export async function startUpstream() {
     }
     return records.get(id);
   };
+  const beacons = new Map();
+  const beacon = (id) => {
+    if (!beacons.has(id)) {
+      let settle;
+      const arrived = new Promise((resolve) => (settle = resolve));
+      beacons.set(id, { received: [], arrived, settle });
+    }
+    return beacons.get(id);
+  };
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, "http://upstream");
     switch (url.pathname) {
+      case "/beacon": {
+        const entry = beacon(url.searchParams.get("id") ?? "");
+        entry.received.push(await describe(request, url));
+        entry.settle();
+        response.writeHead(204).end();
+        return;
+      }
+      case "/beacon/log": {
+        const entry = beacon(url.searchParams.get("id") ?? "");
+        await Promise.race([entry.arrived, new Promise((resolve) => setTimeout(resolve, 3000))]);
+        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ received: entry.received }));
+        return;
+      }
       case "/ws/log": {
         const entry = record(url.searchParams.get("id") ?? "");
         await Promise.race([entry.whenEnded, new Promise((resolve) => setTimeout(resolve, 3000))]);

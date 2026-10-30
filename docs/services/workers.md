@@ -132,7 +132,9 @@ build needs `esbuild` 0.28.0, 0.28.1 or 0.28.2 on `PATH`, or `CELLD_ESBUILD`
 set to its path.
 
 A Python deployment requires the `python-workers-v1` feature, and
-`celld deploy` does not check the nodes for it. A running node without the
+`celld deploy` does not check the nodes for it. A node loads a deployment
+that requires the feature only under `python_workers` and with the Pyodide
+interpreter `celld deploy` embeds; it refuses any other. A running node without the
 feature logs an error and keeps its current deployment, so the fleet serves
 two versions. A node without the feature that starts while a Python
 deployment is current exits with an error. Upgrade every node before the first
@@ -194,6 +196,18 @@ follows its compatibility date (2026-05-26).
 The interpreter starts on the first request to an isolate, and concurrent
 first requests share that start. If the main module raises an error, every
 request to that isolate fails with the same traceback.
+
+`eval()` and WebAssembly compilation, which Pyodide's loader needs, work
+while the interpreter starts, as they do while Cloudflare starts a Worker:
+the main module's top level can call `js.eval()`, and a handler cannot. Only
+a Python Worker that `celld deploy` built has this window, once in an
+isolate. The node checks the interpreter the bundle carries, but not the
+bundle's JavaScript, so a deployer can open the window from a script of its
+own beside that interpreter (plan item 1.65). The window closes when the
+start settles, or 30 seconds after it opened, whichever is first; a request
+that disconnects during the start does not close it, and the next request
+finds the start still running. A start still running at 30 seconds cannot
+finish as it should, so celld replaces that isolate too.
 
 A fatal interpreter error, such as a C stack overflow, fails every request
 that the isolate is running. celld then replaces the isolate, as Cloudflare

@@ -1,0 +1,12 @@
+// nodejs_compat at a date that implies nodejs_compat_v2 and
+// enable_nodejs_global_timers.
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "services": [
+    { "binding": "NONODE", "service": "nonode" },
+    { "binding": "V1", "service": "v1" }
+  ]
+}

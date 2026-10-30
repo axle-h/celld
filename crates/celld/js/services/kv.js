@@ -31,6 +31,10 @@
 //   for bytes and the parsed JSON reply otherwise.
 // - `btoa(bytes)`, `atob(text)`: base64 of bytes and back, for the operator
 //   route.
+// - `requireIoContext()`: throws outside a request, where workerd's
+//   KvNamespace reads refuse before they make a promise (kv.c++
+//   `getWithMetadata` asks for the current request first); the other
+//   methods reject instead, from the RPC the host refuses there.
 function kvService(host) {
   // Run one bounded reclamation transaction. A cell supplies only its ordered
   // candidate query and its per-row transition, so KV expiry and Queue retention
@@ -1097,7 +1101,12 @@ function kvService(host) {
     // for a key that is not there. Upstream's bulk form is a Map and not an
     // object, which matters: an object would collide a key named `__proto__`
     // with the prototype chain.
-    async get(key, options) {
+    get(key, options) {
+      host.requireIoContext();
+      return this.#get(key, options);
+    }
+
+    async #get(key, options) {
       if (Array.isArray(key)) {
         const rows = await this.#read(__kvBulkKeys(key), options, false);
         return new Map(rows.map((row) => [row.key, row.value]));
@@ -1106,7 +1115,12 @@ function kvService(host) {
       return row.value;
     }
 
-    async getWithMetadata(key, options) {
+    getWithMetadata(key, options) {
+      host.requireIoContext();
+      return this.#getWithMetadata(key, options);
+    }
+
+    async #getWithMetadata(key, options) {
       if (Array.isArray(key)) {
         const rows = await this.#read(__kvBulkKeys(key), options, true);
         return new Map(

@@ -1,0 +1,8 @@
+{
+  "workers": ["app", "proxied"],
+  "steps": [
+    {"path": "/"},
+    {"path": "/proxied"},
+    {"path": "/state"}
+  ]
+}

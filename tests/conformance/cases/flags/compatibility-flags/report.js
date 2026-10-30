@@ -50,6 +50,9 @@ const HONOURED = [
   "text_decoder_replace_surrogates",
   "websocket_close_reason_byte_limit",
   "writable_stream_spec_compliant_writer",
+  "enable_nodejs_perf_hooks_module",
+  "enable_global_performance_classes",
+  "allow_eval_during_startup",
 ];
 
 // Flags celld always behaves as on. celld reports one, as true, only where

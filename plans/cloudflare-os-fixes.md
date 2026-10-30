@@ -478,7 +478,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 43 | 1.61 A stuck isolate must not starve the node (security) | done | `7d8df19` |
 | 44 | 1.36 items 1–7 (error serialization, Node timers, Request `cache`, iterable bodies, stream backpressure, Blob MIME type, `Symbol.toStringTag`) | done | `0ac37a1` |
 | 45 | 1.36 items 8–15 (accessors on prototypes, gzip Content-Encoding, Workflow ids, struct/queue/rejection/ALS/import/abort flags, request signal, old-date states, newest date 2026-10-01) | done | `33231d1` |
-| 46+ | Phase 1 in plan order (1.37-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64), and the 1.4 props key-order follow-up | queued | |
+| 46 | 1.37 (importable `env`/`exports`, eval only during startup, module-scope I/O refused, Python startup window, `reportError`, `sendBeacon`, Performance classes and `node:perf_hooks`/`node:timers`, Queue JSON errors, HMAC/RSA/RSA-PSS checks, `getRpcMethodForTestOnly`) | done | (this commit) |
+| 47+ | Phase 1 in plan order (1.38-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -2410,6 +2411,253 @@ date and disable name, and reported in `Cloudflare.compatibilityFlags`.
 - `Blob.text()` strips a BOM; workerd keeps it.
 - The Fetcher always exposes `getRpcMethodForTestOnly`.
 
+**As built (done).** Probed on workerd 1.20261001.1 and read in its source
+at that tag. Two bullets are flag-gated after all: eval during startup
+(`allow_eval_during_startup`, now honoured) and the Performance classes
+(`enable_global_performance_classes`, `enable_nodejs_perf_hooks_module`,
+both now honoured).
+- **`env` and `exports` from `cloudflare:workers`** (cloudflare/workers.ts,
+  api/modules.c++ `EnvModule`, io/worker.c++). Both are workerd's proxies
+  now (`__cfEnv`, `__cfExports`, with null-prototype handlers and captured
+  `Reflect` functions): `env` over the Worker's env, which `load_realm`
+  builds before the main module evaluates (the namespace keys, crons,
+  workflows, containers, KV limits, queue config, `build_env` and the
+  routing moved ahead of `module.evaluate`; none reads the module), so it
+  holds every binding at module scope and a write through it reaches the
+  handlers' env; `exports` over ctx.exports from once the module has
+  evaluated (`__publishWorkerExports`, called by `populate_cf_exports`), so
+  it has `default` and is empty at module scope, as in workerd. Under
+  `disallow_importable_env` both read as empty. The raw export table that
+  was the importable `exports` is now internal (`__moduleExports`, read by
+  the Workflow engine), so a script can no longer change which class a
+  Workflow runs by writing to it. Case `env/importable-env` (module scope
+  and a request, writes, deletes, a Durable Object namespace and an
+  entrypoint through `exports`, and a Worker with `disallow_importable_env`).
+  Found: `env/binding-order` (xfail 1.65).
+- **I/O at module scope** (io/io-context.c++ `IoContext::current()`, and its
+  callers in kv.c++, actor.c++, http.c++, sockets.c++, worker-loader.c++).
+  With `env` whole at module scope, a binding call there was enqueued and
+  then ran inside the first request. workerd throws its global-scope error
+  (`Disallowed operation called within global scope. …`, an `Error`) and
+  starts nothing. celld now does the same at one choke point, the op table
+  (`ops!`): the ops that start I/O through a binding or the network
+  (`GLOBAL_SCOPE_IO_OPS`: subrequests, service fetch and RPC, Durable Object
+  and runtime cell calls, so KV, Queues and Workflows, R2, Worker Loaders,
+  sockets, WebSocket dials) refuse before they run while
+  `ActorRuntimeState::global_scope` is set, which `ModuleEvaluation` sets
+  for the main module's evaluation, the microtasks it queued and the
+  reading of its exports: workerd reads the handlers (`unwrapExports`)
+  before it leaves the Worker's startup, so a getter on the default export,
+  or a Proxy default export's trap, runs in global scope too. The check
+  is a compile-time constant per op, so an op that starts no I/O pays
+  nothing, and one that does pays a slot read. Where workerd's method throws
+  rather than rejects, the harness asks first (`__require_io_context`, a
+  no-op op on the list): KV `get()` and `getWithMetadata()`, a service
+  binding's RPC call or property, a Durable Object namespace's `get()` and
+  `getByName()`, a Worker Loader's `get()` and `load()`; `connect()` and
+  `new WebSocket()` already threw from their op. Where workerd's method asks
+  before it checks its arguments, the harness asks first too, so its
+  refusal comes first, after only the conversions workerd makes before it
+  asks: a Queue's `send()` and `sendBatch()` (their options dictionaries and
+  the batch's sequence of message dictionaries, with JSG's TypeErrors), D1's
+  queries, `exec()` and `batch()` (after `query.trim()` and
+  `statements.map`, whose TypeErrors come first), whose refusal is bare as
+  workerd's client wraps only the answer's errors in `D1_ERROR`, and the
+  Cache API's `put()` (after its Response converts and is not
+  `Response.error()`, both rejections), `match()` and `delete()`, which
+  reject; `caches.open()` asks nothing, as in workerd. A Cache method on
+  something that is not a Cache throws workerd's Illegal invocation
+  TypeError before anything else. The fix review found that `put()`
+  rejects in global scope, not throws: the throw the case first recorded
+  came from `new Response("x")`, which workerd refuses there (1.39). R2's
+  `resumeMultipartUpload()` starts no I/O in workerd, so the handle now
+  looks the upload up when a method first uses it, and it answers at module
+  scope too. Case `builtins/cache-put-checks` (passes on both) pins the
+  receiver and error-response checks in a request, and
+  `queues/send-argument-types` (passes on both) the Queue conversions
+  there. Cases `env/global-scope-binding-io` (passes on both): each refusal
+  as workerd gives it, a var and an id still read, a refused call in a
+  microtask, and two later requests that find the KV key absent and the
+  service's and the Durable Object's counters at 0; and
+  `env/global-scope-io-more` (passes on both): R2, Queues, D1 and the Cache
+  API at module scope, a getter on the default export and a Proxy default
+  export (each refused, with eval() working), and a later request that
+  finds nothing written. Timers, random values and body reads stay with
+  1.39.
+- **eval** (jsg/setup.c++ `modifyCodeGenCallback` and `allowWasmCallback`,
+  io/worker.c++). workerd allows `eval()`, `new Function()` (and the async
+  and generator Function constructors) and compiling Wasm from bytes only
+  while the main module evaluates, with the microtasks it queued and while
+  its exports are read, and then only under `allow_eval_during_startup` (on
+  from 2025-06-01); never in a
+  request, a Durable Object's constructor or method, or a later timer. V8
+  throws `EvalError: Code generation from strings disallowed for this
+  context` and `CompileError: WebAssembly.Module(): Wasm code generation
+  disallowed by embedder`. celld does the same with the context's own
+  switch (`set_allow_generation_from_strings`), which no script reaches: on
+  for the module's evaluation under the flag, off after it for the life of
+  the isolate; an isolate-wide Wasm callback (`allow_wasm_code_generation`)
+  answers with that switch. celld's own code compiles through the embedder
+  API (`ScriptCompiler`), which the switch does not gate, and a configured
+  Wasm module compiles before the module evaluates. The flag is
+  `Support::Honoured`, so `disallow_eval_during_startup` is accepted.
+  The switch and the global-scope flag above are one guard,
+  `ModuleEvaluation`, which every exit from the load drops, after the
+  exports are read.
+  A Python Worker's interpreter, which workerd starts while the Worker
+  starts but celld starts on the first request (it cannot evaluate an
+  asynchronous top level), needs both (Pyodide's loader evaluates its
+  `EM_ASM` code): `startInterpreter` from `celld:python` runs the start in
+  the isolate's one startup window (`op_python_startup`). Only a deployed
+  Python Worker has one: `celld:python` resolves, and the window is
+  available, only in the isolates of a Worker whose manifest requires
+  `python-workers-v1`, which `celld deploy` sets for a `.py` main
+  (`WorkerConfig::with_python_runtime`, from `LoadedDeployment`); for any
+  other Worker, `python_workers` or not, the specifier names no module.
+  The manifest is the tenant's upload, so the node does not take its word:
+  a deployment that requires the feature loads only under `python_workers`
+  and with the interpreter `celld deploy` embeds, `pyodide.asm.wasm` and
+  its GC sentinel as Wasm modules with the pinned SHA-256 digests
+  (`fleet::python_runtime`, `deploy::python::carries_runtime`); any other
+  fails its load. The bundle's JavaScript is the build's output and cannot
+  be pinned, so a deployer who uploads the pinned interpreter beside a
+  script of its own still gets the window (1.65). The window
+  opens once, in a request and not at module scope, and closes when the
+  start settles or `PYTHON_STARTUP_WINDOW` (30 s) after it opened, whichever
+  is first, whatever becomes of the request that opened it: a client that
+  disconnects during the start leaves it running, and the next request finds
+  it. Pyodide 0.28.3's start with the vendored SDK took about 1 s on a lab
+  build here (`celld dev`), so 30 s leaves room for a loaded node. At the
+  deadline a thread condemns the isolate (a start still running then cannot
+  finish as it should, and new requests go elsewhere), on the runtime of the
+  turn that opened the window as the CPU watchdog does, so the slot's last
+  reference never drops on that thread, and interrupts it; V8
+  keeps no interrupt for an isolate no thread holds, so the next turn closes
+  the window as it enters the realm (one load per turn while none is open).
+  Checked by hand on a Python Worker built by `celld deploy`: the first
+  request answers, a handler's `js.eval()` gets the EvalError, and a first
+  request cut off at 0.3 s leaves the start to finish for the next one. Cases
+  `flags/eval-during-startup` (four dates and flags; module scope, its
+  microtasks, a request, a Durable Object's constructor and method, a timer)
+  and `builtins/python-startup-window` (celld-only: a JavaScript Worker with
+  `python_workers` and one without cannot import `celld:python`); the unit
+  tests `js::python_startup_tests` cover a Python Worker's configuration:
+  the import, the window opening once and closing on settle but not at the
+  opening event's end, the deadline between turns and within one, the
+  deadline condemning the slot on the turn's runtime, and module scope;
+  `fleet::tests::only_a_python_bundle_gets_the_python_runtime` covers the
+  grant. Rechecked by hand after the grant: a Python Worker `celld dev`
+  built answers its first request. Found: `builtins/eval-non-string` (xfail
+  1.65).
+- **`reportError()`** (api/global-scope.c++
+  `ServiceWorkerGlobalScope::reportError`). A global function, not
+  enumerable, `length` 0, workerd's TypeError without an argument, that
+  runs celld's existing error reporting (`__reportError`): a trusted,
+  not cancelable ErrorEvent on the global scope from V8's message for the
+  value, then the console. A listener's exception escapes it only when the
+  dispatch propagates (without `spec_compliant_dispatch_exceptions`). The
+  ErrorEvent class is now captured and the event's init has no prototype.
+  Case `builtins/report-error` (two dates).
+- **`navigator.sendBeacon()`** (api/global-scope.c++ `Navigator::sendBeacon`).
+  In a request it POSTs the body through the global fetch() captured before
+  any script runs (`__globalFetch`), as background work the request waits
+  for, and answers true whatever the fetch does; outside one it answers
+  false. Not enumerable, `length` 0, workerd's errors for no argument and a
+  foreign receiver. Case `builtins/send-beacon`; the conformance upstream
+  gained `/beacon` and `/beacon/log`.
+- **Performance classes, `node:perf_hooks`, `node:timers`** (api/performance.h
+  and .c++, global-scope.h, api/node/node.h; src/node/perf_hooks.ts,
+  timers.ts, internal/internal_timers.ts). `enable_global_performance_classes`
+  and `enable_nodejs_perf_hooks_module` (each implied by `nodejs_compat`
+  from 2026-03-17) are honoured. `performance` and the seven classes are one
+  lazy global group (`performance.js`), so a Worker that never names them
+  compiles nothing (hello world no longer builds a `performance` object).
+  Without either flag `performance` has only `timeOrigin` (0) and `now()`
+  (`Date.now()`); with one, Performance is an EventTarget with workerd's
+  user-timing methods, which record marks and measures and measure nothing,
+  and `Performance`, `PerformanceEntry`, `PerformanceMark`,
+  `PerformanceMeasure`, `PerformanceResourceTiming`, `PerformanceObserver`
+  and `PerformanceObserverEntryList` are globals; the hooks flag adds
+  `nodeTiming`, `eventLoopUtilization()`, `markResourceTiming()` and
+  `timerify()`, and with Node.js compatibility `node:perf_hooks` resolves
+  (otherwise it is celld's throw-on-use stub, as for other unavailable
+  modules). It uses only intrinsics the harness captured and keeps entry
+  state in private fields, with workerd's argument conversions and errors.
+  `node:timers` shares workerd's `Timeout` with the global timers through
+  one builder (`__nodeTimers`), and its `setImmediate`/`clearImmediate`
+  return and take an `Immediate`; the global `setImmediate` and
+  `clearImmediate` now exist only under `nodejs_compat_v2`, with workerd's
+  errors, where before they existed whatever the flags and returned a
+  number (a Timeout under global timers). A lazy module can have a default
+  export of its own (`LazyModule.default`), which `process.getBuiltinModule`
+  returns. Cases `builtins/performance-classes` (11 Workers across dates and
+  flags), `node/perf-hooks`, `node/timers-module` (global timers on and
+  off), `node/global-set-immediate`; found: `node/dynamic-import-namespace`
+  (xfail 1.65). `flags/compatibility-flags` reports the three newly
+  honoured flags.
+- **Queue JSON bodies** (api/queue.c++ `serialize`, jsg `JsValue::toJson`).
+  A JSON body is V8's `JSON.stringify` through the captured function: its
+  own errors (a BigInt, a cycle, a throwing `toJSON`) reject `send()` and
+  `sendBatch()` as they are, where celld wrapped them in a
+  `QUEUE_ERROR` Error, and a value it leaves out (a function, a Symbol) is
+  sent as the text `undefined`, as in workerd, where celld refused it.
+  Queue bodies encode with the captured UTF-8 encoder. Case
+  `queues/json-body-errors`.
+- **WebCrypto.** An HMAC key imported from `raw` data takes workerd's
+  length checks (api/crypto/digest.c++ `importHmac`): the data's bits, or a
+  `length` up to 7 bits fewer whose extra bits are zeroed, converted as a
+  WebIDL `long` (`_webIdlLong`: not finite is 0, out of 32 bits workerd's
+  TypeError), never 0, so an empty key is refused with workerd's DataError;
+  before, celld took the length from the data whatever `length` said. RSA
+  generation checks its parameters as workerd's `generateRsa` and
+  `validateRsaParams` (api/crypto/rsa.c++) do under `strict_crypto_checks`,
+  in their order (`_rsaGenerateParams`): the exponent, the hash and the
+  modulus are required; the modulus is a multiple of 8 from 256 to 16384
+  bits, then the exponent 3 or 65537 (read as workerd's `fromBignum` reads
+  it), then a multiple of 128, then at least 512 (BoringSSL's "RSA key size
+  is too small."). Exponent 3 now generates (`RsaPrivateKey::new_with_exp`;
+  the host op takes only 3 or 65537), and the key reports the exponent as
+  given, leading zeros included. Between the modulus's presence and its
+  range come the hash, which must be a digest workerd knows (else its
+  NotSupportedError), and the usages, each one the algorithm has (else its
+  SyntaxError); after the 512-bit floor, a pair whose private half has no
+  usage is refused, and a pair's halves take workerd's public and private
+  usage masks (`wrapKey` and `unwrapKey` were dropped). Found while testing
+  it and fixed: RSA-PSS `verify()` ignored the salt length and verified only
+  a salt as long as the digest, so a signature with `saltLength: 0` never
+  verified, and `sign()` took a missing one as 0 and panicked the host op on
+  one too long for the key. Both now take it as workerd's
+  `RsaPssKey::addSalt` does (`_rsaPssSaltLength`): required (sign's
+  DataError, verify's TypeError), a WebIDL long, not negative; a sign whose
+  salt does not fit the key is workerd's OperationError, a verify false.
+  Cases `builtins/hmac-import-length`, `builtins/rsa-generate-params`.
+- **`Blob.text()`** keeps a BOM already: 1.36 item 14 made it so, and
+  `flags/old-date-states` (`blobText`) pins it on both runtimes. No change.
+- **`getRpcMethodForTestOnly`** (api/http.h `Fetcher`): workerd defines it
+  only under the `experimental` flag, which celld refuses, so on a service
+  binding and a `ctx.exports` stub the name is now an RPC method like any
+  other. `rpc/rpc-refusals-internal` used the hook to send names no stub
+  sends; its `/hook` step is now the unit test
+  `js::rpc_params_tests::reserved_and_object_prototype_names_are_refused`,
+  which drives the receiver's walk as a peer's call reaches it (the
+  test-only `__liftedForTest.atEntrypoint`). Case
+  `rpc/fetcher-test-only-method`.
+- Updated: `docs/cloudflare-compat.md` (`cloudflare:workers`, Web Crypto,
+  Web standards, Performance and timers, Node.js, the flag lists),
+  `docs/services/workers.md` (the Python startup window), the conformance
+  README (`/beacon`). `limits/backing-stores` compiled its Wasm module in a
+  request; it now compiles it at module scope (`prelude`, which its Dynamic
+  Workers' source declares too), and the unit test
+  `growth_outside_the_allocator_is_bounded_within_the_load` loads at a date
+  with `allow_eval_during_startup`.
+- Cost (lab, `ab -n 20000 -c 16`, at 2026-09-04, medians of 12 interleaved
+  rounds against c6a0f3e): hello-world fetch 19140 → 18907 req/s (−1.2%),
+  Durable Object RPC 16980 → 17153 (+1.0%), both within the rounds' spread
+  (hello world 18183-19453 against 18777-19300). The hot path gains one
+  relaxed load per turn (the Python window's deadline, in `realm()`) and a
+  slot read per op that starts I/O (the global-scope check); hello world no
+  longer builds `performance`.
+
 ### 1.17 Close replies on WebSockets with no close handler
 
 **Problem (found by 0.2).** celld always answers a peer's Close with an echo
@@ -2665,7 +2913,16 @@ event loop while a Worker starts), and loads the Worker for the other three.
 workerd's text, from the op or harness entry point that performs it, so
 the frames are the caller's. Find the full list in workerd's
 `IoContext::current()` callers that check `hasCurrentIncomingRequest`
-(timers, crypto random, body reads, subrequests, sockets).
+(timers, crypto random, body reads, subrequests, sockets). 1.37 did the
+I/O half: the ops in `GLOBAL_SCOPE_IO_OPS` (bindings, subrequests, sockets,
+WebSocket dials) refuse while `ActorRuntimeState::global_scope` is set,
+which now covers the reading of the main module's exports too, and the
+harness asks first (`__require_io_context`) where workerd's method refuses
+ahead of its own checks (Queues, D1, the Cache API), so timers, random
+values and body reads remain; each can join that list or call
+`__require_io_context` first. Making a body is refused too: `new
+Response("x")` throws the error at module scope, where `new Response(null)`
+does not (probed by 1.37's `env/global-scope-io-more`).
 
 **Tests.** `loader/global-scope-io` loses its `xfail`.
 
@@ -5705,6 +5962,83 @@ cap; unit tests for the caps.
   it discards; workerd reads it once. `length` is 1, 1 and 2 where
   workerd's is 0, and `toString()` shows source rather than
   `[native code]`.
+
+### 1.65 Gaps found by 1.37
+
+- **eval() of a value that is not a string, and an empty `new Function()`.**
+  workerd's code-generation callback (jsg/setup.c++
+  `modifyCodeGenCallback`) refuses `eval()` of anything but `undefined` in a
+  request, a number or an object included, and lets `new Function()` and
+  `Function()` with no arguments (and a class extending Function that calls
+  `super()`) through, as their source holds no code. celld switches code
+  generation off on the context, which V8 checks for strings only and for
+  every Function constructor, so `eval(5)` returns 5 and `new Function()`
+  throws. Matching it needs V8's `SetModifyCodeGenerationFromStringsCallback`,
+  which rusty_v8 152 does not bind: an upstream binding, or a reviewed
+  patch. Pinned by `builtins/eval-non-string` (xfail).
+- **The env's order.** workerd lists a Worker's vars first, then its other
+  bindings, as Wrangler's configuration gives them; celld lists Durable
+  Object namespaces, then R2, KV, queues, D1, Workflows, service bindings,
+  and the vars last (`build_env`). `Object.keys(env)` shows it, at module
+  scope and in a handler. Pinned by `env/binding-order` (xfail).
+- **A string body's Content-Type** (1.43): `navigator.sendBeacon()` with a
+  string body sends no `Content-Type`, as every celld Request with one;
+  `builtins/send-beacon` leaves those bodies' type to
+  `builtins/body-defaults`.
+- **A Node.js built-in's namespace from `import()`.** A dynamic import of
+  any Node.js built-in links a separate `dyn:` module, so its namespace is
+  another object than a static import's, though its members are the same
+  values. Pinned by `node/dynamic-import-namespace` (xfail).
+- **`node:timers`' `promises`** stands in for workerd's internal namespace of
+  `node:timers/promises` with an object that has a namespace's prototype,
+  tag, keys and attributes; a script can assign to its members, which a
+  namespace refuses. Listed in the docs, no case.
+- **Node.js polyfills Wrangler adds.** With `nodejs_compat` but the perf
+  flags off, Wrangler bundles unenv's polyfills for `node:perf_hooks` and
+  `performance`, and celld's `celld deploy` does not. That state cannot be
+  recorded from workerd through the harness, so it is only listed.
+- **Performance class details** left out of the cases: the classes sit on
+  celld's global object rather than workerd's global scope prototype, the
+  EventTarget method descriptors differ as for every celld EventTarget, and
+  workerd's internal symbols are absent.
+- **Which handler fields are read at startup.** workerd reads every field of
+  its `ExportedHandler` (`fetch`, `tail`, `trace`, `scheduled`, `alarm`,
+  `test`, `queue`, `email` and the rest) off every object export, the
+  default and the named ones, while the Worker starts; celld reads the
+  default export's `fetch`, `queue` and `scheduled` there, and a named
+  export's handlers when one is invoked. A getter or Proxy trap on another
+  key, or on a named export, runs in global scope on workerd and in a
+  request on celld. `env/global-scope-io-more` pins the default export's
+  `fetch` only.
+- **The Python startup window for a bundle that only looks like one.** The
+  node grants the window to a deployment under `python_workers` that
+  carries the pinned Pyodide interpreter and sentinel (1.37), but the
+  bundle's JavaScript is the deployer's and cannot be pinned, so a deployer
+  can upload the interpreter beside a script of its own and open the window
+  once per isolate: eval() and Wasm compilation for up to 30 s in its own
+  isolate, as its module scope has anyway under `allow_eval_during_startup`.
+  It reaches nothing outside that isolate, since workerd's rule is
+  forensic, not an isolation boundary. `condemnIsolate` from `celld:python`
+  lets such a script retire its isolate and get a fresh window with the
+  next one; it stays because Pyodide's fatal hook needs it (workerd aborts
+  the isolate there, and an interpreter after a fatal error answers nothing
+  correctly), and it costs the deployer its own cold starts and nothing
+  more: any Worker can retire its isolate by passing its heap or CPU limit.
+  Closing it fully needs the node to build the bundle's JavaScript itself.
+- **The order of `Cache.put()`'s checks in a request.** workerd checks the
+  key's method (GET), the response's 206 status and its `Vary: *`, silently
+  resolves for a 304, starts serializing the body, and validates the key's
+  URL last, in the PUT it then makes (api/cache.c++ `Cache::put`, about
+  lines 282–371). celld's `asKey` validates the URL first, so a key that
+  breaks two rules (a POST to `ftp://`) gets the URL's TypeError where
+  workerd gives the method's, and a 304 under an invalid key rejects where
+  workerd resolves. Pre-existing; no case.
+- **`storage/nested-root-transactions` is flaky.** One full run during
+  1.37's verification failed its `/concurrent` step: the two concurrent
+  requests reached the object as `b` then `a` instead of `a` then `b`, so
+  `a` saw `b`'s write. Eight reruns on both runtimes passed. The case
+  predates 1.37; it should order its two requests deterministically rather
+  than rely on arrival order.
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 

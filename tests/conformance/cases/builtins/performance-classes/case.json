@@ -1,0 +1,50 @@
+{
+  "workers": [
+    "front",
+    "base",
+    "baseold",
+    "b0317",
+    "globalonly",
+    "hooksnonode",
+    "hooksonly",
+    "noglobal",
+    "oldglobal",
+    "old",
+    "plain"
+  ],
+  "steps": [
+    {
+      "path": "/"
+    },
+    {
+      "path": "/base"
+    },
+    {
+      "path": "/baseold"
+    },
+    {
+      "path": "/b0317"
+    },
+    {
+      "path": "/globalonly"
+    },
+    {
+      "path": "/hooksnonode"
+    },
+    {
+      "path": "/hooksonly"
+    },
+    {
+      "path": "/noglobal"
+    },
+    {
+      "path": "/oldglobal"
+    },
+    {
+      "path": "/old"
+    },
+    {
+      "path": "/plain"
+    }
+  ]
+}
