@@ -1541,12 +1541,8 @@ pub(super) fn inject_storage_compatibility(
     scope.set_slot(super::modules::ImportAttributes {
         refuse: flags.get(f::THROW_ON_UNRECOGNIZED_IMPORT_ASSERTION),
     });
-    // And this, for the node modules a flag gates (`modules::lazy_module`)
-    // and celld:python.
-    scope.set_slot(super::modules::BuiltinModules {
-        perf_hooks: compat.nodejs_compat && flags.get(f::ENABLE_NODEJS_PERF_HOOKS_MODULE),
-        python_host: python_runtime,
-    });
+    // And this, for the builtin modules the flags provide, and celld:python.
+    scope.set_slot(super::modules::BuiltinModules::new(compat, python_runtime));
     let source = format!(
         "const c = __celld.__cell;\n\
          c.deleteAllDeletesAlarm = {};\n\

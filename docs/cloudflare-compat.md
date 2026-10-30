@@ -410,10 +410,24 @@ the global `scheduler.wait`, as on workerd.
   `node:diagnostics_channel`, `node:events`, `node:fs`, `node:os`, `node:path`,
   `node:perf_hooks`, `node:stream`, `node:timers`, `node:timers/promises`, and
   `node:util`.
-- `node:perf_hooks` resolves with Node.js compatibility and
-  `enable_nodejs_perf_hooks_module`, as in workerd; otherwise it is a module
-  whose first call throws, as below. workerd refuses the import then, and
-  Wrangler bundles unenv's polyfill in its place, which celld does not.
+- A Worker has the builtin modules workerd gives it under its date and
+  flags. With Node.js compatibility (`nodejs_compat` or `nodejs_compat_v2`)
+  it has workerd's Node.js modules, a bare name such as `path` names
+  `node:path`, and `sys` names `node:util`. A module with a flag of its own
+  (`node:fs`, `node:os`, `node:http`, `node:perf_hooks` and the others listed
+  under [Honoured flags](#honoured-flags)) needs that flag too; most come
+  with `nodejs_compat` from a date. Without Node.js compatibility a Worker
+  has only `node:process`, and `node:async_hooks` under `nodejs_als`. Every
+  Worker has workerd's `cloudflare:` modules: `ai`, `br`, `durable-objects`,
+  `email`, `node`, `pipelines`, `sockets`, `vectorize`, `workers` and
+  `workflows`. Importing any other builtin fails the Worker's start with
+  `No such module "<name>".`, and `process.getBuiltinModule()` returns
+  `undefined` for it. Wrangler bundles unenv's polyfills for some Node.js
+  modules a Worker's flags leave out, which `celld deploy` does not.
+- A static import of a name that a builtin module does not export links,
+  binding `undefined` or a stub that throws on use, where workerd fails the
+  start with `SyntaxError: The requested module '<name>' does not provide an
+  export named '<export>'` (plan item 1.66).
 - `node:timers` has workerd's `Timeout`, which the global timers return under
   `enable_nodejs_global_timers`. Its `promises` stands in for workerd's
   internal namespace of `node:timers/promises` with an object that has a
@@ -481,8 +495,9 @@ the global `scheduler.wait`, as on workerd.
   built-in module. A raw ESM Worker has no global `require()`.
 - A Node.js built-in module object is writable, so a dependency such as
   `graceful-fs` can patch it at load. The patch stays in its isolate.
-- An import of another Node.js module succeeds, but its first call throws an
-  error.
+- Another Node.js module a Worker has, and `cloudflare:` modules other than
+  `cloudflare:workers`, `cloudflare:sockets` and `cloudflare:workflows`, are
+  stubs whose first call throws an error.
 
 ### [Cache](https://developers.cloudflare.com/workers/runtime-apis/cache/)
 
@@ -561,17 +576,43 @@ celld follows these flags and the dates that turn them on:
   `nodejs_compat_v2` and `no_nodejs_compat_v2` (on from 2026-08-04, or from
   2024-09-23 with `nodejs_compat`). They turn on
   `nodejs_compat_populate_process_env` and decide whether `process.env` is
-  filled (see [Node.js compatibility](#nodejs-compatibility)), whether
-  `node:perf_hooks` resolves, and whether the global `setImmediate()` and
-  `clearImmediate()` exist. celld offers its other Node.js modules and the
-  `process` and `Buffer` globals with or without them.
+  filled (see [Node.js compatibility](#nodejs-compatibility)), which Node.js
+  modules a Worker can import, and whether the global `setImmediate()` and
+  `clearImmediate()` exist. celld offers the `process` and `Buffer` globals
+  with or without them.
 - `nodejs_compat_populate_process_env` and
   `nodejs_compat_do_not_populate_process_env`, which `nodejs_compat` turns on
   from 2025-04-01. With Node.js compatibility, `process.env` holds the env's
   strings and JSON values. Without it, `process.env` stays empty, because
   workerd has no `process` to fill.
-- `nodejs_als` and `no_nodejs_als`. celld offers `node:async_hooks` with
-  `AsyncLocalStorage` with or without the flag.
+- `nodejs_als` and `no_nodejs_als`. Without Node.js compatibility, a Worker
+  has `node:async_hooks` only with the flag.
+- These pairs, each on with `nodejs_compat` from a date between 2025-08-15
+  and 2026-03-17. With Node.js compatibility, each gives a Worker its
+  modules (see [Node.js compatibility](#nodejs-compatibility)):
+  - `enable_nodejs_fs_module` and `disable_nodejs_fs_module`: `node:fs`.
+  - `enable_nodejs_os_module` and `disable_nodejs_os_module`: `node:os`.
+  - `enable_nodejs_http_modules` and `disable_nodejs_http_modules`: `node:http`, `node:https` and the `node:_http_*` client modules.
+  - `enable_nodejs_http_server_modules` and `disable_nodejs_http_server_modules`: `node:_http_server` (on with
+    `enable_nodejs_http_modules` from 2025-09-01).
+  - `enable_nodejs_http2_module` and `disable_nodejs_http2_module`: `node:http2`.
+  - `enable_nodejs_console_module` and `disable_nodejs_console_module`: `node:console`.
+  - `enable_nodejs_vm_module` and `disable_nodejs_vm_module`: `node:vm`.
+  - `enable_nodejs_domain_module` and `disable_nodejs_domain_module`: `node:domain`.
+  - `enable_nodejs_v8_module` and `disable_nodejs_v8_module`: `node:v8`.
+  - `enable_nodejs_tty_module` and `disable_nodejs_tty_module`: `node:tty`.
+  - `enable_nodejs_punycode_module` and `disable_nodejs_punycode_module`: `node:punycode`.
+  - `enable_nodejs_cluster_module` and `disable_nodejs_cluster_module`: `node:cluster`.
+  - `enable_nodejs_child_process_module` and `disable_nodejs_child_process_module`: `node:child_process`.
+  - `enable_nodejs_worker_threads_module` and `disable_nodejs_worker_threads_module`: `node:worker_threads`.
+  - `enable_nodejs_stream_wrap_module` and `disable_nodejs_stream_wrap_module`: `node:_stream_wrap`.
+  - `enable_nodejs_wasi_module` and `disable_nodejs_wasi_module`: `node:wasi`.
+  - `enable_nodejs_dgram_module` and `disable_nodejs_dgram_module`: `node:dgram`.
+  - `enable_nodejs_inspector_module` and `disable_nodejs_inspector_module`: `node:inspector` and `node:inspector/promises`.
+  - `enable_nodejs_trace_events_module` and `disable_nodejs_trace_events_module`: `node:trace_events`.
+  - `enable_nodejs_readline_module` and `disable_nodejs_readline_module`: `node:readline` and `node:readline/promises`.
+  - `enable_nodejs_repl_module` and `disable_nodejs_repl_module`: `node:repl`.
+  - `enable_nodejs_sqlite_module` and `disable_nodejs_sqlite_module`: `node:sqlite`.
 - `rpc_params_dup_stubs` and `rpc_params_transfer_stubs` (on from
   2026-01-20). An RPC call duplicates the stubs in its params instead of
   transferring them, and a param with its own `dup()` crosses as what `dup()`
@@ -858,7 +899,7 @@ These flags do not apply to celld:
 - `dynamic_dispatch_tunnel_exceptions`, `dynamic_dispatch_treat_exceptions_as_500`: it applies to dispatch namespace bindings, which celld does not support.
 - `vectorize_query_metadata_optional`, `vectorize_query_original`: it applies to Vectorize bindings, which celld does not support.
 - `global_fetch_strictly_public`, `global_fetch_private_origin`: it chooses how Cloudflare routes a fetch() to the Worker's own zone, and celld has no zone; the egress policy applies whatever the flag says.
-- `nodejs_zlib`, `no_nodejs_zlib`, `enable_nodejs_process_v2`, `disable_nodejs_process_v2`, `enable_nodejs_http_modules`, `disable_nodejs_http_modules`, `enable_nodejs_http_server_modules`, `disable_nodejs_http_server_modules`, `enable_nodejs_fs_module`, `disable_nodejs_fs_module`, `enable_nodejs_os_module`, `disable_nodejs_os_module`, `remove_nodejs_compat_eol`, `add_nodejs_compat_eol`, `enable_nodejs_http2_module`, `disable_nodejs_http2_module`, `remove_nodejs_compat_eol_v22`, `add_nodejs_compat_eol_v22`, `remove_nodejs_compat_eol_v23`, `add_nodejs_compat_eol_v23`, `remove_nodejs_compat_eol_v24`, `add_nodejs_compat_eol_v24`, `enable_nodejs_console_module`, `disable_nodejs_console_module`, `enable_nodejs_vm_module`, `disable_nodejs_vm_module`, `enable_nodejs_domain_module`, `disable_nodejs_domain_module`, `enable_nodejs_v8_module`, `disable_nodejs_v8_module`, `enable_nodejs_tty_module`, `disable_nodejs_tty_module`, `enable_nodejs_punycode_module`, `disable_nodejs_punycode_module`, `enable_nodejs_cluster_module`, `disable_nodejs_cluster_module`, `enable_nodejs_child_process_module`, `disable_nodejs_child_process_module`, `enable_nodejs_worker_threads_module`, `disable_nodejs_worker_threads_module`, `enable_nodejs_stream_wrap_module`, `disable_nodejs_stream_wrap_module`, `enable_nodejs_wasi_module`, `disable_nodejs_wasi_module`, `enable_nodejs_dgram_module`, `disable_nodejs_dgram_module`, `enable_nodejs_inspector_module`, `disable_nodejs_inspector_module`, `enable_nodejs_trace_events_module`, `disable_nodejs_trace_events_module`, `enable_nodejs_readline_module`, `disable_nodejs_readline_module`, `enable_nodejs_repl_module`, `disable_nodejs_repl_module`, `enable_nodejs_sqlite_module`, `disable_nodejs_sqlite_module`, `throw_on_not_implemented_tls_options`, `no_throw_on_not_implemented_tls_options`: celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility).
+- `nodejs_zlib`, `no_nodejs_zlib`, `enable_nodejs_process_v2`, `disable_nodejs_process_v2`, `remove_nodejs_compat_eol`, `add_nodejs_compat_eol`, `remove_nodejs_compat_eol_v22`, `add_nodejs_compat_eol_v22`, `remove_nodejs_compat_eol_v23`, `add_nodejs_compat_eol_v23`, `remove_nodejs_compat_eol_v24`, `add_nodejs_compat_eol_v24`, `throw_on_not_implemented_tls_options`, `no_throw_on_not_implemented_tls_options`: celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility).
 - `python_external_packages`: it is obsolete.
 - `disable_top_level_await_in_require`, `enable_top_level_await_in_require`, `require_returns_default_export`, `require_returns_namespace`: celld has no run-time require() of a module; esbuild resolves it when it bundles.
 - `request_cf_overrides_cache_rules`, `no_request_cf_overrides_cache_rules`: it changes only Cloudflare's cache rules, and celld has no edge cache.

@@ -479,7 +479,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 44 | 1.36 items 1–7 (error serialization, Node timers, Request `cache`, iterable bodies, stream backpressure, Blob MIME type, `Symbol.toStringTag`) | done | `0ac37a1` |
 | 45 | 1.36 items 8–15 (accessors on prototypes, gzip Content-Encoding, Workflow ids, struct/queue/rejection/ALS/import/abort flags, request signal, old-date states, newest date 2026-10-01) | done | `33231d1` |
 | 46 | 1.37 (importable `env`/`exports`, eval only during startup, module-scope I/O refused, Python startup window, `reportError`, `sendBeacon`, Performance classes and `node:perf_hooks`/`node:timers`, Queue JSON errors, HMAC/RSA/RSA-PSS checks, `getRpcMethodForTestOnly`) | done | `ad351f8` |
-| 47+ | Phase 1 in plan order (1.38-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65), and the 1.4 props key-order follow-up | queued | |
+| 47 | 1.38 (builtin `node:` and `cloudflare:` modules only under the flags that provide them, side-effect imports and re-exports scanned, per-module flags honoured) | done | (this commit) |
+| 48+ | Phase 1 in plan order (1.39-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65, 1.66), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -2889,6 +2890,109 @@ Cloudflare OS's bundles import without the flags first, since deployed
 Workers share the stub path.
 
 **Tests.** `loader/startup-errors-builtins` loses its `xfail`.
+
+**As built (done).** Probed on workerd 1.20261001.1 and read in its source
+at that tag (api/node/node.h `registerNodeJsCompatModules`, jsg/util.c++
+`checkNodeSpecifier` and `NODEJS_BUILTINS`, jsg/modules.c++
+`resolveCallback`, jsg/modules.h `dynamicImportCallback`, api/modules.h
+`registerModules`, api/node/process.c++ `getBuiltinModule`,
+`src/node/BUILD.bazel`, `src/cloudflare/BUILD.bazel`).
+- **workerd's rules.** Its Node.js bundle (68 public modules, `node:test`
+  among them) is registered only with Node.js compatibility (`nodejs_compat`
+  or `nodejs_compat_v2`), and 30 of them need a flag of their own besides:
+  `node:fs`, `node:os`, the `node:http`/`node:https`/`node:_http_*` client
+  modules, `node:_http_server`, `node:http2`, `node:console`, `node:vm`,
+  `node:perf_hooks`, `node:domain`, `node:v8`, `node:tty`, `node:punycode`,
+  `node:cluster`, `node:child_process`, `node:worker_threads`,
+  `node:_stream_wrap`, `node:wasi`, `node:dgram`, `node:inspector(/promises)`,
+  `node:trace_events`, `node:readline(/promises)`, `node:repl` and
+  `node:sqlite`. Most of those flags come with `nodejs_compat` from a date,
+  not with `nodejs_compat_v2` alone; `node:fs/promises` needs none. Without
+  Node.js compatibility only `node:async_hooks` exists, under `nodejs_als`,
+  and `node:process`, which the resolver redirects to an internal module for
+  every Worker. With Node.js compatibility, `checkNodeSpecifier` rewrites a
+  bare Node.js name to `node:<name>` (and `sys`/`node:sys` to `node:util`)
+  before the lookup, so a gated one reports `No such module "node:v8".`;
+  without it a bare name is a path (`No such module "path".`, or
+  `"lib/path"` from `lib/`). `test` is no bare name. The ten `cloudflare:`
+  modules (`ai`, `br`, `durable-objects`, `email`, `node`, `pipelines`,
+  `sockets`, `vectorize`, `workers`, `workflows`) exist whatever the flags;
+  any other `cloudflare:` or `workerd:` name is `No such module` (the
+  `workerd:` ones need experimental flags celld refuses).
+  `process.getBuiltinModule()` applies `checkNodeSpecifier` whatever the
+  flags and returns a Node.js module's default export, another builtin's
+  namespace, or `undefined`.
+- **celld** (`js/modules.rs`). `BuiltinModules`, the isolate slot that
+  `inject_storage_compatibility` sets, now holds the flags and answers
+  `canonical()` (workerd's `checkNodeSpecifier` under Node.js
+  compatibility) and `provides()`, from workerd's tables
+  (`NODE_BUILTIN_NAMES`, `NODE_MODULES`, `GATED_NODE_MODULES`,
+  `CLOUDFLARE_MODULES`). Static resolution (`resolve_external`), `import()`
+  (`host_import_module_dynamically`, through `builtin_source`),
+  `process.getBuiltinModule()` (`op_builtin_module`) and stub registration
+  all ask it, so a module the flags leave out gets no stub and its import
+  fails with workerd's `No such module "<path>".` and `imported from`. The
+  scan (`scan_external_imports`, one regex pass) now reads side-effect
+  imports (minified `import"x"` too), `export * from`, `export * as … from`
+  and `export { … } from`, and drops block comments inside a clause. Stubs
+  are merged per module across the main module and its siblings (a
+  sibling's names from a builtin the main module also imported used to be
+  dropped, failing the link), and `register_requested_builtins` gives a
+  full-surface stub to any builtin V8's module requests list that the scan
+  missed (`import /* … */ "node:buffer"`). `process.getBuiltinModule()` of a
+  `cloudflare:` module returns its namespace (it returned `undefined`). A
+  user import of `celld:internals` is now `No such module`, as workerd
+  reports it, rather than celld's own TypeError. `LAZY_MODULES` and
+  `eager_module_global` are keyed by `node:` names only, and
+  `node:test/reporters`, which workerd lacks, is gone. The 22 per-module
+  `enable_nodejs_*`/`disable_nodejs_*` pairs are now `Honoured` (they were
+  `NoEffect`), so `Cloudflare.compatibilityFlags` reports them as workerd
+  does, and `nodejs_als` now decides `node:async_hooks` without Node.js
+  compatibility.
+- **Scanned names.** A binding name the scan reads from tenant code is
+  interpolated into a stub's source, so the scan keeps only identifiers
+  (`IDENTIFIER_RE`); a quoted string name is left out and fails to link as
+  a missing export would. Found by review: the delimiters already kept a
+  statement separator out of a name, so no escape was found, but nothing
+  stated it (`the_scan_takes_only_identifiers`).
+- **Deployed Workers.** All seven starter Workers (and the integration
+  fixtures) run at 2026-09-04, where `nodejs_compat` is on by date
+  (2026-08-04) and with it every module flag (the latest from 2026-03-17),
+  so they keep every Node.js module; their sources import `cloudflare:`
+  `workers` and `pipelines` (types only) besides. Cloudflare OS's Dynamic
+  Workers (gadgets, code mode, the restore forger: 2026-02-01, no
+  `nodejs_compat`) import only `cloudflare:workers`. Checked by loading the
+  seven configs under `celld dev --no-build` behind a probe Worker that
+  fetched each through a service binding: all seven linked (router, context,
+  custom gatekeeper and error reporter answered 200, the workshop 404, the
+  scheduler and websearch "does not export a fetch() function").
+- **Tests.** `loader/startup-errors-builtins` loses its `xfail` and grows
+  to 29 children: side-effect (plain, minified, missing), re-export (`*`,
+  `* as`, named, minified, missing) and commented imports, names from one
+  builtin across two modules, gated modules with and without their flag,
+  `disable_nodejs_fs_module`, `node:fs/promises` under `nodejs_compat_v2`,
+  bare names with and without Node.js compatibility, `sys`, bare `test`,
+  `nodejs_als`, `node:process` without flags, a date that brings Node.js
+  compatibility, known and unknown `cloudflare:` modules, `workerd:unsafe`.
+  New `loader/builtin-modules` records, for eight dates and flag sets, the
+  `import()` outcome of every bare and `node:` Node.js name and 22 other
+  specifiers, and `process.getBuiltinModule()` of each where workerd has a
+  `process`; its top-level Worker imports `cloudflare:email` and
+  `cloudflare:workflows` for side effects. Both fail at HEAD (the second
+  already at its top-level side-effect import). New
+  `loader/builtin-missing-export` (xfail, 1.66). Unit tests in
+  `js/modules.rs`: the scan's forms, a side-effect import before another
+  statement, availability with and without Node.js compatibility and per
+  flag, and the tables' agreement.
+- Docs: `docs/cloudflare-compat.md` (Node.js compatibility, Honoured flags,
+  Flags without effect), `docs/services/dynamic-workers.md`.
+- Cost (lab, medians of 9 interleaved rounds against ddc8802): hello world
+  (`ab -n 20000 -c 16`) 18435 → 18272 req/s (−0.9%, ranges 18266-19052
+  against 18133-18889); a fresh Dynamic Worker per request importing three
+  builtins (`ab -n 1000 -c 4`) 317 → 314 (−0.9%, 313-321 against 309-320).
+  An isolate build adds a slot read and a map merge per imported builtin,
+  and a walk of each module's requests.
+- Found: 1.66.
 
 ### 1.39 Disallowed operations in global scope (found by 1.18)
 
@@ -6039,6 +6143,42 @@ cap; unit tests for the caps.
   `a` saw `b`'s write. Eight reruns on both runtimes passed. The case
   predates 1.37; it should order its two requests deterministically rather
   than rely on arrival order.
+
+### 1.66 Gaps found by 1.38
+
+- **A name a builtin module does not export.** V8 links a static import
+  against the module's exports, so on workerd `import { nope } from
+  "node:path"` (or `from "node:http"`, `"cloudflare:sockets"`,
+  `"cloudflare:pipelines"`, and `export { nope } from "node:buffer"`) fails
+  the start with `Uncaught SyntaxError: The requested module 'node:path'
+  does not provide an export named 'nope'` and the import's location.
+  celld's stub of a builtin exports every name the Worker imports, binding
+  `undefined` for an implemented module and a stub that throws on use for
+  the others, so the Worker starts. Matching it needs each builtin's export
+  list as workerd has it. Binding only the names an implemented module's
+  backing object has would fail the start of a Worker that imports a name
+  workerd has and celld lacks, and no one has checked those objects
+  against workerd's lists; the stubbed modules have no list at all. Pinned by
+  `loader/builtin-missing-export` (xfail).
+- **The surface of a stubbed builtin.** A namespace import or `import()`
+  of a module celld only stubs (`node:http`, `node:net`, `cloudflare:ai`,
+  `cloudflare:email`, …) gives an empty namespace, where workerd's has the
+  module's exports; the same export lists would fill it. No case.
+- **`cloudflare:email` in a Dynamic Worker.** Its implementation,
+  `cloudflare-internal:email`, is a Miniflare extension, which workerd run
+  locally gives top-level Workers only, so there a loaded Worker's import of
+  it fails with `No such module "cloudflare-internal:email".` and
+  `imported from "cloudflare:email"`. celld gives it to every Worker, as
+  Cloudflare does in production. `loader/builtin-modules` leaves the name
+  out of its list for this reason and imports it from its top-level Worker.
+- **The bundler's builtin names.** `celld deploy` keeps external the bare
+  names in `BARE_NODE_BUILTINS` (engine_api.rs), which lacks some of
+  workerd's `NODEJS_BUILTINS`: `console`, `domain`, `repl`, `sys`, `wasi`,
+  `trace_events`, and the `_http_*`, `_stream_*` and `_tls_*` modules. A
+  bundle that imports one of those bare names has esbuild resolve it from
+  `node_modules` instead, and fail the build when nothing there has it. The
+  list is also the same whatever the Worker's flags. Not probed against
+  Wrangler's bundling; no case.
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 

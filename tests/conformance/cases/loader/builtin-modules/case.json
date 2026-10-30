@@ -1,0 +1,13 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/?set=none"},
+    {"path": "/?set=als"},
+    {"path": "/?set=compat"},
+    {"path": "/?set=v2"},
+    {"path": "/?set=v2-fs"},
+    {"path": "/?set=dated"},
+    {"path": "/?set=disabled"},
+    {"path": "/?set=no-compat"}
+  ]
+}

@@ -302,9 +302,9 @@ pub struct Compat {
     /// Node.js compatibility as workerd computes it: `nodejs_compat` (off =
     /// `no_nodejs_compat`, default on for dates >= 2026-08-04), or
     /// `nodejs_compat_v2`, which the same date or `nodejs_compat` from
-    /// 2024-09-23 implies. workerd has a `process` only with it. celld
-    /// offers its Node.js modules whatever the flags say, but for
-    /// `node:perf_hooks`, so only `process.env` and that module read this.
+    /// 2024-09-23 implies. workerd has a `process` only with it. It decides
+    /// which Node.js modules a Worker can import (`js::modules`
+    /// `BuiltinModules`) and whether `process.env` is filled.
     pub nodejs_compat: bool,
     /// `nodejs_compat_populate_process_env` (off =
     /// `nodejs_compat_do_not_populate_process_env`), which `nodejs_compat`

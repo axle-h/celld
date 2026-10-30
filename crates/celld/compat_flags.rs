@@ -237,8 +237,30 @@ pub const DELETE_ALL_DELETES_ALARM: FlagId = id("delete_all_deletes_alarm");
 pub const DISALLOW_IMPORTABLE_ENV: FlagId = id("disallow_importable_env");
 pub const ENABLE_FAST_JSG_STRUCT: FlagId = id("enable_fast_jsg_struct");
 pub const ENABLE_GLOBAL_PERFORMANCE_CLASSES: FlagId = id("enable_global_performance_classes");
+pub const ENABLE_NODEJS_CHILD_PROCESS_MODULE: FlagId = id("enable_nodejs_child_process_module");
+pub const ENABLE_NODEJS_CLUSTER_MODULE: FlagId = id("enable_nodejs_cluster_module");
+pub const ENABLE_NODEJS_CONSOLE_MODULE: FlagId = id("enable_nodejs_console_module");
+pub const ENABLE_NODEJS_DGRAM_MODULE: FlagId = id("enable_nodejs_dgram_module");
+pub const ENABLE_NODEJS_DOMAIN_MODULE: FlagId = id("enable_nodejs_domain_module");
+pub const ENABLE_NODEJS_FS_MODULE: FlagId = id("enable_nodejs_fs_module");
 pub const ENABLE_NODEJS_GLOBAL_TIMERS: FlagId = id("enable_nodejs_global_timers");
+pub const ENABLE_NODEJS_HTTP2_MODULE: FlagId = id("enable_nodejs_http2_module");
+pub const ENABLE_NODEJS_HTTP_MODULES: FlagId = id("enable_nodejs_http_modules");
+pub const ENABLE_NODEJS_HTTP_SERVER_MODULES: FlagId = id("enable_nodejs_http_server_modules");
+pub const ENABLE_NODEJS_INSPECTOR_MODULE: FlagId = id("enable_nodejs_inspector_module");
+pub const ENABLE_NODEJS_OS_MODULE: FlagId = id("enable_nodejs_os_module");
 pub const ENABLE_NODEJS_PERF_HOOKS_MODULE: FlagId = id("enable_nodejs_perf_hooks_module");
+pub const ENABLE_NODEJS_PUNYCODE_MODULE: FlagId = id("enable_nodejs_punycode_module");
+pub const ENABLE_NODEJS_READLINE_MODULE: FlagId = id("enable_nodejs_readline_module");
+pub const ENABLE_NODEJS_REPL_MODULE: FlagId = id("enable_nodejs_repl_module");
+pub const ENABLE_NODEJS_SQLITE_MODULE: FlagId = id("enable_nodejs_sqlite_module");
+pub const ENABLE_NODEJS_STREAM_WRAP_MODULE: FlagId = id("enable_nodejs_stream_wrap_module");
+pub const ENABLE_NODEJS_TRACE_EVENTS_MODULE: FlagId = id("enable_nodejs_trace_events_module");
+pub const ENABLE_NODEJS_TTY_MODULE: FlagId = id("enable_nodejs_tty_module");
+pub const ENABLE_NODEJS_V8_MODULE: FlagId = id("enable_nodejs_v8_module");
+pub const ENABLE_NODEJS_VM_MODULE: FlagId = id("enable_nodejs_vm_module");
+pub const ENABLE_NODEJS_WASI_MODULE: FlagId = id("enable_nodejs_wasi_module");
+pub const ENABLE_NODEJS_WORKER_THREADS_MODULE: FlagId = id("enable_nodejs_worker_threads_module");
 pub const ENABLE_REQUEST_SIGNAL: FlagId = id("enable_request_signal");
 pub const ENCODER_STREAM_SPEC_COMPLIANT_BACKPRESSURE: FlagId =
     id("encoder_stream_spec_compliant_backpressure");
@@ -1377,7 +1399,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2025, 8, 15) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "pedanticWpt",
@@ -1404,7 +1426,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["enableNodejsHttpModules"], date: Date::new(2025, 9, 1) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "pythonNoGlobalHandlers",
@@ -1422,7 +1444,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2025, 9, 15) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsOsModule",
@@ -1431,7 +1453,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2025, 9, 15) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "pythonWorkersForceNewVendorPath",
@@ -1485,7 +1507,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2025, 9, 1) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "experimentalAllowEvalAlways",
@@ -1557,7 +1579,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2025, 9, 21) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsVmModule",
@@ -1566,7 +1588,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2025, 10, 1) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsPerfHooksModule",
@@ -1593,7 +1615,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2025, 12, 4) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsV8Module",
@@ -1602,7 +1624,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2026, 3, 17) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsTtyModule",
@@ -1611,7 +1633,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2026, 3, 17) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsPunycodeModule",
@@ -1620,7 +1642,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2025, 12, 4) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsClusterModule",
@@ -1629,7 +1651,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2025, 12, 4) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsChildProcessModule",
@@ -1638,7 +1660,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2026, 3, 17) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsWorkerThreadsModule",
@@ -1647,7 +1669,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2026, 3, 17) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsStreamWrapModule",
@@ -1656,7 +1678,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2026, 1, 29) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsWasiModule",
@@ -1665,7 +1687,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2025, 12, 4) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsDgramModule",
@@ -1674,7 +1696,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2026, 1, 29) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsInspectorModule",
@@ -1683,7 +1705,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2026, 1, 29) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsTraceEventsModule",
@@ -1692,7 +1714,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2025, 12, 4) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsReadlineModule",
@@ -1701,7 +1723,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2026, 3, 17) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsReplModule",
@@ -1710,7 +1732,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2026, 3, 17) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableNodeJsSqliteModule",
@@ -1719,7 +1741,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2026, 1, 29) }),
         experimental: false,
-        support: NoEffect("celld's Node.js modules and globals do not depend on this flag (see Node.js compatibility)"),
+        support: Honoured,
     },
     Flag {
         field: "enableCtxExports",

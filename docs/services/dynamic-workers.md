@@ -172,11 +172,13 @@ compiles the code again.
   invocation past its limit fails with `Worker exceeded CPU time limit.`
 - `WorkerCode.env` accepts structured-clone values and Service Binding
   capabilities. The encoded values and the capability props can total 1 MiB.
-- A loaded Worker can import a `node:` module without the flag that provides
-  it, and a `cloudflare:` module that does not exist, by a named or default
-  import. workerd fails such a Worker's start with `No such module`. A
-  side-effect import of a builtin, such as `import "node:buffer";`, fails the
-  start on celld.
+- A loaded Worker has the builtin modules its own date and flags give it,
+  as on workerd ([Node.js compatibility](../cloudflare-compat.md#nodejs-compatibility)).
+  An import of a name that a builtin module does not export links on celld,
+  where workerd fails the start with a `SyntaxError`. `cloudflare:email`
+  resolves in a loaded Worker; workerd run locally fails its import there,
+  because its implementation comes from a Miniflare extension that workerd
+  gives only top-level Workers.
 - workerd refuses I/O, timers and random values at module scope with
   `Uncaught Error: Disallowed operation called within global scope. …`, which
   fails the Worker's start. celld does not: a timer, `scheduler.wait()` or

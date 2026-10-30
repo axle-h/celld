@@ -1,0 +1,26 @@
+{
+  "workers": [
+    "app"
+  ],
+  "xfail": "1.66",
+  "steps": [
+    {
+      "path": "/?child=node-implemented"
+    },
+    {
+      "path": "/?child=node-stubbed"
+    },
+    {
+      "path": "/?child=node-default"
+    },
+    {
+      "path": "/?child=cloudflare-stubbed"
+    },
+    {
+      "path": "/?child=cloudflare-sockets"
+    },
+    {
+      "path": "/?child=re-export"
+    }
+  ]
+}

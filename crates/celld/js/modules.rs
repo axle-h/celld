@@ -181,7 +181,7 @@ impl ModuleRegistry {
 }
 
 /// The specifier the stubs import the internals object from. It is not a
-/// builtin: `is_external` does not know it, so a dynamic import() of it
+/// builtin ([`BuiltinModules::provides`]), so a dynamic import() of it
 /// rejects, and a static import from a user module fails to link.
 const INTERNALS_SPECIFIER: &str = "celld:internals";
 
@@ -223,17 +223,32 @@ fn internals_evaluation_steps<'s>(
 }
 
 /// Compile a host-generated stub that imports `celld:internals` and register
-/// it under `spec` as a trusted referrer. `celld:python` outside a Python
-/// Worker is left out, so it links as no module at all.
+/// it under `spec` as a trusted referrer.
 fn register_internal_stub(scope: &mut v8::PinScope, spec: &str, source: &str) {
-    if spec == PYTHON_HOST_SPECIFIER && !python_host(scope) {
-        return;
-    }
     let Some(module) = compile_module(scope, spec, source) else {
         tracing::warn!(%spec, "module stub failed to compile");
         return;
     };
     modreg(scope).register(scope, builtin_stub_keys(spec), module, true, None);
+}
+
+/// The stub for the builtin `spec`, which the Worker has, exporting `names`.
+fn register_builtin_stub(
+    scope: &mut v8::PinScope,
+    spec: &str,
+    names: &std::collections::BTreeSet<String>,
+) {
+    install_lazy_module(scope, spec);
+    // `import * as x` binds the whole namespace, so the stub's exports
+    // must be the module's full surface — probed from the backing
+    // object, like dynamic import() — not just the scanned names.
+    let source = if names.contains("*") {
+        full_surface_source(scope, spec, names)
+            .unwrap_or_else(|| stub_source(spec, names, lazy_module(spec)))
+    } else {
+        stub_source(spec, names, lazy_module(spec))
+    };
+    register_internal_stub(scope, spec, &source);
 }
 
 fn modreg(scope: &mut v8::PinScope) -> Arc<ModuleRegistry> {
@@ -243,20 +258,21 @@ fn modreg(scope: &mut v8::PinScope) -> Arc<ModuleRegistry> {
         .expect("isolate has no module registry")
 }
 
-/// Is `spec` an external builtin (`node:*`, `cloudflare:*`, `celld:python`,
-/// or a bare node builtin)? esbuild bundles every npm dep inline and leaves
-/// only builtins external, so a remaining bare specifier is a node builtin.
-fn is_external(spec: &str) -> bool {
-    if spec.starts_with("node:") || spec.starts_with("cloudflare:") || spec == PYTHON_HOST_SPECIFIER
-    {
-        return true;
-    }
-    // bare builtin, or a builtin submodule like `stream/promises`
-    BARE_NODE_BUILTINS.contains(&spec)
-        || BARE_NODE_BUILTINS.contains(&spec.split('/').next().unwrap_or(""))
+/// Whether `spec` can name a builtin under some flags: a `node:`,
+/// `cloudflare:` or `celld:python` specifier, or a bare Node.js name. The
+/// scan keeps these; which of them a Worker has depends on its flags
+/// ([`BuiltinModules`]).
+fn may_be_builtin(spec: &str) -> bool {
+    spec.starts_with("node:")
+        || spec.starts_with("cloudflare:")
+        || spec == PYTHON_HOST_SPECIFIER
+        || NODE_BUILTIN_NAMES.contains(&spec)
 }
 
-/// The import statement, and the brace group inside its clause.
+/// The statements that name another module: a side-effect import, an import
+/// with a clause, and a re-export (`export * from`, `export { a } from`).
+/// The groups are the side-effect import's specifier, then the import's
+/// clause and specifier, then the re-export's clause and specifier.
 ///
 /// `Regex::new` compiles the pattern to a program and builds the matcher
 /// scaffolding around it, so it is far more expensive than the scan itself on
@@ -264,13 +280,28 @@ fn is_external(spec: &str) -> bool {
 /// cost once for the main module and once more for each sibling module of a
 /// Worker Loader bundle — on every isolate build.
 static IMPORT_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    // A minifier can join `import` to `{` or `*`, but a default binding must
-    // keep whitespace. Preserve that token boundary so an identifier that
-    // starts with `import` cannot look like an import statement.
-    regex::Regex::new(r#"\bimport(\s+[^;]*?|\s*[{*][^;]*?)\s*from\s*["']([^"']+)["']"#).unwrap()
+    // A minifier can join `import` to `{`, `*` or a quote, and `export` to
+    // `{` or `*`, but a default binding must keep whitespace. Preserve that
+    // token boundary so an identifier that starts with `import` cannot look
+    // like an import statement. The side-effect form comes first, so a
+    // clause never runs on from it into the next statement.
+    regex::Regex::new(concat!(
+        r#"\bimport\s*["']([^"']+)["']"#,
+        r#"|\bimport(\s+[^;]*?|\s*[{*][^;]*?)\s*from\s*["']([^"']+)["']"#,
+        r#"|\bexport(\s*\*[^;]*?|\s*\{[^}]*\})\s*from\s*["']([^"']+)["']"#,
+    ))
+    .unwrap()
 });
 static IMPORT_BRACES_RE: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"\{([^}]*)\}").unwrap());
+static BLOCK_COMMENT_RE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"/\*[\s\S]*?\*/").unwrap());
+// A scanned binding name is interpolated into a stub's source, so only an
+// identifier may reach it; anything else (a quoted string name) is left out
+// and fails to link as a missing export would.
+static IDENTIFIER_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^[\p{ID_Start}$_][\p{ID_Continue}$\x{200C}\x{200D}]*$").unwrap()
+});
 
 /// Counts scans of a source carrying [`SCAN_PROBE_MARKER`].
 ///
@@ -294,9 +325,10 @@ pub fn import_scans() -> usize {
 pub(super) type ExternalImports =
     std::collections::BTreeMap<String, std::collections::BTreeSet<String>>;
 
-/// Scan a bundle for its external (`cloudflare:*` / `node:*`) imports and the
-/// named/default bindings pulled from each. V8 static-links these, so a stub
-/// must provide exactly these names; namespace imports (`* as x`) need none.
+/// Scan a bundle for the builtins it may import ([`may_be_builtin`]) and the
+/// bindings pulled from each. V8 static-links these, so a stub must provide
+/// exactly these names; a side-effect import needs none, and a namespace
+/// import or `export *` the module's full surface (`*`).
 pub(super) fn scan_external_imports(src: &str) -> ExternalImports {
     #[cfg(celld_internal_tests)]
     if src.contains(SCAN_PROBE_MARKER) {
@@ -304,16 +336,26 @@ pub(super) fn scan_external_imports(src: &str) -> ExternalImports {
     }
     let mut map = ExternalImports::default();
     for cap in IMPORT_RE.captures_iter(src) {
-        if !is_external(&cap[2]) {
+        let (spec, clause, import) = match (cap.get(1), cap.get(3), cap.get(5)) {
+            (Some(spec), _, _) => (spec, None, false),
+            (_, Some(spec), _) => (spec, cap.get(2), true),
+            (_, _, Some(spec)) => (spec, cap.get(4), false),
+            _ => unreachable!("every alternative captures a specifier"),
+        };
+        if !may_be_builtin(spec.as_str()) {
             continue;
         }
-        let clause = cap[1].trim();
-        let set = map.entry(cap[2].to_string()).or_default();
+        let set = map.entry(spec.as_str().to_string()).or_default();
+        let Some(clause) = clause else {
+            continue; // a side-effect import binds nothing
+        };
+        let clause = BLOCK_COMMENT_RE.replace_all(clause.as_str(), " ");
+        let clause = clause.trim();
         if let Some(b) = IMPORT_BRACES_RE.captures(clause) {
             for part in b[1].split(',') {
                 let name = part.split_whitespace().next().unwrap_or("");
-                // A commented-out binding inside the braces is not a name.
-                if !name.is_empty() && !name.starts_with("//") {
+                // A commented-out binding, or a quoted name, is not taken.
+                if IDENTIFIER_RE.is_match(name) {
                     set.insert(name.to_string());
                 }
             }
@@ -325,11 +367,12 @@ pub(super) fn scan_external_imports(src: &str) -> ExternalImports {
             .trim()
             .trim_end_matches(',')
             .trim();
-        if !head.is_empty() {
+        if import && !head.is_empty() {
             set.insert("default".into());
         } // default import
-          // `import * as x` consumes the whole namespace; the stub must then
-          // export the module's full surface, not just the scanned names.
+          // `import * as x` and `export *` consume the whole namespace; the
+          // stub must then export the module's full surface, not just the
+          // scanned names.
         if clause.contains('*') {
             set.insert("*".into());
         }
@@ -351,169 +394,145 @@ struct LazyModule {
     /// it is not the namespace's backing object itself (workerd's modules
     /// that `export default` an object of their own).
     default: Option<&'static str>,
-    /// Resolves only with nodejs_compat and enable_nodejs_perf_hooks_module
-    /// ([`BuiltinModules`]); otherwise the specifier is an unsupported builtin.
-    perf_hooks: bool,
 }
 
 const LAZY_MODULES: &[LazyModule] = &[
     LazyModule {
-        specs: &["assert", "node:assert"],
+        specs: &["node:assert"],
         global: "__assertModule",
         source: &NODE_ASSERT_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     LazyModule {
-        specs: &["assert/strict", "node:assert/strict"],
+        specs: &["node:assert/strict"],
         global: "__assertStrictModule",
         source: &NODE_ASSERT_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     LazyModule {
-        specs: &["timers/promises", "node:timers/promises"],
+        specs: &["node:timers/promises"],
         global: "__timersPromises",
         source: &NODE_TIMERS_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     // Same source as node:timers/promises, whose namespace it carries.
     LazyModule {
-        specs: &["timers", "node:timers"],
+        specs: &["node:timers"],
         global: "__timersModule",
         source: &NODE_TIMERS_SOURCE,
         default: Some("__timersDefault"),
-        perf_hooks: false,
     },
     // Shares its source with the `performance` LAZY_GLOBALS entry.
     LazyModule {
-        specs: &["perf_hooks", "node:perf_hooks"],
+        specs: &["node:perf_hooks"],
         global: "__perfHooksModule",
         source: &PERFORMANCE_SOURCE,
         default: Some("__perfHooksDefault"),
-        perf_hooks: true,
     },
     LazyModule {
-        specs: &["test", "node:test", "node:test/reporters"],
+        specs: &["node:test"],
         global: "__nodeTest",
         source: &NODE_TEST_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     LazyModule {
-        specs: &["util", "node:util"],
+        specs: &["node:util"],
         global: "__utilModule",
         source: &NODE_UTIL_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     // Same source, different namespace: node:util/types has the type
     // predicates as its named exports. The shared source defines both
     // globals, so either entry's guard covers the other.
     LazyModule {
-        specs: &["util/types", "node:util/types"],
+        specs: &["node:util/types"],
         global: "__utilTypesModule",
         source: &NODE_UTIL_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     LazyModule {
-        specs: &["events", "node:events"],
+        specs: &["node:events"],
         global: "__eventsModule",
         source: &NODE_EVENTS_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     LazyModule {
-        specs: &["zlib", "node:zlib"],
+        specs: &["node:zlib"],
         global: "__zlibModule",
         source: &NODE_ZLIB_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     LazyModule {
-        specs: &["os", "node:os"],
+        specs: &["node:os"],
         global: "__osModule",
         source: &NODE_OS_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     LazyModule {
-        specs: &["path", "node:path", "path/posix", "node:path/posix"],
+        specs: &["node:path", "node:path/posix"],
         global: "__pathModule",
         source: &NODE_PATH_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     // Same source; either entry's guard covers the other.
     LazyModule {
-        specs: &["path/win32", "node:path/win32"],
+        specs: &["node:path/win32"],
         global: "__pathWin32Module",
         source: &NODE_PATH_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     // Shares its source with the `Buffer` LAZY_GLOBALS entry; the script
     // is self-guarded, so whichever seam runs first wins and the other
     // reuses the same classes.
     LazyModule {
-        specs: &["buffer", "node:buffer"],
+        specs: &["node:buffer"],
         global: "__buffer",
         source: &NODE_BUFFER_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     LazyModule {
-        specs: &["crypto", "node:crypto"],
+        specs: &["node:crypto"],
         global: "__cryptoModule",
         source: &NODE_CRYPTO_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     LazyModule {
-        specs: &["async_hooks", "node:async_hooks"],
+        specs: &["node:async_hooks"],
         global: "__asyncHooksModule",
         source: &NODE_ASYNC_HOOKS_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     LazyModule {
-        specs: &["diagnostics_channel", "node:diagnostics_channel"],
+        specs: &["node:diagnostics_channel"],
         global: "__diagnosticsChannelModule",
         source: &NODE_DIAGNOSTICS_CHANNEL_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     // One source defines the whole stream family; whichever entry runs
     // first, its guard covers the others.
     LazyModule {
-        specs: &["stream", "node:stream"],
+        specs: &["node:stream"],
         global: "__streamModule",
         source: &NODE_STREAM_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     LazyModule {
-        specs: &["stream/promises", "node:stream/promises"],
+        specs: &["node:stream/promises"],
         global: "__streamPromises",
         source: &NODE_STREAM_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     LazyModule {
-        specs: &["stream/web", "node:stream/web"],
+        specs: &["node:stream/web"],
         global: "__streamWeb",
         source: &NODE_STREAM_SOURCE,
         default: None,
-        perf_hooks: false,
     },
     LazyModule {
-        specs: &["stream/consumers", "node:stream/consumers"],
+        specs: &["node:stream/consumers"],
         global: "__streamConsumers",
         source: &NODE_STREAM_SOURCE,
         default: None,
-        perf_hooks: false,
     },
 ];
 
@@ -632,49 +651,311 @@ pub(super) fn install_lazy_globals(scope: &mut v8::PinScope) -> Result<()> {
 /// `LAZY_MODULES` instead.
 fn eager_module_global(spec: &str) -> Option<&'static str> {
     Some(match spec {
-        "fs" | "node:fs" => "__fs",
-        "fs/promises" | "node:fs/promises" => "__fsPromises",
-        "process" | "node:process" => "__process",
+        "node:fs" => "__fs",
+        "node:fs/promises" => "__fsPromises",
+        "node:process" => "__process",
         _ => return None,
     })
 }
 
-/// Which gated builtin modules this isolate has, set before the main module
-/// links (`inject_storage_compatibility`): the node modules its flags make
-/// available, as workerd's `registerNodeJsCompatModules` filters its bundle,
-/// and `celld:python`, which only a deployed Python Worker's bundle can
-/// import (`WorkerConfig::with_python_runtime`).
-#[derive(Default)]
+/// Node.js's builtin module names, as workerd's `checkNodeSpecifier` knows
+/// them (jsg/util.c++ `NODEJS_BUILTINS` at v1.20261001.1). With Node.js
+/// compatibility a bare one names `node:<name>`; without it, it is a path
+/// like any other.
+const NODE_BUILTIN_NAMES: &[&str] = &[
+    "_http_agent",
+    "_http_client",
+    "_http_common",
+    "_http_incoming",
+    "_http_outgoing",
+    "_http_server",
+    "_stream_duplex",
+    "_stream_passthrough",
+    "_stream_readable",
+    "_stream_transform",
+    "_stream_wrap",
+    "_stream_writable",
+    "_tls_common",
+    "_tls_wrap",
+    "assert",
+    "assert/strict",
+    "async_hooks",
+    "buffer",
+    "child_process",
+    "cluster",
+    "console",
+    "constants",
+    "crypto",
+    "dgram",
+    "diagnostics_channel",
+    "dns",
+    "dns/promises",
+    "domain",
+    "events",
+    "fs",
+    "fs/promises",
+    "http",
+    "http2",
+    "https",
+    "inspector",
+    "inspector/promises",
+    "module",
+    "net",
+    "os",
+    "path",
+    "path/posix",
+    "path/win32",
+    "perf_hooks",
+    "process",
+    "punycode",
+    "querystring",
+    "readline",
+    "readline/promises",
+    "repl",
+    "sqlite",
+    "stream",
+    "stream/consumers",
+    "stream/promises",
+    "stream/web",
+    "string_decoder",
+    "sys",
+    "timers",
+    "timers/promises",
+    "tls",
+    "trace_events",
+    "tty",
+    "url",
+    "util",
+    "util/types",
+    "v8",
+    "vm",
+    "wasi",
+    "worker_threads",
+    "zlib",
+];
+
+/// The public modules of workerd's Node.js bundle (`src/node/*.ts` and its
+/// subdirectories at v1.20261001.1). `node:test` has no bare name, and
+/// `node:process` is not one: workerd's resolver redirects it to an
+/// internal module, which every Worker has.
+const NODE_MODULES: &[&str] = &[
+    "node:_http_agent",
+    "node:_http_client",
+    "node:_http_common",
+    "node:_http_incoming",
+    "node:_http_outgoing",
+    "node:_http_server",
+    "node:_stream_duplex",
+    "node:_stream_passthrough",
+    "node:_stream_readable",
+    "node:_stream_transform",
+    "node:_stream_wrap",
+    "node:_stream_writable",
+    "node:_tls_common",
+    "node:_tls_wrap",
+    "node:assert",
+    "node:assert/strict",
+    "node:async_hooks",
+    "node:buffer",
+    "node:child_process",
+    "node:cluster",
+    "node:console",
+    "node:constants",
+    "node:crypto",
+    "node:dgram",
+    "node:diagnostics_channel",
+    "node:dns",
+    "node:dns/promises",
+    "node:domain",
+    "node:events",
+    "node:fs",
+    "node:fs/promises",
+    "node:http",
+    "node:http2",
+    "node:https",
+    "node:inspector",
+    "node:inspector/promises",
+    "node:module",
+    "node:net",
+    "node:os",
+    "node:path",
+    "node:path/posix",
+    "node:path/win32",
+    "node:perf_hooks",
+    "node:punycode",
+    "node:querystring",
+    "node:readline",
+    "node:readline/promises",
+    "node:repl",
+    "node:sqlite",
+    "node:stream",
+    "node:stream/consumers",
+    "node:stream/promises",
+    "node:stream/web",
+    "node:string_decoder",
+    "node:test",
+    "node:timers",
+    "node:timers/promises",
+    "node:tls",
+    "node:trace_events",
+    "node:tty",
+    "node:url",
+    "node:util",
+    "node:util/types",
+    "node:v8",
+    "node:vm",
+    "node:wasi",
+    "node:worker_threads",
+    "node:zlib",
+];
+
+/// The Node.js modules that need a flag of their own besides Node.js
+/// compatibility (api/node/node.h `registerNodeJsCompatModules`). Most of
+/// these flags come with `nodejs_compat` from a date. `node:fs/promises`
+/// needs no flag, as there.
+const GATED_NODE_MODULES: &[(&str, crate::compat_flags::FlagId)] = {
+    use crate::compat_flags as f;
+    &[
+        ("node:_http_agent", f::ENABLE_NODEJS_HTTP_MODULES),
+        ("node:_http_client", f::ENABLE_NODEJS_HTTP_MODULES),
+        ("node:_http_common", f::ENABLE_NODEJS_HTTP_MODULES),
+        ("node:_http_incoming", f::ENABLE_NODEJS_HTTP_MODULES),
+        ("node:_http_outgoing", f::ENABLE_NODEJS_HTTP_MODULES),
+        ("node:_http_server", f::ENABLE_NODEJS_HTTP_SERVER_MODULES),
+        ("node:_stream_wrap", f::ENABLE_NODEJS_STREAM_WRAP_MODULE),
+        ("node:child_process", f::ENABLE_NODEJS_CHILD_PROCESS_MODULE),
+        ("node:cluster", f::ENABLE_NODEJS_CLUSTER_MODULE),
+        ("node:console", f::ENABLE_NODEJS_CONSOLE_MODULE),
+        ("node:dgram", f::ENABLE_NODEJS_DGRAM_MODULE),
+        ("node:domain", f::ENABLE_NODEJS_DOMAIN_MODULE),
+        ("node:fs", f::ENABLE_NODEJS_FS_MODULE),
+        ("node:http", f::ENABLE_NODEJS_HTTP_MODULES),
+        ("node:http2", f::ENABLE_NODEJS_HTTP2_MODULE),
+        ("node:https", f::ENABLE_NODEJS_HTTP_MODULES),
+        ("node:inspector", f::ENABLE_NODEJS_INSPECTOR_MODULE),
+        ("node:inspector/promises", f::ENABLE_NODEJS_INSPECTOR_MODULE),
+        ("node:os", f::ENABLE_NODEJS_OS_MODULE),
+        ("node:perf_hooks", f::ENABLE_NODEJS_PERF_HOOKS_MODULE),
+        ("node:punycode", f::ENABLE_NODEJS_PUNYCODE_MODULE),
+        ("node:readline", f::ENABLE_NODEJS_READLINE_MODULE),
+        ("node:readline/promises", f::ENABLE_NODEJS_READLINE_MODULE),
+        ("node:repl", f::ENABLE_NODEJS_REPL_MODULE),
+        ("node:sqlite", f::ENABLE_NODEJS_SQLITE_MODULE),
+        ("node:trace_events", f::ENABLE_NODEJS_TRACE_EVENTS_MODULE),
+        ("node:tty", f::ENABLE_NODEJS_TTY_MODULE),
+        ("node:v8", f::ENABLE_NODEJS_V8_MODULE),
+        ("node:vm", f::ENABLE_NODEJS_VM_MODULE),
+        ("node:wasi", f::ENABLE_NODEJS_WASI_MODULE),
+        (
+            "node:worker_threads",
+            f::ENABLE_NODEJS_WORKER_THREADS_MODULE,
+        ),
+    ]
+};
+
+/// The modules of workerd's `cloudflare:` bundle (`src/cloudflare/*.ts` at
+/// v1.20261001.1), which every Worker has whatever its flags. celld
+/// implements `workers`, `sockets` and `workflows`; the others are
+/// stubs whose first call throws.
+const CLOUDFLARE_MODULES: &[&str] = &[
+    "cloudflare:ai",
+    "cloudflare:br",
+    "cloudflare:durable-objects",
+    "cloudflare:email",
+    "cloudflare:node",
+    "cloudflare:pipelines",
+    "cloudflare:sockets",
+    "cloudflare:vectorize",
+    "cloudflare:workers",
+    "cloudflare:workflows",
+];
+
+/// Which builtin modules this isolate's Worker can import, from its flags,
+/// set before its modules link (`inject_storage_compatibility`). Every
+/// static import, `import()` and `process.getBuiltinModule()` asks here, so
+/// a module workerd's registry leaves out names no module on celld either.
 pub(super) struct BuiltinModules {
-    pub(super) perf_hooks: bool,
-    pub(super) python_host: bool,
+    flags: crate::compat_flags::CompatFlags,
+    /// `nodejs_compat` or `nodejs_compat_v2`, as workerd's
+    /// `isNodeJsCompatEnabled` reads them.
+    nodejs_compat: bool,
+    /// `celld:python`, which only a deployed Python Worker's bundle can
+    /// import (`WorkerConfig::with_python_runtime`).
+    python_host: bool,
 }
 
-/// Whether this isolate's Worker is a deployed Python Worker, whose bundle
-/// imports `celld:python`. For any other Worker the specifier names no module.
-fn python_host(scope: &v8::Isolate) -> bool {
+impl BuiltinModules {
+    pub(super) fn new(compat: Compat, python_host: bool) -> BuiltinModules {
+        BuiltinModules {
+            flags: compat.flags,
+            nodejs_compat: compat.nodejs_compat,
+            python_host,
+        }
+    }
+
+    /// `spec` as workerd's resolver reads it before it looks the module up:
+    /// with Node.js compatibility, `checkNodeSpecifier` gives a bare Node.js
+    /// name its `node:` prefix, and `sys` is `node:util`.
+    fn canonical<'a>(&self, spec: &'a str) -> std::borrow::Cow<'a, str> {
+        if !self.nodejs_compat {
+            return spec.into();
+        }
+        node_specifier(spec).map_or(spec.into(), Into::into)
+    }
+
+    /// Whether the module `spec` (as [`BuiltinModules::canonical`] gives it)
+    /// is a builtin this Worker has.
+    fn provides(&self, spec: &str) -> bool {
+        if spec == "node:process" || CLOUDFLARE_MODULES.contains(&spec) {
+            return true;
+        }
+        if spec == PYTHON_HOST_SPECIFIER {
+            return self.python_host;
+        }
+        if !NODE_MODULES.contains(&spec) {
+            return false;
+        }
+        // nodejs_als alone registers node:async_hooks.
+        if !self.nodejs_compat {
+            return spec == "node:async_hooks" && self.flags.get(crate::compat_flags::NODEJS_ALS);
+        }
+        GATED_NODE_MODULES
+            .iter()
+            .find(|(name, _)| *name == spec)
+            .is_none_or(|(_, flag)| self.flags.get(*flag))
+    }
+}
+
+/// workerd's `checkNodeSpecifier`: the `node:` specifier a Node.js module
+/// name stands for, or `None` for a specifier that is not one.
+fn node_specifier(spec: &str) -> Option<String> {
+    if spec == "sys" || spec == "node:sys" {
+        return Some("node:util".into());
+    }
+    if NODE_BUILTIN_NAMES.contains(&spec) {
+        return Some(format!("node:{spec}"));
+    }
+    spec.starts_with("node:").then(|| spec.to_string())
+}
+
+fn builtin_modules(scope: &v8::Isolate) -> &BuiltinModules {
     scope
         .get_slot::<BuiltinModules>()
-        .is_some_and(|modules| modules.python_host)
+        .expect("isolate has no builtin modules")
 }
 
-/// The lazy module `spec` names, unless its flags leave it out.
-fn lazy_module(scope: &v8::Isolate, spec: &str) -> Option<&'static LazyModule> {
-    let module = LAZY_MODULES
+/// The lazy module that implements `spec`.
+fn lazy_module(spec: &str) -> Option<&'static LazyModule> {
+    LAZY_MODULES
         .iter()
-        .find(|module| module.specs.contains(&spec))?;
-    let available = !module.perf_hooks
-        || scope
-            .get_slot::<BuiltinModules>()
-            .is_some_and(|modules| modules.perf_hooks);
-    available.then_some(module)
+        .find(|module| module.specs.contains(&spec))
 }
 
 /// Materialize an imported builtin from its external source before its small
 /// ES module wrapper links. The old wrapper concatenated the full setup text,
 /// which turned a shared static source back into one owned string per isolate.
 fn install_lazy_module(scope: &mut v8::PinScope, spec: &str) -> Option<&'static LazyModule> {
-    let module = lazy_module(scope, spec)?;
+    let module = lazy_module(spec)?;
     if internal_value(scope, module.global).is_some() {
         return Some(module);
     }
@@ -804,25 +1085,32 @@ fn internals_import() -> String {
     format!("import __celld from {INTERNALS_SPECIFIER:?};\n")
 }
 
-/// Compile one stub module per external specifier into the isolate's module
-/// registry. Run before
-/// instantiating a real bundle; `resolve_external` then serves them.
+/// Compile one stub module per builtin the Worker's modules import, and has,
+/// into the isolate's module registry. Run before instantiating a real
+/// bundle; `resolve_external` then serves them. A builtin its flags leave
+/// out gets no stub, so its import fails to link with workerd's error.
 pub(super) fn register_stubs(scope: &mut v8::PinScope, config: &WorkerConfig) {
     let registry = modreg(scope);
     registry.modules.lock().unwrap().clear();
     registry.trusted.lock().unwrap().clear();
-    for (spec, names) in &config.main_imports {
-        install_lazy_module(scope, spec);
-        // `import * as x` binds the whole namespace, so the stub's exports
-        // must be the module's full surface — probed from the backing
-        // object, like dynamic import() — not just the scanned names.
-        let s = if names.contains("*") {
-            full_surface_source(scope, spec, names)
-                .unwrap_or_else(|| stub_source(spec, names, lazy_module(scope, spec)))
-        } else {
-            stub_source(spec, names, lazy_module(scope, spec))
-        };
-        register_internal_stub(scope, spec, &s);
+    // One stub per module with the names every module of the Worker pulls
+    // from it: under Node.js compatibility `path` and `node:path` are one
+    // module, and a sibling may import other names than the main module.
+    let mut builtins = ExternalImports::default();
+    let modules = builtin_modules(scope);
+    let scans = std::iter::once(&config.main_imports)
+        .chain(config.es_modules().map(|(_name, _source, imports)| imports));
+    for (spec, names) in scans.flatten() {
+        let spec = modules.canonical(spec);
+        if modules.provides(&spec) {
+            builtins
+                .entry(spec.into_owned())
+                .or_default()
+                .extend(names.iter().cloned());
+        }
+    }
+    for (spec, names) in &builtins {
+        register_builtin_stub(scope, spec, names);
     }
     // sibling text modules (wrangler Text rule: `import md from './x.md'`)
     for (spec, source) in &config.modules {
@@ -1008,38 +1296,60 @@ pub(super) fn register_wasm_modules(scope: &mut v8::PinScope, modules: &[(String
 }
 
 /// Register a loaded worker's sibling JS modules (Worker Loader multi-module
-/// bundles), in addition to the builtins `register_stubs` already added for the
-/// main module. Each module is registered under its own name and `./name` so
-/// both bare and relative sibling imports resolve; the whole graph links when
-/// the main module instantiates. Any builtin a sibling imports (and the main
-/// module did not) is stubbed too. `None` when a sibling does not compile,
-/// which fails the Worker's start with the compile error pending in the
-/// caller's TryCatch.
+/// bundles), beside the builtins `register_stubs` already added for every
+/// module's scan. Each module is registered under its own name and `./name`
+/// so both bare and relative sibling imports resolve; the whole graph links
+/// when the main module instantiates. `None` when a sibling does not
+/// compile, which fails the Worker's start with the compile error pending in
+/// the caller's TryCatch.
 pub(super) fn register_loader_modules(
     scope: &mut v8::PinScope,
     config: &WorkerConfig,
     main: v8::Local<v8::Module>,
 ) -> Option<()> {
-    for (_name, _source, imports) in config.es_modules() {
-        for (spec, names) in imports {
-            if modreg(scope).modules.lock().unwrap().contains_key(spec) {
-                continue;
-            }
-            install_lazy_module(scope, spec);
-            let s = if names.contains("*") {
-                full_surface_source(scope, spec, names)
-                    .unwrap_or_else(|| stub_source(spec, names, lazy_module(scope, spec)))
-            } else {
-                stub_source(spec, names, lazy_module(scope, spec))
-            };
-            register_internal_stub(scope, spec, &s);
-        }
-    }
     register_named_module(scope, &config.main_module_name, main, false);
     for (name, source, _imports) in config.es_modules() {
         register_sibling_module(scope, name, source, false)?;
     }
+    register_requested_builtins(scope);
     Some(())
+}
+
+/// Give every builtin a module requests, and the Worker has, a stub, for
+/// the requests the scan did not see (`import /* why */ "node:fs"`): the
+/// stub is the module's full surface, so every name it has links. V8 lists
+/// each module's requests exactly; only the names come from the scan.
+fn register_requested_builtins(scope: &mut v8::PinScope) {
+    let registry = modreg(scope);
+    let sources: Vec<v8::Global<v8::Module>> = registry
+        .source_names
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(module, _name)| module.clone())
+        .collect();
+    let mut missing = std::collections::BTreeSet::new();
+    for module in &sources {
+        let requests = v8::Local::new(scope, module).get_module_requests();
+        for index in 0..requests.length() {
+            let Some(request) = requests
+                .get(scope, index)
+                .and_then(|data| v8::Local::<v8::ModuleRequest>::try_from(data).ok())
+            else {
+                continue;
+            };
+            let spec = request.get_specifier().to_rust_string_lossy(scope);
+            let modules = builtin_modules(scope);
+            let spec = modules.canonical(&spec);
+            if modules.provides(&spec) && !registry.modules.lock().unwrap().contains_key(&*spec) {
+                missing.insert(spec.into_owned());
+            }
+        }
+    }
+    let everything = std::collections::BTreeSet::from(["*".to_string()]);
+    for spec in missing {
+        register_builtin_stub(scope, &spec, &everything);
+    }
 }
 
 /// `throw_on_unrecognized_import_assertion`, which the isolate holds: workerd
@@ -1076,18 +1386,14 @@ pub(super) fn resolve_external<'s>(
     }
     let spec = specifier.to_rust_string_lossy(scope);
     let registry = modreg(scope);
-    if spec == INTERNALS_SPECIFIER {
-        if registry.trusts(scope, referrer) {
-            return Some(internals_module(scope));
-        }
-        // A user module named the stubs' private specifier. Refuse with a
-        // message: the bare miss below reports no exception, and a link
-        // error that says nothing sends the author looking for a typo.
-        let message = v8::String::new(scope, "celld:internals is not importable").unwrap();
-        let exception = v8::Exception::type_error(scope, message);
-        scope.throw_exception(exception);
-        return None;
+    // A user module that names the stubs' private specifier finds no module
+    // below, as on workerd.
+    if spec == INTERNALS_SPECIFIER && registry.trusts(scope, referrer) {
+        return Some(internals_module(scope));
     }
+    // Under Node.js compatibility a bare Node.js name is its `node:` module,
+    // read before anything else, as workerd's `checkNodeSpecifier` reads it.
+    let spec = builtin_modules(scope).canonical(&spec).into_owned();
     let referrer_name = registry.source_name(scope, referrer);
     let resolved = referrer_name
         .as_deref()
@@ -1194,9 +1500,13 @@ fn resolve_relative_specifier(referrer: &str, spec: &str) -> Option<String> {
     Some(if absolute { format!("/{path}") } else { path })
 }
 
-/// The backing-object expression for a builtin specifier, or `None` if `spec`
-/// is not one. A lazy module is materialized from its external source first.
+/// The backing-object expression for a builtin specifier, or `None` if
+/// `spec` names no builtin this Worker has. A lazy module is materialized
+/// from its external source first.
 fn builtin_source(scope: &mut v8::PinScope, spec: &str) -> Option<String> {
+    if !builtin_modules(scope).provides(spec) {
+        return None;
+    }
     if spec == "cloudflare:sockets" {
         return Some("__celld.__cfSockets".into());
     }
@@ -1204,7 +1514,7 @@ fn builtin_source(scope: &mut v8::PinScope, spec: &str) -> Option<String> {
         return Some("__celld.__cfWorkflows".into());
     }
     if spec == PYTHON_HOST_SPECIFIER {
-        return python_host(scope).then(|| "__celld.__pythonHost".into());
+        return Some("__celld.__pythonHost".into());
     }
     if let Some(module) = install_lazy_module(scope, spec) {
         return Some(format!("__celld.{}", module.global));
@@ -1212,12 +1522,10 @@ fn builtin_source(scope: &mut v8::PinScope, spec: &str) -> Option<String> {
     if let Some(global) = eager_module_global(spec) {
         return Some(format!("__celld.{global}"));
     }
-    is_external(spec).then(|| {
-        format!(
-            "__celld.__nodeStubFor({})",
-            serde_json::to_string(spec).unwrap()
-        )
-    })
+    Some(format!(
+        "__celld.__nodeStubFor({})",
+        serde_json::to_string(spec).unwrap()
+    ))
 }
 
 /// Full-surface module source for a builtin: run the (guarded) setup, probe
@@ -1242,7 +1550,7 @@ fn full_surface_source(
             names.push(name.clone());
         }
     }
-    let default = builtin_default(scope, spec).unwrap_or_else(|| "__b".to_string());
+    let default = builtin_default(spec).unwrap_or_else(|| "__b".to_string());
     let mut src = internals_import();
     src.push_str(&format!("const __b = {expr};\nexport default {default};\n"));
     for (i, name) in names.iter().enumerate() {
@@ -1259,30 +1567,43 @@ fn full_surface_source(
 
 /// The default export of a lazy module that has one of its own, once
 /// `builtin_source` installed it.
-fn builtin_default(scope: &v8::Isolate, spec: &str) -> Option<String> {
-    let default = lazy_module(scope, spec)?.default?;
+fn builtin_default(spec: &str) -> Option<String> {
+    let default = lazy_module(spec)?.default?;
     Some(format!("__celld.{default}"))
 }
 
-/// `process.getBuiltinModule(id)`: the builtin's default export (its backing
-/// object, unless it has a default of its own), or undefined for anything
-/// that is not a node builtin.
+/// `process.getBuiltinModule(id)`, as workerd's `ProcessModule` answers it:
+/// a Node.js module's default export (its backing object, unless it has a
+/// default of its own), another builtin's namespace, or undefined for a
+/// module the Worker does not have. The id reads as `checkNodeSpecifier`
+/// gives it, whatever the flags.
 pub(super) fn op_builtin_module(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    let spec = args.get(0).to_rust_string_lossy(scope);
-    if spec.starts_with("cloudflare:") || spec == PYTHON_HOST_SPECIFIER {
-        return; // not a node builtin
+    let id = args.get(0).to_rust_string_lossy(scope);
+    if let Some(spec) = node_specifier(&id) {
+        let Some(expr) = builtin_source(scope, &spec) else {
+            return;
+        };
+        let expr = builtin_default(&spec).unwrap_or(expr);
+        if let Some(value) = run_internal_snippet(scope, &format!("return {expr};")) {
+            rv.set(value);
+        }
+        return;
     }
-    let Some(expr) = builtin_source(scope, &spec) else {
+    // celld:python is the host's, not one of workerd's builtins.
+    if !CLOUDFLARE_MODULES.contains(&id.as_str()) {
+        return;
+    }
+    let Ok(module) = dynamic_module(scope, &id, &id) else {
         return;
     };
-    let expr = builtin_default(scope, &spec).unwrap_or(expr);
-    if let Some(value) = run_internal_snippet(scope, &format!("return {expr};")) {
-        rv.set(value);
+    if module.get_status() == v8::ModuleStatus::Instantiated && module.evaluate(scope).is_none() {
+        return;
     }
+    rv.set(module.get_module_namespace());
 }
 
 /// Return a registered sibling, or compile a full-namespace builtin once per
@@ -1378,6 +1699,7 @@ pub(super) fn host_import_module_dynamically<'s>(
         return Some(promise);
     }
     let spec = specifier.to_rust_string_lossy(scope);
+    let spec = builtin_modules(scope).canonical(&spec).into_owned();
     let referrer = resource_name.to_rust_string_lossy(scope);
     let resolved = resolve_relative_specifier(&referrer, &spec);
     let path = workerd_module_path(&referrer, &spec).unwrap_or_else(|| spec.clone());
@@ -1446,6 +1768,200 @@ mod tests {
             ["cloudflare:workers", "dyn:cloudflare:workers"]
         );
         assert_eq!(builtin_stub_keys("node:fs"), ["node:fs"]);
+    }
+
+    fn scan(src: &str) -> Vec<(String, Vec<String>)> {
+        scan_external_imports(src)
+            .into_iter()
+            .map(|(spec, names)| (spec, names.into_iter().collect()))
+            .collect()
+    }
+
+    fn entry(spec: &str, names: &[&str]) -> (String, Vec<String>) {
+        (
+            spec.to_string(),
+            names.iter().map(|name| name.to_string()).collect(),
+        )
+    }
+
+    #[test]
+    fn the_scan_reads_every_static_form() {
+        assert_eq!(
+            scan(concat!(
+                "import fs, { readFile as read, /* c */ stat } from \"node:fs\";\n",
+                "import * as path from 'path';\n",
+                "import \"node:buffer\";\n",
+                "import\"node:events\";import{a}from\"node:util\";\n",
+                "export * from \"node:os\";\n",
+                "export * as zlib from \"node:zlib\";\n",
+                "export { default as x, join } from \"node:path\";\n",
+                "export{Buffer}from\"buffer\";\n",
+                "import local from \"./node:fs\";\n",
+                "import \"lodash\";\n",
+                "const importer = 1; import.meta.url; import(\"node:crypto\");\n",
+            )),
+            [
+                entry("buffer", &["Buffer"]),
+                entry("node:buffer", &[]),
+                entry("node:events", &[]),
+                entry("node:fs", &["default", "readFile", "stat"]),
+                entry("node:os", &["*"]),
+                entry("node:path", &["default", "join"]),
+                entry("node:util", &["a"]),
+                entry("node:zlib", &["*"]),
+                entry("path", &["*"]),
+            ]
+        );
+    }
+
+    /// A side-effect import ends where its specifier does, so the next
+    /// statement's clause and names stay its own.
+    #[test]
+    fn a_side_effect_import_does_not_swallow_the_next_statement() {
+        assert_eq!(
+            scan("import \"cloudflare:email\"\nimport { connect } from \"cloudflare:sockets\""),
+            [
+                entry("cloudflare:email", &[]),
+                entry("cloudflare:sockets", &["connect"]),
+            ]
+        );
+    }
+
+    /// Scanned names reach a stub's source, so only identifiers are taken.
+    #[test]
+    fn the_scan_takes_only_identifiers() {
+        assert_eq!(
+            scan(concat!(
+                "import { \"a-b\" as x, $c, _d, é } from \"node:util\";\n",
+                "import { a=globalThis.leak=__celld, b } from \"node:fs\";\n",
+            )),
+            [
+                entry("node:fs", &["b"]),
+                entry("node:util", &["$c", "_d", "é"]),
+            ]
+        );
+    }
+
+    fn modules(date: &str, flags: &[&str]) -> BuiltinModules {
+        let flags = crate::compat_flags::compile_lenient(Some(date), flags);
+        BuiltinModules::new(Compat::from_flags(flags), false)
+    }
+
+    fn resolves(modules: &BuiltinModules, spec: &str) -> Option<String> {
+        let spec = modules.canonical(spec);
+        modules.provides(&spec).then(|| spec.into_owned())
+    }
+
+    /// Recorded from workerd by loader/builtin-modules.
+    #[test]
+    fn without_node_compatibility_only_process_and_cloudflare_modules_resolve() {
+        let none = modules("2026-01-01", &[]);
+        for spec in [
+            "node:process",
+            "cloudflare:workers",
+            "cloudflare:email",
+            "cloudflare:ai",
+        ] {
+            assert_eq!(resolves(&none, spec).as_deref(), Some(spec));
+        }
+        for spec in [
+            "node:fs",
+            "node:buffer",
+            "node:async_hooks",
+            "path",
+            "process",
+            "node:sys",
+            "cloudflare:nope",
+            "cloudflare:test",
+            "workerd:unsafe",
+            "celld:python",
+            "celld:internals",
+        ] {
+            assert_eq!(resolves(&none, spec), None, "{spec}");
+        }
+        let als = modules("2026-01-01", &["nodejs_als"]);
+        assert_eq!(
+            resolves(&als, "node:async_hooks").as_deref(),
+            Some("node:async_hooks")
+        );
+        assert_eq!(resolves(&als, "async_hooks"), None);
+        let python = BuiltinModules::new(Compat::default(), true);
+        assert!(python.provides(PYTHON_HOST_SPECIFIER));
+    }
+
+    #[test]
+    fn node_compatibility_gives_bare_names_and_ungated_modules() {
+        for compat in [
+            modules("2026-01-01", &["nodejs_compat"]),
+            modules("2026-01-01", &["nodejs_compat_v2"]),
+        ] {
+            assert_eq!(resolves(&compat, "path").as_deref(), Some("node:path"));
+            assert_eq!(resolves(&compat, "sys").as_deref(), Some("node:util"));
+            assert_eq!(resolves(&compat, "node:sys").as_deref(), Some("node:util"));
+            assert_eq!(
+                resolves(&compat, "process").as_deref(),
+                Some("node:process")
+            );
+            assert_eq!(
+                resolves(&compat, "fs/promises").as_deref(),
+                Some("node:fs/promises")
+            );
+            assert_eq!(resolves(&compat, "node:test").as_deref(), Some("node:test"));
+            for spec in ["test", "node:test/reporters", "node:nope", "node:v8", "v8"] {
+                assert_eq!(resolves(&compat, spec), None, "{spec}");
+            }
+        }
+        // nodejs_compat turns the module flags on from their dates;
+        // nodejs_compat_v2 alone does not.
+        let compat = modules("2026-01-01", &["nodejs_compat"]);
+        assert!(compat.provides("node:fs") && compat.provides("node:http"));
+        assert!(!compat.provides("node:perf_hooks") && !compat.provides("node:sqlite"));
+        let v2 = modules("2026-01-01", &["nodejs_compat_v2"]);
+        assert!(!v2.provides("node:fs") && !v2.provides("node:http"));
+        let v2_fs = modules(
+            "2026-01-01",
+            &["nodejs_compat_v2", "enable_nodejs_fs_module"],
+        );
+        assert!(v2_fs.provides("node:fs"));
+        let dated = modules("2026-10-01", &[]);
+        assert!(NODE_MODULES.iter().all(|spec| dated.provides(spec)));
+        let disabled = modules(
+            "2026-10-01",
+            &["disable_nodejs_fs_module", "disable_nodejs_http_modules"],
+        );
+        for spec in ["node:fs", "node:http", "node:https", "node:_http_server"] {
+            assert!(!disabled.provides(spec), "{spec}");
+        }
+        assert!(disabled.provides("node:fs/promises") && disabled.provides("node:http2"));
+    }
+
+    #[test]
+    fn the_builtin_tables_agree() {
+        for list in [NODE_BUILTIN_NAMES, NODE_MODULES, CLOUDFLARE_MODULES] {
+            let mut sorted = list.to_vec();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(sorted, list);
+        }
+        // Every bare name but process (redirected) and sys (node:util) is
+        // a bundle module, and node:test is the bundle's only other one.
+        let bare: Vec<String> = NODE_BUILTIN_NAMES
+            .iter()
+            .filter(|name| !matches!(**name, "process" | "sys"))
+            .map(|name| format!("node:{name}"))
+            .chain(["node:test".to_string()])
+            .collect();
+        let mut bare = bare;
+        bare.sort_unstable();
+        assert_eq!(bare, NODE_MODULES);
+        for (spec, _flag) in GATED_NODE_MODULES {
+            assert!(NODE_MODULES.contains(spec), "{spec}");
+        }
+        for module in LAZY_MODULES {
+            for spec in module.specs {
+                assert!(NODE_MODULES.contains(spec), "{spec}");
+            }
+        }
     }
 
     #[test]

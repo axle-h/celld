@@ -1,11 +1,94 @@
 {
-  "workers": ["app"],
-  "xfail": "1.38",
+  "workers": [
+    "app"
+  ],
   "steps": [
-    {"path": "/?child=node-default"},
-    {"path": "/?child=node-named"},
-    {"path": "/?child=node-bare"},
-    {"path": "/?child=cloudflare-named"},
-    {"path": "/?child=node-side-effect"}
+    {
+      "path": "/?child=node-default"
+    },
+    {
+      "path": "/?child=node-named"
+    },
+    {
+      "path": "/?child=node-bare"
+    },
+    {
+      "path": "/?child=cloudflare-named"
+    },
+    {
+      "path": "/?child=node-side-effect"
+    },
+    {
+      "path": "/?child=node-side-effect-minified"
+    },
+    {
+      "path": "/?child=node-side-effect-missing"
+    },
+    {
+      "path": "/?child=node-export-star"
+    },
+    {
+      "path": "/?child=node-export-named"
+    },
+    {
+      "path": "/?child=node-export-missing"
+    },
+    {
+      "path": "/?child=node-export-star-missing"
+    },
+    {
+      "path": "/?child=node-names-across-modules"
+    },
+    {
+      "path": "/?child=node-import-commented"
+    },
+    {
+      "path": "/?child=node-gated"
+    },
+    {
+      "path": "/?child=node-bare-gated"
+    },
+    {
+      "path": "/?child=node-gated-flag"
+    },
+    {
+      "path": "/?child=node-fs-disabled"
+    },
+    {
+      "path": "/?child=node-fs-promises-v2"
+    },
+    {
+      "path": "/?child=node-bare-compat"
+    },
+    {
+      "path": "/?child=node-sys"
+    },
+    {
+      "path": "/?child=node-test-bare"
+    },
+    {
+      "path": "/?child=node-als"
+    },
+    {
+      "path": "/?child=node-als-bare"
+    },
+    {
+      "path": "/?child=node-process"
+    },
+    {
+      "path": "/?child=node-dated"
+    },
+    {
+      "path": "/?child=cloudflare-known"
+    },
+    {
+      "path": "/?child=cloudflare-side-effect"
+    },
+    {
+      "path": "/?child=cloudflare-export"
+    },
+    {
+      "path": "/?child=workerd-unsafe"
+    }
   ]
 }

@@ -1,0 +1,54 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "child": "node-implemented",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught SyntaxError: The requested module 'node:path' does not provide an export named 'nope'\n  at main.js:1:9"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-stubbed",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught SyntaxError: The requested module 'node:http' does not provide an export named 'nope'\n  at main.js:1:9"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-default",
+        "status": 200,
+        "body": "loaded"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "cloudflare-stubbed",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught SyntaxError: The requested module 'cloudflare:pipelines' does not provide an export named 'nope'\n  at main.js:1:9"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "cloudflare-sockets",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught SyntaxError: The requested module 'cloudflare:sockets' does not provide an export named 'nope'\n  at main.js:1:9"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "re-export",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught SyntaxError: The requested module 'node:buffer' does not provide an export named 'nope'\n  at lib.js:1:9"
+      }
+    }
+  ]
+}

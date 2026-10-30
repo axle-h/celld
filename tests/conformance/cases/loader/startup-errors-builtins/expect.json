@@ -41,6 +41,198 @@
         "status": 200,
         "body": "loaded"
       }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-side-effect-minified",
+        "status": 200,
+        "body": "loaded"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-side-effect-missing",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"node:buffer\".\n  imported from \"main.js\""
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-export-star",
+        "status": 200,
+        "body": "functionfunction"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-export-named",
+        "status": 200,
+        "body": "/function"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-export-missing",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"node:path\".\n  imported from \"lib.js\""
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-export-star-missing",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"node:path\".\n  imported from \"lib.js\""
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-names-across-modules",
+        "status": 200,
+        "body": "/function"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-import-commented",
+        "status": 200,
+        "body": "a"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-gated",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"node:v8\".\n  imported from \"main.js\""
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-bare-gated",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"node:v8\".\n  imported from \"main.js\""
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-gated-flag",
+        "status": 200,
+        "body": "loaded"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-fs-disabled",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"node:fs\".\n  imported from \"main.js\""
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-fs-promises-v2",
+        "status": 200,
+        "body": "function"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-bare-compat",
+        "status": 200,
+        "body": "a/btrue"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-sys",
+        "status": 200,
+        "body": "1"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-test-bare",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"test\".\n  imported from \"main.js\""
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-als",
+        "status": 200,
+        "body": "function"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-als-bare",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"async_hooks\".\n  imported from \"main.js\""
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-process",
+        "status": 200,
+        "body": "loaded"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "node-dated",
+        "status": 200,
+        "body": "1"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "cloudflare-known",
+        "status": 200,
+        "body": "function"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "cloudflare-side-effect",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"cloudflare:nope\".\n  imported from \"main.js\""
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "cloudflare-export",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"cloudflare:nope\".\n  imported from \"main.js\""
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "child": "workerd-unsafe",
+        "error": "Error",
+        "message": "Failed to start Worker:\nUncaught Error: No such module \"workerd:unsafe\".\n  imported from \"main.js\""
+      }
     }
   ]
 }
