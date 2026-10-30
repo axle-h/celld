@@ -478,7 +478,7 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 43 | 1.61 A stuck isolate must not starve the node (security) | done | `7d8df19` |
 | 44 | 1.36 items 1–7 (error serialization, Node timers, Request `cache`, iterable bodies, stream backpressure, Blob MIME type, `Symbol.toStringTag`) | done | `0ac37a1` |
 | 45 | 1.36 items 8–15 (accessors on prototypes, gzip Content-Encoding, Workflow ids, struct/queue/rejection/ALS/import/abort flags, request signal, old-date states, newest date 2026-10-01) | done | `33231d1` |
-| 46 | 1.37 (importable `env`/`exports`, eval only during startup, module-scope I/O refused, Python startup window, `reportError`, `sendBeacon`, Performance classes and `node:perf_hooks`/`node:timers`, Queue JSON errors, HMAC/RSA/RSA-PSS checks, `getRpcMethodForTestOnly`) | done | (this commit) |
+| 46 | 1.37 (importable `env`/`exports`, eval only during startup, module-scope I/O refused, Python startup window, `reportError`, `sendBeacon`, Performance classes and `node:perf_hooks`/`node:timers`, Queue JSON errors, HMAC/RSA/RSA-PSS checks, `getRpcMethodForTestOnly`) | done | `ad351f8` |
 | 47+ | Phase 1 in plan order (1.38-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
