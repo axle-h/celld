@@ -476,7 +476,7 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 41 | 1.30 Durable Object reset follow-ups (hang, stale stubs, discarded writes, storage surface) | done | `a7272a7` |
 | 42 | 1.34 Isolate limit follow-ups (per-request CPU limit, D1 query limit, stack frames, `bytes()`) | done | `e1a4bea` |
 | 43 | 1.61 A stuck isolate must not starve the node (security) | done | `7d8df19` |
-| 44 | 1.36 items 1–7 (error serialization, Node timers, Request `cache`, iterable bodies, stream backpressure, Blob MIME type, `Symbol.toStringTag`) | done | (this commit) |
+| 44 | 1.36 items 1–7 (error serialization, Node timers, Request `cache`, iterable bodies, stream backpressure, Blob MIME type, `Symbol.toStringTag`) | done | `0ac37a1` |
 | 45+ | Phase 1 in plan order (1.36 items 8–15, 1.37-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
