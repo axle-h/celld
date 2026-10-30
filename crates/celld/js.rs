@@ -230,7 +230,7 @@ pub struct DoCallReq {
 }
 static DO_CALL_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<DoCallReq>> = OnceLock::new();
 
-/// Delivery order, per caller and per cell.
+/// Delivery order, per caller, per cell and per kind of call.
 ///
 /// Two calls a script makes back-to-back on one Durable Object stub reach
 /// the cell in that order. Workerd guarantees it — one pipe per stub — and
@@ -238,8 +238,16 @@ static DO_CALL_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<DoCallReq>> = Onc
 /// between the call and the cell keeps it now: the caller's two ops race to
 /// the proxy channel, the proxy polls them in a `FuturesUnordered`, and two
 /// drives race for the isolate. So the order is taken where it is still
-/// true, synchronously in `op_do_call_impl`, and carried to the one place
-/// that decides when an event is delivered.
+/// true, synchronously in `op_do_call_impl` and `op_rpc_call`, and carried
+/// to the one place that decides when an event is delivered.
+///
+/// Fetches and RPC calls keep separate chains (`CallKind`). Workerd orders
+/// each kind among itself, by the FIFO of its event loop and of the
+/// object's input gate, but an RPC call takes more turns to reach the object
+/// than a fetch does: of an RPC call and a fetch made back-to-back, the
+/// fetch begins first, cold or warm (`rpc/do-call-order` records it). One
+/// chain for both would make a fetch wait for an RPC call workerd lets it
+/// pass; matching workerd's interleaving would copy its turn counts.
 ///
 /// It is a chain, not a counter: each call leaves behind the receiver its
 /// successor waits on, and takes its predecessor's.
@@ -251,19 +259,54 @@ static DO_CALL_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<DoCallReq>> = Onc
 /// machine cannot show you, and the state was never shared to begin with.
 ///
 /// **Local delivery only.** A call routed to another node crosses HTTP,
-/// where this order has nowhere to ride, so it is dropped there. Workerd
-/// has the same seam in a different place, and a cell that moves mid-flight
-/// reorders under both.
+/// where this order has nowhere to ride. The remote attempt does not wait
+/// for the calls ahead, and it keeps this call's place until the remote call
+/// ends (`CallContext::order`, `dispatch_rpc_call`): a call behind it that
+/// is delivered here, after ownership moves back mid-flight, waits for the
+/// whole remote call rather than for its beginning. Workerd has the same
+/// seam in a different place, and a cell that moves mid-flight reorders
+/// under both.
 pub struct CallOrder {
-    /// The call before this one, or `None` if this is the first.
-    ahead: Option<tokio::sync::oneshot::Receiver<Place>>,
+    /// The call before this one, or `None` if there is none still to begin.
+    ahead: Option<Ahead>,
     /// What the call behind this one waits on.
     release: Option<tokio::sync::oneshot::Sender<Place>>,
     /// The caller that owns the chain, and this call's place in it.
     caller: Arc<IoContext>,
-    cell: String,
+    chain: (CallKind, Arc<str>),
     seq: u64,
     delivered: bool,
+}
+
+/// Which of a caller's chains for a cell a call takes. See `CallOrder`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[doc(hidden)]
+pub enum CallKind {
+    Fetch,
+    Rpc,
+}
+
+/// What a call waits on: the receiver the call ahead of it releases, and
+/// that call's `seq`, which names who will send on it.
+#[doc(hidden)]
+pub struct Ahead {
+    seq: u64,
+    place: tokio::sync::oneshot::Receiver<Place>,
+}
+
+impl Ahead {
+    /// What is still to be waited for, without waiting: a call ahead that
+    /// has been delivered, or died and handed on its place, is passed over.
+    fn settle(mut self) -> Option<Self> {
+        use tokio::sync::oneshot::error::TryRecvError;
+        loop {
+            self = match self.place.try_recv() {
+                Ok(Place(forward)) => *forward?,
+                Err(TryRecvError::Empty) => return Some(self),
+                Err(TryRecvError::Closed) => return None,
+            };
+        }
+    }
 }
 
 /// What a call hands to the one behind it.
@@ -278,18 +321,19 @@ pub struct CallOrder {
 /// flight. Rare, since it needs a call to fail between two that do not, and
 /// silent, since every call involved still gets an answer.
 #[doc(hidden)]
-pub struct Place(Option<Box<tokio::sync::oneshot::Receiver<Place>>>);
+pub struct Place(Option<Box<Ahead>>);
 
 impl CallOrder {
     /// Wait for every call before this one to be delivered.
     ///
     /// A loop rather than one await because a call that died hands back
     /// what *it* was waiting for. `Err` is the chain ahead going away
-    /// entirely, which is nothing left to wait for.
+    /// entirely, which is nothing left to wait for. The receiver is polled
+    /// where it lies, so a wait cancelled mid-await leaves it for `Drop` to
+    /// hand on.
     pub async fn wait(&mut self) {
-        let mut ahead = self.ahead.take();
-        while let Some(place) = ahead {
-            ahead = match place.await {
+        while let Some(ahead) = self.ahead.as_mut() {
+            self.ahead = match (&mut ahead.place).await {
                 Ok(Place(forward)) => forward.map(|boxed| *boxed),
                 Err(_) => None,
             };
@@ -304,53 +348,66 @@ impl CallOrder {
 
 impl Drop for CallOrder {
     fn drop(&mut self) {
-        // Nothing followed this call, so the chain is empty and its tail is
-        // only a leak. A caller's chains outlive its calls otherwise, and a
-        // cell isolate's default caller outlives everything.
-        let mut chains = self.caller.call_chains.lock().unwrap();
-        if chains
-            .tails
-            .get(&self.cell)
-            .is_some_and(|(seq, _)| *seq == self.seq)
-        {
-            chains.tails.remove(&self.cell);
-        }
-        drop(chains);
+        let forward = if self.delivered {
+            None
+        } else {
+            self.ahead.take().and_then(Ahead::settle)
+        };
+        // When nothing followed this call and it had nothing left to wait
+        // for, the chain is empty and its tail is only a leak: a caller's
+        // chains outlive its calls, and a cell isolate's default caller
+        // outlives everything. When it was still waiting, what it waited on
+        // becomes the tail, so the next call waits for the call ahead rather
+        // than on a receiver nobody will send on; that call's `seq` comes
+        // with it, so the tail goes when that call ends in turn.
+        let forward = {
+            let mut chains = self.caller.call_chains.lock().unwrap();
+            match chains.tails.get_mut(&self.chain) {
+                Some(tail) if tail.seq == self.seq => {
+                    match forward {
+                        Some(ahead) => *tail = ahead,
+                        None => {
+                            chains.tails.remove(&self.chain);
+                        }
+                    }
+                    return;
+                }
+                _ => forward,
+            }
+        };
         if let Some(release) = self.release.take() {
-            let forward = (!self.delivered).then(|| self.ahead.take()).flatten();
             let _ = release.send(Place(forward.map(Box::new)));
         }
     }
 }
 
-/// One caller's chains, one per cell it has called.
+/// One caller's chains, one per cell it has called and kind of call.
 #[derive(Default)]
 #[doc(hidden)]
 pub struct CallChains {
     next_seq: u64,
-    pub tails: HashMap<String, (u64, tokio::sync::oneshot::Receiver<Place>)>,
+    tails: HashMap<(CallKind, Arc<str>), Ahead>,
 }
 
-/// Take this call's place in its caller's chain for `cell`. Synchronous, so
-/// the places are taken in the order the script made the calls.
+/// Take this call's place in its caller's `kind` chain for `cell`.
+/// Synchronous, so the places are taken in the order the script made the
+/// calls.
 #[doc(hidden)]
-pub fn enter_call_order(caller: Arc<IoContext>, cell: &str) -> CallOrder {
-    let (release, next) = tokio::sync::oneshot::channel();
+pub fn enter_call_order(caller: Arc<IoContext>, kind: CallKind, cell: &str) -> CallOrder {
+    let (release, place) = tokio::sync::oneshot::channel();
+    let chain = (kind, Arc::<str>::from(cell));
     let (seq, ahead) = {
         let mut chains = caller.call_chains.lock().unwrap();
         chains.next_seq += 1;
         let seq = chains.next_seq;
-        let ahead = chains
-            .tails
-            .insert(cell.to_string(), (seq, next))
-            .map(|(_, ahead)| ahead);
+        let ahead = chains.tails.insert(chain.clone(), Ahead { seq, place });
         (seq, ahead)
     };
     CallOrder {
         ahead,
         release: Some(release),
         caller,
-        cell: cell.to_string(),
+        chain,
         seq,
         delivered: false,
     }
@@ -640,6 +697,9 @@ pub enum CellJob {
         /// dead-letter transfer into another. A binding's call never may.
         internal: bool,
         reply: tokio::sync::oneshot::Sender<Result<RpcOutcome>>,
+        /// Where this call sits in its caller's order of RPC calls to this
+        /// cell, as on `Fetch`.
+        order: Option<CallOrder>,
     },
     WsOpen {
         scope: String,
@@ -713,6 +773,7 @@ impl CellJob {
 
     /// A Durable Object RPC from the admitted `caller`, which decides whether
     /// the call may use a runtime cell's internal methods.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn rpc(
         scope: String,
         name: Option<String>,
@@ -721,6 +782,7 @@ impl CellJob {
         request_id: Option<RequestId>,
         caller: &crate::scope_grant::Caller,
         reply: tokio::sync::oneshot::Sender<Result<RpcOutcome>>,
+        order: Option<CallOrder>,
     ) -> Self {
         CellJob::Rpc {
             request_id,
@@ -730,6 +792,7 @@ impl CellJob {
             args,
             internal: caller.internal(),
             reply,
+            order,
         }
     }
 
@@ -754,7 +817,7 @@ impl CellJob {
     /// wait on it and then release the call behind it.
     pub fn take_order(&mut self) -> Option<CallOrder> {
         match self {
-            CellJob::Fetch { order, .. } => order.take(),
+            CellJob::Fetch { order, .. } | CellJob::Rpc { order, .. } => order.take(),
             _ => None,
         }
     }
@@ -7453,6 +7516,7 @@ fn begin_cell(tc: &mut v8::PinScope, job: CellJob, event_time: i64) -> Begun {
             args,
             internal,
             reply,
+            order: _,
         } => {
             if let Err(error) = register_actor_name(tc, &scope, name.as_deref()) {
                 let _ = reply.send(Err(error));
@@ -12035,6 +12099,7 @@ fn op_facet_rpc(
             args: RpcData::V8(call_args.into()),
             internal: false,
             reply,
+            order: None,
         };
         let (near, owner) = (facet.slot.last_thread(), facet.slot.owner());
         let driving = crate::isolate_threads::spawn_near(
@@ -12447,7 +12512,7 @@ fn op_do_call_impl(
     let (tx, rx) = tokio::sync::oneshot::channel();
     // Taken here and nowhere later: this is the last point that still runs
     // in the order the script made the calls.
-    let order = Some(enter_call_order(current_context(), &cell));
+    let order = Some(enter_call_order(current_context(), CallKind::Fetch, &cell));
     // Every host op needs an internal cancellation channel. A caller without
     // an AbortSignal cannot cancel from JavaScript, but its enclosing Worker
     // can still disappear and drop this op before routing completes.
@@ -12652,8 +12717,9 @@ fn op_rpc_signal_wait(
     rv.set(promise);
 }
 
-/// `__rpc_call(scope, name, method, argsSc)` -> Promise<Uint8Array>;
-/// arguments and result are V8 structured-clone bytes.
+/// `__rpc_call(scope, name, method, argsSc, head?)` -> Promise<Uint8Array>;
+/// arguments and result are V8 structured-clone bytes, and `head` is a
+/// Durable Object stub's (`__DO_UNBOUND_HEAD`).
 fn op_rpc_call(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -12673,6 +12739,7 @@ fn op_rpc_call(
     let head = args.get(4);
     let payload = args.get(3);
     let mut bytes = Vec::new();
+    let stub_call = head.is_array_buffer_view();
     if let Ok(head) = v8::Local::<v8::ArrayBufferView>::try_from(head) {
         bytes.resize(head.byte_length(), 0);
         head.copy_contents(&mut bytes);
@@ -12685,6 +12752,12 @@ fn op_rpc_call(
     let args = RpcData::V8(bytes.into());
     let (tx, rx) = tokio::sync::oneshot::channel();
     let gate = egress_gate_request(&event_context(scope), celld_logic::Channel::CellRpc);
+    // As in `op_do_call_impl`: the last point that runs in the order the
+    // script made the calls. Only a stub's call takes a place, and only a
+    // stub's call has a head: a runtime class's client (`__cellRpc`, behind
+    // KV, D1, Queue and Workflow) is not a stub on workerd, and nothing
+    // orders its calls through one.
+    let order = stub_call.then(|| enter_call_order(current_context(), CallKind::Rpc, &cell));
     let request = RpcCallReq {
         scope: cell,
         name,
@@ -12693,6 +12766,7 @@ fn op_rpc_call(
         reply: tx,
         parent: current_trace_context(scope),
         caller,
+        order,
     };
     let id = asyncrt::enqueue(async move {
         gated_channel_send(gate, &RPC_CALL_TX, request, "no RPC channel").await?;
@@ -13552,6 +13626,137 @@ mod io_context_poll_tests {
         });
         assert!(context.take_poll_request());
         assert!(!context.take_poll_request());
+    }
+}
+
+#[cfg(test)]
+mod call_order_tests {
+    //! `CallOrder`: a caller's calls to one cell begin in the order it made
+    //! them, whichever of them dies on the way.
+    use super::*;
+    use std::future::Future;
+    use std::pin::{pin, Pin};
+    use std::task::{Context, Waker};
+
+    fn ready(wait: Pin<&mut impl Future<Output = ()>>) -> bool {
+        wait.poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready()
+    }
+
+    fn enter(caller: &Arc<IoContext>, cell: &str) -> CallOrder {
+        enter_call_order(caller.clone(), CallKind::Rpc, cell)
+    }
+
+    fn deliver(mut order: CallOrder) {
+        order.delivered();
+    }
+
+    fn tails(caller: &IoContext) -> usize {
+        caller.call_chains.lock().unwrap().tails.len()
+    }
+
+    #[test]
+    fn calls_begin_in_the_order_they_were_made() {
+        let caller = IoContext::new();
+        let (mut a, mut b, mut c) = (
+            enter(&caller, "x"),
+            enter(&caller, "x"),
+            enter(&caller, "x"),
+        );
+        let mut other = enter_call_order(caller.clone(), CallKind::Fetch, "x");
+        assert!(ready(pin!(other.wait())), "a fetch keeps its own chain");
+        assert!(ready(pin!(a.wait())));
+        {
+            let (mut b_waits, mut c_waits) = (pin!(b.wait()), pin!(c.wait()));
+            assert!(!ready(b_waits.as_mut()));
+            assert!(!ready(c_waits.as_mut()));
+            deliver(a);
+            assert!(ready(b_waits.as_mut()));
+            assert!(!ready(c_waits.as_mut()), "c waits for b too");
+        }
+        deliver(b);
+        assert!(ready(pin!(c.wait())));
+    }
+
+    /// A call that dies before delivery hands the call behind it what it was
+    /// waiting for.
+    #[test]
+    fn a_dead_call_hands_on_its_place() {
+        let caller = IoContext::new();
+        let (a, b, mut c) = (
+            enter(&caller, "x"),
+            enter(&caller, "x"),
+            enter(&caller, "x"),
+        );
+        let mut c_waits = pin!(c.wait());
+        drop(b);
+        assert!(!ready(c_waits.as_mut()), "c waits for a, behind the dead b");
+        deliver(a);
+        assert!(ready(c_waits.as_mut()));
+    }
+
+    /// `a` is waiting, `b` dies before delivery with nothing behind it yet,
+    /// and `c` comes after: `c` must not overtake `a`.
+    #[test]
+    fn a_dead_tail_leaves_its_place_for_the_next_call() {
+        let caller = IoContext::new();
+        let first = enter(&caller, "x");
+        let (a, b) = (enter(&caller, "x"), enter(&caller, "x"));
+        drop(b);
+        let mut c = enter(&caller, "x");
+        let mut c_waits = pin!(c.wait());
+        assert!(
+            !ready(c_waits.as_mut()),
+            "c waits for a and what a waits for"
+        );
+        drop(a);
+        assert!(
+            !ready(c_waits.as_mut()),
+            "c waits for first, behind the dead a"
+        );
+        deliver(first);
+        assert!(ready(c_waits.as_mut()));
+    }
+
+    /// A wait cancelled mid-await keeps what it was waiting on, for a later
+    /// wait or for the call behind.
+    #[test]
+    fn a_cancelled_wait_keeps_its_place() {
+        let caller = IoContext::new();
+        let (a, mut b, mut c) = (
+            enter(&caller, "x"),
+            enter(&caller, "x"),
+            enter(&caller, "x"),
+        );
+        assert!(!ready(pin!(b.wait())));
+        assert!(!ready(pin!(b.wait())), "a second wait still waits for a");
+        drop(b);
+        let mut c_waits = pin!(c.wait());
+        assert!(!ready(c_waits.as_mut()), "c waits for a, behind the dead b");
+        deliver(a);
+        assert!(ready(c_waits.as_mut()));
+    }
+
+    /// A chain with nothing in it leaves nothing behind, however its calls
+    /// ended.
+    #[test]
+    fn an_empty_chain_leaves_no_tail() {
+        let caller = IoContext::new();
+        for cell in 0..100 {
+            let mut call = enter(&caller, &cell.to_string());
+            assert!(ready(pin!(call.wait())));
+            deliver(call);
+        }
+        assert_eq!(tails(&caller), 0);
+        let (a, b) = (enter(&caller, "x"), enter(&caller, "x"));
+        drop(b);
+        assert_eq!(tails(&caller), 1, "a's place is the tail now");
+        deliver(a);
+        assert_eq!(tails(&caller), 0);
+        let (a, b) = (enter(&caller, "x"), enter(&caller, "x"));
+        deliver(a);
+        drop(b);
+        assert_eq!(tails(&caller), 0);
     }
 }
 
@@ -14626,6 +14831,7 @@ mod runtime_cell_tests {
             None,
             &call.caller,
             reply,
+            call.order,
         );
         let runtime = crate::asyncrt::test_host_runtime();
         runtime.block_on(crate::runtime::drive_cell(

@@ -1,0 +1,10 @@
+{
+  "workers": ["order"],
+  "steps": [
+    {"path": "/rpc-cold"},
+    {"path": "/rpc-warm"},
+    {"path": "/fetch-cold"},
+    {"path": "/from-object"},
+    {"path": "/two-stubs"}
+  ]
+}

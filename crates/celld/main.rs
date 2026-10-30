@@ -1433,6 +1433,9 @@ async fn dispatch_rpc_call(app: AppHandle, call: RpcCallReq) {
         reply,
         parent,
         caller,
+        // Only a local attempt takes it, as `CallContext::order` for a
+        // fetch: a remote one holds this call's place until the call ends.
+        mut order,
     } = call;
     let result = async {
         anyhow::ensure!(
@@ -1462,7 +1465,16 @@ async fn dispatch_rpc_call(app: AppHandle, call: RpcCallReq) {
                             app.runtime
                                 .as_ref()
                                 .context("no cell runtime")?
-                                .rpc(scope, name, method, args, local_request_id, parent, &caller)
+                                .rpc(
+                                    scope,
+                                    name,
+                                    method,
+                                    args,
+                                    local_request_id,
+                                    parent,
+                                    &caller,
+                                    order.take(),
+                                )
                                 .await
                         })
                         .await;
@@ -2371,6 +2383,7 @@ pub(crate) async fn dispatch_forwarded_rpc(app: AppHandle, call: ForwardedRpc) -
                     local_request_id,
                     parent,
                     &caller,
+                    None,
                 ))
                 .await;
             match completed.result {

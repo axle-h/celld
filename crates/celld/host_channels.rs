@@ -195,6 +195,9 @@ pub struct RpcCallReq {
     pub parent: Option<crate::telemetry::TraceContext>,
     /// Who made the call, as on `DoCallReq`.
     pub caller: crate::scope_grant::Caller,
+    /// Where this call sits in its caller's order for this cell, as on
+    /// `DoCallReq`.
+    pub order: Option<crate::js::CallOrder>,
 }
 pub(crate) static RPC_CALL_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<RpcCallReq>> =
     OnceLock::new();

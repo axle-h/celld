@@ -481,7 +481,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 46 | 1.37 (importable `env`/`exports`, eval only during startup, module-scope I/O refused, Python startup window, `reportError`, `sendBeacon`, Performance classes and `node:perf_hooks`/`node:timers`, Queue JSON errors, HMAC/RSA/RSA-PSS checks, `getRpcMethodForTestOnly`) | done | `ad351f8` |
 | 47 | 1.38 (builtin `node:` and `cloudflare:` modules only under the flags that provide them, side-effect imports and re-exports scanned, per-module flags honoured) | done | `167bd1a` |
 | 48 | 1.39 (timers, random values, bodies, streams, `WebSocketPair`, `waitUntil` and the rest refused in global scope as workerd does; key generation and celld's own timers immune to replaced globals) | done | `c58b76a` |
-| 49+ | Phase 1 in plan order (1.40-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65, 1.66, 1.67), and the 1.4 props key-order follow-up | queued | |
+| 49 | Durable Object stub RPC calls begin in the order they were made (the `storage/nested-root-transactions` flake; see 1.65) | done | (this commit) |
+| 50+ | Phase 1 in plan order (1.40-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65, 1.66, 1.67), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -6272,12 +6273,37 @@ cap; unit tests for the caps.
   breaks two rules (a POST to `ftp://`) gets the URL's TypeError where
   workerd gives the method's, and a 304 under an invalid key rejects where
   workerd resolves. Pre-existing; no case.
-- **`storage/nested-root-transactions` is flaky.** One full run during
-  1.37's verification failed its `/concurrent` step: the two concurrent
-  requests reached the object as `b` then `a` instead of `a` then `b`, so
-  `a` saw `b`'s write. Eight reruns on both runtimes passed. The case
-  predates 1.37; it should order its two requests deterministically rather
-  than rely on arrival order.
+- **As built: `storage/nested-root-transactions` was flaky** (about one run
+  in 20, CI run 41104475000): its `/concurrent` step began `b` before `a`,
+  though the Worker called `a` first on the same stub. The case was right
+  and celld was wrong. A Durable Object stub's RPC calls took no place in
+  their caller's order: each became its own drive task (`run_cell_event`)
+  and the first to take the isolate began first. A stub's `fetch()` already
+  took one (`CallOrder`, taken synchronously in `op_do_call_impl` and waited
+  on in `drive_cell_inner`). On workerd a stub's calls begin in the order
+  they were made, as its event loop and the object's input gate
+  (io-gate.c++, `waiters.front()`) are both FIFO. Fixed: `op_rpc_call` takes
+  the call's place too, `RpcCallReq` and `CellJob::Rpc` carry it, and the
+  drive waits for the calls ahead to be delivered, not to finish, so events
+  still interleave at their awaits. Fetches and RPC calls keep separate
+  chains (`CallKind`): workerd begins a fetch before an RPC call made just
+  ahead of it, cold or warm, which one chain would forbid. Calls from a
+  facet stub take no place, as before. `rpc/do-call-order` makes 24 calls
+  at once on a cold and a warm object, from another object, over two stubs
+  and by `fetch()`, and failed on every run before the fix. Only a stub's
+  RPC call takes a place: `__cellRpc`, behind the KV, D1, Queue and
+  Workflow bindings, shares `op_rpc_call` but sends no stub head, and
+  workerd orders none of those through a stub (ordering them cost about 15%
+  on 600 concurrent KV operations). Review fixed two holes in `CallOrder`
+  that fetch had too, now unit-tested (`call_order_tests`): a call that died
+  undelivered as the tail removed its entry, so the next call began ahead
+  of a call still waiting, and now leaves what it waited on as the tail
+  (with that call's `seq`, so the entry still goes when the chain empties);
+  and `wait` moved its receiver out, so a drive cancelled mid-wait let the
+  next call jump, and now polls it in place. A remote attempt holds its
+  place until the remote call ends, as fetch's does: when ownership moves
+  back mid-flight, a call behind it delivered locally waits for the whole
+  remote call, not just its beginning.
 
 ### 1.66 Gaps found by 1.38
 

@@ -1,0 +1,9 @@
+{
+  "name": "order",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "durable_objects": {
+    "bindings": [{ "name": "RECORDER", "class_name": "Recorder" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Recorder"] }]
+}

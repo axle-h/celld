@@ -1937,9 +1937,19 @@ impl RuntimeManager {
         request_id: Option<js::RequestId>,
         parent: Option<crate::telemetry::TraceContext>,
         caller: &crate::scope_grant::Caller,
+        order: Option<js::CallOrder>,
     ) -> anyhow::Result<js::RpcOutcome> {
         let (reply, receive) = tokio::sync::oneshot::channel();
-        let job = CellJob::rpc(cell.clone(), name, method, args, request_id, caller, reply);
+        let job = CellJob::rpc(
+            cell.clone(),
+            name,
+            method,
+            args,
+            request_id,
+            caller,
+            reply,
+            order,
+        );
         self.cell_event(
             &cell,
             job,
