@@ -482,7 +482,7 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 47 | 1.38 (builtin `node:` and `cloudflare:` modules only under the flags that provide them, side-effect imports and re-exports scanned, per-module flags honoured) | done | `167bd1a` |
 | 48 | 1.39 (timers, random values, bodies, streams, `WebSocketPair`, `waitUntil` and the rest refused in global scope as workerd does; key generation and celld's own timers immune to replaced globals) | done | `c58b76a` |
 | 49 | Durable Object stub RPC calls begin in the order they were made (the `storage/nested-root-transactions` flake; see 1.65) | done | `247e708` |
-| 50 | 1.40 (workerd's error types and texts across the runtime APIs; non-extractable key material private, SubtleCrypto receivers checked, node:crypto handles private; Request/Response/Cache/HTMLRewriter checks) | done | (this commit) |
+| 50 | 1.40 (workerd's error types and texts across the runtime APIs; non-extractable key material private, SubtleCrypto receivers checked, node:crypto handles private; Request/Response/Cache/HTMLRewriter checks) | done | `4d9c582` |
 | 51+ | Phase 1 in plan order (1.41-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65, 1.66, 1.67, 1.68), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
