@@ -1,0 +1,10 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/?group=timers"},
+    {"path": "/?group=random"},
+    {"path": "/?group=bodies"},
+    {"path": "/?group=streams"},
+    {"path": "/?group=other"}
+  ]
+}

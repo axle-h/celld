@@ -10,6 +10,7 @@
     "#abortsignal-rpc": "./lib/worker/abortsignal-rpc.js",
     "#byob": "./lib/worker/byob.js",
     "#clone": "./lib/worker/clone.js",
+    "#global-scope-ops": "./lib/worker/global-scope-ops.js",
     "#marker-shaped": "./lib/worker/marker-shaped.js",
     "#params-dup": "./lib/worker/params-dup.js",
     "#process-env": "./lib/worker/process-env.js",

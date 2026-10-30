@@ -1,0 +1,25 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "patched-draw-all-zero": true,
+        "aes-gcm-key-all-zero": false,
+        "aes-cbc-key-all-zero": false,
+        "hmac-key-all-zero": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "scheduler-wait": "resolved",
+        "abort-signal-timeout": "rejected TimeoutError",
+        "node-timers-promises": "resolved",
+        "node-timers-promises-aborted": "rejected AbortError",
+        "replaced-calls": 0
+      }
+    }
+  ]
+}

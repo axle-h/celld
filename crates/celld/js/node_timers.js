@@ -3,6 +3,10 @@
 // Injected lazily into the generated stub module, so an isolate that never
 // imports it pays nothing.
 (() => {
+  // workerd's node:timers/promises arms through node:timers' own timers,
+  // which captured the globals' originals, so replacing the global
+  // setTimeout does not reach it; these are celld's (harness.js).
+  const { __setTimeout: setTimer, __clearTimeout: clearTimer } = __celld;
   const withSignal = (ms, value, options, schedule) =>
     new Promise((resolve, reject) => {
       const signal = options && options.signal;
@@ -17,7 +21,7 @@
       }, Number(ms) || 0);
       if (signal) {
         onAbort = () => {
-          globalThis.clearTimeout(id);
+          clearTimer(id);
           reject(signal.reason);
         };
         signal.addEventListener("abort", onAbort, { once: true });
@@ -25,10 +29,10 @@
     });
 
   const setTimeout_ = (ms, value, options) =>
-    withSignal(ms, value, options, globalThis.setTimeout);
+    withSignal(ms, value, options, setTimer);
 
   const setImmediate_ = (value, options) =>
-    withSignal(0, value, options, globalThis.setTimeout);
+    withSignal(0, value, options, setTimer);
 
   // Yields once per interval until the caller stops iterating or aborts.
   async function* setInterval_(ms, value, options) {

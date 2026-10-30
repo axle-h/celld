@@ -290,12 +290,11 @@ function __mimeEscape(value) {
 // Serialize a FormData into a multipart/form-data body. The boundary must
 // not occur in any part; 16 random bytes make that collision unreachable,
 // and the delimiter stays unquoted so a `boundary=` parameter needs no
-// quoting.
+// quoting. They are celld's own draw, which neither a script's `crypto` nor
+// global scope reaches.
 function __multipartBody(form) {
   const random = new Uint8Array(16);
-  if (globalThis.crypto && crypto.getRandomValues) crypto.getRandomValues(random);
-  else for (let i = 0; i < random.length; i++)
-    random[i] = Math.floor(Math.random() * 256);
+  $$celldRandomValues(random);
   const boundary = "----celldFormBoundary" +
     Array.from(random, (byte) => byte.toString(16).padStart(2, "0")).join("");
   const encoder = new TextEncoder();
@@ -864,6 +863,12 @@ const __bodyUsed = (target) => {
 // finished stream has two of them).
 const __closedUnread = (body) =>
   body != null && body._closed === true && body._disturbed !== true;
+// workerd reads a stream body with the request's buffering limit
+// (`Body::bufferingLimit`), so global scope refuses the read before it
+// starts; a buffered body, or none, needs no request.
+const __requireReadContext = (target) => {
+  if (__bodyBytesRaw(target) === null) __require_io_context();
+};
 const __markBodyRead = (target) => {
   if (!__closedUnread(__bodyStream(target))) __setBodyRead(target, true);
 };
@@ -969,6 +974,8 @@ class __BodyFields extends __Stamp {
     // strip_bom_in_read_all_text. A Request keeps what it decoded; a
     // Response decodes each time.
     __bodyText = async (target) => {
+      // workerd reports a used body before it asks for the request.
+      if (!__bodyUsed(target)) __requireReadContext(target);
       __markBodyRead(target);
       const bytes = await __consumeBody(target);
       const strip = __cell.compat.stripBomInReadAllText;
@@ -992,6 +999,7 @@ class __BodyFields extends __Stamp {
       }
       async arrayBuffer() {
         if (!__isBody(this)) throw __illegalInvocation();
+        __requireReadContext(this);
         __markBodyRead(this);
         return __handOverBody(this, await __consumeBody(this));
       }
@@ -999,6 +1007,7 @@ class __BodyFields extends __Stamp {
       // own, which `arrayBuffer()` hands over.
       async bytes() {
         if (!__isBody(this)) throw __illegalInvocation();
+        __requireReadContext(this);
         __markBodyRead(this);
         return new __Uint8Array(__handOverBody(this, await __consumeBody(this)));
       }
@@ -1010,17 +1019,25 @@ class __BodyFields extends __Stamp {
         if (!__isBody(this)) throw __illegalInvocation();
         return __jsonParse(await __bodyText(this));
       }
+      // workerd's `Body::formData`: a used body, then a missing Content-Type,
+      // before anything is read.
       async formData() {
         if (!__isBody(this)) throw __illegalInvocation();
+        if (__bodyUsed(this)) throw new TypeError(__BODY_USED);
+        const contentType =
+          __ReflectApply(__HeadersGet, __bodyHeaders(this), ["content-type"]);
+        if (contentType === null)
+          throw new TypeError("Parsing a Body as FormData requires a Content-Type header.");
+        __requireReadContext(this);
         // The undecoded bytes, not `text()`: a UTF-8 decode replaces each invalid
         // sequence in a binary file part with one U+FFFD, so both the bytes and
         // the length change.
         __markBodyRead(this);
-        return __celld.__parseFormData(await __consumeBody(this),
-          __ReflectApply(__HeadersGet, __bodyHeaders(this), ["content-type"]));
+        return __celld.__parseFormData(await __consumeBody(this), contentType);
       }
       async blob() {
         if (!__isBody(this)) throw __illegalInvocation();
+        __requireReadContext(this);
         __markBodyRead(this);
         return __bodyBlob(__handOverBody(this, await __consumeBody(this)),
           __ReflectApply(__HeadersGet, __bodyHeaders(this), ["content-type"]));
@@ -1175,6 +1192,11 @@ class __ResponseFields extends __Stamp {
         } else if (self.#status !== 101) {
           throw new RangeError("Responses with a WebSocket must have status code 101.");
         }
+        // workerd makes any body but a stream in the request
+        // (`Body::extractBody`), after these checks: global scope refuses it.
+        if (!fromNetwork && body !== undefined && body !== null &&
+            !(body instanceof __ReadableStream))
+          __require_io_context();
         self.#cf = initCf;
         return self;
     };
@@ -1228,9 +1250,13 @@ class __ResponseFields extends __Stamp {
             `${statusCode} is not a redirect status code. ` +
             "It must be one of: 301, 302, 303, 307, or 308.");
         }
+        const location = new URL(input).href;
+        // workerd builds the Location header with the request's header
+        // table, so global scope refuses it once the URL has parsed.
+        __require_io_context();
         const response = new Response(null, {
           status: statusCode,
-          headers: { Location: new URL(input).href },
+          headers: { Location: location },
         });
         // A redirect response owns a guarded header list. Without the guard, an
         // application can rewrite Location after construction, which differs
@@ -1593,6 +1619,11 @@ class __RequestFields extends __Stamp {
             throw new TypeError(`Invalid HTTP method string: ${raw}`);
           self.#method = upper;
         }
+        // A script's init with a body but a stream: workerd makes it in the
+        // request (`Body::extractBody`), so global scope refuses it.
+        if (internal === null && hasBody && body !== null && !__isRequest(init) &&
+            !(body instanceof __ReadableStream))
+          __require_io_context();
         let stream = null;
         let typed = null;
         if (hasBody && body !== null && typeof body === "object") {
@@ -2040,12 +2071,17 @@ const __fetchedFrom = (response, urls) => {
   __setResponseRedirected(response, urls.length > 1);
   return response;
 };
+// workerd asks for the request once the Request is made (`fetchImpl`), so
+// global scope refuses there, in the caller's frame, before the first await.
 globalThis.fetch = async (input, init) => {
   const rawUrl = typeof input === "string" ? input : input?.url;
   if (typeof rawUrl === "string" && rawUrl.startsWith("data:")) {
+    __require_io_context();
     return __dataUrlResponse(rawUrl);
   }
-  return __fetchThrough(new __Request(input, init), __fetchNetwork);
+  const request = new __Request(input, init);
+  __require_io_context();
+  return __fetchThrough(request, __fetchNetwork);
 };
 // The global fetch(), for celld's own callers (navigator.sendBeacon), so a
 // Worker that replaces globalThis.fetch changes none of them.
@@ -2683,9 +2719,28 @@ const __timerThen = Promise.prototype.then;
 const __timerThis = globalThis;
 const __clearTimer = (id) => {
   const armed = __ReflectApply(__MapGet, __timers, [id]);
-  if (armed === undefined) return;
+  if (armed === undefined) {
+    // workerd looks a timer up among the request's, so global scope, which
+    // has none, refuses it (`IoContext::current()`); a set one cannot exist
+    // there, as setting one is refused too.
+    __require_io_context();
+    return;
+  }
   __ReflectApply(__MapDelete, __timers, [id]);
   __timer_cancel(armed);
+};
+const __NumberIsSafeInteger = Number.isSafeInteger;
+// workerd's clearTimeout() and clearInterval() (api/global-scope.c++): the
+// id is required, converts as a number, and clears a timer only when it is a
+// safe integer; null or undefined clears nothing.
+const __clearTimerArgument = (method, args) => {
+  if (args.length === 0)
+    throw new TypeError(`Failed to execute '${method}' on 'ServiceWorkerGlobalScope': ` +
+      "parameter 1 is not of type 'Number'.");
+  const value = args[0];
+  if (value === undefined || value === null) return;
+  const id = +value;
+  if (__NumberIsSafeInteger(id)) __clearTimer(id);
 };
 const __armTimeout = (cb, ms, a) => {
   const id = __timer_alloc();
@@ -2734,13 +2789,22 @@ const __baseTimers = {
     return __armInterval(cb, args[1], args.slice(2));
   },
   // One id space and one cancel, because a caller can cross the two.
-  clearTimeout(...args) { __clearTimer(args[0]); },
-  clearInterval(...args) { __clearTimer(args[0]); },
+  clearTimeout(...args) { __clearTimerArgument("clearTimeout", args); },
+  clearInterval(...args) { __clearTimerArgument("clearInterval", args); },
 };
 globalThis.setTimeout = __baseTimers.setTimeout;
 globalThis.setInterval = __baseTimers.setInterval;
 globalThis.clearTimeout = __baseTimers.clearTimeout;
 globalThis.clearInterval = __baseTimers.clearInterval;
+// celld's own timers: Queue flushes, Workflow deadlines, scheduler.wait(),
+// AbortSignal.timeout(), node:timers/promises and EventSource retries. In
+// workerd these are C++ (or node:timers' captured originals), so a script
+// that replaces the global setTimeout or clearTimeout does not reach them.
+// They still allocate through `__timer_alloc`, so global scope refuses them.
+const __setTimeout = __baseTimers.setTimeout;
+const __clearTimeout = __baseTimers.clearTimeout;
+__celld.__setTimeout = __setTimeout;
+__celld.__clearTimeout = __clearTimeout;
 // enable_nodejs_global_timers: the global setTimeout and setInterval return
 // Node.js Timeout objects, and clearTimeout and clearInterval take them as
 // well as ids. workerd's node-internal:internal_timers and its
@@ -2890,9 +2954,10 @@ const __makeNodeTimers = () => {
     error.code = "ERR_INVALID_ARG_TYPE";
     throw error;
   };
+  // A number goes to the global clearTimeout() of before the override.
   const clearTimer = (timer) => {
     if (timer instanceof Timeout) clear(timer);
-    else if (typeof timer === "number") __clearTimer(timer);
+    else if (typeof timer === "number") __clearTimerArgument("clearTimeout", [timer]);
   };
   // workerd's Immediate (api/global-scope.h): a zero-delay timer whose
   // ref() and unref() do nothing and whose hasRef() is false. It has no
@@ -9884,7 +9949,7 @@ function __queueMessageId(now) {
     }
   }
   const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
+  $$celldRandomValues(bytes);
   const ms = __queueIdMs;
   bytes[0] = Math.floor(ms / 0x10000000000) & 0xff;
   bytes[1] = Math.floor(ms / 0x100000000) & 0xff;
@@ -10534,7 +10599,7 @@ class __QueueCell {
       timer: null,
     };
     this._producerGroup = group;
-    group.timer = setTimeout(() => {
+    group.timer = __setTimeout(() => {
       void this._flushProducerGroup(group);
     }, __queueLimits().producerGroupMs);
     return group;
@@ -10545,7 +10610,7 @@ class __QueueCell {
     group.flushing = true;
     if (this._producerGroup === group) this._producerGroup = null;
     if (group.timer !== null) {
-      clearTimeout(group.timer);
+      __clearTimeout(group.timer);
       group.timer = null;
     }
 
@@ -12352,7 +12417,7 @@ const __wfEnterStep = (name, fn) => {
 // discarded and the timeout counts as a failed attempt, as upstream.
 const __wfTimeout = (promise, ms, name, attempt) =>
   new Promise((resolve, reject) => {
-    const timer = setTimeout(
+    const timer = __setTimeout(
       () =>
         reject(new Error(
           `step ${JSON.stringify(name)} timed out after ${ms} ms (attempt ${attempt})`,
@@ -12360,8 +12425,8 @@ const __wfTimeout = (promise, ms, name, attempt) =>
       ms,
     );
     promise.then(
-      (value) => { clearTimeout(timer); resolve(value); },
-      (error) => { clearTimeout(timer); reject(error); },
+      (value) => { __clearTimeout(timer); resolve(value); },
+      (error) => { __clearTimeout(timer); reject(error); },
     );
   });
 
@@ -13198,7 +13263,7 @@ const __WorkflowCell = (() => {
       stallTimer: undefined,
       clearStall() {
         if (this.stallTimer !== undefined) {
-          clearTimeout(this.stallTimer);
+          __clearTimeout(this.stallTimer);
           this.stallTimer = undefined;
         }
       },
@@ -13220,7 +13285,7 @@ const __WorkflowCell = (() => {
     driver.check = () => {
       if (driver.checkQueued || driver.finished) return;
       driver.checkQueued = true;
-      setTimeout(() => {
+      __setTimeout(() => {
         driver.checkQueued = false;
         if (driver.finished || driver.running !== 0) return;
         if (driver.pauseRequested) {
@@ -13243,7 +13308,7 @@ const __WorkflowCell = (() => {
         // run() from the top anyway, so losing the timer loses nothing --
         // the replay re-enters the same stall and re-arms its own grace.
         if (driver.stallTimer !== undefined) return;
-        driver.stallTimer = setTimeout(() => {
+        driver.stallTimer = __setTimeout(() => {
           driver.stallTimer = undefined;
           if (driver.finished || driver.running !== 0 || driver.blocked.length > 0) {
             return;
@@ -13700,6 +13765,9 @@ const __cf = __celld.__cf = {
   // works through __makeStub's getPrototypeOf trap.
   RpcStub: class RpcStub {
     constructor(target) {
+      // workerd's stub belongs to the request, which it asks for before it
+      // checks the target, so global scope refuses one.
+      __require_io_context();
       if (target === null ||
           (typeof target !== "object" && typeof target !== "function"))
         throw new TypeError(
@@ -13718,9 +13786,11 @@ const __cf = __celld.__cf = {
   // the current event or extend its active background work. Outside either
   // lifetime this is Workerd's global-scope error.
   waitUntil(promise) {
-    if (!__wait_until_active())
+    if (!__wait_until_active()) {
+      __require_io_context();
       throw new Error(
         "Disallowed operation called within global scope.");
+    }
     __registerWaitUntil(promise);
   },
   // The key of a `[restore]()` method. Like workerd's (an API symbol,
@@ -14520,7 +14590,7 @@ if (!globalThis.AbortSignal) {
     }
     static timeout(ms) {
       const c = new AbortController();
-      setTimeout(() => c.abort(new DOMException(
+      __setTimeout(() => c.abort(new DOMException(
         "The operation was aborted due to timeout", "TimeoutError",
       )), ms);
       return c.signal;
@@ -14670,8 +14740,10 @@ if (!globalThis.Blob) {
     // workerd's Blob::text keeps a leading byte order mark.
     async text() { return __utf8(this.#bytes, false); }
     // A platform stream, as in workerd, so a BYOB reader works on it. Each
-    // chunk is a copy: the Blob's bytes stay its own.
+    // chunk is a copy: the Blob's bytes stay its own. workerd makes it in the
+    // request, so global scope refuses it.
     stream() {
+      __require_io_context();
       const bytes = this.#bytes;
       let offset = 0;
       return new CelldChunkStream(() => {
@@ -16329,6 +16401,8 @@ globalThis.WebSocketPair = function WebSocketPair() {
   if (new.target === undefined)
     throw new TypeError("Failed to construct 'WebSocketPair': Please use the " +
       "'new' operator, this object constructor cannot be called as a function.");
+  // workerd's ends belong to the request, so global scope refuses a pair.
+  __require_io_context();
   // Both ends take the id the host allocates when one of them is registered:
   // accepted by a Durable Object, or returned by a Worker.
   const client = __wsCreate({ __proto__: null });
@@ -16471,18 +16545,21 @@ if (!globalThis.scheduler) {
               "the provided value is not of type 'AbortSignal'.");
         }
         if (signal === undefined) {
-          setTimeout(resolve, ms);
+          __setTimeout(resolve, ms);
           return;
         }
         if (signal.aborted) {
+          // workerd makes its promise in the request, so global scope
+          // refuses even a wait that is already aborted.
+          __require_io_context();
           reject(signal.reason);
           return;
         }
         const onAbort = () => {
-          clearTimeout(id);
+          __clearTimeout(id);
           reject(signal.reason);
         };
-        const id = setTimeout(() => {
+        const id = __setTimeout(() => {
           signal.removeEventListener("abort", onAbort);
           resolve();
         }, ms);

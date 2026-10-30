@@ -1,12 +1,30 @@
 {
   "workers": ["app"],
-  "xfail": "1.39",
   "steps": [
     {"path": "/?child=timer"},
     {"path": "/?child=scheduler-wait"},
     {"path": "/?child=random"},
     {"path": "/?child=response-text"},
     {"path": "/?child=transform-stream"},
-    {"path": "/?child=fetch"}
+    {"path": "/?child=fetch"},
+    {"path": "/?child=fetch-data-url"},
+    {"path": "/?child=interval"},
+    {"path": "/?child=clear-timeout"},
+    {"path": "/?child=abort-signal-timeout"},
+    {"path": "/?child=random-uuid"},
+    {"path": "/?child=generate-key"},
+    {"path": "/?child=generate-key-unawaited"},
+    {"path": "/?child=request-body"},
+    {"path": "/?child=response-json"},
+    {"path": "/?child=response-redirect"},
+    {"path": "/?child=blob-stream"},
+    {"path": "/?child=compression-stream"},
+    {"path": "/?child=fixed-length-stream"},
+    {"path": "/?child=websocket-pair"},
+    {"path": "/?child=event-source"},
+    {"path": "/?child=rpc-stub"},
+    {"path": "/?child=wait-until"},
+    {"path": "/?child=set-immediate"},
+    {"path": "/?child=diagnostics-publish"}
   ]
 }

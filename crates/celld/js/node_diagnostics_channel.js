@@ -43,6 +43,9 @@
       for (const callback of [...this.#subscribers]) {
         Reflect.apply(callback, undefined, [message, this.#name]);
       }
+      // workerd then hands the message to the request's tracer, so global
+      // scope refuses a publication once its subscribers have run.
+      __require_io_context();
     }
 
     subscribe(callback) {

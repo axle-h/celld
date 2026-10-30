@@ -3826,7 +3826,7 @@ struct ActorRuntimeState {
     internals: OnceLock<v8::Global<v8::Object>>,
     /// Set while the main module evaluates, with the microtasks it queued:
     /// workerd's global scope, where no request is current, so the ops of
-    /// [`GLOBAL_SCOPE_IO_OPS`] refuse.
+    /// [`GLOBAL_SCOPE_OPS`] refuse.
     global_scope: AtomicBool,
     /// See [`op_python_startup`].
     python_startup: AtomicU8,
@@ -9363,20 +9363,28 @@ impl Worker {
 
 // ---- native ops exposed to JS ----
 
-/// The ops that start I/O through a binding or the network: a subrequest, a
-/// service binding's fetch or RPC, a Durable Object or runtime cell call
-/// (KV, Queues, Workflows), R2, a Worker Loader, a socket. workerd asks each
-/// for the current request (`IoContext::current()`), which global scope does
-/// not have, so it throws its global-scope error there and starts nothing.
-/// celld refuses them the same way while the main module evaluates
+/// The ops that need a request: those that start I/O through a binding or
+/// the network (a subrequest, a service binding's fetch or RPC, a Durable
+/// Object or runtime cell call for KV, Queues and Workflows, R2, a Worker
+/// Loader, a socket), set a timer (`__timer_alloc`: every timer, node:timers'
+/// and `AbortSignal.timeout()`'s too), draw random values for a script
+/// (`$$randomValues`: `getRandomValues()`, `randomUUID()`, and so the AES and
+/// HMAC keys `generateKey()` makes and node:crypto's random functions; celld's
+/// own ids draw through `$$celldRandomValues`), or start a compression stream
+/// (`__zlib_stream_new`). workerd asks each for the current request
+/// (`IoContext::current()`), which global scope does not have, so it throws
+/// its global-scope error there and starts nothing. celld refuses them the
+/// same way while the main module evaluates
 /// ([`ActorRuntimeState::global_scope`]), before the op runs, so nothing is
 /// enqueued for a later request to start. `__require_io_context` does
-/// nothing else: the harness calls it where workerd's method throws
-/// synchronously ahead of an op of its own, or refuses ahead of its checks
-/// of its arguments. Timers, random values and body reads stay with plan
-/// item 1.39.
-const GLOBAL_SCOPE_IO_OPS: &[&str] = &[
+/// nothing else: the harness calls it where workerd's method asks ahead of an
+/// op of its own, or asks where celld has no op at all (making or reading a
+/// body, a stream or a WebSocketPair, an RpcStub).
+const GLOBAL_SCOPE_OPS: &[&str] = &[
     "__require_io_context",
+    "__timer_alloc",
+    "$$randomValues",
+    "__zlib_stream_new",
     "__op_fetch",
     "__asset_fetch",
     "__svc_call",
@@ -9414,13 +9422,13 @@ const GLOBAL_SCOPE_ERROR: &str = "Disallowed operation called within global scop
      values are not allowed within global scope. To fix this error, perform this operation \
      within a handler. https://developers.cloudflare.com/workers/runtime-apis/handlers/";
 
-/// Whether `name` is in [`GLOBAL_SCOPE_IO_OPS`], for the op table to decide at
+/// Whether `name` is in [`GLOBAL_SCOPE_OPS`], for the op table to decide at
 /// compile time.
 const fn refused_in_global_scope(name: &str) -> bool {
     let name = name.as_bytes();
     let mut op = 0;
-    while op < GLOBAL_SCOPE_IO_OPS.len() {
-        let listed = GLOBAL_SCOPE_IO_OPS[op].as_bytes();
+    while op < GLOBAL_SCOPE_OPS.len() {
+        let listed = GLOBAL_SCOPE_OPS[op].as_bytes();
         if listed.len() == name.len() {
             let mut byte = 0;
             while byte < name.len() && listed[byte] == name[byte] {
@@ -9449,12 +9457,42 @@ fn throw_global_scope_error(scope: &mut v8::PinScope) {
 }
 
 /// `__require_io_context()`: nothing in a request; in global scope the op
-/// table refuses it ([`GLOBAL_SCOPE_IO_OPS`]).
+/// table refuses it ([`GLOBAL_SCOPE_OPS`]).
 fn op_require_io_context(
     _scope: &mut v8::PinScope,
     _args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
 ) {
+}
+
+/// `__in_global_scope()`: whether the main module is evaluating, for an API
+/// whose refusal there is its own error rather than the global-scope one
+/// (`new EventSource()`).
+fn op_in_global_scope(
+    scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    rv.set_bool(in_global_scope(scope));
+}
+
+#[cfg(test)]
+mod global_scope_ops_tests {
+    use super::*;
+
+    /// A name the op table lacks would refuse nothing, so each listed op must
+    /// be one the table installs, and celld's own random draw must not be
+    /// listed.
+    #[test]
+    fn every_listed_op_is_installed() {
+        for name in GLOBAL_SCOPE_OPS {
+            assert!(OP_NAMES.contains(name), "{name} is not an op");
+            assert!(refused_in_global_scope(name));
+        }
+        assert!(!refused_in_global_scope("$$celldRandomValues"));
+        assert!(!refused_in_global_scope("__in_global_scope"));
+        assert!(!refused_in_global_scope("__timer_cancel"));
+    }
 }
 
 /// One host op per entry. The macro names the table and the installer
@@ -9467,7 +9505,7 @@ fn op_require_io_context(
 /// the actor, and a loaded worker once reached `__do_call` around its
 /// `globalOutbound: null` (denoland/celld#192).
 ///
-/// An op in [`GLOBAL_SCOPE_IO_OPS`] refuses, before it runs, while the main
+/// An op in [`GLOBAL_SCOPE_OPS`] refuses, before it runs, while the main
 /// module evaluates.
 macro_rules! ops {
     ($names:ident, $install:ident, $($name:literal => $op:path),* $(,)?) => {
@@ -9914,6 +9952,7 @@ ops! { OP_NAMES, install_op_functions,
         "__isolate_condemn" => op_isolate_condemn,
         "__python_startup" => op_python_startup,
         "__require_io_context" => op_require_io_context,
+        "__in_global_scope" => op_in_global_scope,
         "__timer_alloc" => op_timer_alloc,
         "__io_context_id" => op_io_context_id,
         "__io_context_poll" => op_io_context_poll,
@@ -9927,6 +9966,7 @@ ops! { OP_NAMES, install_op_functions,
         "__timer_cancel" => op_timer_cancel,
         "__crypto_operation" => crypto::op_crypto_operation,
         "$$randomValues" => crypto::op_webcrypto_random,
+        "$$celldRandomValues" => crypto::op_webcrypto_random,
         "$$digest" => crypto::op_webcrypto_digest,
         "$$hmacSign" => crypto::op_webcrypto_hmac_sign,
         "$$hmacVerify" => crypto::op_webcrypto_hmac_verify,

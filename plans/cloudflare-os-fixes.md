@@ -480,7 +480,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 45 | 1.36 items 8–15 (accessors on prototypes, gzip Content-Encoding, Workflow ids, struct/queue/rejection/ALS/import/abort flags, request signal, old-date states, newest date 2026-10-01) | done | `33231d1` |
 | 46 | 1.37 (importable `env`/`exports`, eval only during startup, module-scope I/O refused, Python startup window, `reportError`, `sendBeacon`, Performance classes and `node:perf_hooks`/`node:timers`, Queue JSON errors, HMAC/RSA/RSA-PSS checks, `getRpcMethodForTestOnly`) | done | `ad351f8` |
 | 47 | 1.38 (builtin `node:` and `cloudflare:` modules only under the flags that provide them, side-effect imports and re-exports scanned, per-module flags honoured) | done | `167bd1a` |
-| 48+ | Phase 1 in plan order (1.39-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65, 1.66), and the 1.4 props key-order follow-up | queued | |
+| 48 | 1.39 (timers, random values, bodies, streams, `WebSocketPair`, `waitUntil` and the rest refused in global scope as workerd does; key generation and celld's own timers immune to replaced globals) | done | (this commit) |
+| 49+ | Phase 1 in plan order (1.40-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65, 1.66, 1.67), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -3029,6 +3030,140 @@ Response("x")` throws the error at module scope, where `new Response(null)`
 does not (probed by 1.37's `env/global-scope-io-more`).
 
 **Tests.** `loader/global-scope-io` loses its `xfail`.
+
+**As built (done).** Probed on workerd 1.20261001.1 (a Dynamic Worker per
+operation, which catches and reports) and read in its source at that tag:
+io/io-context.c++ `IoContext::current()` and its callers in
+api/global-scope.c++ (the timers, `setImmediate`), api/basics.c++
+(`Scheduler::wait`, `AbortSignal::timeout`), api/crypto/crypto.c++,
+digest.c++ and aes.c++ (`getRandomValues`, `randomUUID`, `generateHmac`,
+`generateAes`), api/http.c++ (`Body::bufferingLimit`, `Body::text`,
+`Body::formData`, `Response::constructor`, `Response::redirect`,
+`Request::constructor`, `fetchImpl`), api/js-readable-stream.c++
+(`bufferBackedImpl`), api/blob.c++ (`Blob::stream`),
+api/streams/compression.c++ and identity-transform-stream.c++,
+api/web-socket.c++ (`WebSocketPair`), api/worker-rpc.c++
+(`JsRpcStub::constructor`), api/html-rewriter.c++ (`transform`),
+api/eventsource.c++, api/node/diagnostics-channel.c++ (`Channel::publish`),
+api/workers-module.c++ (`waitUntil`), and src/node/internal/internal_timers.ts.
+- **workerd's rules.** Every method that asks for the current request throws
+  the global-scope `Error` at module scope, synchronously, or as a rejection
+  when the method returns a promise (`scheduler.wait()`, a body read,
+  `generateKey()`), after the checks it makes first: argument conversions,
+  `getRandomValues()`'s integer-view and 64 KiB checks, `generateKey()`'s
+  usages and AES length, a Response's init and status, `Response.redirect()`'s
+  status and URL, a used body or a missing Content-Type for `formData()`.
+  Refused: setting a timer (`setTimeout`, `setInterval`, `setImmediate`,
+  `scheduler.wait()` even with an aborted signal, `AbortSignal.timeout()`,
+  node:timers and its promises), clearing one by a safe-integer id
+  (`clearTimeout(1)`, `clearTimeout("1")`; not `undefined`, `null` or 1.5);
+  `getRandomValues()`, `randomUUID()`, an AES or HMAC key from
+  `generateKey()` and node:crypto's random functions (ECDSA, Ed25519, X25519
+  and RSA keys are made); making any body but a stream (a string, bytes, a
+  Blob, FormData, URLSearchParams, an async iterable; `Response.json()`,
+  `Response.redirect()`, a Request with one); reading a stream body
+  (`text()`, `json()`, `arrayBuffer()`, `bytes()`, `blob()`, `formData()`;
+  a null body reads as empty, and reading the stream itself waits);
+  `Blob.stream()`; `IdentityTransformStream`, `FixedLengthStream`,
+  `CompressionStream`, `DecompressionStream` (a TransformStream, a
+  WritableStream, the text streams and `DigestStream` are made);
+  `WebSocketPair`; `new RpcStub()`; `HTMLRewriter.transform()` of a body;
+  `waitUntil()` from `cloudflare:workers`; a diagnostics_channel
+  `publish()`, after its subscribers run. `new EventSource()` and
+  `EventSource.from()` throw `NotSupportedError: An EventSource can only be
+  created within the context of a worker request.` first. A Worker whose
+  module scope lets one escape fails to start with `Failed to start
+  Worker:` and `Uncaught Error: Disallowed operation …` and the caller's
+  frames; an unawaited rejected `generateKey()` does not fail it. A Durable
+  Object's constructor, its own and a facet's from a Dynamic Worker, runs in
+  the request that reached it, so all of these work there.
+- **celld** refuses at the same points. The op table's list, now
+  `GLOBAL_SCOPE_OPS` (js.rs), gains `__timer_alloc` (every timer),
+  `$$randomValues` (a script's random values) and `__zlib_stream_new` (the
+  compression streams), so those cost a slot read and nothing in the
+  harness. celld's own random draws (multipart boundaries, queue message
+  ids, the harness's UUIDs) go through a second name for the same op,
+  `$$celldRandomValues`, which nothing refuses and no script reaches, so
+  they also no longer go through a script's `crypto`. `generateKey()` draws
+  an AES or HMAC key through `$$randomValues` itself, not through
+  `getRandomValues()`, which a script can replace on `Crypto.prototype`
+  (it made all-zero keys, and a key at module scope); workerd's draw is
+  native. celld's own timers (a Queue producer group's flush, a Workflow
+  step's deadline and its quiescence and stall timers, `scheduler.wait()`,
+  `AbortSignal.timeout()`, node:timers/promises and EventSource's retry) arm
+  through the harness's timers (`__setTimeout`, `__clearTimeout`, on
+  `__celld` for the scripts after it) instead of the global `setTimeout`,
+  which a script can replace; workerd's are C++, and its
+  node:timers/promises uses node:timers', which captured the originals.
+  They still allocate through `__timer_alloc`, so global scope refuses
+  them as before. The rest ask
+  `__require_io_context()` where workerd asks: the Response constructor
+  after its status checks, for a body that is not a stream; the Request
+  constructor after its method check, for a script's init with such a
+  body; `Response.redirect()` after the URL parses; the body methods for a
+  stream body (`text()` and `json()` after the used check, `formData()`
+  after the used and Content-Type checks, which it now makes before reading,
+  as workerd does in a request too, with workerd's text); `clearTimeout()`
+  and `clearInterval()` for an id no timer of celld's has; an aborted
+  `scheduler.wait()`; `Blob.stream()`; `IdentityTransformStream` (so
+  `FixedLengthStream` after its length check); `WebSocketPair`; `RpcStub`
+  before its target check; `HTMLRewriter.transform()` of a body;
+  `waitUntil()`; diagnostics_channel `publish()`; and global `fetch()`,
+  which now asks once its Request is made, before its first `await`, so the
+  refusal has the caller's frame (it had none) and a `data:` URL is refused
+  too. EventSource asks a new op, `__in_global_scope()`, and throws its own
+  error. `clearTimeout()` and `clearInterval()` now take their id as workerd
+  does: required (workerd's TypeError), converted as a number, clearing only
+  a safe integer. `getRandomValues()` has workerd's TypeMismatchError and
+  QuotaExceededError texts. Python's interpreter starts in a request
+  (1.37), and the Workflow, Durable Object and Performance setup, the
+  builtin modules' evaluation and the reading of the exports set no timer
+  and draw nothing through the refused names, so none is refused; checked
+  by the full suites and by hand on the Python Worker 1.37 used.
+- **Tests.** `loader/global-scope-io` loses its `xfail` and grows to 25
+  children: each refusal above that escapes module scope, a `data:` fetch,
+  an unawaited rejection that still starts, and EventSource's own error,
+  each with workerd's frames. New `loader/global-scope-ops` records 118
+  operations at module scope through a shared probe
+  (`lib/worker/global-scope-ops.js`, `#global-scope-ops`): whether each
+  returns, throws or rejects, and with what, the checks that come before the
+  refusal included, and that replacing the global `setTimeout` or
+  `getRandomValues()` first changes none of them. Both fail at HEAD. New
+  `builtins/replaced-globals` (fails at HEAD) pins, in a request, that a
+  secret key from `generateKey()` is random after `getRandomValues()` is
+  replaced, and that `scheduler.wait()`, `AbortSignal.timeout()` and
+  node:timers/promises settle after the global `setTimeout` and
+  `clearTimeout` are. New
+  `loader/global-scope-durable-object` (passes at HEAD too) pins that a
+  Durable Object's constructor and a Dynamic Worker facet's may set a
+  timer, draw random values and make and read bodies. Found:
+  `loader/global-scope-io-node-frames` and `loader/global-scope-ops-gaps`
+  (xfail, 1.67). Unit test
+  `js::global_scope_ops_tests::every_listed_op_is_installed`.
+- **Deployed Workers.** Loading the seven starter configs (all at 2026-09-04)
+  under `celld dev --no-build` behind a probe Worker that fetches each
+  through a service binding, as 1.38 did, starts all seven (router, context,
+  custom gatekeeper and error reporter answer 200, the workshop 404, the
+  scheduler and websearch "does not export a fetch() function"), so none
+  does any of these at module scope. Cloudflare OS's Dynamic Workers' own
+  module scope (the code-mode harness, the restore forger) only imports and
+  declares classes; the gadgets' and the agent's code is the user's, held to
+  workerd's rules as on Cloudflare, and the bundled blueprints' servers
+  (workspace docs, sheets, slides) do none of these at module scope.
+- Docs: `docs/cloudflare-compat.md` (`cloudflare:workers`, Web Crypto, Web
+  standards, Performance and timers), `docs/limitations.md`,
+  `docs/services/dynamic-workers.md`.
+- Cost: (lab, `ab -n 20000 -c 16` at 2026-09-04, medians of 9
+  interleaved rounds against 4c055c2, three runs that failed to start or
+  stalled left out): hello world 18624 → 18656 req/s (+0.2%, ranges
+  18421-19359 against 18032-18921); a request that sets and clears a timer,
+  clears it again, draws a UUID and random values, reads a Blob's stream
+  through a Response and answers with a string body 18182 → 18177 (0.0%,
+  17469-18500 against 17884-18414). The hot path gains a slot read on the
+  timer and random ops, and an op call for a Response or Request made with
+  a body that is not a stream, a stream body read, a clear of an unknown
+  timer, `Blob.stream()` and the rarer constructors above.
+- Found: 1.67.
 
 ### 1.40 Runtime API error messages (found by 1.18)
 
@@ -6179,6 +6314,44 @@ cap; unit tests for the caps.
   `node_modules` instead, and fail the build when nothing there has it. The
   list is also the same whatever the Worker's flags. Not probed against
   Wrangler's bundling; no case.
+
+### 1.67 Gaps found by 1.39
+
+- **A Node.js module's frames.** workerd's `node:` modules are JavaScript,
+  so when a refusal comes from inside one (`randomBytes()`, node:timers'
+  `setTimeout()` and the promises API), its startup error lists that
+  module's frames (`at node-internal:crypto_random:67:19 in randomFillSync`)
+  above the caller's. celld's Node.js modules are its own code, whose frames
+  every startup error leaves out, so it lists only the caller's. Matching it
+  needs celld's module code to carry workerd's file names, lines and
+  function names. Pinned by `loader/global-scope-io-node-frames` (xfail).
+- **`generateKey()` for a secret key.** workerd checks an AES key's usages
+  (`SyntaxError: Attempt to generate AES-GCM key with invalid usage
+  "sign".`) and its length (128, 192 or 256, `Generated AES key length must
+  be 128, 192, or 256 bits but requested 7.`) and an HMAC key's hash
+  (`Unrecognized or unimplemented digest algorithm requested.`) before it
+  draws the key, and makes AES-KW keys. celld checks no AES usage, refuses
+  192 bits, has its own texts for the other two, and cannot make an AES-KW
+  key; at module scope the first shows as the global-scope refusal where
+  workerd gives its SyntaxError. Pinned by `loader/global-scope-ops-gaps`
+  (xfail), with the next.
+- **`queueMicrotask()`** is celld's polyfill, `Promise.resolve().then(f)`:
+  it returns a promise where workerd's returns `undefined`, takes anything
+  as its callback, and turns a callback's throw into a rejection rather than
+  a reported error. Pinned by `loader/global-scope-ops-gaps` (xfail).
+- **The order of a Request init's checks.** workerd refuses a body at module
+  scope after checking `integrity`, the method and the headers, and before
+  `redirect`, `cache` and `encodeResponseBody`; celld refuses it after all
+  of them but the method's, so an init at module scope with a body and a bad
+  `cache` or `encodeResponseBody` gets their TypeError where workerd gives
+  the refusal. No case.
+- **Timers celld builds on the global `setTimeout` (done, in 1.39).**
+  `scheduler.wait()`, `AbortSignal.timeout()`, node:timers/promises,
+  EventSource's retry and the Queue and Workflow timers called the global
+  `setTimeout`, so a script that replaced it changed what they did, and
+  decided whether they were refused at module scope; workerd's are native
+  and use its own timers. They now use the harness's timers. Pinned by
+  `builtins/replaced-globals` and `loader/global-scope-ops`.
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 

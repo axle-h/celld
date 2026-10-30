@@ -341,6 +341,9 @@ class IdentityTransformStream {
   constructor(_queuingStrategy) {
     const limit = expected;
     expected = undefined;
+    // workerd's pipe belongs to the request, so global scope refuses one,
+    // after FixedLengthStream checks its length.
+    __require_io_context();
     const ctl = new InternalController();
     const readable = new ReadableStream();
     ctl._stream = readable;

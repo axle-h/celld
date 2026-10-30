@@ -128,8 +128,21 @@ Only the binding types in the [services table](#services) are available.
   `match()` and `delete()`, and the global `fetch()`, `connect()` and
   `new WebSocket()`. They throw or reject as Cloudflare's do, ahead of the
   checks Cloudflare's make after it. R2's `resumeMultipartUpload()` and
-  `caches.open()` start no I/O and work there. Timers, random values and
-  body reads there still run (plan item 1.39). Cloudflare reads every
+  `caches.open()` start no I/O and work there. So is everything else
+  Cloudflare does only in a request: setting or clearing a timer (the
+  global timers, `scheduler.wait()`, `AbortSignal.timeout()`, `setImmediate()`
+  and node:timers), drawing random values (`crypto.getRandomValues()`,
+  `randomUUID()`, an AES or HMAC key from `generateKey()`, node:crypto's
+  random functions), making a body other than a stream (`new Response("x")`,
+  `Response.json()`, `Response.redirect()`, a Request with such a body),
+  reading a stream body, `Blob.stream()`, a compression, identity or
+  fixed-length stream, a `WebSocketPair`, an `RpcStub`, `HTMLRewriter` on a
+  body, `waitUntil()` from `cloudflare:workers`, and a diagnostics_channel
+  publication (after its subscribers run). `new EventSource()` and
+  `EventSource.from()` throw Cloudflare's `NotSupportedError` there. A null
+  body, a stream body, and asymmetric keys from `generateKey()` need no
+  request, as on Cloudflare. A Durable Object's constructor runs in a
+  request, so all of these work there. Cloudflare reads every
   handler of every object export while the Worker starts, and celld only
   the default export's `fetch`, `queue` and `scheduled`, so a getter on
   another one runs in a request on celld (plan item 1.65). The env lists
@@ -347,6 +360,9 @@ The `tail` and `email` handlers are unavailable.
   it was given.
 - RSA-PSS `sign()` and `verify()` require `saltLength`, as Cloudflare does,
   and use exactly the length given.
+- `generateKey()` cannot make an AES-KW key or a 192-bit AES key, does not
+  check an AES key's usages, and refuses a bad AES length or an unknown HMAC
+  hash with other texts than Cloudflare's (plan item 1.67).
 
 ### [Web standards](https://developers.cloudflare.com/workers/runtime-apis/web-standards/)
 
@@ -371,6 +387,8 @@ The `tail` and `email` handlers are unavailable.
 - `reportError()` fires an `ErrorEvent` at the global scope and then logs the
   error, and `navigator.sendBeacon()` POSTs its body in the background and
   answers `true` in a request, `false` at module scope.
+- `queueMicrotask()` returns a promise, where Cloudflare's returns
+  `undefined` (plan item 1.67).
 
 ### [Performance and timers](https://developers.cloudflare.com/workers/runtime-apis/performance/)
 
@@ -393,6 +411,10 @@ isolate's life, an observer is never called, and `eventCounts` is empty.
 `timerify()`. Without either flag `performance` has only `timeOrigin` and
 `now()`.
 
+`clearTimeout()` and `clearInterval()` take an id as Cloudflare's do: it is
+required, converts as a number (so `"1"` clears timer 1), and clears only
+when it is a safe integer; `null` and `undefined` clear nothing.
+
 The global `setImmediate()` and `clearImmediate()` exist with
 `nodejs_compat_v2`, as in workerd. `setImmediate()` answers with an
 `Immediate`, which `clearImmediate()` and `Symbol.dispose` cancel.
@@ -402,7 +424,9 @@ wait, and an already-aborted signal rejects it at once. celld rejects with
 the signal's reason itself. workerd rejects with a copy rebuilt from the
 reason's name and message, so there a reason that is not an `Error`, such as
 a string, arrives as an `Error`. `scheduler` in `node:timers/promises` calls
-the global `scheduler.wait`, as on workerd.
+the global `scheduler.wait`, as on workerd. A script that replaces the global
+`setTimeout()` or `clearTimeout()` changes neither `scheduler.wait()`,
+`AbortSignal.timeout()` nor `node:timers/promises`, as on workerd.
 
 ### [Node.js compatibility](https://developers.cloudflare.com/workers/runtime-apis/nodejs/)
 

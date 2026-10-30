@@ -82,11 +82,12 @@ APIs, and Wrangler configuration.
   `Error: Script startup exceeded CPU time limit.` on the next line. workerd
   run locally enforces neither limit, so this follows workerd's source rather
   than a recording.
-- Module scope cannot wait for I/O or a timer: celld runs no event loop
-  while a Worker starts, so a top-level `await` on one fails the start with
-  `Top-level await in module is unsettled.` workerd refuses the operation
-  itself, with `Disallowed operation called within global scope.`, and also
-  refuses `crypto.getRandomValues()` there, which celld allows.
+- Module scope cannot wait for anything but microtasks: celld runs no event
+  loop while a Worker starts, so a top-level `await` that nothing in module
+  scope settles fails the start with `Top-level await in module is
+  unsettled.` The operations that would settle one (I/O, timers, body reads)
+  are refused there, as on workerd, with `Disallowed operation called within
+  global scope.` ([Cloudflare compatibility](cloudflare-compat.md)).
 - Each isolate start is a load, so the limits apply whenever a pool adds an
   isolate under load, or a Durable Object's isolate starts, and not only at a
   deployment. A Worker whose load is close to a limit can fail later, when a

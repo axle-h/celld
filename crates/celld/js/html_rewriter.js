@@ -311,6 +311,9 @@
         throw new TypeError(
           "HTMLRewriter.transform() requires a Response argument");
       }
+      // workerd rewrites a body in the request, so global scope refuses
+      // one; a response without a body needs none.
+      if (response.body !== null) __require_io_context();
       const contentType = response.headers.get("content-type") || "";
       const charset = /;\s*charset=([^;\s]+)/i.exec(contentType);
       const config = {

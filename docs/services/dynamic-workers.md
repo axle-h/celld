@@ -179,11 +179,12 @@ compiles the code again.
   resolves in a loaded Worker; workerd run locally fails its import there,
   because its implementation comes from a Miniflare extension that workerd
   gives only top-level Workers.
-- workerd refuses I/O, timers and random values at module scope with
-  `Uncaught Error: Disallowed operation called within global scope. …`, which
-  fails the Worker's start. celld does not: a timer, `scheduler.wait()` or
-  `fetch()` awaited there fails the start as an unsettled top-level `await`,
-  and `crypto.getRandomValues()` or reading a body works.
+- I/O, timers, random values, and making or reading a body are refused at
+  module scope with `Uncaught Error: Disallowed operation called within
+  global scope. …`, as on workerd, which fails the Worker's start
+  ([Cloudflare compatibility](../cloudflare-compat.md)). When the refusal
+  comes from inside a Node.js module, workerd's startup error also lists
+  that module's frames (`node-internal:…`), which celld's has none of.
 - Some runtime APIs throw with other messages than workerd's, such as
   `new URL("bad")`, `atob`, `new Headers([["a"]])` and `new TextDecoder("bogus")`.
 - A loaded Worker entrypoint cannot transfer to another Worker. Awaitable and

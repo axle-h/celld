@@ -1,0 +1,14 @@
+{
+  "workers": [
+    "app"
+  ],
+  "xfail": "1.67",
+  "steps": [
+    {
+      "path": "/?child=node-random-bytes"
+    },
+    {
+      "path": "/?child=node-timers-promises"
+    }
+  ]
+}

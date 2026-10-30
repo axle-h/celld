@@ -6,6 +6,15 @@
 // and `id:` persists as the Last-Event-ID for reconnects.
 (function () {
   const kFrom = Symbol("celld.EventSource.from");
+  // workerd makes an EventSource only in a request, and refuses one first
+  // with its own error in global scope.
+  const requireRequest = () => {
+    if (__in_global_scope()) {
+      throw new DOMException(
+        "An EventSource can only be created within the context of a worker request.",
+        "NotSupportedError");
+    }
+  };
 
   class EventSource extends EventTarget {
     static CONNECTING = 0;
@@ -13,6 +22,7 @@
     static CLOSED = 2;
 
     constructor(url, init = undefined) {
+      requireRequest();
       super();
       this._sourceState = 0; // CONNECTING
       this._sourceUrl = "";
@@ -57,6 +67,7 @@
       if (!(readable instanceof ReadableStream)) {
         throw new TypeError("argument is not a ReadableStream");
       }
+      requireRequest();
       if (readable.locked) {
         throw new TypeError("This ReadableStream is locked.");
       }
@@ -87,7 +98,7 @@
       this._sourceClosed = true;
       this._sourceState = 2; // CLOSED
       if (this._retryTimer !== null) {
-        clearTimeout(this._retryTimer);
+        __celld.__clearTimeout(this._retryTimer);
         this._retryTimer = null;
       }
       const reader = this._reader;
@@ -198,7 +209,7 @@
     }
 
     _scheduleReconnect() {
-      this._retryTimer = setTimeout(() => {
+      this._retryTimer = __celld.__setTimeout(() => {
         this._retryTimer = null;
         if (this._sourceClosed) return;
         this._connect();

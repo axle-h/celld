@@ -1,0 +1,7 @@
+{
+  "workers": ["app"],
+  "xfail": "1.67",
+  "steps": [
+    {"path": "/?group=gaps"}
+  ]
+}

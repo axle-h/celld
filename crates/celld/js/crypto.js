@@ -4,7 +4,10 @@
 // Cells keeps a second, JSON-shaped op for Workers-compatible algorithms that
 // require structured arguments (RSA-OAEP, ECDSA, and Ed25519).
 (function () {
+  // A script's random values, which global scope refuses (js.rs
+  // `GLOBAL_SCOPE_OPS`), and celld's own, which nothing refuses.
   const _randomValues = $$randomValues;
+  const _celldRandomValues = $$celldRandomValues;
   const _digest = $$digest;
   const _hmacSign = $$hmacSign;
   const _hmacVerify = $$hmacVerify;
@@ -636,7 +639,7 @@
             : defaults[hash];
           if (!byteLength) throw _notSupported("unsupported HMAC hash: " + hash);
           const raw = new Uint8Array(byteLength);
-          crypto.getRandomValues(raw);
+          _randomValues(raw);
           return _makeKey(
             "secret",
             { name, hash: { name: hash }, length: raw.byteLength * 8 },
@@ -650,7 +653,7 @@
           throw new DOMException("AES-GCM length must be 128 or 256", "OperationError");
         }
         const raw = new Uint8Array(byteLength);
-        crypto.getRandomValues(raw);
+        _randomValues(raw);
         return _makeKey(
           "secret",
           { name, length: raw.byteLength * 8 },
@@ -873,6 +876,19 @@
     }
   }
 
+  // A version 4 UUID from 16 bytes `fill` draws.
+  const _uuid = (fill) => {
+    const bytes = new Uint8Array(16);
+    fill(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const h = (index) => bytes[index].toString(16).padStart(2, "0");
+    return h(0) + h(1) + h(2) + h(3) + "-" +
+      h(4) + h(5) + "-" + h(6) + h(7) + "-" +
+      h(8) + h(9) + "-" + h(10) + h(11) +
+      h(12) + h(13) + h(14) + h(15);
+  };
+
   const subtle = new SubtleCrypto();
   // workerd's `crypto` is an instance of its Crypto class: its methods,
   // `subtle` and DigestStream are its prototype's, which has the tag. celld
@@ -898,13 +914,14 @@
         !(array instanceof BigUint64Array)
       ) {
         throw new DOMException(
-          "Argument is not an integer-typed array",
+          "ArrayBufferView argument to getRandomValues() must be an integer-typed view.",
           "TypeMismatchError",
         );
       }
       if (array.byteLength > 65536) {
         throw new DOMException(
-          "getRandomValues byteLength must be at most 65536",
+          "getRandomValues() only accepts buffers of size <= 64K but provided " +
+            `${array.byteLength} bytes.`,
           "QuotaExceededError",
         );
       }
@@ -913,15 +930,7 @@
     },
 
     randomUUID() {
-      const bytes = new Uint8Array(16);
-      _randomValues(bytes);
-      bytes[6] = (bytes[6] & 0x0f) | 0x40;
-      bytes[8] = (bytes[8] & 0x3f) | 0x80;
-      const h = (index) => bytes[index].toString(16).padStart(2, "0");
-      return h(0) + h(1) + h(2) + h(3) + "-" +
-        h(4) + h(5) + "-" + h(6) + h(7) + "-" +
-        h(8) + h(9) + "-" + h(10) + h(11) +
-        h(12) + h(13) + h(14) + h(15);
+      return _uuid(_randomValues);
     },
   });
   Object.defineProperty(cryptoPrototype, "subtle", {
@@ -1044,8 +1053,9 @@
   globalThis.CryptoKey = CryptoKey;
   globalThis.SubtleCrypto = SubtleCrypto;
   globalThis.crypto = crypto;
-  // The harness's own ids use this, whatever a script does to `crypto`.
-  __celld.__randomUUID = crypto.randomUUID;
+  // The harness's own ids use this, whatever a script does to `crypto`, and
+  // wherever it runs.
+  __celld.__randomUUID = () => _uuid(_celldRandomValues);
   // `node_crypto.js` hands a parsed key to Web Crypto through
   // `KeyObject.toCryptoKey()`, so it reports the same dictionary. It built
   // a second one by hand, which drifted: it named every EC curve P-256 and
