@@ -1,0 +1,41 @@
+{
+  "name": "enable",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": [
+    "enhanced_error_serialization"
+  ],
+  "services": [
+    {
+      "binding": "SELF",
+      "service": "enable",
+      "entrypoint": "Errors"
+    },
+    {
+      "binding": "PEER_ENHANCED",
+      "service": "peer-enhanced",
+      "entrypoint": "Errors"
+    },
+    {
+      "binding": "PEER_LEGACY",
+      "service": "peer-legacy",
+      "entrypoint": "Errors"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "OBJECT",
+        "class_name": "ObjectEnable"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ObjectEnable"
+      ]
+    }
+  ]
+}

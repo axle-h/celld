@@ -76,8 +76,7 @@ for (const [cls, name] of [
   [CompressionStream, 'CompressionStream'],
   [DecompressionStream, 'DecompressionStream'],
 ])
-  Object.defineProperty(cls.prototype, Symbol.toStringTag,
-                        { value: name, configurable: true });
+  __celld.__apiTag(cls.prototype, name);
 
 return { CompressionStream, DecompressionStream };
 })()

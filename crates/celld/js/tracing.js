@@ -43,7 +43,6 @@
   const SafeTypeError = TypeError;
   const SafeError = Error;
   const SafeSymbol = Symbol;
-  const SymbolToStringTag = Symbol.toStringTag;
   const globalObject = globalThis;
 
   const mapGet = (map, key) => ReflectApply(MapPrototypeGet, map, [key]);
@@ -106,7 +105,8 @@
   });
 
   // workerd's JSG classes put methods on the prototype as enumerable data
-  // properties, `constructor` last, with a writable Symbol.toStringTag. Runs
+  // properties, `constructor` last, with a writable Symbol.toStringTag under
+  // set_tostring_tag (api_tags.js). Runs
   // at load, before any Worker code.
   const shapePrototype = (cls, tag) => {
     const proto = cls.prototype;
@@ -119,9 +119,7 @@
     ObjectDefineProperty(proto, "constructor", {
       value: cls, writable: true, enumerable: false, configurable: true,
     });
-    ObjectDefineProperty(proto, SymbolToStringTag, {
-      value: tag, writable: true, enumerable: false, configurable: true,
-    });
+    __celld.__apiTag(proto, tag);
   };
 
   let newSpan;

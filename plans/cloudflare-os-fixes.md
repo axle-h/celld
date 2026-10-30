@@ -476,7 +476,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 41 | 1.30 Durable Object reset follow-ups (hang, stale stubs, discarded writes, storage surface) | done | `a7272a7` |
 | 42 | 1.34 Isolate limit follow-ups (per-request CPU limit, D1 query limit, stack frames, `bytes()`) | done | `e1a4bea` |
 | 43 | 1.61 A stuck isolate must not starve the node (security) | done | `7d8df19` |
-| 44+ | Phase 1 in plan order (1.36-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62), and the 1.4 props key-order follow-up | queued | |
+| 44 | 1.36 items 1–7 (error serialization, Node timers, Request `cache`, iterable bodies, stream backpressure, Blob MIME type, `Symbol.toStringTag`) | done | (this commit) |
+| 45+ | Phase 1 in plan order (1.36 items 8–15, 1.37-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -1942,6 +1943,169 @@ differential case:
     `writable_stream_spec_compliant_writer`).
 15. Raise `NEWEST_DATE` once the three flags dated after 2026-09-04 are
     modelled.
+
+**As built (items 1–7).** Each flag below is honoured, with its date and
+its disable name, read from `compat_flags` and reported in
+`Cloudflare.compatibilityFlags`. Probed on workerd 1.20261001.1 and read in
+its source at that tag.
+1. **`enhanced_error_serialization`** (jsg/ser.c++ `WriteHostObject` and
+   `ReadHostObject`, jsg/util.c++ `decodeTunneledException`, jsg/value.h).
+   Every serializer of the isolate (`structuredClone()`, storage, queue
+   bodies, `__sc_encode`) writes a native Error other than a DOMException
+   as workerd's host object, in its byte layout: tag 10, workerd's
+   `ErrorTag`, the name when the tag does not give it, the message, then an
+   object of its other own string-keyed properties, each read once and set
+   as on any object (`storage_ops::write_native_error`, gated by a per-isolate
+   slot set from the flag). The reader always takes it: a message that is
+   not a string is workerd's DataCloneError, an unknown name is defined, the
+   rest are defined as data, and `stack` is kept except over RPC
+   (`__sc_decode(bytes, false)`). Over RPC an Error crosses as a
+   `__celld$err` marker that the lift builds from the same record
+   (`__errorRecord`, read in the projection, so a getter runs once), with
+   its properties lifted and escaped as any plain data (plan 1.53): a
+   function among them crosses as a stub, `__proto__` on the copy makes it
+   refused as workerd refuses it, and the reviver
+   (`__reviveError`) checks the tag, the message and the properties' object
+   and defines each property as data; an Error that its own properties
+   refer to is refused with V8's "Unable to deserialize cloned data.", as
+   workerd's deserializer refuses it, and params a callee cannot read fail
+   the call as an exception it threw (`remote`). An Error inside a Map or Set, which
+   the lift does not walk, goes to the Rust writer. A thrown value now
+   crosses as workerd tunnels it: the sender sends its description (V8's
+   side-effect-free detail string, typed as workerd types it, or a
+   DOMException's private name and message: `__tunneled_error`; one whose
+   description starts `DOMException(<name>)` arrives as that DOMException,
+   as in workerd) and its
+   serialization under the sender's own flag; a receiver with the flag
+   takes that serialization when it gives an object, otherwise an Error of
+   the description's type and message with its own stack, and marks it
+   `remote`. A Durable Object reset's error crosses the same way, within
+   the envelope bound. Before, celld kept a thrown Error's own enumerable
+   properties whatever the flag, and dropped them from a returned one.
+   Case `flags/enhanced-error-serialization` (structuredClone, a returned
+   value, a thrown one, a Durable Object, storage, and another script's
+   enhanced and legacy callee, under four dates and flags) and
+   `rpc/marker-shaped-error-props` (an Error's marker-shaped properties as
+   params, result, thrown value and clone). `lib/worker/marker-shaped.js`
+   adds `__celld$err` to the keys every marker-shaped case sends as data.
+2. **`enable_nodejs_global_timers`** (worker.c++ loads
+   node-internal:internal_timers_global_override, src/node/internal/
+   internal_timers.ts). With it the global `setTimeout()` and
+   `setInterval()` return workerd's `Timeout` (private state, `refresh`,
+   `ref`, `unref`, `hasRef`, `close`, `Symbol.dispose`,
+   `Symbol.toPrimitive`), and `clearTimeout()` and `clearInterval()` take a
+   Timeout or an id, with Node's ERR_INVALID_ARG_TYPE for a callback that is
+   not a function, its "Received" part as Node's `inspect` with depth -1
+   gives it (`__installNodeGlobalTimers`, run before the modules
+   evaluate). The flag alone turns it on, as in workerd. The base timers now
+   have workerd's names, length 0 and its TypeError for a callback that is
+   not a function. Case `flags/nodejs-global-timers`.
+3. **`cache_option_enabled`, `cache_no_cache_enabled`** (http.c++
+   `RequestInitializerDict::validate`, `Request::serializeCfBlobJson`,
+   `fetchImplNoOutputLock`). A Request takes `"no-store"`, and `"no-cache"`
+   with the second flag, with workerd's errors for any other mode (and for
+   `reload`, whose flag is experimental), keeps the mode in a private field
+   that `new Request(request)`, a Request given as the init, `clone()` and
+   RPC (`k` in the Request marker, which the receiver's own flags then take
+   or refuse) carry, and reports it from an unnamed `Request.prototype.cache`
+   getter that exists only with the flag. `__fetchThrough` gives each
+   subrequest workerd's `cf`, copied as JSON as workerd copies it (so a key
+   that is undefined is not there), with the mode's cache properties and
+   `cacheControl` made from the mode or from `cacheTtl`, which was missing
+   without a mode too), then `Cache-Control` and `Pragma` `no-cache` unless
+   set; the copy a same-isolate target receives has no mode. The two
+   `cf.cacheControl` exclusions are checked as the init is. Case
+   `flags/request-cache-option` (seven dates and flags; a same-isolate
+   target, since `cf` does not reach another isolate, 1.41).
+4. **`fetch_iterable_type_support`** and its override adjustment (jsg/
+   iterator.h `AsyncGeneratorIgnoringStrings`, http.c++ `Body::extractBody`,
+   `JsReadableStream::from`). Without the flag every such body is
+   stringified; with it an object other than a boxed string with an async
+   or else a sync iterator, its iterator taken at once, is read as a stream
+   of its values, a promised value awaited, and with the adjustment a sync
+   iterable other than an Array with its own `toString` or
+   `Symbol.toPrimitive` is stringified. Before, celld concatenated an
+   Array of views eagerly and stringified one with other values. A body
+   read whole now takes a stream's chunks as workerd does: an ArrayBuffer or
+   any view as its bytes (a Uint16Array was converted element-wise and an
+   ArrayBuffer read as nothing), anything else as "This ReadableStream did
+   not return bytes.". Case `flags/fetch-iterable-type-support`.
+5. **Stream backpressure** (streams/standard.c++
+   `TransformStreamDefaultController::enqueue`, streams/encoding.c++).
+   Without `fixup-transform-stream-backpressure` an enqueue no longer sets
+   a TransformStream's backpressure; without
+   `encoder_stream_spec_compliant_backpressure` the readable side of a
+   TextEncoderStream or TextDecoderStream has a high water mark of 1. Case
+   `flags/stream-backpressure` (identity, two enqueues per write, encoder,
+   decoder, five dates and flags).
+6. **`blob_standard_mime_type`** (http.c++ `Body::blob`, util/
+   mimetype.c++). A body's `blob()` has the Content-Type extracted and
+   serialized as workerd's `MimeType` does it, its quirks kept (a backslash
+   is a token character, every character from 0x80 is a quoted-string one,
+   `boundary` after a space), or the header as it is without the flag;
+   before, celld
+   lower-cased it either way. Case `flags/blob-standard-mime-type` (30
+   header values on Request and Response, two Content-Type headers).
+7. **`set_tostring_tag`** (jsg/resource.h). Every API class celld defines,
+   and the `crypto` object, gets its workerd name as a writable,
+   configurable, non-enumerable `Symbol.toStringTag` through `__apiTag` (on a
+   prototype of its own for `crypto`, as celld has no Crypto global)
+   (api_tags.js, the first prelude script); without the flag the tags given
+   before the flags are known are deleted and a lazy global gets none.
+   Before, some classes had none, some an accessor and some a read-only
+   one. Case `flags/set-tostring-tag` (51 prototypes and 30 instances under
+   four dates and flags).
+- The Request constructor reads a script's init as workerd's
+  RequestInitializerDict does: each field in its struct order (`method`,
+  `headers`, `body`, `redirect`, `fetcher`, `cf`, `cache`, `integrity`,
+  `signal`, `encodeResponseBody`), converted before the next is read (the
+  headers into a Headers, the body as workerd converts it), then validated
+  (the cache mode, the `cf` exclusions, `encodeResponseBody` and an
+  `integrity` that is not empty, with workerd's errors); pinned by a traced
+  Proxy init in `fetch/redirect-mode`. celld's own inits are objects only
+  it makes, known by identity (a WeakSet, so no property of a script's
+  init is read to tell): they carry what an arrived request, the copy a
+  same-isolate target receives and a revived one need (a one-time body, the
+  client's signal, no cache mode, raw headers built lazily), and the
+  one-time body and the subrequest signal are private fields. Every
+  construction on celld's own paths uses the Request, Response and Headers
+  classes captured before any script runs, and tests by brand, so a Worker
+  that replaces those globals sees none of them
+  (`fetch/request-global-replaced`).
+  celld's own inits, the inits of the Responses it makes, its stream
+  sources and strategies, the records `__readResponse` hands the host and
+  the host's JSON replies on the request paths have no prototype, and the
+  attributes of a Request, a Response and an AbortController are class
+  fields (a Request's and a Response's `cf` is undefined when it has none,
+  as workerd's is), so a getter or setter a script puts on
+  Object.prototype is never run by these paths and cannot stand in for a
+  field they leave out (`fetch/object-prototype-getters`: an incoming
+  request, a service binding's fetch to the Worker's own entrypoint and to
+  another script, an RPC call carrying a Request and a subrequest, with
+  getters under 25 such names). Before, a getter named `signal` made every
+  incoming request fail, and one named `headersList` or `cache` changed
+  what celld's own Requests held.
+- A fetch handler's result that is not a Response (a Proxy of one, an
+  object with its prototype, a string, undefined, a Promise of either) is
+  refused with workerd's TypeErrors: "Incorrect type for Promise: the
+  Promise did not resolve to 'Response'.", and, for a class entrypoint's
+  `fetch()` that returns neither a Promise nor a Response, "Callback
+  returned incorrect type; expected 'Promise'". Before, celld answered 200
+  with the value as text (`fetch/handler-non-response`).
+  After these changes (lab, `ab -n 20000 -c 16`, medians of 5 interleaved
+  rounds against 4010757): hello-world fetch 18728 → 18520 req/s (−1.1%),
+  Durable Object RPC 16873 → 16837 (−0.2%).
+- Found, as plan item 1.63 with xfail cases where workerd shows the
+  behaviour: `flags/set-tostring-tag-instances`, `streams/pull-after-queued-read`,
+  `rpc/error-shapes`.
+- Updated: `flags/compatibility-flags` reports the ten flags;
+  `deploy/compat-flags` and `loader/compat-flags-refused` refuse
+  `webcrypto_modern_algorithms` in place of `enhanced_error_serialization`.
+- Cost (lab, `ab -n 20000 -c 16`, medians of 11 interleaved rounds against
+  4010757, every flag on): hello-world fetch 18710 → 18685 req/s (−0.1%),
+  Durable Object RPC 17150 → 16975 (−1.0%), a service binding's fetch to the
+  Worker's own entrypoint 18464 → 18333 (−0.7%), RPC to it 18145 → 18131
+  (−0.1%).
 
 ### 1.37 Gaps found by 1.16 that no flag gates
 
@@ -5073,6 +5237,83 @@ cap; unit tests for the caps.
   than a lock; turn observations are recorded on the isolate thread;
   `vacant_for_request_cancellation_test` is built in every test build; the
   `/state` fields are `stuckIsolates.{total,nodeCap,ownerCap,longShare,owners}`.
+
+### 1.63 Gaps found by 1.36 (items 1–7)
+
+- **Instances that are not of an API class.** celld's global scope, `ctx`,
+  bindings (service, KV, R2, Queue, Durable Object namespace and id), a
+  Durable Object's state, storage, `sql`, id and `this`, `navigator`,
+  `scheduler`, `Cloudflare`, `console` and `process` are plain objects; an
+  RPC stub and property are functions, an RPC promise a Promise, and a
+  DOMException a native Error. So `Object.prototype.toString()` gives none
+  of them workerd's class name with `set_tostring_tag`, and the stubs,
+  promise and DOMException give `[object Function]`, `[object Promise]` and
+  `[object Error]` without it, where workerd gives `[object Object]`.
+  celld lacks the globals `Body`, `Crypto`, `FetchEvent`, `Navigator`, the
+  `Performance` classes, `PromiseRejectionEvent`, `ScheduledEvent`,
+  `ServiceWorkerGlobalScope`, `TailEvent`, `TraceEvent` and
+  `WorkerGlobalScope`, has `DigestStream` and `Temporal` globals that
+  workerd does not, and no API prototype has workerd's
+  `Symbol.for("cloudflare:internal-class")` mark. Pinned by
+  `flags/set-tostring-tag-instances` (xfail).
+- **When a ReadableStream pulls.** workerd pulls on start, after an enqueue
+  and when a read finds the queue empty (standard.c++ `pullIfNeeded`
+  callers); celld, as the Streams Standard, also after a read that its
+  queue satisfies. A source with a high water mark above 0 refills earlier
+  in celld, and a TextEncoderStream before
+  `encoder_stream_spec_compliant_backpressure` (with the TransformStream fix)
+  runs its next write earlier. Pinned by `streams/pull-after-queued-read`
+  (xfail); `flags/stream-backpressure` leaves that combination to it.
+- **Error shapes.** A DOMException's `code` is an accessor of its prototype
+  in celld and its own in workerd, and one returned over RPC, passed as a
+  param or written to Durable Object storage arrives as an Error named
+  `"Error"` without a `code`; workerd's arrives as a DOMException in all
+  three. An Error's
+  stack starts with the message it has when the stack is first read;
+  workerd's starts with the one it was made with. Pinned by
+  `rpc/error-shapes` (xfail).
+- **A stored value that cannot be read back** (an Error whose properties
+  refer to it, say) fails `storage.get()` with celld's "actor storage
+  deserialization failed; …" text; workerd's is "internal error; reference
+  = <id>". `flags/enhanced-error-serialization` leaves that path out for
+  that value.
+- **Another script's handler errors.** A fetch handler in another script
+  that returns something other than a Response, or throws, reaches the
+  caller as an `Error` whose message carries the text ("fetch threw:
+  TypeError: …" for a throw); workerd's caller gets the TypeError. Pinned
+  by `service-bindings/target-errors` (xfail).
+- **Object.prototype elsewhere.** Paths outside the request, response and
+  RPC ones still build ordinary objects and read fields they may lack from
+  them: the R2, D1 and Queue host replies, the WebSocket and storage
+  records, and the own fields that celld's other JavaScript classes (the
+  streams, events, Headers) create by assignment, so a getter-only
+  accessor a script puts on Object.prototype under one of those names
+  (`_closedPromise`, `_hwm` and the like) makes the class throw.
+- **Request init fields celld reads and does not use.** `fetcher` is read
+  and ignored, where workerd sends the Request through that Fetcher, and
+  `encodeResponseBody` is checked and then ignored, as celld neither
+  decodes nor encodes a body (1.36 item 9). Other globals that celld's own
+  paths look up when they run (`structuredClone`, `TextDecoder`, `Blob`
+  and others beyond Request, Response, Headers, AbortController,
+  ReadableStream, FormData and URLSearchParams) can still be replaced by a
+  Worker under them.
+- **Request and Response attributes are own data properties.** workerd's
+  are prototype accessors, so in workerd `Object.keys(new Request(u))` is
+  `[]` and `JSON.stringify` gives `"{}"`, where celld shows about 11 own
+  fields. A subclass that defines `get status()` or `get cf()` is shadowed
+  by the own field (celld reads 200 or `null`, workerd 299 or the getter's
+  value). `structuredClone(new Request(u))` fails in celld with
+  "Unsupported object type" and succeeds in workerd.
+- **A failed fetch handler's 500 body.** celld's 500 shows
+  "Worker failed: <message>" to the client where workerd sends
+  "Internal Server Error"; the text is workerd's own fixed message, so
+  nothing leaks, but the body differs.
+- **What is not yet observable.** A thrown value's detail holds a Blob or
+  another celld host value only as V8 writes it, which fails (the host
+  classes refuse a plain clone), so it falls back to the description; in
+  workerd the host value serializes. An Error's property that is a
+  function crosses another isolate's RPC result as a DataCloneError where
+  workerd gives a stub (cross-isolate stubs, Phase 3).
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 

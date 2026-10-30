@@ -98,8 +98,7 @@ class URLPattern {
   }
 }
 
-Object.defineProperty(URLPattern.prototype, Symbol.toStringTag,
-                      { value: 'URLPattern', configurable: true });
+__celld.__apiTag(URLPattern.prototype, 'URLPattern');
 
 return { URLPattern };
 })()

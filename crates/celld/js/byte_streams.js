@@ -790,14 +790,12 @@ function byteCancel(reason) {
   return Promise.resolve(result).then(() => undefined);
 }
 
-// Web IDL toStringTag.
 for (const [cls, name] of [
   [ReadableByteStreamController, 'ReadableByteStreamController'],
   [ReadableStreamBYOBReader, 'ReadableStreamBYOBReader'],
   [ReadableStreamBYOBRequest, 'ReadableStreamBYOBRequest'],
 ]) {
-  Object.defineProperty(cls.prototype, Symbol.toStringTag,
-                        { value: name, configurable: true });
+  __celld.__apiTag(cls.prototype, name);
 }
 
 return {

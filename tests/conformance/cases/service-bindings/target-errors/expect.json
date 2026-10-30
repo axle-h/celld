@@ -1,0 +1,20 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "proxy": {
+          "error": "TypeError: Incorrect type for Promise: the Promise did not resolve to 'Response'."
+        },
+        "string": {
+          "error": "TypeError: Incorrect type for Promise: the Promise did not resolve to 'Response'."
+        },
+        "undefined": {
+          "error": "TypeError: Incorrect type for Promise: the Promise did not resolve to 'Response'."
+        }
+      }
+    }
+  ]
+}

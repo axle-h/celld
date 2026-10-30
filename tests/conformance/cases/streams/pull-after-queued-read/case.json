@@ -1,0 +1,8 @@
+{
+  "workers": ["app", "encoder"],
+  "xfail": "1.63",
+  "steps": [
+    {"path": "/"},
+    {"path": "/encoder"}
+  ]
+}

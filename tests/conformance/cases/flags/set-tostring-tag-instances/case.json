@@ -1,0 +1,15 @@
+{
+  "workers": [
+    "front",
+    "disable"
+  ],
+  "xfail": "1.63",
+  "steps": [
+    {
+      "path": "/"
+    },
+    {
+      "path": "/disable"
+    }
+  ]
+}

@@ -898,7 +898,7 @@ ReadableStream.from = function(asyncIterable) {
   }
 
   let cancelInProgress = false;
-  return new ReadableStream({
+  return new ReadableStream({ __proto__: null,
     async pull(controller) {
       let resultP;
       try {
@@ -947,7 +947,7 @@ ReadableStream.from = function(asyncIterable) {
             "return() must return an object");
       });
     }
-  }, { highWaterMark: 0 });
+  }, { __proto__: null, highWaterMark: 0 });
 };
 
 class CountQueuingStrategy {
@@ -974,9 +974,8 @@ globalThis.ReadableStreamDefaultController =
 globalThis.CountQueuingStrategy = CountQueuingStrategy;
 globalThis.ByteLengthQueuingStrategy =
   ByteLengthQueuingStrategy;
-// Web IDL toStringTag -- `Object.prototype.toString
-// .call(rs)` returns "[object ReadableStream]"
-// instead of "[object Object]".
+// `Object.prototype.toString.call(rs)` returns
+// "[object ReadableStream]" under set_tostring_tag.
 for (const [cls, name] of [
   [ReadableStream, 'ReadableStream'],
   [ReadableStreamDefaultReader,
@@ -987,8 +986,6 @@ for (const [cls, name] of [
   [ByteLengthQueuingStrategy,
     'ByteLengthQueuingStrategy'],
 ]) {
-  Object.defineProperty(cls.prototype,
-    Symbol.toStringTag,
-    { value: name, configurable: true });
+  __celld.__apiTag(cls.prototype, name);
 }
 })();

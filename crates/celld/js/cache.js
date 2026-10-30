@@ -24,15 +24,13 @@
       throw new TypeError(
         "Invalid URL. Cache API keys must be fully-qualified, valid URLs.");
     }
-    return request instanceof Request ? request : new Request(url);
+    return __celld.__isRequest(request) ? request : new __celld.__Request(url);
   };
 
   class Cache {
     constructor(token = undefined) {
       if (token !== kCreate) throw new TypeError("Illegal constructor");
     }
-
-    get [Symbol.toStringTag]() { return "Cache"; }
 
     async put(request, response) {
       const key = asKey(request);
@@ -83,8 +81,6 @@
       if (token !== kCreate) throw new TypeError("Illegal constructor");
     }
 
-    get [Symbol.toStringTag]() { return "CacheStorage"; }
-
     async open(cacheName) {
       if (String(cacheName).length >= 1024) {
         throw new TypeError("Cache name is too long.");
@@ -100,6 +96,8 @@
     enumerable: true,
   });
 
+  __celld.__apiTag(Cache.prototype, "Cache");
+  __celld.__apiTag(CacheStorage.prototype, "CacheStorage");
   globalThis.Cache = Cache;
   globalThis.CacheStorage = CacheStorage;
   globalThis.caches = storage;

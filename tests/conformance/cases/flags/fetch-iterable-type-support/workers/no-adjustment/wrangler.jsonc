@@ -1,0 +1,1 @@
+{"name": "no-adjustment", "main": "index.js", "compatibility_date": "2026-09-04", "compatibility_flags": ["no_fetch_iterable_type_support_override_adjustment"]}

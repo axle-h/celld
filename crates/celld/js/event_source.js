@@ -65,7 +65,6 @@
       return source;
     }
 
-    get [Symbol.toStringTag]() { return "EventSource"; }
     get readyState() { return this._sourceState; }
     get url() { return this._sourceUrl; }
     get withCredentials() { return false; }
@@ -285,5 +284,6 @@
     });
   }
 
+  __celld.__apiTag(EventSource.prototype, "EventSource");
   globalThis.EventSource = EventSource;
 })();

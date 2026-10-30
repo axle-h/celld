@@ -1,0 +1,24 @@
+{
+  "name": "before",
+  "main": "index.js",
+  "compatibility_date": "2024-09-25",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "OBJECT",
+        "class_name": "ObjectBefore"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ObjectBefore"
+      ]
+    }
+  ],
+  "compatibility_flags": [
+    "expose_global_message_channel"
+  ]
+}

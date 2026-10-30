@@ -1,0 +1,52 @@
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "services": [
+    {
+      "binding": "DISABLE",
+      "service": "disable"
+    },
+    {
+      "binding": "SELF",
+      "service": "front",
+      "entrypoint": "Things"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "OBJECT",
+        "class_name": "ObjectFront"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ObjectFront"
+      ]
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "kv-front"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "R2",
+      "bucket_name": "r2-front"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "QUEUE",
+        "queue": "q-front"
+      }
+    ]
+  }
+}

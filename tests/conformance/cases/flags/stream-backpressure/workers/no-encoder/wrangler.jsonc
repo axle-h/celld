@@ -1,0 +1,1 @@
+{"name": "no-encoder", "main": "index.js", "compatibility_date": "2026-09-04", "compatibility_flags": ["no_encoder_stream_spec_compliant_backpressure"]}

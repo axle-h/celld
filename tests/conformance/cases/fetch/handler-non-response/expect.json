@@ -1,0 +1,39 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "proxy": {
+          "error": "TypeError: Callback returned incorrect type; expected 'Promise'"
+        },
+        "fake": {
+          "error": "TypeError: Callback returned incorrect type; expected 'Promise'"
+        },
+        "string": {
+          "error": "TypeError: Callback returned incorrect type; expected 'Promise'"
+        },
+        "undefined": {
+          "error": "TypeError: Callback returned incorrect type; expected 'Promise'"
+        },
+        "null": {
+          "error": "TypeError: Callback returned incorrect type; expected 'Promise'"
+        },
+        "object": {
+          "error": "TypeError: Callback returned incorrect type; expected 'Promise'"
+        },
+        "number": {
+          "error": "TypeError: Callback returned incorrect type; expected 'Promise'"
+        },
+        "promiseOfString": {
+          "error": "TypeError: Incorrect type for Promise: the Promise did not resolve to 'Response'."
+        },
+        "response": {
+          "status": 200,
+          "body": "real"
+        }
+      }
+    }
+  ]
+}

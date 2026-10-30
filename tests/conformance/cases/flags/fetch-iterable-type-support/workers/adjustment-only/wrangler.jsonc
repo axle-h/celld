@@ -1,0 +1,1 @@
+{"name": "adjustment-only", "main": "index.js", "compatibility_date": "2026-01-01", "compatibility_flags": ["fetch_iterable_type_support_override_adjustment"]}

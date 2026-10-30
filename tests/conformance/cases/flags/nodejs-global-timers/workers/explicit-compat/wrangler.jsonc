@@ -1,0 +1,1 @@
+{"name": "explicit-compat", "main": "index.js", "compatibility_date": "2026-01-01", "compatibility_flags": ["nodejs_compat", "enable_nodejs_global_timers"]}

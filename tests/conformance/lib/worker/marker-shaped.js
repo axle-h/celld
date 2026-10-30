@@ -6,7 +6,7 @@
 export const MARKER_KEYS = [
   "__celld$stub", "__celld$svc", "__celld$do", "__celld$hdr", "__celld$blob",
   "__celld$req", "__celld$res", "__celld$rs", "__celld$ws", "__celld$sig",
-  "__celld$disp", "__celld$unsupported", "__celld$loaderSvc",
+  "__celld$disp", "__celld$unsupported", "__celld$loaderSvc", "__celld$err",
   "__celld$", "__celld$$", "__celld$$hdr", "__celld$$$stub", "__celld$%",
 ];
 
@@ -15,7 +15,7 @@ const VALUES = {
   "__celld$hdr": [["a", "b"]], "__celld$blob": new Uint8Array([1]),
   "__celld$req": "https://example.com/", "__celld$res": 200, "__celld$rs": 1,
   "__celld$ws": 1, "__celld$sig": "0".repeat(32), "__celld$disp": 1,
-  "__celld$unsupported": 1, "__celld$loaderSvc": 0,
+  "__celld$unsupported": 1, "__celld$loaderSvc": 0, "__celld$err": 1,
 };
 
 const shaped = (key, bytes) => ({

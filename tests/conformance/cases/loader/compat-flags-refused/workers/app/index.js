@@ -1,5 +1,5 @@
 const CASES = {
-  refused: { compatibilityDate: "2026-02-01", compatibilityFlags: ["enhanced_error_serialization"] },
+  refused: { compatibilityDate: "2026-02-01", compatibilityFlags: ["webcrypto_modern_algorithms"] },
   newestDate: { compatibilityDate: "2026-09-05" },
 };
 

@@ -1,0 +1,105 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "global": "[object ServiceWorkerGlobalScope]",
+        "ctx": "[object ExecutionContext]",
+        "service": "[object Fetcher]",
+        "kv": "[object KvNamespace]",
+        "r2": "[object R2Bucket]",
+        "queue": "[object WorkerQueue]",
+        "namespace": "[object DurableObjectNamespace]",
+        "objectId": "[object DurableObjectId]",
+        "state": "[object DurableObjectState]",
+        "storage": "[object DurableObjectStorage]",
+        "sql": "[object SqlStorage]",
+        "id": "[object DurableObjectId]",
+        "object": "[object DurableObjectBase]",
+        "exception": "[object DOMException]",
+        "stub": "[object JsRpcStub]",
+        "property": "[object JsRpcProperty]",
+        "promise": "[object JsRpcPromise]",
+        "caches": "[object CacheStorage]",
+        "crypto": "[object Crypto]",
+        "navigator": "[object Navigator]",
+        "scheduler": "[object Scheduler]",
+        "cloudflare": "[object Cloudflare]",
+        "console": "[object console]",
+        "process": "[object process]",
+        "globals": {
+          "Body": "function",
+          "Crypto": "function",
+          "FetchEvent": "function",
+          "Navigator": "function",
+          "Performance": "function",
+          "PerformanceEntry": "function",
+          "PromiseRejectionEvent": "function",
+          "ScheduledEvent": "function",
+          "ServiceWorkerGlobalScope": "function",
+          "TailEvent": "function",
+          "TraceEvent": "function",
+          "WorkerGlobalScope": "function",
+          "DigestStream": "undefined",
+          "Temporal": "undefined"
+        },
+        "runtimeClass": [
+          "Symbol(Symbol.toStringTag)",
+          "cloudflare:internal-class",
+          "Symbol(kResourceTypeInspect)"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "global": "[object Object]",
+        "ctx": "[object Object]",
+        "service": "[object Object]",
+        "kv": "[object Object]",
+        "r2": "[object Object]",
+        "queue": "[object Object]",
+        "namespace": "[object Object]",
+        "objectId": "[object Object]",
+        "state": "[object Object]",
+        "storage": "[object Object]",
+        "sql": "[object Object]",
+        "id": "[object Object]",
+        "object": "[object Object]",
+        "exception": "[object Object]",
+        "stub": "[object Object]",
+        "property": "[object Object]",
+        "promise": "[object Object]",
+        "caches": "[object Object]",
+        "crypto": "[object Object]",
+        "navigator": "[object Object]",
+        "scheduler": "[object Object]",
+        "cloudflare": "[object Object]",
+        "console": "[object console]",
+        "process": "[object process]",
+        "globals": {
+          "Body": "function",
+          "Crypto": "function",
+          "FetchEvent": "function",
+          "Navigator": "function",
+          "Performance": "function",
+          "PerformanceEntry": "function",
+          "PromiseRejectionEvent": "function",
+          "ScheduledEvent": "function",
+          "ServiceWorkerGlobalScope": "function",
+          "TailEvent": "function",
+          "TraceEvent": "function",
+          "WorkerGlobalScope": "function",
+          "DigestStream": "undefined",
+          "Temporal": "undefined"
+        },
+        "runtimeClass": [
+          "cloudflare:internal-class",
+          "Symbol(kResourceTypeInspect)"
+        ]
+      }
+    }
+  ]
+}

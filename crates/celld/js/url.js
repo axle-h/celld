@@ -285,12 +285,5 @@
             } catch { return null; }
         }
     };
-    // Per WHATWG / Web IDL, every interface gets a
-    // Symbol.toStringTag matching its class name so
-    // `Object.prototype.toString.call(url)` returns
-    // "[object URL]" instead of "[object Object]".
-    Object.defineProperty(globalThis.URL.prototype,
-        Symbol.toStringTag, {
-            value: 'URL', configurable: true,
-        });
+    __celld.__apiTag(globalThis.URL.prototype, 'URL');
 })();

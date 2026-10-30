@@ -7992,6 +7992,121 @@ fn op_dom_exception_brand(
     }
 }
 
+/// Whether `object` is a `DOMException`: made by its constructor, which
+/// records its name in a private field that script cannot set.
+pub(super) fn is_dom_exception(scope: &v8::PinScope, object: v8::Local<v8::Object>) -> bool {
+    if object.is_proxy() {
+        return false;
+    }
+    let key = dom_exception_private(scope, "name");
+    object
+        .get_private(scope, key)
+        .is_some_and(|value| value.is_string())
+}
+
+/// `__is_dom_exception(value)`: whether `value` is a `DOMException`.
+fn op_is_dom_exception(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let value = args.get(0);
+    let is = v8::Local::<v8::Object>::try_from(value)
+        .is_ok_and(|object| is_dom_exception(scope, object));
+    rv.set_bool(is);
+}
+
+/// What a thrown value crosses RPC as when its serialization does not
+/// (jsg/value.h, the kj::Exception workerd makes of it, and util.c++
+/// `decodeTunneledException`, which reads it back): `[type, message]`, the
+/// error type the receiver makes and its message, from V8's side-effect-free
+/// detail string; `["DOMException", message, name]` for a `DOMException`, or
+/// a value whose description starts as one's does;
+/// or `[null, message]` for one the receiver does not recognise.
+fn op_tunneled_error(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let value = args.get(0);
+    let out = v8::Array::new(scope, 0);
+    let push = |scope: &mut v8::PinScope, text: Option<&str>| {
+        let item = match text {
+            Some(text) => v8::String::new(scope, text).unwrap().into(),
+            None => v8::null(scope).into(),
+        };
+        out.set_index(scope, out.length(), item);
+    };
+    let reason = if let Some((name, message)) = dom_exception_fields(scope, value) {
+        format!("DOMException({name}): {message}")
+    } else {
+        let detail = value
+            .to_detail_string(scope)
+            .map(|detail| detail.to_rust_string_lossy(scope))
+            .unwrap_or_else(|| "(couldn't stringify)".into());
+        let typed = value.is_object()
+            && STARTUP_ERROR_TYPES
+                .iter()
+                .any(|name| detail.starts_with(name));
+        if typed {
+            detail
+        } else {
+            format!("Error: {detail}")
+        }
+    };
+    let trim = |rest: &str| {
+        rest.strip_prefix(':').map_or(String::new(), |rest| {
+            rest.trim_start_matches(' ').to_owned()
+        })
+    };
+    // A description that starts `DOMException(<name>)`, a DOMException's or
+    // any value's whose detail string does, is a DOMException of that name.
+    if let Some(rest) = reason.strip_prefix("DOMException(") {
+        if let Some(close) = rest.find(')') {
+            push(scope, Some("DOMException"));
+            push(scope, Some(&trim(&rest[close + 1..])));
+            push(scope, Some(&rest[..close]));
+            rv.set(out.into());
+            return;
+        }
+    }
+    // The receiver's error types are jsg's JS_ERROR_TYPES, in order; its
+    // message is what follows the first that starts the text, after a colon
+    // and spaces, or nothing (`trimErrorMessage`).
+    let found = STARTUP_ERROR_TYPES[..STARTUP_ERROR_TYPES.len() - 1]
+        .iter()
+        .find(|name| reason.starts_with(*name));
+    match found {
+        Some(name) => {
+            push(scope, Some(name));
+            push(scope, Some(&trim(&reason[name.len()..])));
+        }
+        None => {
+            push(scope, None);
+            push(scope, Some(&reason));
+        }
+    }
+    rv.set(out.into());
+}
+
+fn dom_exception_fields(
+    scope: &v8::PinScope,
+    value: v8::Local<v8::Value>,
+) -> Option<(String, String)> {
+    if value.is_proxy() {
+        return None;
+    }
+    let object = v8::Local::<v8::Object>::try_from(value).ok()?;
+    let field = |field: &str| {
+        let key = dom_exception_private(scope, field);
+        object
+            .get_private(scope, key)
+            .filter(|value| value.is_string())
+            .map(|value| value.to_rust_string_lossy(scope))
+    };
+    Some((field("name")?, field("message")?))
+}
+
 /// workerd describes a `DOMException` by the name and message it was made
 /// with, as "DOMException(<name>): <message>", where V8 would describe it as
 /// an `Error` named by its `name` property. Only the private fields are
@@ -9272,6 +9387,8 @@ ops! { OP_NAMES, install_op_functions,
         "__http_stream_read_all" => op_http_stream_read_all,
         "__memory_admit" => op_memory_admit,
         "__dom_exception_brand" => op_dom_exception_brand,
+        "__tunneled_error" => op_tunneled_error,
+        "__is_dom_exception" => op_is_dom_exception,
         "__memory_limit" => op_memory_limit,
         "__memory_watch_pause" => op_memory_watch_pause,
         "__http_stream_cancel" => op_http_stream_cancel,
@@ -16729,6 +16846,7 @@ const _: fn() = || {
     assert_send_sync::<ActorRuntimeState>();
     assert_send_sync::<ModuleRegistry>();
     assert_send_sync::<LoaderOwner>();
+    assert_send_sync::<storage_ops::ErrorSerialization>();
 };
 
 /// A request must be able to carry its own context across a suspension. A

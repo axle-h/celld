@@ -1,0 +1,7 @@
+{
+  "workers": ["front", "target"],
+  "xfail": "1.63",
+  "steps": [
+    {"path": "/"}
+  ]
+}

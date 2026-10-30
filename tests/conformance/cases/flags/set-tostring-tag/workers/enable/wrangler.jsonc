@@ -1,0 +1,25 @@
+{
+  "name": "enable",
+  "main": "index.js",
+  "compatibility_date": "2024-06-01",
+  "compatibility_flags": [
+    "set_tostring_tag",
+    "expose_global_message_channel"
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "OBJECT",
+        "class_name": "ObjectEnable"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ObjectEnable"
+      ]
+    }
+  ]
+}

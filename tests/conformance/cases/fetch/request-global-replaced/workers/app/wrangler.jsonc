@@ -1,0 +1,6 @@
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "services": [{ "binding": "SELF", "service": "app", "entrypoint": "Echo" }]
+}

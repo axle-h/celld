@@ -1,0 +1,302 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "identity": [
+          "start desired=1",
+          "written desired=-2",
+          "read a",
+          "write 0 settled",
+          "after read 0 desired=-1",
+          "read b",
+          "write 1 settled",
+          "after read 1 desired=0",
+          "read c",
+          "write 2 settled",
+          "after read 2 desired=1"
+        ],
+        "doubling": [
+          "start desired=1",
+          "written desired=-1",
+          "read a",
+          "write 0 settled",
+          "after read 0 desired=0",
+          "read a",
+          "after read 1 desired=0"
+        ],
+        "encoder": [
+          "start desired=1",
+          "written desired=-2",
+          "read a",
+          "write 0 settled",
+          "after read 0 desired=-1",
+          "read b",
+          "write 1 settled",
+          "after read 1 desired=0",
+          "read c",
+          "write 2 settled",
+          "after read 2 desired=1"
+        ],
+        "decoder": [
+          "start desired=1",
+          "written desired=-2",
+          "read a",
+          "write 0 settled",
+          "after read 0 desired=-1",
+          "read b",
+          "write 1 settled",
+          "after read 1 desired=0",
+          "read c",
+          "write 2 settled",
+          "after read 2 desired=1"
+        ],
+        "reported": {
+          "transform": true,
+          "encoder": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "identity": [
+          "start desired=1",
+          "written desired=-2",
+          "read a",
+          "write 0 settled",
+          "write 1 settled",
+          "write 2 settled",
+          "after read 0 desired=1",
+          "read b",
+          "after read 1 desired=1",
+          "read c",
+          "after read 2 desired=1"
+        ],
+        "doubling": [
+          "start desired=1",
+          "written desired=-1",
+          "read a",
+          "write 0 settled",
+          "write 1 settled",
+          "after read 0 desired=1",
+          "read a",
+          "after read 1 desired=1"
+        ],
+        "encoder": [
+          "start desired=1",
+          "write 0 settled",
+          "write 1 settled",
+          "write 2 settled",
+          "written desired=1",
+          "read a",
+          "after read 0 desired=1",
+          "read b",
+          "after read 1 desired=1",
+          "read c",
+          "after read 2 desired=1"
+        ],
+        "decoder": [
+          "start desired=1",
+          "write 0 settled",
+          "write 1 settled",
+          "write 2 settled",
+          "written desired=1",
+          "read a",
+          "after read 0 desired=1",
+          "read b",
+          "after read 1 desired=1",
+          "read c",
+          "after read 2 desired=1"
+        ],
+        "reported": {
+          "transform": false,
+          "encoder": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "identity": [
+          "start desired=1",
+          "written desired=-2",
+          "read a",
+          "write 0 settled",
+          "after read 0 desired=-1",
+          "read b",
+          "write 1 settled",
+          "after read 1 desired=0",
+          "read c",
+          "write 2 settled",
+          "after read 2 desired=1"
+        ],
+        "doubling": [
+          "start desired=1",
+          "written desired=-1",
+          "read a",
+          "write 0 settled",
+          "after read 0 desired=0",
+          "read a",
+          "after read 1 desired=0"
+        ],
+        "encoder": null,
+        "decoder": null,
+        "reported": {
+          "transform": true,
+          "encoder": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "identity": [
+          "start desired=1",
+          "written desired=-2",
+          "read a",
+          "write 0 settled",
+          "write 1 settled",
+          "write 2 settled",
+          "after read 0 desired=1",
+          "read b",
+          "after read 1 desired=1",
+          "read c",
+          "after read 2 desired=1"
+        ],
+        "doubling": [
+          "start desired=1",
+          "written desired=-1",
+          "read a",
+          "write 0 settled",
+          "write 1 settled",
+          "after read 0 desired=1",
+          "read a",
+          "after read 1 desired=1"
+        ],
+        "encoder": [
+          "start desired=1",
+          "written desired=-2",
+          "read a",
+          "write 0 settled",
+          "write 1 settled",
+          "write 2 settled",
+          "after read 0 desired=1",
+          "read b",
+          "after read 1 desired=1",
+          "read c",
+          "after read 2 desired=1"
+        ],
+        "decoder": [
+          "start desired=1",
+          "written desired=-2",
+          "read a",
+          "write 0 settled",
+          "write 1 settled",
+          "write 2 settled",
+          "after read 0 desired=1",
+          "read b",
+          "after read 1 desired=1",
+          "read c",
+          "after read 2 desired=1"
+        ],
+        "reported": {
+          "transform": false,
+          "encoder": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "identity": [
+          "start desired=1",
+          "written desired=-2",
+          "read a",
+          "write 0 settled",
+          "after read 0 desired=-1",
+          "read b",
+          "write 1 settled",
+          "after read 1 desired=0",
+          "read c",
+          "write 2 settled",
+          "after read 2 desired=1"
+        ],
+        "doubling": [
+          "start desired=1",
+          "written desired=-1",
+          "read a",
+          "write 0 settled",
+          "after read 0 desired=0",
+          "read a",
+          "after read 1 desired=0"
+        ],
+        "encoder": null,
+        "decoder": null,
+        "reported": {
+          "transform": true,
+          "encoder": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "identity": [
+          "start desired=1",
+          "written desired=-2",
+          "read a",
+          "write 0 settled",
+          "after read 0 desired=-1",
+          "read b",
+          "write 1 settled",
+          "after read 1 desired=0",
+          "read c",
+          "write 2 settled",
+          "after read 2 desired=1"
+        ],
+        "doubling": [
+          "start desired=1",
+          "written desired=-1",
+          "read a",
+          "write 0 settled",
+          "after read 0 desired=0",
+          "read a",
+          "after read 1 desired=0"
+        ],
+        "encoder": [
+          "start desired=1",
+          "written desired=-2",
+          "read a",
+          "write 0 settled",
+          "after read 0 desired=-1",
+          "read b",
+          "write 1 settled",
+          "after read 1 desired=0",
+          "read c",
+          "write 2 settled",
+          "after read 2 desired=1"
+        ],
+        "decoder": [
+          "start desired=1",
+          "written desired=-2",
+          "read a",
+          "write 0 settled",
+          "after read 0 desired=-1",
+          "read b",
+          "write 1 settled",
+          "after read 1 desired=0",
+          "read c",
+          "write 2 settled",
+          "after read 2 desired=1"
+        ],
+        "reported": {
+          "transform": true,
+          "encoder": true
+        }
+      }
+    }
+  ]
+}

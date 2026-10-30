@@ -270,11 +270,6 @@
             }
         }
     };
-    // Web IDL toStringTag.
-    Object.defineProperty(globalThis.TextEncoder.prototype,
-      Symbol.toStringTag,
-      { value: 'TextEncoder', configurable: true });
-    Object.defineProperty(globalThis.TextDecoder.prototype,
-      Symbol.toStringTag,
-      { value: 'TextDecoder', configurable: true });
+    __celld.__apiTag(globalThis.TextEncoder.prototype, 'TextEncoder');
+    __celld.__apiTag(globalThis.TextDecoder.prototype, 'TextDecoder');
 })();

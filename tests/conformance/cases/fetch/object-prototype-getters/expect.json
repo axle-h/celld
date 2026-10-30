@@ -1,0 +1,109 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "incoming": "POST incoming",
+        "atStart": [],
+        "binding": "POST /binding payload",
+        "otherScript": "POST /other across",
+        "rpc": "PUT http://x/rpc carried",
+        "upstream": {
+          "status": 200,
+          "method": "POST",
+          "body": "out"
+        },
+        "calls": [
+          "headers",
+          "redirect",
+          "fetcher",
+          "cf",
+          "cache",
+          "integrity",
+          "signal",
+          "encodeResponseBody",
+          "headers",
+          "redirect",
+          "fetcher",
+          "cf",
+          "cache",
+          "integrity",
+          "signal",
+          "encodeResponseBody",
+          "headers",
+          "redirect",
+          "fetcher",
+          "cf",
+          "cache",
+          "integrity",
+          "signal",
+          "encodeResponseBody",
+          "headers",
+          "redirect",
+          "fetcher",
+          "cf",
+          "cache",
+          "integrity",
+          "signal",
+          "encodeResponseBody"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "incoming": "POST again",
+        "atStart": [
+          "status",
+          "statusText",
+          "cf",
+          "webSocket"
+        ],
+        "binding": "POST /binding payload",
+        "otherScript": "POST /other across",
+        "rpc": "PUT http://x/rpc carried",
+        "upstream": {
+          "status": 200,
+          "method": "POST",
+          "body": "out"
+        },
+        "calls": [
+          "headers",
+          "redirect",
+          "fetcher",
+          "cf",
+          "cache",
+          "integrity",
+          "signal",
+          "encodeResponseBody",
+          "headers",
+          "redirect",
+          "fetcher",
+          "cf",
+          "cache",
+          "integrity",
+          "signal",
+          "encodeResponseBody",
+          "headers",
+          "redirect",
+          "fetcher",
+          "cf",
+          "cache",
+          "integrity",
+          "signal",
+          "encodeResponseBody",
+          "headers",
+          "redirect",
+          "fetcher",
+          "cf",
+          "cache",
+          "integrity",
+          "signal",
+          "encodeResponseBody"
+        ]
+      }
+    }
+  ]
+}

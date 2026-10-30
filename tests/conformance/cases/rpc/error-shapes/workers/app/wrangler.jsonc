@@ -1,0 +1,8 @@
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "services": [{ "binding": "SELF", "service": "app", "entrypoint": "Errors" }],
+  "durable_objects": { "bindings": [{ "name": "STORE", "class_name": "Store" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Store"] }]
+}

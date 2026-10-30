@@ -1,0 +1,976 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "rpc": "no-store",
+        "constructed": {
+          "undefined": {
+            "cache": null
+          },
+          "no-store": {
+            "cache": "no-store"
+          },
+          "no-cache": {
+            "cache": "no-cache"
+          },
+          "reload": {
+            "error": "TypeError: Unsupported cache mode: reload"
+          },
+          "default": {
+            "error": "TypeError: Unsupported cache mode: default"
+          },
+          "force-cache": {
+            "error": "TypeError: Unsupported cache mode: force-cache"
+          },
+          "No-Store": {
+            "error": "TypeError: Unsupported cache mode: No-Store"
+          },
+          "": {
+            "error": "TypeError: Unsupported cache mode: "
+          }
+        },
+        "copies": {
+          "no-store": {
+            "request": {
+              "cache": "no-store"
+            },
+            "withInit": {
+              "cache": "no-store"
+            },
+            "asInit": {
+              "cache": "no-store"
+            },
+            "clone": {
+              "cache": "no-store"
+            }
+          },
+          "no-cache": {
+            "request": {
+              "cache": "no-cache"
+            },
+            "withInit": {
+              "cache": "no-cache"
+            },
+            "asInit": {
+              "cache": "no-cache"
+            },
+            "clone": {
+              "cache": "no-cache"
+            }
+          }
+        },
+        "subrequests": {
+          "none": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {},
+            "cache": null
+          },
+          "noStore": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noCache": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheForceRevalidate": true,
+              "cacheControl": "no-cache"
+            },
+            "cache": null
+          },
+          "noStoreWithHeaders": {
+            "cacheControl": "max-age=5",
+            "pragma": "x",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noStoreWithTtl": {
+            "error": "TypeError: CacheTtl: 5, is not compatible with cache: no-store header."
+          },
+          "noStoreWithNoCacheTtl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noCacheWithCacheControl": {
+            "error": "TypeError: The 'cacheControl' option on cf cannot be used together with the 'cache' request option. The 'cache' option ('no-store'/'no-cache') maps to cache TTL behavior internally, which conflicts with explicit Cache-Control directives."
+          },
+          "noStoreWithUndefinedTtl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noStoreWithUndefinedCacheControl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "ttl": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {
+              "cacheTtl": 30,
+              "cacheControl": "max-age=30"
+            },
+            "cache": null
+          },
+          "ttlWithCacheControl": {
+            "error": "TypeError: The 'cacheControl' and 'cacheTtl' options on cf are mutually exclusive. Use 'cacheControl' for explicit Cache-Control header directives, or 'cacheTtl' for a simplified TTL, but not both."
+          },
+          "request": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          }
+        },
+        "onPrototype": true,
+        "descriptor": {
+          "enumerable": true,
+          "configurable": true,
+          "set": null,
+          "name": "",
+          "detached": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "unset": null,
+        "reported": {
+          "option": true,
+          "noCache": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "rpc": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented.",
+        "constructed": {
+          "undefined": {
+            "cache": null
+          },
+          "no-store": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "no-cache": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "reload": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "default": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "force-cache": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "No-Store": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          }
+        },
+        "copies": {},
+        "subrequests": {
+          "none": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {},
+            "cache": null
+          },
+          "noStore": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "noCache": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "noStoreWithHeaders": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "noStoreWithTtl": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "noStoreWithNoCacheTtl": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "noCacheWithCacheControl": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "noStoreWithUndefinedTtl": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "noStoreWithUndefinedCacheControl": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "ttl": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {
+              "cacheTtl": 30,
+              "cacheControl": "max-age=30"
+            },
+            "cache": null
+          },
+          "ttlWithCacheControl": {
+            "error": "TypeError: The 'cacheControl' and 'cacheTtl' options on cf are mutually exclusive. Use 'cacheControl' for explicit Cache-Control header directives, or 'cacheTtl' for a simplified TTL, but not both."
+          },
+          "request": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {},
+            "cache": null
+          }
+        },
+        "onPrototype": false,
+        "descriptor": null,
+        "unset": "absent",
+        "reported": {
+          "option": false,
+          "noCache": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "rpc": "no-store",
+        "constructed": {
+          "undefined": {
+            "cache": null
+          },
+          "no-store": {
+            "cache": "no-store"
+          },
+          "no-cache": {
+            "error": "TypeError: Unsupported cache mode: no-cache"
+          },
+          "reload": {
+            "error": "TypeError: Unsupported cache mode: reload"
+          },
+          "default": {
+            "error": "TypeError: Unsupported cache mode: default"
+          },
+          "force-cache": {
+            "error": "TypeError: Unsupported cache mode: force-cache"
+          },
+          "No-Store": {
+            "error": "TypeError: Unsupported cache mode: No-Store"
+          },
+          "": {
+            "error": "TypeError: Unsupported cache mode: "
+          }
+        },
+        "copies": {
+          "no-store": {
+            "request": {
+              "cache": "no-store"
+            },
+            "withInit": {
+              "cache": "no-store"
+            },
+            "asInit": {
+              "cache": "no-store"
+            },
+            "clone": {
+              "cache": "no-store"
+            }
+          }
+        },
+        "subrequests": {
+          "none": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {},
+            "cache": null
+          },
+          "noStore": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noCache": {
+            "error": "TypeError: Unsupported cache mode: no-cache"
+          },
+          "noStoreWithHeaders": {
+            "cacheControl": "max-age=5",
+            "pragma": "x",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noStoreWithTtl": {
+            "error": "TypeError: CacheTtl: 5, is not compatible with cache: no-store header."
+          },
+          "noStoreWithNoCacheTtl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noCacheWithCacheControl": {
+            "error": "TypeError: Unsupported cache mode: no-cache"
+          },
+          "noStoreWithUndefinedTtl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noStoreWithUndefinedCacheControl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "ttl": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {
+              "cacheTtl": 30,
+              "cacheControl": "max-age=30"
+            },
+            "cache": null
+          },
+          "ttlWithCacheControl": {
+            "error": "TypeError: The 'cacheControl' and 'cacheTtl' options on cf are mutually exclusive. Use 'cacheControl' for explicit Cache-Control header directives, or 'cacheTtl' for a simplified TTL, but not both."
+          },
+          "request": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          }
+        },
+        "onPrototype": true,
+        "descriptor": {
+          "enumerable": true,
+          "configurable": true,
+          "set": null,
+          "name": "",
+          "detached": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "unset": null,
+        "reported": {
+          "option": true,
+          "noCache": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "rpc": "no-store",
+        "constructed": {
+          "undefined": {
+            "cache": null
+          },
+          "no-store": {
+            "cache": "no-store"
+          },
+          "no-cache": {
+            "error": "TypeError: Unsupported cache mode: no-cache"
+          },
+          "reload": {
+            "error": "TypeError: Unsupported cache mode: reload"
+          },
+          "default": {
+            "error": "TypeError: Unsupported cache mode: default"
+          },
+          "force-cache": {
+            "error": "TypeError: Unsupported cache mode: force-cache"
+          },
+          "No-Store": {
+            "error": "TypeError: Unsupported cache mode: No-Store"
+          },
+          "": {
+            "error": "TypeError: Unsupported cache mode: "
+          }
+        },
+        "copies": {
+          "no-store": {
+            "request": {
+              "cache": "no-store"
+            },
+            "withInit": {
+              "cache": "no-store"
+            },
+            "asInit": {
+              "cache": "no-store"
+            },
+            "clone": {
+              "cache": "no-store"
+            }
+          }
+        },
+        "subrequests": {
+          "none": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {},
+            "cache": null
+          },
+          "noStore": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noCache": {
+            "error": "TypeError: Unsupported cache mode: no-cache"
+          },
+          "noStoreWithHeaders": {
+            "cacheControl": "max-age=5",
+            "pragma": "x",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noStoreWithTtl": {
+            "error": "TypeError: CacheTtl: 5, is not compatible with cache: no-store header."
+          },
+          "noStoreWithNoCacheTtl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noCacheWithCacheControl": {
+            "error": "TypeError: Unsupported cache mode: no-cache"
+          },
+          "noStoreWithUndefinedTtl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noStoreWithUndefinedCacheControl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "ttl": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {
+              "cacheTtl": 30,
+              "cacheControl": "max-age=30"
+            },
+            "cache": null
+          },
+          "ttlWithCacheControl": {
+            "error": "TypeError: The 'cacheControl' and 'cacheTtl' options on cf are mutually exclusive. Use 'cacheControl' for explicit Cache-Control header directives, or 'cacheTtl' for a simplified TTL, but not both."
+          },
+          "request": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          }
+        },
+        "onPrototype": true,
+        "descriptor": {
+          "enumerable": true,
+          "configurable": true,
+          "set": null,
+          "name": "",
+          "detached": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "unset": null,
+        "reported": {
+          "option": true,
+          "noCache": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "rpc": "no-store",
+        "constructed": {
+          "undefined": {
+            "cache": null
+          },
+          "no-store": {
+            "cache": "no-store"
+          },
+          "no-cache": {
+            "cache": "no-cache"
+          },
+          "reload": {
+            "error": "TypeError: Unsupported cache mode: reload"
+          },
+          "default": {
+            "error": "TypeError: Unsupported cache mode: default"
+          },
+          "force-cache": {
+            "error": "TypeError: Unsupported cache mode: force-cache"
+          },
+          "No-Store": {
+            "error": "TypeError: Unsupported cache mode: No-Store"
+          },
+          "": {
+            "error": "TypeError: Unsupported cache mode: "
+          }
+        },
+        "copies": {
+          "no-store": {
+            "request": {
+              "cache": "no-store"
+            },
+            "withInit": {
+              "cache": "no-store"
+            },
+            "asInit": {
+              "cache": "no-store"
+            },
+            "clone": {
+              "cache": "no-store"
+            }
+          },
+          "no-cache": {
+            "request": {
+              "cache": "no-cache"
+            },
+            "withInit": {
+              "cache": "no-cache"
+            },
+            "asInit": {
+              "cache": "no-cache"
+            },
+            "clone": {
+              "cache": "no-cache"
+            }
+          }
+        },
+        "subrequests": {
+          "none": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {},
+            "cache": null
+          },
+          "noStore": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noCache": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheForceRevalidate": true,
+              "cacheControl": "no-cache"
+            },
+            "cache": null
+          },
+          "noStoreWithHeaders": {
+            "cacheControl": "max-age=5",
+            "pragma": "x",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noStoreWithTtl": {
+            "error": "TypeError: CacheTtl: 5, is not compatible with cache: no-store header."
+          },
+          "noStoreWithNoCacheTtl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noCacheWithCacheControl": {
+            "error": "TypeError: The 'cacheControl' option on cf cannot be used together with the 'cache' request option. The 'cache' option ('no-store'/'no-cache') maps to cache TTL behavior internally, which conflicts with explicit Cache-Control directives."
+          },
+          "noStoreWithUndefinedTtl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noStoreWithUndefinedCacheControl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "ttl": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {
+              "cacheTtl": 30,
+              "cacheControl": "max-age=30"
+            },
+            "cache": null
+          },
+          "ttlWithCacheControl": {
+            "error": "TypeError: The 'cacheControl' and 'cacheTtl' options on cf are mutually exclusive. Use 'cacheControl' for explicit Cache-Control header directives, or 'cacheTtl' for a simplified TTL, but not both."
+          },
+          "request": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          }
+        },
+        "onPrototype": true,
+        "descriptor": {
+          "enumerable": true,
+          "configurable": true,
+          "set": null,
+          "name": "",
+          "detached": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "unset": null,
+        "reported": {
+          "option": true,
+          "noCache": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "rpc": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented.",
+        "constructed": {
+          "undefined": {
+            "cache": null
+          },
+          "no-store": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "no-cache": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "reload": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "default": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "force-cache": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "No-Store": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          }
+        },
+        "copies": {},
+        "subrequests": {
+          "none": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {},
+            "cache": null
+          },
+          "noStore": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "noCache": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "noStoreWithHeaders": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "noStoreWithTtl": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "noStoreWithNoCacheTtl": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "noCacheWithCacheControl": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "noStoreWithUndefinedTtl": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "noStoreWithUndefinedCacheControl": {
+            "error": "Error: The 'cache' field on 'RequestInitializerDict' is not implemented."
+          },
+          "ttl": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {
+              "cacheTtl": 30,
+              "cacheControl": "max-age=30"
+            },
+            "cache": null
+          },
+          "ttlWithCacheControl": {
+            "error": "TypeError: The 'cacheControl' and 'cacheTtl' options on cf are mutually exclusive. Use 'cacheControl' for explicit Cache-Control header directives, or 'cacheTtl' for a simplified TTL, but not both."
+          },
+          "request": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {},
+            "cache": null
+          }
+        },
+        "onPrototype": false,
+        "descriptor": null,
+        "unset": "absent",
+        "reported": {
+          "option": false,
+          "noCache": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "rpc": "no-store",
+        "constructed": {
+          "undefined": {
+            "cache": null
+          },
+          "no-store": {
+            "cache": "no-store"
+          },
+          "no-cache": {
+            "error": "TypeError: Unsupported cache mode: no-cache"
+          },
+          "reload": {
+            "error": "TypeError: Unsupported cache mode: reload"
+          },
+          "default": {
+            "error": "TypeError: Unsupported cache mode: default"
+          },
+          "force-cache": {
+            "error": "TypeError: Unsupported cache mode: force-cache"
+          },
+          "No-Store": {
+            "error": "TypeError: Unsupported cache mode: No-Store"
+          },
+          "": {
+            "error": "TypeError: Unsupported cache mode: "
+          }
+        },
+        "copies": {
+          "no-store": {
+            "request": {
+              "cache": "no-store"
+            },
+            "withInit": {
+              "cache": "no-store"
+            },
+            "asInit": {
+              "cache": "no-store"
+            },
+            "clone": {
+              "cache": "no-store"
+            }
+          }
+        },
+        "subrequests": {
+          "none": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {},
+            "cache": null
+          },
+          "noStore": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noCache": {
+            "error": "TypeError: Unsupported cache mode: no-cache"
+          },
+          "noStoreWithHeaders": {
+            "cacheControl": "max-age=5",
+            "pragma": "x",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noStoreWithTtl": {
+            "error": "TypeError: CacheTtl: 5, is not compatible with cache: no-store header."
+          },
+          "noStoreWithNoCacheTtl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noCacheWithCacheControl": {
+            "error": "TypeError: Unsupported cache mode: no-cache"
+          },
+          "noStoreWithUndefinedTtl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "noStoreWithUndefinedCacheControl": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          },
+          "ttl": {
+            "cacheControl": null,
+            "pragma": null,
+            "cf": {
+              "cacheTtl": 30,
+              "cacheControl": "max-age=30"
+            },
+            "cache": null
+          },
+          "ttlWithCacheControl": {
+            "error": "TypeError: The 'cacheControl' and 'cacheTtl' options on cf are mutually exclusive. Use 'cacheControl' for explicit Cache-Control header directives, or 'cacheTtl' for a simplified TTL, but not both."
+          },
+          "request": {
+            "cacheControl": "no-cache",
+            "pragma": "no-cache",
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "cache": null
+          }
+        },
+        "onPrototype": true,
+        "descriptor": {
+          "enumerable": true,
+          "configurable": true,
+          "set": null,
+          "name": "",
+          "detached": "TypeError: Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "unset": null,
+        "reported": {
+          "option": true,
+          "noCache": false
+        }
+      }
+    }
+  ]
+}

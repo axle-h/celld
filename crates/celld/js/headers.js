@@ -354,4 +354,5 @@ function _makeHeadersIter(list, kind) {
 // accepts any non-BodyInit value via ToString. Match
 // that here so primitives go through cleanly.
 
+__celld.__apiTag(Headers.prototype, "Headers");
 globalThis.Headers = Headers;

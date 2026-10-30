@@ -5,7 +5,7 @@
       "worker": null,
       "output": [
         "Error: The compatibility flag url_original is not supported by celld: celld always behaves as url_standard does: URL follows the WHATWG URL Standard.",
-        "The compatibility flag enhanced_error_serialization is not supported by celld: structuredClone() and RPC carry an Error's name, message, stack and cause, but not its other own properties."
+        "The compatibility flag webcrypto_modern_algorithms is not supported by celld: Web Crypto has no ML-KEM or ML-DSA."
       ]
     },
     {

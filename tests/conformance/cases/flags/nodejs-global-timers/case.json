@@ -1,0 +1,30 @@
+{
+  "workers": [
+    "front",
+    "before",
+    "no-nodejs-compat",
+    "explicit",
+    "explicit-compat",
+    "disable"
+  ],
+  "steps": [
+    {
+      "path": "/"
+    },
+    {
+      "path": "/before"
+    },
+    {
+      "path": "/no-nodejs-compat"
+    },
+    {
+      "path": "/explicit"
+    },
+    {
+      "path": "/explicit-compat"
+    },
+    {
+      "path": "/disable"
+    }
+  ]
+}

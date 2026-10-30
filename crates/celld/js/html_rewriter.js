@@ -279,9 +279,9 @@
   // Stream-valued content buffers to text after the handler settles.
   // Bad UTF-8 is Workerd's parser error, thrown before the mutation.
   const collectContent = async (source) => {
-    const buffer = source instanceof Response
+    const buffer = __celld.__isResponse(source)
       ? await source.arrayBuffer()
-      : await new Response(source).arrayBuffer();
+      : await new __celld.__Response(source).arrayBuffer();
     try {
       return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
     } catch {
@@ -331,16 +331,16 @@
 
       // A 101 keeps its WebSocket, as in workerd: the body is rewritten,
       // and the socket is not part of the body.
-      const init = {
+      const init = __celld.__responseInit({
         status: response.status,
         statusText: response.statusText,
         headers: response.headers,
         webSocket: response.webSocket,
-      };
+      });
       const source = response.body;
       if (!source) {
         __hr_free(id);
-        return new Response(null, init);
+        return new __celld.__Response(null, init);
       }
 
       const state = {
@@ -358,7 +358,7 @@
         selectors: this.__selectors,
         document: this.__document,
       };
-      const readable = new ReadableStream({
+      const readable = new ReadableStream({ __proto__: null,
         start: (controller) => {
           state.controller = controller;
           __hrPump(state);
@@ -370,7 +370,7 @@
         pull: () => __hrWake(state),
         cancel: (reason) => __hrCancel(state, reason),
       });
-      return new Response(readable, init);
+      return new __celld.__Response(readable, init);
     }
   }
 
@@ -568,5 +568,6 @@
     }
   }
 
+  __celld.__apiTag(HTMLRewriter.prototype, "HTMLRewriter");
   globalThis.HTMLRewriter = HTMLRewriter;
 })();

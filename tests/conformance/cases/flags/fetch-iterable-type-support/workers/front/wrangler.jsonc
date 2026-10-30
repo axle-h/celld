@@ -1,0 +1,31 @@
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "services": [
+    {
+      "binding": "BEFORE",
+      "service": "before"
+    },
+    {
+      "binding": "ENABLE",
+      "service": "enable"
+    },
+    {
+      "binding": "ENABLE_ADJUSTED",
+      "service": "enable-adjusted"
+    },
+    {
+      "binding": "NO_ADJUSTMENT",
+      "service": "no-adjustment"
+    },
+    {
+      "binding": "ADJUSTMENT_ONLY",
+      "service": "adjustment-only"
+    },
+    {
+      "binding": "DISABLE",
+      "service": "disable"
+    }
+  ]
+}

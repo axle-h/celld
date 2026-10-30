@@ -250,8 +250,5 @@ class URLSearchParams {
 }
 
 globalThis.URLSearchParams = URLSearchParams;
-Object.defineProperty(URLSearchParams.prototype,
-  Symbol.toStringTag, {
-    value: 'URLSearchParams', configurable: true,
-  });
+__celld.__apiTag(URLSearchParams.prototype, 'URLSearchParams');
 } // end block scope

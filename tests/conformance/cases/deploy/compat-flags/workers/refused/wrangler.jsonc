@@ -4,5 +4,5 @@
   "name": "refused",
   "main": "index.js",
   "compatibility_date": "2026-09-04",
-  "compatibility_flags": ["enhanced_error_serialization", "url_original"]
+  "compatibility_flags": ["webcrypto_modern_algorithms", "url_original"]
 }

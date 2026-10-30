@@ -1,0 +1,12 @@
+{
+  "name": "no-cache-before",
+  "main": "index.js",
+  "compatibility_date": "2025-08-06",
+  "services": [
+    {
+      "binding": "ECHO",
+      "service": "no-cache-before",
+      "entrypoint": "Echo"
+    }
+  ]
+}

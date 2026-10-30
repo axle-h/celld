@@ -1,12 +1,19 @@
 // TextEncoderStream / TextDecoderStream. TextDecoderStream keeps decoder
 // state across chunks so split
 // multi-byte sequences are decoded correctly, then flushes at end-of-stream.
+//
+// Their readable side has the Encoding Standard's high water mark of 0
+// under encoder_stream_spec_compliant_backpressure, and 1 otherwise, as
+// workerd's had (streams/encoding.c++).
+const readableStrategy = () =>
+  (__celld.__cell?.compat.encoderStreamBackpressure ?? true)
+    ? undefined : { highWaterMark: 1 };
 globalThis.TextEncoderStream = class TextEncoderStream
     extends TransformStream {
   constructor() {
     const enc = new TextEncoder();
     let pending = '';
-    super({
+    super({ __proto__: null,
       transform(chunk, controller) {
         let s = pending + String(chunk);
         pending = '';
@@ -23,7 +30,7 @@ globalThis.TextEncoderStream = class TextEncoderStream
       flush(controller) {
         if (pending) controller.enqueue(enc.encode(pending));
       },
-    });
+    }, undefined, readableStrategy());
   }
   get encoding() { return 'utf-8'; }
 };
@@ -33,7 +40,7 @@ globalThis.TextDecoderStream = class TextDecoderStream
   #dec;
   constructor(label = 'utf-8', options = {}) {
     const dec = new TextDecoder(label, options);
-    super({
+    super({ __proto__: null,
       transform(chunk, controller) {
         if (!(chunk instanceof ArrayBuffer)
             && !ArrayBuffer.isView(chunk))
@@ -45,10 +52,12 @@ globalThis.TextDecoderStream = class TextDecoderStream
         const s = dec.decode();
         if (s) controller.enqueue(s);
       },
-    });
+    }, undefined, readableStrategy());
     this.#dec = dec;
   }
   get encoding() { return this.#dec.encoding; }
   get fatal() { return this.#dec.fatal; }
   get ignoreBOM() { return this.#dec.ignoreBOM; }
 };
+__celld.__apiTag(TextEncoderStream.prototype, "TextEncoderStream");
+__celld.__apiTag(TextDecoderStream.prototype, "TextDecoderStream");

@@ -1,0 +1,24 @@
+{
+  "workers": [
+    "front",
+    "legacy",
+    "before",
+    "enable",
+    "peer-enhanced",
+    "peer-legacy"
+  ],
+  "steps": [
+    {
+      "path": "/"
+    },
+    {
+      "path": "/legacy"
+    },
+    {
+      "path": "/before"
+    },
+    {
+      "path": "/enable"
+    }
+  ]
+}

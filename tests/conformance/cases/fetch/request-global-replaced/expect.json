@@ -1,0 +1,117 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "atStart": 0,
+        "seen": [
+          {
+            "name": "Request",
+            "init": {
+              "keys": [
+                "method",
+                "body"
+              ],
+              "symbols": 0
+            }
+          },
+          {
+            "name": "Request",
+            "init": {
+              "keys": [
+                "method",
+                "body",
+                "oneTimeBody",
+                "incomingSignal",
+                "received",
+                "headersJson",
+                "hasBody"
+              ],
+              "symbols": 0
+            }
+          }
+        ],
+        "viaBinding": {
+          "path": "/echo",
+          "body": ""
+        },
+        "givenBody": "given",
+        "forgedHeader": null,
+        "redirected": {
+          "path": "/landed",
+          "body": "x"
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "atStart": 2,
+        "seen": [
+          {
+            "name": "Request",
+            "init": {
+              "keys": [
+                "method",
+                "body"
+              ],
+              "symbols": 0
+            }
+          },
+          {
+            "name": "Request",
+            "init": {
+              "keys": [
+                "method",
+                "body",
+                "oneTimeBody",
+                "incomingSignal",
+                "received",
+                "headersJson",
+                "hasBody"
+              ],
+              "symbols": 0
+            }
+          },
+          {
+            "name": "Request",
+            "init": {
+              "keys": [
+                "method",
+                "body"
+              ],
+              "symbols": 0
+            }
+          },
+          {
+            "name": "Request",
+            "init": {
+              "keys": [
+                "method",
+                "body",
+                "oneTimeBody",
+                "incomingSignal",
+                "received",
+                "headersJson",
+                "hasBody"
+              ],
+              "symbols": 0
+            }
+          }
+        ],
+        "viaBinding": {
+          "path": "/echo",
+          "body": ""
+        },
+        "givenBody": "given",
+        "forgedHeader": null,
+        "redirected": {
+          "path": "/landed",
+          "body": "x"
+        }
+      }
+    }
+  ]
+}

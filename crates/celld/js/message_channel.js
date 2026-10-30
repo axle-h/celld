@@ -18,8 +18,6 @@
       this._messageHandler = null;
     }
 
-    get [Symbol.toStringTag]() { return "MessagePort"; }
-
     get onmessage() { return this._messageHandler; }
     set onmessage(handler) {
       this._messageHandler = typeof handler === "function" ? handler : null;
@@ -103,9 +101,10 @@
         port2: { value: port2, enumerable: true },
       });
     }
-    get [Symbol.toStringTag]() { return "MessageChannel"; }
   }
 
+  __celld.__apiTag(MessagePort.prototype, "MessagePort");
+  __celld.__apiTag(MessageChannel.prototype, "MessageChannel");
   globalThis.MessagePort = MessagePort;
   globalThis.MessageChannel = MessageChannel;
 })();

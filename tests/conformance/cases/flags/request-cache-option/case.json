@@ -1,0 +1,34 @@
+{
+  "workers": [
+    "front",
+    "before",
+    "no-cache-before",
+    "enable",
+    "enable-both",
+    "disable",
+    "no-cache-disabled"
+  ],
+  "steps": [
+    {
+      "path": "/"
+    },
+    {
+      "path": "/before"
+    },
+    {
+      "path": "/no-cache-before"
+    },
+    {
+      "path": "/enable"
+    },
+    {
+      "path": "/enable-both"
+    },
+    {
+      "path": "/disable"
+    },
+    {
+      "path": "/no-cache-disabled"
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "fresh": {
+          "type": "DOMException",
+          "name": "NotFoundError",
+          "own": [
+            "code",
+            "message",
+            "name",
+            "stack"
+          ]
+        },
+        "cloned": {
+          "type": "DOMException",
+          "name": "NotFoundError",
+          "own": [
+            "code",
+            "message",
+            "name",
+            "stack"
+          ]
+        },
+        "returned": {
+          "type": "DOMException",
+          "name": "NotFoundError",
+          "own": [
+            "code",
+            "message",
+            "name",
+            "stack"
+          ]
+        },
+        "param": {
+          "type": "DOMException",
+          "name": "NotFoundError",
+          "own": [
+            "code",
+            "message",
+            "name",
+            "stack"
+          ]
+        },
+        "stored": {
+          "type": "DOMException",
+          "name": "NotFoundError",
+          "own": [
+            "code",
+            "message",
+            "name",
+            "stack"
+          ]
+        },
+        "refused": {
+          "type": "DOMException",
+          "name": "DataCloneError",
+          "own": [
+            "code",
+            "message",
+            "name",
+            "stack"
+          ]
+        },
+        "stack": "Error: made"
+      }
+    }
+  ]
+}

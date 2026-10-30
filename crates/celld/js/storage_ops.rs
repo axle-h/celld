@@ -1030,15 +1030,263 @@ fn throw_data_clone_error(scope: &mut v8::PinScope, message: v8::Local<v8::Strin
     scope.throw_exception(exception);
 }
 
-struct StorageValueDelegate;
+/// Whether an isolate's serializers write an `Error` with its own
+/// properties (`enhanced_error_serialization`), set once from the Worker's
+/// flags before its modules evaluate.
+#[derive(Clone, Copy, Default)]
+pub(super) struct ErrorSerialization {
+    pub(super) enhanced: bool,
+}
+
+fn enhanced_errors(isolate: &v8::Isolate) -> bool {
+    isolate
+        .get_slot::<ErrorSerialization>()
+        .is_some_and(|errors| errors.enhanced)
+}
+
+/// workerd's host-object tag for a native `Error` (jsg/ser.c++
+/// `SERIALIZATION_TAG_NATIVE_ERROR`), written as a raw little-endian u32, as
+/// workerd writes it.
+const NATIVE_ERROR_TAG: u32 = 10;
+
+/// The tag of every other host object celld writes: a structured clone's
+/// branded host value.
+const BRANDED_HOST_TAG: u32 = u32::MAX;
+
+/// workerd's `ErrorTag`, by index: the name an `Error` is written under, or
+/// none (0) for any other name, which is then written too.
+const ERROR_TAG_NAMES: [&str; 14] = [
+    "",
+    "Error",
+    "TypeError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "WasmCompileError",
+    "WasmLinkError",
+    "WasmRuntimeError",
+    "WasmSuspendError",
+    "EvalError",
+    "URIError",
+    "AggregateError",
+    "SuppressedError",
+];
+
+fn own_property_names<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Array>> {
+    object.get_property_names(
+        scope,
+        v8::GetPropertyNamesArgs {
+            mode: v8::KeyCollectionMode::OwnOnly,
+            property_filter: v8::PropertyFilter::ALL_PROPERTIES,
+            index_filter: v8::IndexFilter::SkipIndices,
+            key_conversion: v8::KeyConversionMode::KeepNumbers,
+        },
+    )
+}
+
+/// Whether the serializer writes `object` as workerd's native-error host
+/// object: an `Error` other than a `DOMException`, which is a host value of
+/// its own in workerd, under `enhanced_error_serialization`.
+fn is_enhanced_error(scope: &mut v8::PinScope, object: v8::Local<v8::Object>) -> bool {
+    object.is_native_error() && !super::is_dom_exception(scope, object) && enhanced_errors(scope)
+}
+
+/// Write an `Error` as workerd's `Serializer::WriteHostObject` does: its tag,
+/// its name when the tag does not give it, its message, and then an object
+/// of its other own properties, each read once and set as on any object, so
+/// that `__proto__` sets the copy's prototype, as in workerd.
+fn write_native_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    serializer: &dyn v8::ValueSerializerHelper,
+) -> Option<bool> {
+    let context = scope.get_current_context();
+    let name_key = v8::String::new(scope, "name")?;
+    let message_key = v8::String::new(scope, "message")?;
+    serializer.write_raw_bytes(&NATIVE_ERROR_TAG.to_le_bytes());
+    let name = object.get(scope, name_key.into())?;
+    let name_text = name.to_string(scope)?.to_rust_string_lossy(scope);
+    let tag = ERROR_TAG_NAMES
+        .iter()
+        .skip(1)
+        .position(|known| *known == name_text)
+        .map_or(0, |index| index as u32 + 1);
+    serializer.write_raw_bytes(&tag.to_le_bytes());
+    if tag == 0 && !serializer.write_value(context, name)? {
+        return Some(false);
+    }
+    let message = object.get(scope, message_key.into())?;
+    if !serializer.write_value(context, message)? {
+        return Some(false);
+    }
+    let names = own_property_names(scope, object)?;
+    let properties = v8::Object::new(scope);
+    for index in 0..names.length() {
+        let key = names.get_index(scope, index)?;
+        if key.strict_equals(name_key.into()) || key.strict_equals(message_key.into()) {
+            continue;
+        }
+        let value = object.get(scope, key)?;
+        properties.set(scope, key, value)?;
+    }
+    serializer.write_value(context, properties.into())
+}
+
+fn read_raw_u32(deserializer: &dyn v8::ValueDeserializerHelper) -> Option<u32> {
+    let bytes = deserializer.read_raw_bytes(4)?;
+    Some(u32::from_le_bytes(bytes.try_into().ok()?))
+}
+
+/// An `Error` of workerd's `ErrorTag` `tag` with `message`: V8's own for the
+/// classes the API makes, the harness's captured constructors for the rest,
+/// and an `Error` for an unknown tag (jsg/ser.c++ `toJsError`).
+fn error_of_tag<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    tag: u32,
+    message: v8::Local<'s, v8::String>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let error = match tag {
+        2 => v8::Exception::type_error(scope, message),
+        3 => v8::Exception::range_error(scope, message),
+        4 => v8::Exception::reference_error(scope, message),
+        5 => v8::Exception::syntax_error(scope, message),
+        6..=13 => {
+            let make = internal_function(scope, "__errorOfTag").ok()?;
+            let tag = v8::Integer::new_from_unsigned(scope, tag);
+            let receiver = v8::undefined(scope).into();
+            let allow = std::pin::pin!(v8::AllowJavascriptExecutionScope::new(scope));
+            let scope = &mut allow.init();
+            let made = make.call(scope, receiver, &[tag.into(), message.into()])?;
+            return made.to_object(scope);
+        }
+        _ => v8::Exception::error(scope, message),
+    };
+    error.to_object(scope)
+}
+
+/// Read what `write_native_error` wrote, as workerd's
+/// `Deserializer::ReadHostObject` does: a message that is not a string is a
+/// DataCloneError, an unknown name is defined on an `Error`, and the other
+/// properties are defined as data, `stack` only when `preserve_stack`.
+fn read_native_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    deserializer: &dyn v8::ValueDeserializerHelper,
+    preserve_stack: bool,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context = scope.get_current_context();
+    let tag = read_raw_u32(deserializer)?;
+    let name = if tag == 0 {
+        Some(deserializer.read_value(context)?)
+    } else {
+        None
+    };
+    let message = deserializer.read_value(context)?;
+    let Ok(message) = message.try_cast::<v8::String>() else {
+        let text = v8::String::new(
+            scope,
+            "Deserialization failed: error message is not a string",
+        )?;
+        // The DataCloneError is the harness's, made while V8 reads.
+        let allow = std::pin::pin!(v8::AllowJavascriptExecutionScope::new(scope));
+        let scope = &mut allow.init();
+        throw_data_clone_error(scope, text);
+        return None;
+    };
+    let error = error_of_tag(scope, tag, message)?;
+    if let Some(name) = name {
+        let key = v8::String::new(scope, "name")?;
+        error.define_own_property(scope, key.into(), name, v8::PropertyAttribute::NONE)?;
+    }
+    let properties = deserializer.read_value(context)?;
+    if let Ok(properties) = properties.try_cast::<v8::Object>() {
+        let stack = v8::String::new(scope, "stack")?;
+        let names = own_property_names(scope, properties)?;
+        for index in 0..names.length() {
+            let key = names.get_index(scope, index)?;
+            if !preserve_stack && key.strict_equals(stack.into()) {
+                continue;
+            }
+            let value = properties.get(scope, key)?;
+            let key = key.try_cast::<v8::Name>().ok()?;
+            error.create_data_property(scope, key, value)?;
+        }
+    }
+    Some(error)
+}
+
+/// The serializer of storage, RPC payloads and the other transports: V8's
+/// own, with workerd's native-error host object under
+/// `enhanced_error_serialization`.
+struct StorageValueDelegate {
+    enhanced: bool,
+    preserve_stack: bool,
+}
+
+impl StorageValueDelegate {
+    fn writer(scope: &v8::Isolate) -> StorageValueDelegate {
+        StorageValueDelegate {
+            enhanced: enhanced_errors(scope),
+            preserve_stack: true,
+        }
+    }
+
+    fn reader(preserve_stack: bool) -> StorageValueDelegate {
+        StorageValueDelegate {
+            enhanced: false,
+            preserve_stack,
+        }
+    }
+}
 
 impl v8::ValueSerializerImpl for StorageValueDelegate {
     fn throw_data_clone_error(&self, scope: &mut v8::PinScope, message: v8::Local<v8::String>) {
         throw_data_clone_error(scope, message);
     }
+
+    fn has_custom_host_object(&self, _isolate: &v8::Isolate) -> bool {
+        self.enhanced
+    }
+
+    // As workerd's `Serializer::IsHostObject`: an object with embedder
+    // fields is one, which V8 refuses as it would without this delegate.
+    fn is_host_object<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+    ) -> Option<bool> {
+        Some(object.internal_field_count() > 0 || is_enhanced_error(scope, object))
+    }
+
+    fn write_host_object<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+        serializer: &dyn v8::ValueSerializerHelper,
+    ) -> Option<bool> {
+        if is_enhanced_error(scope, object) {
+            return write_native_error(scope, object, serializer);
+        }
+        let message = v8::String::new(scope, "Unsupported object type").unwrap();
+        self.throw_data_clone_error(scope, message);
+        None
+    }
 }
 
-impl v8::ValueDeserializerImpl for StorageValueDelegate {}
+impl v8::ValueDeserializerImpl for StorageValueDelegate {
+    fn read_host_object<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        deserializer: &dyn v8::ValueDeserializerHelper,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        if read_raw_u32(deserializer)? != NATIVE_ERROR_TAG {
+            return None;
+        }
+        read_native_error(scope, deserializer, self.preserve_stack)
+    }
+}
 
 #[derive(Clone)]
 struct TransientCloneDelegate<'a> {
@@ -1084,7 +1332,7 @@ impl v8::ValueSerializerImpl for TransientCloneDelegate<'_> {
         scope: &mut v8::PinScope<'s, '_>,
         object: v8::Local<'s, v8::Object>,
     ) -> Option<bool> {
-        object.has(scope, self.host_object_brand.into())
+        Some(object.has(scope, self.host_object_brand.into())? || is_enhanced_error(scope, object))
     }
 
     fn write_host_object<'s>(
@@ -1093,6 +1341,9 @@ impl v8::ValueSerializerImpl for TransientCloneDelegate<'_> {
         object: v8::Local<'s, v8::Object>,
         serializer: &dyn v8::ValueSerializerHelper,
     ) -> Option<bool> {
+        if !object.has(scope, self.host_object_brand.into())? {
+            return write_native_error(scope, object, serializer);
+        }
         let value = object.get(scope, self.host_object_brand.into())?;
         let Ok(serialize) = value.try_cast::<v8::Function>() else {
             let message = v8::String::new(scope, "Unsupported object type").unwrap();
@@ -1100,7 +1351,7 @@ impl v8::ValueSerializerImpl for TransientCloneDelegate<'_> {
             return None;
         };
         let data = serialize.call(scope, object.into(), &[])?;
-        serializer.write_uint32(u32::MAX);
+        serializer.write_raw_bytes(&BRANDED_HOST_TAG.to_le_bytes());
         serializer.write_value(scope.get_current_context(), data)
     }
 }
@@ -1111,9 +1362,10 @@ impl v8::ValueDeserializerImpl for TransientCloneDelegate<'_> {
         scope: &mut v8::PinScope<'s, '_>,
         deserializer: &dyn v8::ValueDeserializerHelper,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        let mut tag = 0;
-        if !deserializer.read_uint32(&mut tag) || tag != u32::MAX {
-            return None;
+        match read_raw_u32(deserializer)? {
+            BRANDED_HOST_TAG => {}
+            NATIVE_ERROR_TAG => return read_native_error(scope, deserializer, true),
+            _ => return None,
         }
         let data = deserializer.read_value(scope.get_current_context())?;
         let object = data.to_object(scope)?;
@@ -1159,7 +1411,7 @@ fn serialize_storage_value(
     value: v8::Local<v8::Value>,
 ) -> Option<Vec<u8>> {
     let context = scope.get_current_context();
-    let serializer = v8::ValueSerializer::new(scope, Box::new(StorageValueDelegate));
+    let serializer = v8::ValueSerializer::new(scope, Box::new(StorageValueDelegate::writer(scope)));
     serializer.write_header();
     if !serializer.write_value(context, value).unwrap_or(false) {
         return None;
@@ -1179,6 +1431,16 @@ pub(super) fn deserialize_storage_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: storage::StoredValue,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    deserialize_value(scope, value, true)
+}
+
+/// Decode a value; an `Error` written with its own properties keeps its
+/// `stack` only when `preserve_stack`, which workerd's RPC does not ask for.
+fn deserialize_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: storage::StoredValue,
+    preserve_stack: bool,
+) -> Option<v8::Local<'s, v8::Value>> {
     match value {
         storage::StoredValue::LegacyJson(json) => {
             let json = v8::String::new(scope, &json)?;
@@ -1186,8 +1448,11 @@ pub(super) fn deserialize_storage_value<'s>(
         }
         storage::StoredValue::V8(bytes) => {
             let context = scope.get_current_context();
-            let deserializer =
-                v8::ValueDeserializer::new(scope, Box::new(StorageValueDelegate), &bytes);
+            let deserializer = v8::ValueDeserializer::new(
+                scope,
+                Box::new(StorageValueDelegate::reader(preserve_stack)),
+                &bytes,
+            );
             deserializer.set_supports_legacy_wire_format(true);
             if !deserializer.read_header(context).unwrap_or(false) {
                 return None;
@@ -1268,7 +1533,9 @@ pub(super) fn op_sc_encode(
     }
 }
 
-/// `__sc_decode(bytes)` -> value: inverse of `__sc_encode`.
+/// `__sc_decode(bytes, preserveStack = true)` -> value: inverse of
+/// `__sc_encode`. RPC passes `false`: an `Error` written with its own
+/// properties then takes the receiver's stack, as in workerd.
 pub(super) fn op_sc_decode(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -1280,8 +1547,15 @@ pub(super) fn op_sc_decode(
         scope.throw_exception(exception);
         return;
     };
-    match deserialize_storage_value(scope, storage::StoredValue::V8(bytes)) {
+    let preserve_stack = !args.get(1).is_false();
+    let tc = std::pin::pin!(v8::TryCatch::new(scope));
+    let scope = &mut tc.init();
+    match deserialize_value(scope, storage::StoredValue::V8(bytes), preserve_stack) {
         Some(value) => rv.set(value),
+        // A DataCloneError the payload's contents raised is the answer.
+        None if scope.has_caught() => {
+            scope.rethrow();
+        }
         None => throw_storage_error(scope, "rpc", "corrupt clone payload"),
     }
 }

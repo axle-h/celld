@@ -1,0 +1,3 @@
+// fixup-transform-stream-backpressure is on from 2024-12-16, and
+// encoder_stream_spec_compliant_backpressure from 2026-03-24.
+{ "name": "encoder", "main": "index.js", "compatibility_date": "2025-01-01" }

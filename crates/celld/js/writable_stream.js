@@ -635,8 +635,12 @@ class TransformStream {
       backpressureCleared ??= Promise.withResolvers();
       return backpressureCleared.promise;
     };
+    // Without fixup-transform-stream-backpressure an enqueue never sets
+    // it (workerd's original TransformStreamDefaultController::enqueue), so
+    // once a read clears it, every write runs at once.
+    const fixup = __celld.__cell?.compat.transformStreamBackpressure ?? true;
     const enqueued = () => {
-      if (rsc.desiredSize !== null && rsc.desiredSize <= 0)
+      if (fixup && rsc.desiredSize !== null && rsc.desiredSize <= 0)
         setBackpressure(true);
     };
     // workerd ties a TransformStream to the request or Durable Object
@@ -653,7 +657,7 @@ class TransformStream {
       return Promise.resolve(
         cancelFn.call(transformer, reason));
     };
-    this.readable = new ReadableStream({
+    this.readable = new ReadableStream({ __proto__: null,
       start(c) { rsc = c; },
       pull() {
         if (foreign()) return never();
@@ -699,7 +703,7 @@ class TransformStream {
       ? new Promise((res) => res(startFn.call(transformer, ctrl)))
       : undefined;
     started?.catch((e) => rsc.error(e));
-    writable = new WritableStream({
+    writable = new WritableStream({ __proto__: null,
       start() { return started; },
       async write(chunk) {
         if (foreign()) return never();
@@ -774,7 +778,6 @@ globalThis.WritableStreamDefaultController =
 globalThis.TransformStream = TransformStream;
 globalThis.TransformStreamDefaultController =
   TransformStreamDefaultController;
-// Web IDL toStringTag.
 for (const [cls, name] of [
   [WritableStream, 'WritableStream'],
   [WritableStreamDefaultWriter,
@@ -785,7 +788,5 @@ for (const [cls, name] of [
   [TransformStreamDefaultController,
     'TransformStreamDefaultController'],
 ]) {
-  Object.defineProperty(cls.prototype,
-    Symbol.toStringTag,
-    { value: name, configurable: true });
+  __celld.__apiTag(cls.prototype, name);
 }

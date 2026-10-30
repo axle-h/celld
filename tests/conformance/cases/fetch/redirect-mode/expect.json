@@ -45,6 +45,31 @@
         "requestAsInit": {
           "redirect": "manual"
         },
+        "traced": {
+          "log": [
+            "get method",
+            "method.toString",
+            "get headers",
+            "headers.x-a.toString",
+            "get body",
+            "body.toString",
+            "get redirect",
+            "redirect.toString",
+            "get fetcher",
+            "get cf",
+            "get cache",
+            "get integrity",
+            "integrity.toString",
+            "get signal",
+            "get encodeResponseBody",
+            "encodeResponseBody.toString"
+          ],
+          "result": {
+            "method": "POST",
+            "redirect": "manual",
+            "header": "1"
+          }
+        },
         "fetchError": {
           "rejected": "TypeError",
           "message": "Invalid redirect value, must be one of \"follow\" or \"manual\" (\"error\" won't be implemented since it does not make sense at the edge; use \"manual\" and check the response status code)."

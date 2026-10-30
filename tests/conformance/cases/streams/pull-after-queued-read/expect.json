@@ -1,0 +1,54 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "source": [
+          "pull 0",
+          "pull 1",
+          "started",
+          "read 0",
+          "read 1",
+          "pull 2",
+          "pull 3",
+          "pull 4",
+          "read 2"
+        ],
+        "encoder": [
+          "read a",
+          "write 0 settled",
+          "read b",
+          "write 1 settled",
+          "read c",
+          "write 2 settled"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "source": [
+          "pull 0",
+          "pull 1",
+          "started",
+          "read 0",
+          "read 1",
+          "pull 2",
+          "pull 3",
+          "pull 4",
+          "read 2"
+        ],
+        "encoder": [
+          "write 0 settled",
+          "read a",
+          "read b",
+          "write 1 settled",
+          "write 2 settled",
+          "read c"
+        ]
+      }
+    }
+  ]
+}

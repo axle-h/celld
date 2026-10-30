@@ -1,0 +1,41 @@
+{
+  "name": "legacy",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": [
+    "legacy_error_serialization"
+  ],
+  "services": [
+    {
+      "binding": "SELF",
+      "service": "legacy",
+      "entrypoint": "Errors"
+    },
+    {
+      "binding": "PEER_ENHANCED",
+      "service": "peer-enhanced",
+      "entrypoint": "Errors"
+    },
+    {
+      "binding": "PEER_LEGACY",
+      "service": "peer-legacy",
+      "entrypoint": "Errors"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "OBJECT",
+        "class_name": "ObjectLegacy"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ObjectLegacy"
+      ]
+    }
+  ]
+}

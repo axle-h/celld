@@ -1,0 +1,36 @@
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "services": [
+    {
+      "binding": "BEFORE",
+      "service": "before"
+    },
+    {
+      "binding": "NO_CACHE_BEFORE",
+      "service": "no-cache-before"
+    },
+    {
+      "binding": "ENABLE",
+      "service": "enable"
+    },
+    {
+      "binding": "ENABLE_BOTH",
+      "service": "enable-both"
+    },
+    {
+      "binding": "DISABLE",
+      "service": "disable"
+    },
+    {
+      "binding": "NO_CACHE_DISABLED",
+      "service": "no-cache-disabled"
+    },
+    {
+      "binding": "ECHO",
+      "service": "front",
+      "entrypoint": "Echo"
+    }
+  ]
+}

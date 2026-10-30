@@ -1,0 +1,19 @@
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "services": [
+    {
+      "binding": "BEFORE",
+      "service": "before"
+    },
+    {
+      "binding": "ENABLE",
+      "service": "enable"
+    },
+    {
+      "binding": "LEGACY",
+      "service": "legacy"
+    }
+  ]
+}

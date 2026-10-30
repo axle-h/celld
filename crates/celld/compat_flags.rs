@@ -227,9 +227,20 @@ pub const ABORTSIGNAL_RPC: FlagId = id("enable_abortsignal_rpc");
 pub const ALLOW_IRREVOCABLE_STUB_STORAGE: FlagId = id("allow_irrevocable_stub_storage");
 pub const ASSETS_NAVIGATION_PREFERS_ASSET_SERVING: FlagId =
     id("assets_navigation_prefers_asset_serving");
+pub const BLOB_STANDARD_MIME_TYPE: FlagId = id("blob_standard_mime_type");
+pub const CACHE_NO_CACHE: FlagId = id("cache_no_cache_enabled");
+pub const CACHE_OPTION_ENABLED: FlagId = id("cache_option_enabled");
 pub const DELETE_ALL_DELETES_ALARM: FlagId = id("delete_all_deletes_alarm");
 pub const DISALLOW_IMPORTABLE_ENV: FlagId = id("disallow_importable_env");
+pub const ENABLE_NODEJS_GLOBAL_TIMERS: FlagId = id("enable_nodejs_global_timers");
+pub const ENCODER_STREAM_SPEC_COMPLIANT_BACKPRESSURE: FlagId =
+    id("encoder_stream_spec_compliant_backpressure");
+pub const ENHANCED_ERROR_SERIALIZATION: FlagId = id("enhanced_error_serialization");
 pub const FETCHER_NO_GET_PUT_DELETE: FlagId = id("fetcher_no_get_put_delete");
+pub const FETCH_ITERABLE_TYPE_SUPPORT: FlagId = id("fetch_iterable_type_support");
+pub const FETCH_ITERABLE_TYPE_SUPPORT_OVERRIDE_ADJUSTMENT: FlagId =
+    id("fetch_iterable_type_support_override_adjustment");
+pub const FIXUP_TRANSFORM_STREAM_BACKPRESSURE: FlagId = id("fixup-transform-stream-backpressure");
 pub const JS_RPC: FlagId = id("js_rpc");
 pub const NODEJS_ALS: FlagId = id("nodejs_als");
 pub const NODEJS_COMPAT: FlagId = id("nodejs_compat");
@@ -238,6 +249,7 @@ pub const NODEJS_COMPAT_V2: FlagId = id("nodejs_compat_v2");
 pub const QUEUES_JSON_MESSAGES: FlagId = id("queues_json_messages");
 pub const RPC_PARAMS_DUP_STUBS: FlagId = id("rpc_params_dup_stubs");
 pub const SERVICE_BINDING_EXTRA_HANDLERS: FlagId = id("service_binding_extra_handlers");
+pub const SET_TOSTRING_TAG: FlagId = id("set_tostring_tag");
 pub const SQLITE_VEC: FlagId = id("sqlite_vec");
 pub const WEB_SOCKET_AUTO_REPLY_TO_CLOSE: FlagId = id("web_socket_auto_reply_to_close");
 pub const WEBSOCKET_STANDARD_BINARY_TYPE: FlagId = id("websocket_standard_binary_type");
@@ -873,7 +885,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2024, 6, 3)),
         implied: None,
         experimental: false,
-        support: Unmodelled("Blob.type lower-cases a body's Content-Type but normalizes it as neither flag state does"),
+        support: Honoured,
     },
     Flag {
         field: "fetchStandardUrl",
@@ -918,7 +930,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2024, 11, 11)),
         implied: None,
         experimental: false,
-        support: Off("the Request `cache` option throws"),
+        support: Honoured,
     },
     Flag {
         field: "kvDirectBinding",
@@ -1017,9 +1029,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2024, 9, 26)),
         implied: None,
         experimental: false,
-        support: Unmodelled(
-            "only some of celld's API classes have their name as Symbol.toStringTag",
-        ),
+        support: Honoured,
     },
     Flag {
         field: "upperCaseAllHttpMethods",
@@ -1055,7 +1065,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2024, 12, 16)),
         implied: None,
         experimental: false,
-        support: Unmodelled("celld's TransformStream lets a write settle before its readable side is read, as neither flag state does"),
+        support: Honoured,
     },
     Flag {
         field: "obsolete69",
@@ -1073,7 +1083,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["cacheOptionEnabled"], date: Date::new(2025, 8, 7) }),
         experimental: false,
-        support: Off("the Request `cache` option throws"),
+        support: Honoured,
     },
     Flag {
         field: "pythonWorkers20250116",
@@ -1478,7 +1488,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2026, 4, 21)),
         implied: None,
         experimental: false,
-        support: Off("structuredClone() and RPC carry an Error's name, message, stack and cause, but not its other own properties"),
+        support: Honoured,
     },
     Flag {
         field: "emailSendingQueuing",
@@ -1757,7 +1767,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2026, 2, 19)),
         implied: None,
         experimental: false,
-        support: Unmodelled("a Request or Response body stringifies an Array but iterates an async iterable, as neither flag state does"),
+        support: Honoured,
     },
     Flag {
         field: "envModuleNullableSupport",
@@ -1784,7 +1794,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["fetchIterableTypeSupport"], date: Date::new(2026, 1, 15) }),
         experimental: false,
-        support: Unmodelled("a Request or Response body stringifies an Array but iterates an async iterable, as neither flag state does"),
+        support: Honoured,
     },
     Flag {
         field: "stripBomInReadAllText",
@@ -1820,7 +1830,7 @@ pub const FLAGS: &[Flag] = &[
         date: None,
         implied: Some(Implied { by: &["nodeJsCompat"], date: Date::new(2026, 2, 10) }),
         experimental: false,
-        support: Off("the global setTimeout() and setInterval() return numbers, not Node.js Timeout objects"),
+        support: Honoured,
     },
     Flag {
         field: "noAutoAllocateChunkSize",
@@ -1955,7 +1965,7 @@ pub const FLAGS: &[Flag] = &[
         date: Some(Date::new(2026, 3, 24)),
         implied: None,
         experimental: false,
-        support: Off("TextEncoderStream and TextDecoderStream accept a write before their readable side is read"),
+        support: Honoured,
     },
     Flag {
         field: "specCompliantPropertyAttributes",
@@ -2509,6 +2519,51 @@ mod tests {
     }
 
     #[test]
+    fn the_flags_of_plan_1_36_follow_their_dates_and_implications() {
+        // enable_nodejs_global_timers: nodejs_compat implies it from
+        // 2026-02-10, and the flag alone turns it on.
+        let timers = ENABLE_NODEJS_GLOBAL_TIMERS;
+        assert!(!values("2026-02-09", &["nodejs_compat"]).get(timers));
+        assert!(values("2026-02-10", &["nodejs_compat"]).get(timers));
+        assert!(values("2026-09-04", &[]).get(timers));
+        assert!(!values("2026-09-04", &["no_nodejs_compat"]).get(timers));
+        assert!(!values("2026-09-04", &["no_nodejs_global_timers"]).get(timers));
+        assert!(values("2026-01-01", &["enable_nodejs_global_timers"]).get(timers));
+        // cache_no_cache_enabled: cache_option_enabled implies it from
+        // 2025-08-07.
+        let before = values("2025-08-06", &[]);
+        assert!(before.get(CACHE_OPTION_ENABLED) && !before.get(CACHE_NO_CACHE));
+        assert!(values("2025-08-07", &[]).get(CACHE_NO_CACHE));
+        assert!(!values("2024-11-10", &[]).get(CACHE_OPTION_ENABLED));
+        assert!(!values("2026-09-04", &["cache_no_cache_disabled"]).get(CACHE_NO_CACHE));
+        // The override adjustment follows fetch_iterable_type_support from
+        // 2026-01-15.
+        let early = values("2026-01-01", &["fetch_iterable_type_support"]);
+        assert!(early.get(FETCH_ITERABLE_TYPE_SUPPORT));
+        assert!(!early.get(FETCH_ITERABLE_TYPE_SUPPORT_OVERRIDE_ADJUSTMENT));
+        let late = values("2026-01-20", &["fetch_iterable_type_support"]);
+        assert!(late.get(FETCH_ITERABLE_TYPE_SUPPORT_OVERRIDE_ADJUSTMENT));
+        assert!(!values("2026-02-18", &[]).get(FETCH_ITERABLE_TYPE_SUPPORT));
+        // The rest by date.
+        for (flag, day) in [
+            (ENHANCED_ERROR_SERIALIZATION, ("2026-04-20", "2026-04-21")),
+            (BLOB_STANDARD_MIME_TYPE, ("2024-06-02", "2024-06-03")),
+            (SET_TOSTRING_TAG, ("2024-09-25", "2024-09-26")),
+            (
+                FIXUP_TRANSFORM_STREAM_BACKPRESSURE,
+                ("2024-12-15", "2024-12-16"),
+            ),
+            (
+                ENCODER_STREAM_SPEC_COMPLIANT_BACKPRESSURE,
+                ("2026-03-23", "2026-03-24"),
+            ),
+        ] {
+            assert!(!values(day.0, &[]).get(flag), "{flag:?}");
+            assert!(values(day.1, &[]).get(flag), "{flag:?}");
+        }
+    }
+
+    #[test]
     fn implications_follow_their_date_and_chain_in_field_order() {
         // nodejs_compat implies nodejs_compat_v2 from 2024-09-23, and either
         // implies nodejs_zlib from then.
@@ -2597,26 +2652,25 @@ mod tests {
         // Off: the other way round.
         assert!(compile_at(
             Some("2026-09-04"),
-            &["legacy_error_serialization"],
+            &["mutable_api_prototypes"],
             Context::Deploy,
             TODAY
         )
         .is_ok());
         assert_eq!(
-            errors(Some("2026-01-01"), &["enhanced_error_serialization"]),
+            errors(Some("2026-01-01"), &["immutable_api_prototypes"]),
             [
-                "The compatibility flag enhanced_error_serialization is not supported by celld: \
-              structuredClone() and RPC carry an Error's name, message, stack and cause, but \
-              not its other own properties."
+                "The compatibility flag immutable_api_prototypes is not supported by celld: API \
+              prototypes are mutable."
             ]
         );
         // Unmodelled: both names.
         assert_eq!(
-            errors(Some("2026-01-01"), &["blob_legacy_mime_type"]).len(),
+            errors(Some("2026-01-01"), &["enable_streams_nodejs_v24_compat"]).len(),
             1
         );
         assert_eq!(
-            errors(Some("2026-01-01"), &["blob_standard_mime_type"]).len(),
+            errors(Some("2026-01-01"), &["disable_streams_nodejs_v24_compat"]).len(),
             1
         );
         // Honoured experimental flags and celld's own flags are accepted.
@@ -2715,13 +2769,15 @@ mod tests {
         assert_eq!(reported.get("enable_abortsignal_rpc"), Some(&false));
         assert_eq!(reported.get("sqlite_vec"), Some(&false));
         assert_eq!(reported.get("url_standard"), Some(&true));
-        assert_eq!(reported.get("enhanced_error_serialization"), None);
+        assert_eq!(reported.get("enhanced_error_serialization"), Some(&true));
+        assert_eq!(reported.get("immutable_api_prototypes"), None);
         // Before its date workerd computes url_standard off: not reported.
         let old: std::collections::HashMap<_, _> = values("2022-01-01", &[]).reported().collect();
         assert_eq!(old.get("url_standard"), None);
         assert_eq!(old.get("rpc_params_dup_stubs"), Some(&false));
         assert_eq!(reported.get("minimal_subrequests"), None);
-        assert_eq!(reported.get("blob_standard_mime_type"), None);
+        assert_eq!(reported.get("blob_standard_mime_type"), Some(&true));
+        assert_eq!(old.get("blob_standard_mime_type"), Some(&false));
         assert_eq!(reported.get("experimental"), None);
     }
 }

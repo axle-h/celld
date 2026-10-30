@@ -1,0 +1,30 @@
+{
+  "workers": [
+    "front",
+    "before",
+    "transform-only",
+    "original-transform",
+    "no-encoder",
+    "enable"
+  ],
+  "steps": [
+    {
+      "path": "/"
+    },
+    {
+      "path": "/before"
+    },
+    {
+      "path": "/transform-only"
+    },
+    {
+      "path": "/original-transform"
+    },
+    {
+      "path": "/no-encoder"
+    },
+    {
+      "path": "/enable"
+    }
+  ]
+}

@@ -127,7 +127,6 @@
         __celldMaterial: { __proto__: null, value: material },
       });
     }
-    get [Symbol.toStringTag]() { return "CryptoKey"; }
   }
 
   function _makeKey(type, algorithm, extractable, usages, material) {
@@ -230,8 +229,6 @@
   }
 
   class SubtleCrypto {
-    get [Symbol.toStringTag]() { return "SubtleCrypto"; }
-
     async digest(algorithm, data) {
       const name = _algorithmName(algorithm);
       if (!_DIGEST_ALGS.has(name)) {
@@ -793,8 +790,12 @@
     },
 
     subtle,
-    get [Symbol.toStringTag]() { return "Crypto"; },
   };
+  // workerd's `crypto` is an instance of its Crypto class, whose prototype
+  // has the tag; celld has no Crypto global, so a prototype of its own.
+  const cryptoPrototype = {};
+  __celld.__apiTag(cryptoPrototype, "Crypto");
+  Object.setPrototypeOf(crypto, cryptoPrototype);
 
   // Cloudflare's DigestStream: a WritableStream that hashes what is written
   // to it and resolves `digest` when the stream closes. Not Web Crypto, and
@@ -812,7 +813,7 @@
         state.resolve = resolve;
         state.reject = reject;
       });
-      super({
+      super({ __proto__: null,
         write(chunk) {
           // A string is written as its UTF-8 bytes, as workerd does; every
           // other chunk must already be binary.
@@ -856,7 +857,6 @@
       });
       this.__celldDigestState = state;
     }
-    get [Symbol.toStringTag]() { return "DigestStream"; }
     [Symbol.dispose]() {
       const state = this.__celldDigestState;
       if (state.disposed) return; // disposing twice is a no-op
@@ -870,6 +870,9 @@
     }
   }
 
+  __celld.__apiTag(DigestStream.prototype, "DigestStream");
+  __celld.__apiTag(CryptoKey.prototype, "CryptoKey");
+  __celld.__apiTag(SubtleCrypto.prototype, "SubtleCrypto");
   crypto.DigestStream = DigestStream;
   globalThis.DigestStream = DigestStream;
   globalThis.CryptoKey = CryptoKey;

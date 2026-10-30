@@ -1,0 +1,22 @@
+{
+  "workers": [
+    "app",
+    "other"
+  ],
+  "upstream": true,
+  "env": {
+    "CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${UPSTREAM_PORT}"
+  },
+  "steps": [
+    {
+      "path": "/first?port=${UPSTREAM_PORT}",
+      "method": "POST",
+      "body": "incoming"
+    },
+    {
+      "path": "/second?port=${UPSTREAM_PORT}",
+      "method": "POST",
+      "body": "again"
+    }
+  ]
+}

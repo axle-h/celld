@@ -3,7 +3,7 @@
     {
       "status": 200,
       "body": {
-        "refused": "Error: The compatibility flag enhanced_error_serialization is not supported by celld: structuredClone() and RPC carry an Error's name, message, stack and cause, but not its other own properties.",
+        "refused": "Error: The compatibility flag webcrypto_modern_algorithms is not supported by celld: Web Crypto has no ML-KEM or ML-DSA.",
         "newestDate": "Error: This Worker requires compatibility date \"2026-09-05\", but the newest date supported by this server binary is \"2026-09-04\"."
       }
     }

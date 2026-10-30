@@ -1,0 +1,24 @@
+{
+  "name": "disable",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": [
+    "do_not_set_tostring_tag"
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "OBJECT",
+        "class_name": "ObjectDisable"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ObjectDisable"
+      ]
+    }
+  ]
+}

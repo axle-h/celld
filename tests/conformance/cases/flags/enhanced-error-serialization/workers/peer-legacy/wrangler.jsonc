@@ -1,0 +1,8 @@
+{
+  "name": "peer-legacy",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": [
+    "legacy_error_serialization"
+  ]
+}

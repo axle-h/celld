@@ -1,0 +1,38 @@
+{
+  "name": "before",
+  "main": "index.js",
+  "compatibility_date": "2026-04-20",
+  "services": [
+    {
+      "binding": "SELF",
+      "service": "before",
+      "entrypoint": "Errors"
+    },
+    {
+      "binding": "PEER_ENHANCED",
+      "service": "peer-enhanced",
+      "entrypoint": "Errors"
+    },
+    {
+      "binding": "PEER_LEGACY",
+      "service": "peer-legacy",
+      "entrypoint": "Errors"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "OBJECT",
+        "class_name": "ObjectBefore"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ObjectBefore"
+      ]
+    }
+  ]
+}

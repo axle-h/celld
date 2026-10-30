@@ -350,7 +350,7 @@ class IdentityTransformStream {
     // fetch body.
     if (limit !== undefined) readable._expectedLength = limit;
     let seen = 0;
-    const writable = new WritableStream({
+    const writable = new WritableStream({ __proto__: null,
       write(chunk) {
         let view;
         try {
@@ -431,8 +431,7 @@ for (const [cls, name] of [
   [IdentityTransformStream, 'IdentityTransformStream'],
   [FixedLengthStream, 'FixedLengthStream'],
 ])
-  Object.defineProperty(cls.prototype, Symbol.toStringTag,
-                        { value: name, configurable: true });
+  __celld.__apiTag(cls.prototype, name);
 
 return { IdentityTransformStream, FixedLengthStream };
 })()

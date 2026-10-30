@@ -113,7 +113,7 @@
       // consumer. A speculative host read parked on the connection
       // would deadlock startTls(), whose handshake cannot begin while
       // a plaintext read holds the socket -- the server speaks second.
-      this.#readable = new ReadableStream({
+      this.#readable = new ReadableStream({ __proto__: null,
         pull: async (controller) => {
           await this.#opened;
           if (this.#closing || this.#detached) {
@@ -135,8 +135,8 @@
           controller.enqueue(bytes);
         },
         cancel() {},
-      }, { highWaterMark: 0 });
-      this.#writable = new WritableStream({
+      }, { __proto__: null, highWaterMark: 0 });
+      this.#writable = new WritableStream({ __proto__: null,
         write: async (chunk) => {
           if (refused !== null) throw refused;
           await this.#opened;

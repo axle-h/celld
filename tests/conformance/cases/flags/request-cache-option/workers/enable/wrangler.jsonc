@@ -1,0 +1,16 @@
+{
+  "name": "enable",
+  "main": "index.js",
+  "compatibility_date": "2024-01-01",
+  "compatibility_flags": [
+    "cache_option_enabled",
+    "rpc"
+  ],
+  "services": [
+    {
+      "binding": "ECHO",
+      "service": "enable",
+      "entrypoint": "Echo"
+    }
+  ]
+}

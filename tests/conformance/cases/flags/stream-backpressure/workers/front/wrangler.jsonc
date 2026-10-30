@@ -1,0 +1,27 @@
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "services": [
+    {
+      "binding": "BEFORE",
+      "service": "before"
+    },
+    {
+      "binding": "TRANSFORM_ONLY",
+      "service": "transform-only"
+    },
+    {
+      "binding": "ORIGINAL_TRANSFORM",
+      "service": "original-transform"
+    },
+    {
+      "binding": "NO_ENCODER",
+      "service": "no-encoder"
+    },
+    {
+      "binding": "ENABLE",
+      "service": "enable"
+    }
+  ]
+}

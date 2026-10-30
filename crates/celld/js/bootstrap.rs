@@ -34,6 +34,7 @@ struct BootstrapSource {
     source: &'static v8::OneByteConst,
 }
 
+static_source!(API_TAGS_SOURCE, "api_tags.js");
 static_source!(TEXT_ENCODING_SOURCE, "text_encoding.js");
 static_source!(URL_SEARCH_PARAMS_SOURCE, "url_search_params.js");
 static_source!(URL_SOURCE, "url.js");
@@ -51,6 +52,10 @@ static_source!(CRYPTO_SOURCE, "crypto.js");
 static_source!(TRACING_SOURCE, "tracing.js");
 
 static PRELUDE: &[BootstrapSource] = &[
+    BootstrapSource {
+        name: "api_tags.js",
+        source: &API_TAGS_SOURCE,
+    },
     BootstrapSource {
         name: "text_encoding.js",
         source: &TEXT_ENCODING_SOURCE,
@@ -1513,6 +1518,12 @@ fn finish_cell_adoption(tc: &mut v8::PinScope, cell: &str, owned: bool) -> Resul
 }
 
 pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Compat) -> Result<()> {
+    use crate::compat_flags as f;
+    let flags = compat.flags;
+    // Every serializer of the isolate reads this (`storage_ops`).
+    scope.set_slot(storage_ops::ErrorSerialization {
+        enhanced: flags.get(f::ENHANCED_ERROR_SERIALIZATION),
+    });
     let source = format!(
         "const c = __celld.__cell;\n\
          c.deleteAllDeletesAlarm = {};\n\
@@ -1525,7 +1536,18 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
          c.compat.disallowImportableEnv = {};\n\
          c.compat.serviceBindingExtraHandlers = {};\n\
          c.compat.rpcParamsDupStubs = {};\n\
-         c.compat.abortSignalRpc = {};",
+         c.compat.abortSignalRpc = {};\n\
+         c.compat.enhancedErrorSerialization = {};\n\
+         c.compat.nodejsGlobalTimers = {};\n\
+         c.compat.cacheOption = {};\n\
+         c.compat.cacheNoCache = {};\n\
+         c.compat.fetchIterable = {};\n\
+         c.compat.fetchIterableOverrideAdjustment = {};\n\
+         c.compat.encoderStreamBackpressure = {};\n\
+         c.compat.transformStreamBackpressure = {};\n\
+         c.compat.blobStandardMimeType = {};\n\
+         c.compat.setToStringTag = {};\n\
+         c.applyCompat();",
         compat.delete_all_deletes_alarm,
         compat.js_rpc,
         compat.fetcher_get_put_delete,
@@ -1537,6 +1559,16 @@ pub(super) fn inject_storage_compatibility(scope: &mut v8::PinScope, compat: Com
         compat.service_binding_extra_handlers,
         compat.rpc_params_dup_stubs,
         compat.abort_signal_rpc,
+        flags.get(f::ENHANCED_ERROR_SERIALIZATION),
+        flags.get(f::ENABLE_NODEJS_GLOBAL_TIMERS),
+        flags.get(f::CACHE_OPTION_ENABLED),
+        flags.get(f::CACHE_NO_CACHE),
+        flags.get(f::FETCH_ITERABLE_TYPE_SUPPORT),
+        flags.get(f::FETCH_ITERABLE_TYPE_SUPPORT_OVERRIDE_ADJUSTMENT),
+        flags.get(f::ENCODER_STREAM_SPEC_COMPLIANT_BACKPRESSURE),
+        flags.get(f::FIXUP_TRANSFORM_STREAM_BACKPRESSURE),
+        flags.get(f::BLOB_STANDARD_MIME_TYPE),
+        flags.get(f::SET_TOSTRING_TAG),
     );
     run_internal_snippet(scope, &source).ok_or_else(|| anyhow!("compatibility install failed"))?;
     Ok(())

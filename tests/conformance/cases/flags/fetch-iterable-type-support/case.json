@@ -1,0 +1,37 @@
+{
+  "workers": [
+    "front",
+    "before",
+    "enable",
+    "enable-adjusted",
+    "no-adjustment",
+    "adjustment-only",
+    "disable"
+  ],
+  "steps": [
+    {
+      "path": "/"
+    },
+    {
+      "path": "/before"
+    },
+    {
+      "path": "/enable"
+    },
+    {
+      "path": "/enable-adjusted"
+    },
+    {
+      "path": "/no-adjustment"
+    },
+    {
+      "path": "/adjustment-only"
+    },
+    {
+      "path": "/disable"
+    },
+    {
+      "path": "/served"
+    }
+  ]
+}

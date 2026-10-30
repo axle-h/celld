@@ -1,0 +1,1046 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "results": {
+          "arrayOfViews": {
+            "response": {
+              "text": "abcd"
+            },
+            "request": {
+              "text": "abcd"
+            }
+          },
+          "emptyArray": {
+            "response": {
+              "text": ""
+            },
+            "request": {
+              "text": ""
+            }
+          },
+          "arrayOfStrings": {
+            "response": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            },
+            "request": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            }
+          },
+          "arrayOfNumbers": {
+            "response": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            },
+            "request": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            }
+          },
+          "set": {
+            "response": {
+              "text": "set"
+            },
+            "request": {
+              "text": "set"
+            }
+          },
+          "map": {
+            "response": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            },
+            "request": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            }
+          },
+          "generator": {
+            "response": {
+              "text": "generator"
+            },
+            "request": {
+              "text": "generator"
+            }
+          },
+          "asyncGenerator": {
+            "response": {
+              "text": "async"
+            },
+            "request": {
+              "text": "async"
+            }
+          },
+          "asyncIterable": {
+            "response": {
+              "text": "it"
+            },
+            "request": {
+              "text": "it"
+            }
+          },
+          "promises": {
+            "response": {
+              "text": "promised"
+            },
+            "request": {
+              "text": "promised"
+            }
+          },
+          "customToString": {
+            "response": {
+              "text": "stringified"
+            },
+            "request": {
+              "text": "stringified"
+            }
+          },
+          "customToPrimitive": {
+            "response": {
+              "text": "primitive"
+            },
+            "request": {
+              "text": "primitive"
+            }
+          },
+          "arrayWithToString": {
+            "response": {
+              "text": "array"
+            },
+            "request": {
+              "text": "array"
+            }
+          },
+          "toStringOnly": {
+            "response": {
+              "text": "plain"
+            },
+            "request": {
+              "text": "plain"
+            }
+          },
+          "stringObject": {
+            "response": {
+              "text": "boxed"
+            },
+            "request": {
+              "text": "boxed"
+            }
+          },
+          "throwingIterator": {
+            "response": {
+              "constructed": "Error: no iterator"
+            },
+            "request": {
+              "constructed": "Error: no iterator"
+            }
+          },
+          "throwsMidway": {
+            "response": {
+              "read": "Error: midway"
+            },
+            "request": {
+              "read": "Error: midway"
+            }
+          }
+        },
+        "iteratorCalls": 1,
+        "reported": {
+          "support": true,
+          "adjustment": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "results": {
+          "arrayOfViews": {
+            "response": {
+              "text": "97,98,[object ArrayBuffer]"
+            },
+            "request": {
+              "text": "97,98,[object ArrayBuffer]"
+            }
+          },
+          "emptyArray": {
+            "response": {
+              "text": ""
+            },
+            "request": {
+              "text": ""
+            }
+          },
+          "arrayOfStrings": {
+            "response": {
+              "text": "a,b"
+            },
+            "request": {
+              "text": "a,b"
+            }
+          },
+          "arrayOfNumbers": {
+            "response": {
+              "text": "1,2"
+            },
+            "request": {
+              "text": "1,2"
+            }
+          },
+          "set": {
+            "response": {
+              "text": "[object Set]"
+            },
+            "request": {
+              "text": "[object Set]"
+            }
+          },
+          "map": {
+            "response": {
+              "text": "[object Map]"
+            },
+            "request": {
+              "text": "[object Map]"
+            }
+          },
+          "generator": {
+            "response": {
+              "text": "[object Generator]"
+            },
+            "request": {
+              "text": "[object Generator]"
+            }
+          },
+          "asyncGenerator": {
+            "response": {
+              "text": "[object AsyncGenerator]"
+            },
+            "request": {
+              "text": "[object AsyncGenerator]"
+            }
+          },
+          "asyncIterable": {
+            "response": {
+              "text": "[object Object]"
+            },
+            "request": {
+              "text": "[object Object]"
+            }
+          },
+          "promises": {
+            "response": {
+              "text": "[object Generator]"
+            },
+            "request": {
+              "text": "[object Generator]"
+            }
+          },
+          "customToString": {
+            "response": {
+              "text": "stringified"
+            },
+            "request": {
+              "text": "stringified"
+            }
+          },
+          "customToPrimitive": {
+            "response": {
+              "text": "primitive"
+            },
+            "request": {
+              "text": "primitive"
+            }
+          },
+          "arrayWithToString": {
+            "response": {
+              "text": "stringified"
+            },
+            "request": {
+              "text": "stringified"
+            }
+          },
+          "toStringOnly": {
+            "response": {
+              "text": "plain"
+            },
+            "request": {
+              "text": "plain"
+            }
+          },
+          "stringObject": {
+            "response": {
+              "text": "boxed"
+            },
+            "request": {
+              "text": "boxed"
+            }
+          },
+          "throwingIterator": {
+            "response": {
+              "text": "[object Object]"
+            },
+            "request": {
+              "text": "[object Object]"
+            }
+          },
+          "throwsMidway": {
+            "response": {
+              "text": "[object Generator]"
+            },
+            "request": {
+              "text": "[object Generator]"
+            }
+          }
+        },
+        "iteratorCalls": 0,
+        "reported": {
+          "support": false,
+          "adjustment": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "results": {
+          "arrayOfViews": {
+            "response": {
+              "text": "abcd"
+            },
+            "request": {
+              "text": "abcd"
+            }
+          },
+          "emptyArray": {
+            "response": {
+              "text": ""
+            },
+            "request": {
+              "text": ""
+            }
+          },
+          "arrayOfStrings": {
+            "response": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            },
+            "request": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            }
+          },
+          "arrayOfNumbers": {
+            "response": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            },
+            "request": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            }
+          },
+          "set": {
+            "response": {
+              "text": "set"
+            },
+            "request": {
+              "text": "set"
+            }
+          },
+          "map": {
+            "response": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            },
+            "request": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            }
+          },
+          "generator": {
+            "response": {
+              "text": "generator"
+            },
+            "request": {
+              "text": "generator"
+            }
+          },
+          "asyncGenerator": {
+            "response": {
+              "text": "async"
+            },
+            "request": {
+              "text": "async"
+            }
+          },
+          "asyncIterable": {
+            "response": {
+              "text": "it"
+            },
+            "request": {
+              "text": "it"
+            }
+          },
+          "promises": {
+            "response": {
+              "text": "promised"
+            },
+            "request": {
+              "text": "promised"
+            }
+          },
+          "customToString": {
+            "response": {
+              "text": "iterated"
+            },
+            "request": {
+              "text": "iterated"
+            }
+          },
+          "customToPrimitive": {
+            "response": {
+              "text": "iterated"
+            },
+            "request": {
+              "text": "iterated"
+            }
+          },
+          "arrayWithToString": {
+            "response": {
+              "text": "array"
+            },
+            "request": {
+              "text": "array"
+            }
+          },
+          "toStringOnly": {
+            "response": {
+              "text": "plain"
+            },
+            "request": {
+              "text": "plain"
+            }
+          },
+          "stringObject": {
+            "response": {
+              "text": "boxed"
+            },
+            "request": {
+              "text": "boxed"
+            }
+          },
+          "throwingIterator": {
+            "response": {
+              "constructed": "Error: no iterator"
+            },
+            "request": {
+              "constructed": "Error: no iterator"
+            }
+          },
+          "throwsMidway": {
+            "response": {
+              "read": "Error: midway"
+            },
+            "request": {
+              "read": "Error: midway"
+            }
+          }
+        },
+        "iteratorCalls": 1,
+        "reported": {
+          "support": true,
+          "adjustment": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "results": {
+          "arrayOfViews": {
+            "response": {
+              "text": "abcd"
+            },
+            "request": {
+              "text": "abcd"
+            }
+          },
+          "emptyArray": {
+            "response": {
+              "text": ""
+            },
+            "request": {
+              "text": ""
+            }
+          },
+          "arrayOfStrings": {
+            "response": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            },
+            "request": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            }
+          },
+          "arrayOfNumbers": {
+            "response": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            },
+            "request": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            }
+          },
+          "set": {
+            "response": {
+              "text": "set"
+            },
+            "request": {
+              "text": "set"
+            }
+          },
+          "map": {
+            "response": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            },
+            "request": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            }
+          },
+          "generator": {
+            "response": {
+              "text": "generator"
+            },
+            "request": {
+              "text": "generator"
+            }
+          },
+          "asyncGenerator": {
+            "response": {
+              "text": "async"
+            },
+            "request": {
+              "text": "async"
+            }
+          },
+          "asyncIterable": {
+            "response": {
+              "text": "it"
+            },
+            "request": {
+              "text": "it"
+            }
+          },
+          "promises": {
+            "response": {
+              "text": "promised"
+            },
+            "request": {
+              "text": "promised"
+            }
+          },
+          "customToString": {
+            "response": {
+              "text": "stringified"
+            },
+            "request": {
+              "text": "stringified"
+            }
+          },
+          "customToPrimitive": {
+            "response": {
+              "text": "primitive"
+            },
+            "request": {
+              "text": "primitive"
+            }
+          },
+          "arrayWithToString": {
+            "response": {
+              "text": "array"
+            },
+            "request": {
+              "text": "array"
+            }
+          },
+          "toStringOnly": {
+            "response": {
+              "text": "plain"
+            },
+            "request": {
+              "text": "plain"
+            }
+          },
+          "stringObject": {
+            "response": {
+              "text": "boxed"
+            },
+            "request": {
+              "text": "boxed"
+            }
+          },
+          "throwingIterator": {
+            "response": {
+              "constructed": "Error: no iterator"
+            },
+            "request": {
+              "constructed": "Error: no iterator"
+            }
+          },
+          "throwsMidway": {
+            "response": {
+              "read": "Error: midway"
+            },
+            "request": {
+              "read": "Error: midway"
+            }
+          }
+        },
+        "iteratorCalls": 1,
+        "reported": {
+          "support": true,
+          "adjustment": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "results": {
+          "arrayOfViews": {
+            "response": {
+              "text": "abcd"
+            },
+            "request": {
+              "text": "abcd"
+            }
+          },
+          "emptyArray": {
+            "response": {
+              "text": ""
+            },
+            "request": {
+              "text": ""
+            }
+          },
+          "arrayOfStrings": {
+            "response": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            },
+            "request": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            }
+          },
+          "arrayOfNumbers": {
+            "response": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            },
+            "request": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            }
+          },
+          "set": {
+            "response": {
+              "text": "set"
+            },
+            "request": {
+              "text": "set"
+            }
+          },
+          "map": {
+            "response": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            },
+            "request": {
+              "read": "TypeError: This ReadableStream did not return bytes."
+            }
+          },
+          "generator": {
+            "response": {
+              "text": "generator"
+            },
+            "request": {
+              "text": "generator"
+            }
+          },
+          "asyncGenerator": {
+            "response": {
+              "text": "async"
+            },
+            "request": {
+              "text": "async"
+            }
+          },
+          "asyncIterable": {
+            "response": {
+              "text": "it"
+            },
+            "request": {
+              "text": "it"
+            }
+          },
+          "promises": {
+            "response": {
+              "text": "promised"
+            },
+            "request": {
+              "text": "promised"
+            }
+          },
+          "customToString": {
+            "response": {
+              "text": "iterated"
+            },
+            "request": {
+              "text": "iterated"
+            }
+          },
+          "customToPrimitive": {
+            "response": {
+              "text": "iterated"
+            },
+            "request": {
+              "text": "iterated"
+            }
+          },
+          "arrayWithToString": {
+            "response": {
+              "text": "array"
+            },
+            "request": {
+              "text": "array"
+            }
+          },
+          "toStringOnly": {
+            "response": {
+              "text": "plain"
+            },
+            "request": {
+              "text": "plain"
+            }
+          },
+          "stringObject": {
+            "response": {
+              "text": "boxed"
+            },
+            "request": {
+              "text": "boxed"
+            }
+          },
+          "throwingIterator": {
+            "response": {
+              "constructed": "Error: no iterator"
+            },
+            "request": {
+              "constructed": "Error: no iterator"
+            }
+          },
+          "throwsMidway": {
+            "response": {
+              "read": "Error: midway"
+            },
+            "request": {
+              "read": "Error: midway"
+            }
+          }
+        },
+        "iteratorCalls": 1,
+        "reported": {
+          "support": true,
+          "adjustment": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "results": {
+          "arrayOfViews": {
+            "response": {
+              "text": "97,98,[object ArrayBuffer]"
+            },
+            "request": {
+              "text": "97,98,[object ArrayBuffer]"
+            }
+          },
+          "emptyArray": {
+            "response": {
+              "text": ""
+            },
+            "request": {
+              "text": ""
+            }
+          },
+          "arrayOfStrings": {
+            "response": {
+              "text": "a,b"
+            },
+            "request": {
+              "text": "a,b"
+            }
+          },
+          "arrayOfNumbers": {
+            "response": {
+              "text": "1,2"
+            },
+            "request": {
+              "text": "1,2"
+            }
+          },
+          "set": {
+            "response": {
+              "text": "[object Set]"
+            },
+            "request": {
+              "text": "[object Set]"
+            }
+          },
+          "map": {
+            "response": {
+              "text": "[object Map]"
+            },
+            "request": {
+              "text": "[object Map]"
+            }
+          },
+          "generator": {
+            "response": {
+              "text": "[object Generator]"
+            },
+            "request": {
+              "text": "[object Generator]"
+            }
+          },
+          "asyncGenerator": {
+            "response": {
+              "text": "[object AsyncGenerator]"
+            },
+            "request": {
+              "text": "[object AsyncGenerator]"
+            }
+          },
+          "asyncIterable": {
+            "response": {
+              "text": "[object Object]"
+            },
+            "request": {
+              "text": "[object Object]"
+            }
+          },
+          "promises": {
+            "response": {
+              "text": "[object Generator]"
+            },
+            "request": {
+              "text": "[object Generator]"
+            }
+          },
+          "customToString": {
+            "response": {
+              "text": "stringified"
+            },
+            "request": {
+              "text": "stringified"
+            }
+          },
+          "customToPrimitive": {
+            "response": {
+              "text": "primitive"
+            },
+            "request": {
+              "text": "primitive"
+            }
+          },
+          "arrayWithToString": {
+            "response": {
+              "text": "stringified"
+            },
+            "request": {
+              "text": "stringified"
+            }
+          },
+          "toStringOnly": {
+            "response": {
+              "text": "plain"
+            },
+            "request": {
+              "text": "plain"
+            }
+          },
+          "stringObject": {
+            "response": {
+              "text": "boxed"
+            },
+            "request": {
+              "text": "boxed"
+            }
+          },
+          "throwingIterator": {
+            "response": {
+              "text": "[object Object]"
+            },
+            "request": {
+              "text": "[object Object]"
+            }
+          },
+          "throwsMidway": {
+            "response": {
+              "text": "[object Generator]"
+            },
+            "request": {
+              "text": "[object Generator]"
+            }
+          }
+        },
+        "iteratorCalls": 0,
+        "reported": {
+          "support": false,
+          "adjustment": true
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "results": {
+          "arrayOfViews": {
+            "response": {
+              "text": "97,98,[object ArrayBuffer]"
+            },
+            "request": {
+              "text": "97,98,[object ArrayBuffer]"
+            }
+          },
+          "emptyArray": {
+            "response": {
+              "text": ""
+            },
+            "request": {
+              "text": ""
+            }
+          },
+          "arrayOfStrings": {
+            "response": {
+              "text": "a,b"
+            },
+            "request": {
+              "text": "a,b"
+            }
+          },
+          "arrayOfNumbers": {
+            "response": {
+              "text": "1,2"
+            },
+            "request": {
+              "text": "1,2"
+            }
+          },
+          "set": {
+            "response": {
+              "text": "[object Set]"
+            },
+            "request": {
+              "text": "[object Set]"
+            }
+          },
+          "map": {
+            "response": {
+              "text": "[object Map]"
+            },
+            "request": {
+              "text": "[object Map]"
+            }
+          },
+          "generator": {
+            "response": {
+              "text": "[object Generator]"
+            },
+            "request": {
+              "text": "[object Generator]"
+            }
+          },
+          "asyncGenerator": {
+            "response": {
+              "text": "[object AsyncGenerator]"
+            },
+            "request": {
+              "text": "[object AsyncGenerator]"
+            }
+          },
+          "asyncIterable": {
+            "response": {
+              "text": "[object Object]"
+            },
+            "request": {
+              "text": "[object Object]"
+            }
+          },
+          "promises": {
+            "response": {
+              "text": "[object Generator]"
+            },
+            "request": {
+              "text": "[object Generator]"
+            }
+          },
+          "customToString": {
+            "response": {
+              "text": "stringified"
+            },
+            "request": {
+              "text": "stringified"
+            }
+          },
+          "customToPrimitive": {
+            "response": {
+              "text": "primitive"
+            },
+            "request": {
+              "text": "primitive"
+            }
+          },
+          "arrayWithToString": {
+            "response": {
+              "text": "stringified"
+            },
+            "request": {
+              "text": "stringified"
+            }
+          },
+          "toStringOnly": {
+            "response": {
+              "text": "plain"
+            },
+            "request": {
+              "text": "plain"
+            }
+          },
+          "stringObject": {
+            "response": {
+              "text": "boxed"
+            },
+            "request": {
+              "text": "boxed"
+            }
+          },
+          "throwingIterator": {
+            "response": {
+              "text": "[object Object]"
+            },
+            "request": {
+              "text": "[object Object]"
+            }
+          },
+          "throwsMidway": {
+            "response": {
+              "text": "[object Generator]"
+            },
+            "request": {
+              "text": "[object Generator]"
+            }
+          }
+        },
+        "iteratorCalls": 0,
+        "reported": {
+          "support": false,
+          "adjustment": false
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": "abcd"
+    }
+  ]
+}

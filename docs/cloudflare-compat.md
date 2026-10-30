@@ -62,7 +62,9 @@ An unsupported feature that does not cause an error is a defect.
 
 ### [Fetch, Request, Response, and Headers](https://developers.cloudflare.com/workers/runtime-apis/fetch/)
 
-- The `cache` request option is unavailable.
+- The `cache` request option follows its flags (see
+  [Honoured flags](#honoured-flags)). It changes what a subrequest carries,
+  as in workerd; celld has no edge cache for it to change.
 - An inbound `Request` has a `cf` object without Cloudflare edge fields. celld
   cannot prove the geolocation, colo, or TLS metadata.
 - celld removes `Content-Length` from a Worker response, except for a `HEAD`
@@ -171,6 +173,18 @@ The `tail` and `email` handlers are unavailable.
   `getRpcMethodForTestOnly()`. workerd has it only under the `experimental`
   flag.
 - An `AbortSignal` in a Durable Object RPC call does not cross a node boundary.
+- A `DOMException` returned over RPC, passed as a param, or written to
+  Durable Object storage arrives as an `Error` named `"Error"` without a
+  `code`, and a `DOMException`'s `code` is an accessor of its prototype in
+  celld. workerd's arrives as a `DOMException` in all three, and its `code`
+  is its own.
+- A stored value that cannot be read back, such as an Error that refers to
+  itself, fails with celld's own error; workerd's is an internal error.
+- A fetch handler in another script that returns something other than a
+  Response, or throws, reaches the caller as an `Error` carrying the text;
+  workerd's caller gets the TypeError.
+- An Error's stack starts with its name and message when the stack is first
+  read; workerd's starts with the message it was made with.
 - A remote RPC retries only when the failed peer attempt did not start the
   method. Use a stable operation ID for an application retry.
 
@@ -183,6 +197,11 @@ The `tail` and `email` handlers are unavailable.
   rejects with the cancel reason. workerd rejects with "Network connection
   lost." when a read was in flight, and refuses a write or close after a
   write the cancel rejected as "This WritableStream has been closed.".
+- A ReadableStream pulls its source after a read that its queue satisfies,
+  while the queue is below its high water mark, as the Streams Standard
+  says. workerd pulls only on start, after an enqueue, and when a read finds
+  the queue empty, so a TransformStream whose readable side has a high
+  water mark above 0 runs its next write later there.
 
 ### [WebSockets](https://developers.cloudflare.com/workers/runtime-apis/websockets/)
 
@@ -293,6 +312,17 @@ The `tail` and `email` handlers are unavailable.
   so `importKey()` and `exportKey()` both carry the point alone.
 
 ### [Web standards](https://developers.cloudflare.com/workers/runtime-apis/web-standards/)
+
+- The global scope, `ctx`, the bindings, a Durable Object's state, storage
+  and id, `navigator`, `scheduler`, `Cloudflare`, `console` and `process`
+  are plain objects in celld, and an RPC stub or property a function and an
+  RPC promise a Promise, so `Object.prototype.toString()` gives none of them
+  workerd's class name. celld lacks the global classes `Body`, `Crypto`,
+  `FetchEvent`, `Navigator`, the `Performance` classes,
+  `PromiseRejectionEvent`, `ScheduledEvent`, `ServiceWorkerGlobalScope`,
+  `TailEvent`, `TraceEvent` and `WorkerGlobalScope`, and has a global
+  `DigestStream` and `Temporal`, which workerd does not. No API prototype
+  has workerd's `Symbol.for("cloudflare:internal-class")` mark.
 
 ### [Performance and timers](https://developers.cloudflare.com/workers/runtime-apis/performance/)
 
@@ -500,6 +530,54 @@ celld follows these flags and the dates that turn them on:
   chooses for one socket. A hibernatable socket never replies by itself, and
   is CLOSING in `webSocketClose`. A peer's Close without a status is
   answered with an empty Close, which `close()` without a code also sends.
+- `enhanced_error_serialization` and `legacy_error_serialization` (on from
+  2026-04-21): `structuredClone()`, storage, a queue message and RPC carry an
+  Error's own properties, and its name whatever it is, as workerd's
+  serializer writes an Error. Over RPC its `stack` is the receiver's, and an
+  Error a call throws arrives as the callee serialized it, when it could;
+  otherwise, and always without the flag, as an Error of its description's
+  type and message. Without the flag V8 carries a value's name (a standard
+  one), message, stack and cause. A `DOMException` crosses as before either
+  way.
+- `enable_nodejs_global_timers` and `no_nodejs_global_timers` (on from
+  2026-02-10 with `nodejs_compat`): the global `setTimeout()` and
+  `setInterval()` return Node.js `Timeout` objects, which `clearTimeout()`
+  and `clearInterval()` take, as do the ids they convert to. Otherwise
+  they return numbers.
+- `cache_option_enabled` and `cache_option_disabled` (on from 2024-11-11),
+  and `cache_no_cache_enabled` and `cache_no_cache_disabled` (on from
+  2025-08-07 with `cache_option_enabled`): a Request takes `cache:
+  "no-store"`, and with the second flag `"no-cache"`, and reports it as
+  `request.cache`. A subrequest with either has `Cache-Control` and
+  `Pragma` `no-cache` unless it sets them, and the `cf` the mode stands for.
+  Without the first flag the option throws, as in workerd.
+- `fetch_iterable_type_support` and `no_fetch_iterable_type_support` (on
+  from 2026-02-19), and `fetch_iterable_type_support_override_adjustment` and
+  `no_fetch_iterable_type_support_override_adjustment` (on from 2026-01-15
+  with the first): a Request or Response body that is a sync or async
+  iterable is read as a stream of its values, and with the second flag a
+  sync iterable other than an Array that has its own `toString` or
+  `Symbol.toPrimitive` is stringified instead. Otherwise such a body is
+  stringified.
+- `fixup-transform-stream-backpressure` and
+  `original-transform-stream-backpressure` (on from 2024-12-16): a
+  TransformStream's enqueue that fills its readable side applies
+  backpressure, so the next write waits for a read. Otherwise, once a read
+  clears the initial backpressure, every write runs at once.
+- `encoder_stream_spec_compliant_backpressure` and
+  `no_encoder_stream_spec_compliant_backpressure` (on from 2026-03-24): a
+  TextEncoderStream's and a TextDecoderStream's readable side has a high
+  water mark of 0, so the first write waits for a read. Otherwise it has 1.
+- `blob_standard_mime_type` and `blob_legacy_mime_type` (on from
+  2024-06-03): the Blob a body's `blob()` gives has the MIME type extracted
+  from the `Content-Type` header and serialized, as workerd's `MimeType`
+  does it; otherwise the header as it is.
+- `set_tostring_tag` and `do_not_set_tostring_tag` (on from 2024-09-26):
+  each API class's prototype has its name as `Symbol.toStringTag`,
+  writable and configurable, so `Object.prototype.toString()` of a Request
+  is `[object Request]`. Without the flag none has one. The objects that
+  are not instances of an API class in celld, such as the global scope,
+  `ctx`, the bindings and an RPC stub, have no tag either way.
 - `assets_navigation_prefers_asset_serving` and
   `assets_navigation_has_no_effect` (on from 2025-04-01); see
   [Static assets](services/static-assets.md).
@@ -552,10 +630,8 @@ behaves as these flags select:
 - `internal_stream_byob_return_view`: a BYOB read that ends a platform stream returns an empty view.
 - `fetch_standard_url`: fetch() parses its URL with the WHATWG URL Standard.
 - `legacy_module_registry`: celld does not implement workerd's new module registry.
-- `cache_option_disabled`: the Request `cache` option throws.
 - `allow_custom_ports`: fetch() uses the URL's port.
 - `upper_case_all_http_methods`: a Request upper-cases a known method name.
-- `cache_no_cache_disabled`: the Request `cache` option throws.
 - `urlpattern_standard`: URLPattern follows the WHATWG URLPattern Standard.
 - `enable_weak_ref`: WeakRef and FinalizationRegistry are defined.
 - `no_request_signal_passthrough`: an incoming request's signal never reaches a subrequest.
@@ -566,17 +642,14 @@ behaves as these flags select:
 - `non_pedantic_wpt`: celld does not implement workerd's pedantic WPT mode.
 - `expose_global_message_channel`: MessageChannel and MessagePort are globals.
 - `strip_authorization_on_cross_origin_redirect`: fetch() drops Authorization when it follows a redirect to another origin.
-- `legacy_error_serialization`: structuredClone() and RPC carry an Error's name, message, stack and cause, but not its other own properties.
 - `enable_ctx_exports`: ctx.exports is defined.
 - `mutable_api_prototypes`: API prototypes are mutable.
 - `strip_bom_in_read_all_text`: Response.text() and Request.text() drop a leading byte order mark.
-- `no_nodejs_global_timers`: the global setTimeout() and setInterval() return numbers, not Node.js Timeout objects.
 - `text_decoder_replace_surrogates`: the UTF-16LE TextDecoder replaces a lone surrogate with U+FFFD.
 - `containers_pid_namespace`: a container has its own PID namespace.
 - `text_decoder_cjk_decoder`: TextDecoder decodes CJK encodings per the Encoding Standard.
 - `websocket_close_reason_byte_limit`: WebSocket close() throws SyntaxError for a reason over 123 bytes.
 - `writable_stream_spec_compliant_writer`: a WritableStream writer follows the Streams Standard on release.
-- `no_encoder_stream_spec_compliant_backpressure`: TextEncoderStream and TextDecoderStream accept a write before their readable side is read.
 - `workflows_preserve_non_retryable_error_message`: a NonRetryableError keeps its message and name.
 - `resizable_array_buffer_in_blob`: Blob accepts a resizable ArrayBuffer.
 - `diagnostics_channel_has_subscribers_getter`: diagnostics_channel's hasSubscribers is a getter.
@@ -621,28 +694,20 @@ celld lacks the behaviour these flags select:
 - `workers_api_getters_setters_on_prototype`: Request, Response and Headers carry their attributes as own instance properties, not prototype accessors.
 - `web_socket_compression`: celld never negotiates permessage-deflate on a WebSocket.
 - `brotli_content_encoding`, `no_brotli_content_encoding`: celld neither encodes nor decodes a body by its Content-Encoding, gzip or br.
-- `blob_standard_mime_type`, `blob_legacy_mime_type`: Blob.type lower-cases a body's Content-Type but normalizes it as neither flag state does.
 - `new_module_registry`: celld does not implement workerd's new module registry.
-- `cache_option_enabled`, `cache_no_cache_enabled`: the Request `cache` option throws.
 - `internal_writable_stream_abort_clears_queue`, `internal_writable_stream_abort_does_not_clear_queue`: celld does not model when abort() clears a platform writable stream's queue.
 - `handle_cross_request_promise_resolution`, `no_handle_cross_request_promise_resolution`: celld does not model which request a promise continuation runs in.
-- `set_tostring_tag`, `do_not_set_tostring_tag`: only some of celld's API classes have their name as Symbol.toStringTag.
-- `fixup-transform-stream-backpressure`, `original-transform-stream-backpressure`: celld's TransformStream lets a write settle before its readable side is read, as neither flag state does.
 - `nonclass_entrypoint_reuses_ctx_across_invocations`: each event gets its own ctx.
 - `queue_consumer_no_wait_for_wait_until`, `queue_consumer_wait_for_wait_until`: celld does not model when a queue consumer reports its outcome relative to waitUntil().
 - `request_signal_passthrough`: an incoming request's signal never reaches a subrequest.
 - `bind_asynclocalstorage_snapshot_to_request`, `do_not_bind_asynclocalstorage_snapshot_to-request`: celld does not tie an AsyncLocalStorage snapshot to the request that took it.
 - `throw_on_unrecognized_import_assertion`, `ignore_unrecognized_import_assertion`: celld does not model unknown import attributes.
 - `pedantic_wpt`: celld does not implement workerd's pedantic WPT mode.
-- `enhanced_error_serialization`: structuredClone() and RPC carry an Error's name, message, stack and cause, but not its other own properties.
 - `enable_fast_jsg_struct`, `disable_fast_jsg_struct`: celld does not model whether an API dictionary carries absent optional fields as undefined.
 - `enable_streams_nodejs_v24_compat`, `disable_streams_nodejs_v24_compat`: celld does not model the Node.js 24 stream changes.
 - `immutable_api_prototypes`: API prototypes are mutable.
-- `fetch_iterable_type_support`, `no_fetch_iterable_type_support`, `fetch_iterable_type_support_override_adjustment`, `no_fetch_iterable_type_support_override_adjustment`: a Request or Response body stringifies an Array but iterates an async iterable, as neither flag state does.
-- `enable_nodejs_global_timers`: the global setTimeout() and setInterval() return numbers, not Node.js Timeout objects.
 - `queue_expose_error_codes`, `no_queue_expose_error_codes`: celld does not model the error codes queue operations carry.
 - `unhandled_rejection_after_microtask_checkpoint`, `no_unhandled_rejection_after_microtask_checkpoint`: celld does not model when an unhandled rejection is reported.
-- `encoder_stream_spec_compliant_backpressure`: TextEncoderStream and TextDecoderStream accept a write before their readable side is read.
 - `no_resizable_array_buffer_in_blob`: Blob accepts a resizable ArrayBuffer.
 - `auto_grpc_convert`: celld does not convert a gRPC-web subrequest to gRPC.
 - `workflows_enable_fast_engine_creation`: Workflow create() without an id names the instance with a random UUID.
@@ -663,23 +728,13 @@ behaves as before the date:
 - `workers_api_getters_setters_on_prototype`, from 2022-01-31: Request, Response and Headers carry their attributes as own instance properties, not prototype accessors.
 - `web_socket_compression`, from 2023-08-15: celld never negotiates permessage-deflate on a WebSocket.
 - `brotli_content_encoding`, from 2024-04-29: celld neither encodes nor decodes a body by its Content-Encoding, gzip or br.
-- `blob_standard_mime_type`, from 2024-06-03: Blob.type lower-cases a body's Content-Type but normalizes it as neither flag state does.
-- `cache_option_enabled`, from 2024-11-11: the Request `cache` option throws.
 - `internal_writable_stream_abort_clears_queue`, from 2024-09-02: celld does not model when abort() clears a platform writable stream's queue.
 - `handle_cross_request_promise_resolution`, from 2024-10-14: celld does not model which request a promise continuation runs in.
-- `set_tostring_tag`, from 2024-09-26: only some of celld's API classes have their name as Symbol.toStringTag.
-- `fixup-transform-stream-backpressure`, from 2024-12-16: celld's TransformStream lets a write settle before its readable side is read, as neither flag state does.
-- `cache_no_cache_enabled`, from 2025-08-07 with cache_option_enabled: the Request `cache` option throws.
 - `bind_asynclocalstorage_snapshot_to_request`, from 2025-06-16: celld does not tie an AsyncLocalStorage snapshot to the request that took it.
 - `throw_on_unrecognized_import_assertion`, from 2025-06-16: celld does not model unknown import attributes.
-- `enhanced_error_serialization`, from 2026-04-21: structuredClone() and RPC carry an Error's name, message, stack and cause, but not its other own properties.
 - `enable_fast_jsg_struct`, from 2025-12-03: celld does not model whether an API dictionary carries absent optional fields as undefined.
-- `fetch_iterable_type_support`, from 2026-02-19: a Request or Response body stringifies an Array but iterates an async iterable, as neither flag state does.
-- `fetch_iterable_type_support_override_adjustment`, from 2026-01-15 with fetch_iterable_type_support: a Request or Response body stringifies an Array but iterates an async iterable, as neither flag state does.
-- `enable_nodejs_global_timers`, from 2026-02-10 with nodejs_compat: the global setTimeout() and setInterval() return numbers, not Node.js Timeout objects.
 - `queue_expose_error_codes`, from 2026-03-12: celld does not model the error codes queue operations carry.
 - `unhandled_rejection_after_microtask_checkpoint`, from 2026-03-03: celld does not model when an unhandled rejection is reported.
-- `encoder_stream_spec_compliant_backpressure`, from 2026-03-24: TextEncoderStream and TextDecoderStream accept a write before their readable side is read.
 - `workflows_enable_fast_engine_creation`, from 2026-08-11: Workflow create() without an id names the instance with a random UUID.
 
 #### Before a date

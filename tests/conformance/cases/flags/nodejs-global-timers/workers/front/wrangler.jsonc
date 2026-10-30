@@ -1,0 +1,27 @@
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "services": [
+    {
+      "binding": "BEFORE",
+      "service": "before"
+    },
+    {
+      "binding": "NO_NODEJS_COMPAT",
+      "service": "no-nodejs-compat"
+    },
+    {
+      "binding": "EXPLICIT",
+      "service": "explicit"
+    },
+    {
+      "binding": "EXPLICIT_COMPAT",
+      "service": "explicit-compat"
+    },
+    {
+      "binding": "DISABLE",
+      "service": "disable"
+    }
+  ]
+}

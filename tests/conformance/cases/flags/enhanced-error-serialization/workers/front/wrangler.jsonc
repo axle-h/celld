@@ -1,0 +1,50 @@
+{
+  "name": "front",
+  "main": "index.js",
+  "compatibility_date": "2026-09-04",
+  "services": [
+    {
+      "binding": "SELF",
+      "service": "front",
+      "entrypoint": "Errors"
+    },
+    {
+      "binding": "PEER_ENHANCED",
+      "service": "peer-enhanced",
+      "entrypoint": "Errors"
+    },
+    {
+      "binding": "PEER_LEGACY",
+      "service": "peer-legacy",
+      "entrypoint": "Errors"
+    },
+    {
+      "binding": "LEGACY",
+      "service": "legacy"
+    },
+    {
+      "binding": "BEFORE",
+      "service": "before"
+    },
+    {
+      "binding": "ENABLE",
+      "service": "enable"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "OBJECT",
+        "class_name": "ObjectFront"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ObjectFront"
+      ]
+    }
+  ]
+}

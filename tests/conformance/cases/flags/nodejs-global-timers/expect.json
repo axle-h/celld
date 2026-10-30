@@ -1,0 +1,402 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "timeout": {
+          "constructor": "Timeout",
+          "tag": "[object Object]",
+          "methods": [
+            "Symbol(Symbol.dispose)",
+            "Symbol(Symbol.toPrimitive)",
+            "close",
+            "constructor",
+            "hasRef",
+            "ref",
+            "refresh",
+            "unref"
+          ],
+          "own": [],
+          "primitive": "number"
+        },
+        "interval": {
+          "constructor": "Timeout",
+          "tag": "[object Object]",
+          "methods": [
+            "Symbol(Symbol.dispose)",
+            "Symbol(Symbol.toPrimitive)",
+            "close",
+            "constructor",
+            "hasRef",
+            "ref",
+            "refresh",
+            "unref"
+          ],
+          "own": [],
+          "primitive": "number"
+        },
+        "fired": [
+          [
+            "timeout",
+            "a",
+            "b"
+          ]
+        ],
+        "ticks": 2,
+        "functions": {
+          "setTimeout": [
+            "setTimeout",
+            2
+          ],
+          "setInterval": [
+            "setInterval",
+            2
+          ],
+          "clearTimeout": [
+            "clearTimeout",
+            1
+          ],
+          "clearInterval": [
+            "clearInterval",
+            1
+          ]
+        },
+        "refs": [
+          true,
+          true,
+          false,
+          true,
+          true
+        ],
+        "refreshReturns": true,
+        "refreshed": 1,
+        "closeReturns": true,
+        "closed": 0,
+        "disposed": 0,
+        "string": "TypeError: The \"callback\" argument must be of type function. Received type string ('1 + 1') (ERR_INVALID_ARG_TYPE)",
+        "missing": "TypeError: The \"callback\" argument must be of type function. Received undefined (ERR_INVALID_ARG_TYPE)",
+        "intervalString": "TypeError: The \"callback\" argument must be of type function. Received type string ('x') (ERR_INVALID_ARG_TYPE)",
+        "nullPrototype": "TypeError: The \"callback\" argument must be of type function. Received [Object: null prototype] (ERR_INVALID_ARG_TYPE)",
+        "emptyNullPrototype": "TypeError: The \"callback\" argument must be of type function. Received [Object: null prototype] {} (ERR_INVALID_ARG_TYPE)",
+        "anonymousClass": "TypeError: The \"callback\" argument must be of type function. Received {} (ERR_INVALID_ARG_TYPE)",
+        "constructorField": "TypeError: The \"callback\" argument must be of type function. Received [Object] (ERR_INVALID_ARG_TYPE)",
+        "symbolKeyed": "TypeError: The \"callback\" argument must be of type function. Received [Object: null prototype] (ERR_INVALID_ARG_TYPE)",
+        "tagged": "TypeError: The \"callback\" argument must be of type function. Received Object [Tagged] {} (ERR_INVALID_ARG_TYPE)",
+        "taggedNullPrototype": "TypeError: The \"callback\" argument must be of type function. Received T <Complex prototype> [T] {} (ERR_INVALID_ARG_TYPE)",
+        "ownTag": "TypeError: The \"callback\" argument must be of type function. Received [Own: null prototype] (ERR_INVALID_ARG_TYPE)",
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "timeout": "number",
+        "interval": "number",
+        "fired": [
+          [
+            "timeout",
+            "a",
+            "b"
+          ]
+        ],
+        "ticks": 2,
+        "functions": {
+          "setTimeout": [
+            "setTimeout",
+            0
+          ],
+          "setInterval": [
+            "setInterval",
+            0
+          ],
+          "clearTimeout": [
+            "clearTimeout",
+            0
+          ],
+          "clearInterval": [
+            "clearInterval",
+            0
+          ]
+        },
+        "string": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "missing": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "intervalString": "TypeError: Failed to execute 'setInterval' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "nullPrototype": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "emptyNullPrototype": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "anonymousClass": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "constructorField": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "symbolKeyed": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "tagged": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "taggedNullPrototype": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "ownTag": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "timeout": "number",
+        "interval": "number",
+        "fired": [
+          [
+            "timeout",
+            "a",
+            "b"
+          ]
+        ],
+        "ticks": 2,
+        "functions": {
+          "setTimeout": [
+            "setTimeout",
+            0
+          ],
+          "setInterval": [
+            "setInterval",
+            0
+          ],
+          "clearTimeout": [
+            "clearTimeout",
+            0
+          ],
+          "clearInterval": [
+            "clearInterval",
+            0
+          ]
+        },
+        "string": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "missing": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "intervalString": "TypeError: Failed to execute 'setInterval' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "nullPrototype": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "emptyNullPrototype": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "anonymousClass": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "constructorField": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "symbolKeyed": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "tagged": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "taggedNullPrototype": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "ownTag": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "reported": false
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "timeout": {
+          "constructor": "Timeout",
+          "tag": "[object Object]",
+          "methods": [
+            "Symbol(Symbol.dispose)",
+            "Symbol(Symbol.toPrimitive)",
+            "close",
+            "constructor",
+            "hasRef",
+            "ref",
+            "refresh",
+            "unref"
+          ],
+          "own": [],
+          "primitive": "number"
+        },
+        "interval": {
+          "constructor": "Timeout",
+          "tag": "[object Object]",
+          "methods": [
+            "Symbol(Symbol.dispose)",
+            "Symbol(Symbol.toPrimitive)",
+            "close",
+            "constructor",
+            "hasRef",
+            "ref",
+            "refresh",
+            "unref"
+          ],
+          "own": [],
+          "primitive": "number"
+        },
+        "fired": [
+          [
+            "timeout",
+            "a",
+            "b"
+          ]
+        ],
+        "ticks": 2,
+        "functions": {
+          "setTimeout": [
+            "setTimeout",
+            2
+          ],
+          "setInterval": [
+            "setInterval",
+            2
+          ],
+          "clearTimeout": [
+            "clearTimeout",
+            1
+          ],
+          "clearInterval": [
+            "clearInterval",
+            1
+          ]
+        },
+        "refs": [
+          true,
+          true,
+          false,
+          true,
+          true
+        ],
+        "refreshReturns": true,
+        "refreshed": 1,
+        "closeReturns": true,
+        "closed": 0,
+        "disposed": 0,
+        "string": "TypeError: The \"callback\" argument must be of type function. Received type string ('1 + 1') (ERR_INVALID_ARG_TYPE)",
+        "missing": "TypeError: The \"callback\" argument must be of type function. Received undefined (ERR_INVALID_ARG_TYPE)",
+        "intervalString": "TypeError: The \"callback\" argument must be of type function. Received type string ('x') (ERR_INVALID_ARG_TYPE)",
+        "nullPrototype": "TypeError: The \"callback\" argument must be of type function. Received [Object: null prototype] (ERR_INVALID_ARG_TYPE)",
+        "emptyNullPrototype": "TypeError: The \"callback\" argument must be of type function. Received [Object: null prototype] {} (ERR_INVALID_ARG_TYPE)",
+        "anonymousClass": "TypeError: The \"callback\" argument must be of type function. Received {} (ERR_INVALID_ARG_TYPE)",
+        "constructorField": "TypeError: The \"callback\" argument must be of type function. Received [Object] (ERR_INVALID_ARG_TYPE)",
+        "symbolKeyed": "TypeError: The \"callback\" argument must be of type function. Received [Object: null prototype] (ERR_INVALID_ARG_TYPE)",
+        "tagged": "TypeError: The \"callback\" argument must be of type function. Received Object [Tagged] {} (ERR_INVALID_ARG_TYPE)",
+        "taggedNullPrototype": "TypeError: The \"callback\" argument must be of type function. Received T <Complex prototype> [T] {} (ERR_INVALID_ARG_TYPE)",
+        "ownTag": "TypeError: The \"callback\" argument must be of type function. Received [Own: null prototype] (ERR_INVALID_ARG_TYPE)",
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "timeout": {
+          "constructor": "Timeout",
+          "tag": "[object Object]",
+          "methods": [
+            "Symbol(Symbol.dispose)",
+            "Symbol(Symbol.toPrimitive)",
+            "close",
+            "constructor",
+            "hasRef",
+            "ref",
+            "refresh",
+            "unref"
+          ],
+          "own": [],
+          "primitive": "number"
+        },
+        "interval": {
+          "constructor": "Timeout",
+          "tag": "[object Object]",
+          "methods": [
+            "Symbol(Symbol.dispose)",
+            "Symbol(Symbol.toPrimitive)",
+            "close",
+            "constructor",
+            "hasRef",
+            "ref",
+            "refresh",
+            "unref"
+          ],
+          "own": [],
+          "primitive": "number"
+        },
+        "fired": [
+          [
+            "timeout",
+            "a",
+            "b"
+          ]
+        ],
+        "ticks": 2,
+        "functions": {
+          "setTimeout": [
+            "setTimeout",
+            2
+          ],
+          "setInterval": [
+            "setInterval",
+            2
+          ],
+          "clearTimeout": [
+            "clearTimeout",
+            1
+          ],
+          "clearInterval": [
+            "clearInterval",
+            1
+          ]
+        },
+        "refs": [
+          true,
+          true,
+          false,
+          true,
+          true
+        ],
+        "refreshReturns": true,
+        "refreshed": 1,
+        "closeReturns": true,
+        "closed": 0,
+        "disposed": 0,
+        "string": "TypeError: The \"callback\" argument must be of type function. Received type string ('1 + 1') (ERR_INVALID_ARG_TYPE)",
+        "missing": "TypeError: The \"callback\" argument must be of type function. Received undefined (ERR_INVALID_ARG_TYPE)",
+        "intervalString": "TypeError: The \"callback\" argument must be of type function. Received type string ('x') (ERR_INVALID_ARG_TYPE)",
+        "nullPrototype": "TypeError: The \"callback\" argument must be of type function. Received [Object: null prototype] (ERR_INVALID_ARG_TYPE)",
+        "emptyNullPrototype": "TypeError: The \"callback\" argument must be of type function. Received [Object: null prototype] {} (ERR_INVALID_ARG_TYPE)",
+        "anonymousClass": "TypeError: The \"callback\" argument must be of type function. Received {} (ERR_INVALID_ARG_TYPE)",
+        "constructorField": "TypeError: The \"callback\" argument must be of type function. Received [Object] (ERR_INVALID_ARG_TYPE)",
+        "symbolKeyed": "TypeError: The \"callback\" argument must be of type function. Received [Object: null prototype] (ERR_INVALID_ARG_TYPE)",
+        "tagged": "TypeError: The \"callback\" argument must be of type function. Received Object [Tagged] {} (ERR_INVALID_ARG_TYPE)",
+        "taggedNullPrototype": "TypeError: The \"callback\" argument must be of type function. Received T <Complex prototype> [T] {} (ERR_INVALID_ARG_TYPE)",
+        "ownTag": "TypeError: The \"callback\" argument must be of type function. Received [Own: null prototype] (ERR_INVALID_ARG_TYPE)",
+        "reported": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "timeout": "number",
+        "interval": "number",
+        "fired": [
+          [
+            "timeout",
+            "a",
+            "b"
+          ]
+        ],
+        "ticks": 2,
+        "functions": {
+          "setTimeout": [
+            "setTimeout",
+            0
+          ],
+          "setInterval": [
+            "setInterval",
+            0
+          ],
+          "clearTimeout": [
+            "clearTimeout",
+            0
+          ],
+          "clearInterval": [
+            "clearInterval",
+            0
+          ]
+        },
+        "string": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "missing": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "intervalString": "TypeError: Failed to execute 'setInterval' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "nullPrototype": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "emptyNullPrototype": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "anonymousClass": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "constructorField": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "symbolKeyed": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "tagged": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "taggedNullPrototype": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "ownTag": "TypeError: Failed to execute 'setTimeout' on 'ServiceWorkerGlobalScope': parameter 1 is not of type 'function'.",
+        "reported": false
+      }
+    }
+  ]
+}
