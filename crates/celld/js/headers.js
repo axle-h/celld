@@ -9,7 +9,8 @@ let _nameCache = { __proto__: null };
 let _nameCacheSize = 0;
 const _nameCacheMax = 4096;
 function _checkName(name) {
-  name = String(name);
+  // ToString, which throws for a Symbol, as JSG's conversion does.
+  name = `${name}`;
   let valid = _nameCache[name];
   if (valid === undefined) {
     valid = _tokenRe.test(name);
@@ -37,15 +38,14 @@ function _lower(name) {
 // whitespace (HT/LF/CR/SP) from both ends first per
 // WHATWG fetch -- trailing LF/CR are permitted input.
 function _checkValue(value) {
-  value = String(value).replace(
+  value = `${value}`.replace(
     /^[\t\n\r ]+|[\t\n\r ]+$/g, '');
   // workerd's rule: NUL, LF and CR are invalid; any other code
   // point passes (a received value is UTF-8 with replacement).
   for (let i = 0; i < value.length; i++) {
     const c = value.charCodeAt(i);
     if (c === 0 || c === 0x0A || c === 0x0D)
-      throw new TypeError(
-        "Invalid header value");
+      throw new TypeError("Invalid header value.");
   }
   return value;
 }
@@ -57,6 +57,19 @@ function _checkValue(value) {
 // serialization lifts it natively instead.
 const _noClone = () => {};
 const _defineProperty = Object.defineProperty;
+const _isArray = Array.isArray;
+const _arrayFrom = Array.from;
+const _jsg = __celld.__jsg;
+// A method's required string parameters (`count` of them), which the call
+// must not leave out.
+function _required(args, count, method) {
+  if (args.length < count)
+    throw _jsg.execute(method, "Headers", args.length + 1, "string");
+}
+
+// The init's type, as workerd names it (headers.h `Initializer`).
+const _INIT_TYPE = "Headers or Sequence or object";
+__celld.__headersInitType = _INIT_TYPE;
 
 // The spec's header list, plus the sorted pair list derived from it.
 //
@@ -163,32 +176,38 @@ class Headers {
     _defineProperty(this, "__celldHost",
       { __proto__: null, value: _noClone, enumerable: true });
     if (init === undefined) return;
-    if (init === null || typeof init !== "object")
-      throw new TypeError("Invalid Headers init");
+    // WebIDL `object` includes callables.
+    if (init === null || typeof init !== "object" && typeof init !== "function")
+      throw _jsg.construct("Headers", 1, _INIT_TYPE);
     // Sequence-like (includes Headers with its default
     // iterator or any user-overridden one) takes precedence
     // over record so custom iterators are honored.
     if (typeof init[Symbol.iterator] === "function") {
-      for (const pair of init) {
-        if (!pair || typeof pair !== "object"
-            || pair.length !== 2)
+      for (let pair of init) {
+        // Each pair is itself a sequence, which a string is not
+        // (jsg/iterator.h `Sequence`).
+        if (pair === null || typeof pair !== "object" && typeof pair !== "function" ||
+            typeof pair[Symbol.iterator] !== "function")
+          throw _jsg.other("Sequence");
+        if (!_isArray(pair)) pair = _arrayFrom(pair);
+        if (pair.length !== 2)
           throw new TypeError(
-            "Headers init entry must be a 2-tuple");
+            "To initialize a Headers object from a sequence, each inner " +
+            "sequence must have exactly two elements.");
         this.append(pair[0], pair[1]);
       }
     } else {
       // Record: explicit Reflect walk so Proxy handlers
-      // see the WebIDL es-to-record trace exactly --
+      // see the WebIDL es-to-record trace --
       // ownKeys -> for each key, getOwnPropertyDescriptor;
-      // if enumerable, coerce key to ByteString (throws
-      // for Symbols), then [[Get]], then validate value.
+      // if enumerable, check the name, then [[Get]], then
+      // validate value. A Symbol key is skipped, as
+      // workerd's walk (GetOwnPropertyNames) skips it.
       for (const k of Reflect.ownKeys(init)) {
+        if (typeof k === "symbol") continue;
         const desc = Reflect
           .getOwnPropertyDescriptor(init, k);
         if (!desc || !desc.enumerable) continue;
-        if (typeof k === "symbol")
-          throw new TypeError(
-            "Headers init key must be a string");
         const ck = _checkName(k);
         const v = Reflect.get(init, k, init);
         const cv = _checkValue(v);
@@ -198,12 +217,14 @@ class Headers {
   }
 
   append(name, value) {
+    _required(arguments, 2, "append");
     this.#checkMutable();
     const k = _checkName(name);
     const v = _checkValue(value);
     this.#push(k, v);
   }
   get(name) {
+    _required(arguments, 1, "get");
     const lower = _lower(_checkName(name));
     const state = this.#list;
     let value = null;
@@ -215,6 +236,7 @@ class Headers {
     return value;
   }
   set(name, value) {
+    _required(arguments, 2, "set");
     this.#checkMutable();
     name = _checkName(name);
     const v = _checkValue(value);
@@ -248,10 +270,12 @@ class Headers {
     state.pairs = null;
   }
   has(name) {
+    _required(arguments, 1, "has");
     const lower = _lower(_checkName(name));
     return this.#list.lower.includes(lower);
   }
   delete(name) {
+    _required(arguments, 1, "delete");
     this.#checkMutable();
     const lower = _lower(_checkName(name));
     const state = this.#list;
@@ -302,8 +326,7 @@ class Headers {
   [Symbol.iterator]() { return this.entries(); }
   forEach(cb, thisArg) {
     if (typeof cb !== "function")
-      throw new TypeError(
-        "forEach callback must be a function");
+      throw _jsg.execute("forEach", "Headers", 1, "function");
     for (const [k, v] of this.entries())
       cb.call(thisArg, v, k, this);
   }

@@ -1,0 +1,6 @@
+{
+  "kind": "celld-only",
+  "reason": "workerd's KeyObject.toCryptoKey() throws ERR_METHOD_NOT_IMPLEMENTED; celld's applies the requested algorithm and usages, which for a non-extractable key must not exceed the key's own",
+  "workers": ["app"],
+  "steps": [{"path": "/"}]
+}

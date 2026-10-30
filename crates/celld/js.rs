@@ -16692,8 +16692,9 @@ fn op_url_parse(
     };
     let u = match parsed {
         Ok(u) => u,
-        Err(e) => {
-            let msg = v8::String::new(scope, &format!("Invalid URL: {e}")).unwrap();
+        // workerd's text (url-standard.c++ `parseImpl`), which gives no reason.
+        Err(_) => {
+            let msg = v8::String::new(scope, "Invalid URL string.").unwrap();
             let exc = v8::Exception::type_error(scope, msg);
             scope.throw_exception(exc);
             return;

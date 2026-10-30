@@ -80,8 +80,12 @@ An unsupported feature that does not cause an error is a defect.
   as without `brotli_content_encoding` (see
   [Differences selected by compatibility date](#differences-selected-by-compatibility-date)).
 - The response to a `HEAD` request, or with status 101, 204, 205 or 304, has
-  a null body. celld does not refuse a Response constructed with such a
-  status and a body, as workerd does for one that is not empty.
+  a null body. A Response constructed with such a status and a stream or a
+  body that is not empty is refused, as in workerd, and an empty body is
+  taken as none.
+- A Request's method is one of `GET`, `HEAD`, `POST`, `PUT`, `DELETE`,
+  `PATCH` and `OPTIONS`. workerd also takes `TRACE`, `PURGE` and the WebDAV
+  methods (plan item 1.68).
 - A remote Durable Object call cannot retry after request-body transmission
   starts because celld keeps no replay copy.
 - A remote Durable Object call waits for a rejected owner generation to change
@@ -363,6 +367,21 @@ The `tail` and `email` handlers are unavailable.
 - `generateKey()` cannot make an AES-KW key or a 192-bit AES key, does not
   check an AES key's usages, and refuses a bad AES length or an unknown HMAC
   hash with other texts than Cloudflare's (plan item 1.67).
+- No operation checks that the key's algorithm is the one requested or that
+  the key lists the usage, `importKey()` checks no usages and no AES key
+  length, `generateKey()` makes a secret key with no usages, and a secret
+  key cannot be imported from `jwk`. Cloudflare refuses the first five with
+  an `InvalidAccessError`, a `SyntaxError` or a `DataError` (plan item
+  1.68).
+- A key's material is reachable through no property, and a
+  non-extractable key through no export, wrap, `structuredClone()` or
+  node:crypto `KeyObject.export()`, as in workerd. An object that only
+  inherits from a CryptoKey is not taken as one, where Cloudflare takes it
+  as that key (plan item 1.68).
+- A `SubtleCrypto` method called on any object but `crypto.subtle` throws
+  `Illegal invocation…` before it runs, as in workerd, and `deriveKey()`,
+  `wrapKey()` and `unwrapKey()` use none of a script's replacements for the
+  other methods.
 
 ### [Web standards](https://developers.cloudflare.com/workers/runtime-apis/web-standards/)
 
@@ -389,6 +408,21 @@ The `tail` and `email` handlers are unavailable.
   answers `true` in a request, `false` at module scope.
 - `queueMicrotask()` returns a promise, where Cloudflare's returns
   `undefined` (plan item 1.67).
+- The runtime APIs throw workerd's errors, of its types and with its
+  messages, including its Web IDL conversion errors (`Failed to execute
+  'get' on 'Headers': parameter 1 is not of type 'string'.`). Some differ
+  (plan item 1.68): an API class called without `new` throws V8's `Class
+  constructor X cannot be invoked without 'new'`, and a method or accessor
+  of one called on another object throws V8's private-member error, where
+  workerd throws `Failed to construct 'X': Please use the 'new' operator…`
+  and `Illegal invocation…`; reading a body twice or while it is locked
+  does not throw (plan item 1.43), and a body read by `text()` can be read
+  again through `body` or by `HTMLRewriter.transform()`, where workerd's is
+  locked (plan item 1.68); a header name may not be empty or hold
+  a byte above 0x7F, which workerd allows; an HTMLRewriter selector is
+  parsed by `transform()`, not by `on()`; and a short `FixedLengthStream`
+  or a string written to an `IdentityTransformStream` fails the write or
+  close, where workerd fails the readable side.
 
 ### [Performance and timers](https://developers.cloudflare.com/workers/runtime-apis/performance/)
 
@@ -463,7 +497,10 @@ the global `scheduler.wait`, as on workerd. A script that replaces the global
 - `node:crypto` does not implement Diffie-Hellman, streaming signatures,
   ciphers, RSA-PSS, or DSA signatures and key generation.
 - `KeyObject.toCryptoKey()` applies the requested algorithm, extractability,
-  and usages to an asymmetric key.
+  and usages to an asymmetric key, where workerd's throws
+  `ERR_METHOD_NOT_IMPLEMENTED`. A key made from a non-extractable CryptoKey
+  stays non-extractable and keeps that key's algorithm, hash and usages: it
+  cannot become an ECDH or RSA-OAEP key, or gain a usage.
 - `node:zlib` implements the synchronous functions `deflateSync`,
   `inflateSync`, `gzipSync`, `gunzipSync`, `deflateRawSync` and
   `inflateRawSync`, with workerd's `constants` and `codes`. Every other

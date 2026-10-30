@@ -37,8 +37,11 @@ const _uspDecode = (s) => {
 
 // Convert a DOMString to a USVString: replace each lone
 // surrogate (unpaired high/low) with U+FFFD.
+const _surrogateRe = /[\uD800-\uDFFF]/;
 const _toUSVString = (s) => {
-  s = String(s);
+  // ToString, which throws for a Symbol, as JSG's conversion does.
+  s = `${s}`;
+  if (!_surrogateRe.test(s)) return s;
   let out = '';
   let i = 0;
   while (i < s.length) {
@@ -90,35 +93,46 @@ const _parseString = (s) => {
   return params;
 };
 
+const _jsg = __celld.__jsg;
+// A required USVString parameter of a method (`count` of them), which the
+// call must not leave out.
+const _required = (args, count, method) => {
+  if (args.length < count)
+    throw _jsg.execute(method, 'URLSearchParams', args.length + 1, 'USVString');
+};
+
 // The parameter list of a URLSearchParams, for its iterators.
 let paramsOf;
 class URLSearchParams {
   #params = [];
   _url = null; // live-bound URL, if any
 
+  // workerd's init is a sequence of pairs, a record or a string, tried in
+  // that order (url-standard.h `Initializer`): anything but an object,
+  // `null` included, converts to a string.
   constructor(init) {
-    if (init === undefined || init === null) return;
-    if (typeof init === 'string') {
-      const s = init.startsWith('?')
-        ? init.slice(1) : init;
-      this.#params = _parseString(s);
-      // WebIDL `object` includes callables, so a class or function is a
-      // valid record init (e.g. `new URLSearchParams(DOMException)`
-      // enumerates its constants).
-    } else if (typeof init === 'object' ||
-               typeof init === 'function') {
+    if (init === undefined) return;
+    // WebIDL `object` includes callables, so a class or function is a
+    // valid record init (e.g. `new URLSearchParams(DOMException)`
+    // enumerates its constants).
+    if (typeof init !== 'object' && typeof init !== 'function' ||
+        init === null) {
+      const s = _toUSVString(init);
+      this.#params = _parseString(s.startsWith('?') ? s.slice(1) : s);
+    } else {
       // Check for iterable (Symbol.iterator) first.
       if (typeof init[Symbol.iterator]
             === 'function') {
         for (const pair of init) {
-          if (typeof pair !== 'object' &&
-              typeof pair !== 'string')
-            throw new TypeError('Invalid pair');
+          // Each pair is itself a sequence, which a string is not
+          // (jsg/iterator.h `Sequence`).
+          if (pair === null || typeof pair !== 'object' &&
+              typeof pair !== 'function' ||
+              typeof pair[Symbol.iterator] !== 'function')
+            throw _jsg.other('Sequence');
           const arr = [...pair];
           if (arr.length !== 2)
-            throw new TypeError(
-              'Each pair must have exactly ' +
-              'two elements');
+            throw new TypeError('Invalid URL search params sequence.');
           this.#params.push([
             _toUSVString(arr[0]),
             _toUSVString(arr[1]),
@@ -152,22 +166,25 @@ class URLSearchParams {
   }
 
   get(name) {
-    name = String(name);
+    _required(arguments, 1, 'get');
+    name = _toUSVString(name);
     const p = this.#params.find(
       ([k]) => k === name);
     return p ? p[1] : null;
   }
 
   getAll(name) {
-    name = String(name);
+    _required(arguments, 1, 'getAll');
+    name = _toUSVString(name);
     return this.#params.filter(
       ([k]) => k === name).map(([, v]) => v);
   }
 
   has(name, value) {
-    name = String(name);
+    _required(arguments, 1, 'has');
+    name = _toUSVString(name);
     if (value !== undefined) {
-      value = String(value);
+      value = _toUSVString(value);
       return this.#params.some(
         ([k, v]) => k === name && v === value);
     }
@@ -175,8 +192,9 @@ class URLSearchParams {
   }
 
   set(name, value) {
-    name = String(name);
-    value = String(value);
+    _required(arguments, 2, 'set');
+    name = _toUSVString(name);
+    value = _toUSVString(value);
     let found = false;
     this.#params = this.#params.filter(([k]) => {
       if (k === name && !found) {
@@ -195,15 +213,17 @@ class URLSearchParams {
   }
 
   append(name, value) {
+    _required(arguments, 2, 'append');
     this.#params.push(
-      [String(name), String(value)]);
+      [_toUSVString(name), _toUSVString(value)]);
     this.#sync();
   }
 
   delete(name, value) {
-    name = String(name);
+    _required(arguments, 1, 'delete');
+    name = _toUSVString(name);
     if (value !== undefined) {
-      value = String(value);
+      value = _toUSVString(value);
       this.#params = this.#params.filter(
         ([k, v]) => !(k === name && v === value));
     } else {
@@ -237,6 +257,8 @@ class URLSearchParams {
   [Symbol.iterator]() { return this.entries(); }
 
   forEach(callback, thisArg) {
+    if (typeof callback !== 'function')
+      throw _jsg.execute('forEach', 'URLSearchParams', 1, 'function');
     for (let i = 0; i < this.#params.length; i++) {
       callback.call(
         thisArg, this.#params[i][1],

@@ -21,6 +21,10 @@ function _readResult(value, done) {
 // Brand-check sentinel for internal construction.
 const _rsc_brand = Symbol("ReadableStreamController");
 
+// JSG's conversion errors (api_tags.js).
+const jsg = __celld.__jsg;
+const isDictionary = jsg.isDictionary;
+
 const RELEASED =
   "This ReadableStream reader has been released.";
 const ONE_READ =
@@ -136,8 +140,7 @@ class ReadableStreamDefaultController {
   enqueue(chunk) {
     if (this.#closeRequested || this.#errored ||
         this.#stream._closed)
-      throw new TypeError(
-        "Cannot enqueue a closed/errored stream");
+      throw new TypeError("Unable to enqueue");
     // Run size() if the strategy provides one. A throw
     // or invalid return (non-finite, negative) errors
     // the stream and rethrows from enqueue. Size's own
@@ -171,7 +174,7 @@ class ReadableStreamDefaultController {
   close() {
     if (this.#closeRequested || this.#errored ||
         this.#stream._closed)
-      throw new TypeError("Already closed");
+      throw new TypeError("This ReadableStream is closed.");
     this.#closeRequested = true;
     this.#stream._closeRequested = true;
     if (this.#stream._queue.length === 0)
@@ -212,9 +215,7 @@ class ReadableStreamDefaultReader {
     if (__celld.__oldAttributes)
       __celld.__installAttributes(this, "ReadableStreamDefaultReader");
     if (!(stream instanceof ReadableStream))
-      throw new TypeError(
-        "ReadableStreamDefaultReader requires a " +
-        "ReadableStream argument");
+      throw jsg.construct('ReadableStreamDefaultReader', 1, 'ReadableStream');
     if (stream._locked)
       throw new TypeError("This ReadableStream is currently locked to a reader.");
     this.#stream = stream;
@@ -397,42 +398,36 @@ function ReadableStream(underlyingSource, queuingStrategy) {
     // must beat an invalid highWaterMark. hwm stays
     // undefined when defaulted: byte streams default to 0
     // where default streams use 1.
+    // Both are dictionaries (streams/common.h): undefined or null is
+    // empty, and a value that is not an object is refused.
+    if (!isDictionary(underlyingSource))
+      throw jsg.construct('ReadableStream', 1, 'UnderlyingSource');
     let hwm;
     let sizeFn;
-    if (queuingStrategy !== undefined) {
+    if (!isDictionary(queuingStrategy))
+      throw jsg.construct('ReadableStream', 2, 'StreamQueuingStrategy');
+    if (queuingStrategy != null) {
       const s = queuingStrategy.size;
       if (s !== undefined && typeof s !== 'function')
-        throw new TypeError(
-          'strategy.size must be a function');
+        throw jsg.field('size', 'StreamQueuingStrategy', 'function');
       sizeFn = s;
       const h = queuingStrategy.highWaterMark;
-      if (h !== undefined) {
-        const n = Number(h);
-        // Workerd throws TypeError here, not the spec's
-        // RangeError.
-        if (Number.isNaN(n) || n < 0)
-          throw new TypeError(
-            'highWaterMark must be non-negative');
-        hwm = n;
-      }
+      // A uint64_t in workerd, so a fraction is dropped.
+      if (h !== undefined) hwm = jsg.toUint64(h);
     }
     self._hwm = hwm === undefined ? 1 : hwm;
     self._sizeFn = sizeFn;
-    if (underlyingSource === null ||
-        (underlyingSource !== undefined &&
-         typeof underlyingSource !== 'object'))
-      throw new TypeError("Invalid source");
-    const src = underlyingSource || {};
+    const src = underlyingSource ?? {};
     // Workerd extension: a source may declare its total
     // byte length; fetch-style consumers read it for
     // Content-Length (see also FixedLengthStream).
     if (src.expectedLength !== undefined)
       self._expectedLength = Number(src.expectedLength);
     if (src.type !== undefined) {
-      const t = String(src.type);
+      const t = `${src.type}`;
       if (t !== 'bytes')
         throw new TypeError(
-          `Invalid type '${t}'`);
+          `"${t}" is not a valid type of ReadableStream.`);
       // Byte-stream machinery lives in a lazy prelude;
       // naming the global compiles it on first use. It
       // installs the byte controller plus instance
@@ -448,18 +443,16 @@ function ReadableStream(underlyingSource, queuingStrategy) {
     const pullFn = src.pull;
     const startFn = src.start;
     const cancelFn = src.cancel;
-    if (cancelFn !== undefined &&
-        typeof cancelFn !== 'function')
-      throw new TypeError(
-        "cancel must be a function");
-    if (pullFn !== undefined &&
-        typeof pullFn !== 'function')
-      throw new TypeError(
-        "pull must be a function");
+    // In workerd's member order (streams/common.h `UnderlyingSource`).
     if (startFn !== undefined &&
         typeof startFn !== 'function')
-      throw new TypeError(
-        "start must be a function");
+      throw jsg.field('start', 'UnderlyingSource', 'function');
+    if (pullFn !== undefined &&
+        typeof pullFn !== 'function')
+      throw jsg.field('pull', 'UnderlyingSource', 'function');
+    if (cancelFn !== undefined &&
+        typeof cancelFn !== 'function')
+      throw jsg.field('cancel', 'UnderlyingSource', 'function');
     self._source = src;
     self._startFn = startFn;
     self._pullFn = pullFn;
@@ -626,12 +619,15 @@ __celld.__installMembers(ReadableStream, class {
     if (refused !== undefined) return refused;
     if (this._locked)
       return Promise.reject(new TypeError(
-        "Cannot cancel a locked ReadableStream"));
+        "This ReadableStream is currently locked to a reader."));
     return this._cancel(reason);
   }
 
   tee(cloneForBranch2 = false) {
     ioCheck(this);
+    // workerd's text, comma and all (streams/readable.c++ `tee`).
+    if (this._locked)
+      throw new TypeError("This ReadableStream is currently locked to a reader,");
     // Branches of a byte stream are byte streams, so
     // they support BYOB reads; the source is still read
     // through a default reader (coalesced chunks).
@@ -723,8 +719,8 @@ __celld.__installMembers(ReadableStream, class {
         typeof destination !== 'object' ||
         !('_sink' in destination) ||
         !(destination instanceof WritableStream))
-      return Promise.reject(new TypeError(
-        "pipeTo destination must be WritableStream"));
+      return Promise.reject(jsg.execute(
+        'pipeTo', 'ReadableStream', 1, 'WritableStream'));
     // A stream another request owns refuses the pipe before
     // anything else, as its reads would.
     const refused = ioRefusal(this);
@@ -743,10 +739,11 @@ __celld.__installMembers(ReadableStream, class {
     }
     if (this._locked)
       return Promise.reject(new TypeError(
-        "ReadableStream is locked"));
+        "This ReadableStream is currently locked to a reader."));
+    // Without the period, as workerd's has none here.
     if (destination._locked)
       return Promise.reject(new TypeError(
-        "WritableStream is locked"));
+        "This WritableStream is currently locked to a writer"));
     if (signal && signal.aborted) {
       const err = signal.reason || new DOMException(
         "The operation was aborted", "AbortError");
@@ -848,24 +845,24 @@ __celld.__installMembers(ReadableStream, class {
     if (!(this instanceof ReadableStream))
       throw new TypeError(
         "pipeThrough called on non-ReadableStream");
-    if (typeof transform !== 'object' ||
-        transform === null)
-      throw new TypeError(
-        "pipeThrough argument must be an object");
+    // A Transform: a dictionary whose two members are required
+    // (streams/readable.h).
+    if (transform === undefined || transform === null)
+      throw jsg.nullDict('N7workerd3api14ReadableStream9TransformE');
+    if (typeof transform !== 'object' && typeof transform !== 'function')
+      throw jsg.execute('pipeThrough', 'ReadableStream', 1, 'Transform');
     if (!(transform.readable instanceof
           ReadableStream))
-      throw new TypeError(
-        "transform.readable must be ReadableStream");
+      throw jsg.field('readable', 'Transform', 'ReadableStream');
     if (!(transform.writable instanceof
           WritableStream))
-      throw new TypeError(
-        "transform.writable must be WritableStream");
+      throw jsg.field('writable', 'Transform', 'WritableStream');
     if (this._locked)
       throw new TypeError(
-        "ReadableStream is locked");
+        "This ReadableStream is currently locked to a reader.");
     if (transform.writable._locked)
       throw new TypeError(
-        "WritableStream is locked");
+        "This WritableStream is currently locked to a writer.");
     // Spec: mark the pipeTo promise as handled --
     // pipeTo already mirrors errors between the two
     // streams via the readable's error state, so a
@@ -974,8 +971,7 @@ ReadableStream.from = function(asyncIterable) {
     nextMethod = iterator.next;
     isAsync = false;
   } else {
-    throw new TypeError(
-      "ReadableStream.from() requires an iterable");
+    throw jsg.execute('from', 'ReadableStream', 1, 'AsyncGenerator');
   }
 
   let cancelInProgress = false;
@@ -1031,16 +1027,29 @@ ReadableStream.from = function(asyncIterable) {
   }, { __proto__: null, highWaterMark: 0 });
 };
 
+// Their init is a QueuingStrategyInit, a dictionary whose `highWaterMark`
+// is required (streams/queue.h), so a call without one is refused.
+const strategyInit = (owner, args) => {
+  if (args.length < 1) throw jsg.construct(owner, 1, 'QueuingStrategyInit');
+  const init = args[0];
+  if (init === undefined || init === null)
+    throw jsg.nullDict('N7workerd3api19QueuingStrategyInitE');
+  if (!isDictionary(init))
+    throw jsg.construct(owner, 1, 'QueuingStrategyInit');
+  // A double, so ToNumber.
+  return +init.highWaterMark;
+};
+
 class CountQueuingStrategy {
-  constructor({ highWaterMark }) {
-    this.highWaterMark = highWaterMark;
+  constructor(init) {
+    this.highWaterMark = strategyInit('CountQueuingStrategy', arguments);
   }
   size() { return 1; }
 }
 
 class ByteLengthQueuingStrategy {
-  constructor({ highWaterMark }) {
-    this.highWaterMark = highWaterMark;
+  constructor(init) {
+    this.highWaterMark = strategyInit('ByteLengthQueuingStrategy', arguments);
   }
   // Optional chain: size(undefined) returns undefined
   // rather than throwing (Workerd behavior).

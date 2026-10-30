@@ -81,6 +81,40 @@
     throw new TypeError("expected an ArrayBuffer or ArrayBufferView");
   }
 
+  // A BufferSource parameter of a method, refused with JSG's error for it.
+  function _bufferParam(data, method, owner, index) {
+    if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) return _toBuf(data);
+    throw __celld.__jsg.execute(method, owner, index, "BufferSource");
+  }
+
+  // A CryptoKey parameter of a SubtleCrypto method, as its state
+  // (`_keyState`), refused with JSG's error for anything else.
+  function _keyParam(key, method, index) {
+    const state = _keyState(key);
+    if (state === undefined)
+      throw __celld.__jsg.execute(method, "SubtleCrypto", index, "CryptoKey");
+    return state;
+  }
+
+  // The algorithms workerd knows (crypto.c++ `registeredAlgorithms`, without
+  // the ML-DSA and ML-KEM ones its webcrypto_modern_algorithms flag adds),
+  // uppercased, and those it can generate a key for. An algorithm outside
+  // them gets workerd's "Unrecognized" error, which echoes the name as the
+  // caller wrote it; one inside them that celld lacks gets celld's own.
+  const _WORKERD_ALGS = new Set([
+    "AES-CTR", "AES-CBC", "AES-GCM", "AES-KW", "HMAC", "PBKDF2", "HKDF",
+    "RSASSA-PKCS1-V1_5", "RSA-PSS", "RSA-OAEP", "ECDSA", "ECDH",
+    "NODE-ED25519", "ED25519", "X25519", "RSA-RAW",
+  ]);
+  const _WORKERD_GENERATE_ALGS = new Set(
+    [..._WORKERD_ALGS].filter((name) =>
+      name !== "PBKDF2" && name !== "HKDF" && name !== "RSA-RAW"));
+  const _KEY_FORMATS = new Set(["raw", "pkcs8", "spki", "jwk"]);
+  // The algorithm's name as the caller wrote it.
+  function _givenAlgorithmName(algorithm) {
+    return String(typeof algorithm === "string" ? algorithm : algorithm?.name ?? "");
+  }
+
   function _algorithmName(algorithm) {
     return String(
       typeof algorithm === "string" ? algorithm : algorithm?.name || "",
@@ -102,6 +136,12 @@
       `are not supported (requested ${iterations}).`;
   }
 
+  // workerd's refusal to export a key made non-extractable.
+  function _notExtractable(state) {
+    return new DOMException(
+      `Attempt to export non-extractable ${state.algorithm?.name} key.`, "InvalidAccessError");
+  }
+
   function _notSupported(message) {
     return new DOMException(message, "NotSupportedError");
   }
@@ -120,23 +160,58 @@
     return Array.from(label);
   }
 
+  // A CryptoKey is made only by celld (`__celld.__makeCryptoKey`): a script
+  // that calls the constructor gets workerd's "Illegal constructor".
+  const kMakeKey = Symbol("celld.CryptoKey.make");
+  // A key's state: its type, algorithm, extractability, usages and
+  // material. Only celld reads it (`_keyState`, `__celld.__cryptoKeyState`):
+  // the key's public properties are copies a script may redefine, as it may
+  // workerd's, so every check reads this instead, and no property, Proxy,
+  // inspection or clone of a key reaches its material.
+  let _keyState;
+  // The state's own copy of a key's algorithm dictionary: the one
+  // `key.algorithm` holds is the script's to change, and a changed
+  // `algorithm.hash.name` must not change what the key signs with.
+  const _copyAlgorithm = (value) => {
+    if (ArrayBuffer.isView(value)) return value.slice();
+    if (value === null || typeof value !== "object") return value;
+    const copy = {};
+    for (const name of Object.keys(value)) copy[name] = _copyAlgorithm(value[name]);
+    return copy;
+  };
   class CryptoKey {
-    // The brand the RPC envelope classifies by (harness.js, `__hostKind`).
-    #brand;
+    #state;
     static {
-      __celld.__isCryptoKey = (value) =>
-        typeof value === "object" && value !== null && #brand in value;
+      // The key's state, or undefined for anything else: a Proxy of a key,
+      // or an object that only inherits from one, is not a key.
+      _keyState = (value) =>
+        typeof value === "object" && value !== null && #state in value
+          ? value.#state : undefined;
     }
-    constructor(type, algorithm, extractable, usages, material) {
+    // A rest parameter, so `CryptoKey.length` is 0, as workerd's is.
+    constructor(...args) {
+      const [token, type, algorithm, extractable, usages, material] = args;
+      if (token !== kMakeKey) throw new TypeError("Illegal constructor");
+      this.#state = {
+        __proto__: null, type, algorithm: _copyAlgorithm(algorithm),
+        extractable: Boolean(extractable),
+        usages: Object.freeze(Array.from(usages || [])), material,
+      };
+      // workerd's instance properties: read-only, enumerable and
+      // configurable, in its order.
+      const state = this.#state;
       Object.defineProperties(this, {
-        type: { __proto__: null, value: type, enumerable: true },
-        algorithm: { __proto__: null, value: algorithm, enumerable: true },
-        extractable: { __proto__: null, value: Boolean(extractable), enumerable: true },
-        usages: { __proto__: null, value: Object.freeze(Array.from(usages || [])), enumerable: true },
-        __celldMaterial: { __proto__: null, value: material },
+        usages: { __proto__: null, value: state.usages, enumerable: true, configurable: true },
+        algorithm: { __proto__: null, value: algorithm, enumerable: true, configurable: true },
+        extractable: { __proto__: null, value: state.extractable, enumerable: true, configurable: true },
+        type: { __proto__: null, value: type, enumerable: true, configurable: true },
       });
     }
   }
+  // The brand the RPC envelope classifies by (harness.js, `__hostKind`).
+  __celld.__isCryptoKey = (value) => _keyState(value) !== undefined;
+  // For node:crypto, which keeps a CryptoKey as a KeyObject's handle.
+  __celld.__cryptoKeyState = _keyState;
 
   // A WebIDL `long`, as workerd's JSG converts one: a value that is not
   // finite is 0, anything else is truncated and must fit 32 bits.
@@ -268,8 +343,10 @@
   }
 
   function _makeKey(type, algorithm, extractable, usages, material) {
-    return new CryptoKey(type, algorithm, extractable, usages, material);
+    return new CryptoKey(kMakeKey, type, algorithm, extractable, usages, material);
   }
+  // For celld's other key makers: node:crypto.
+  __celld.__makeCryptoKey = _makeKey;
 
   // Web Crypto reports a key's algorithm as its *KeyAlgorithm dictionary,
   // built from the parsed key, not as the request the caller passed. An
@@ -337,7 +414,10 @@
   // AES-GCM reports a failure by returning nothing, and this turns that into
   // the `OperationError` the Web Crypto specification names. The block modes
   // throw from the host with the cause, so they never reach that branch.
-  function _aes(name, algorithm, key, data, encrypting) {
+  function _aes(name, algorithm, state, data, encrypting) {
+    if ((name === "AES-GCM" || name === "AES-CBC") && algorithm.iv === undefined) {
+      throw new TypeError('Missing field "iv" in "algorithm".');
+    }
     if (name === "AES-GCM" && _toBuf(algorithm.iv).byteLength === 0) {
       throw new DOMException("AES-GCM IV must not be empty.", "OperationError");
     }
@@ -350,7 +430,7 @@
     const run = encrypting ? _aesEncrypt : _aesDecrypt;
     const out = run(
       name,
-      key.__celldMaterial.bytes,
+      state.material.bytes,
       _toBuf(name === "AES-CTR" ? algorithm.counter : algorithm.iv),
       _toBuf(data),
       name === "AES-GCM"
@@ -359,6 +439,17 @@
       tagLength / 8,
     );
     if (!out) {
+      // workerd's text for a ciphertext that fails to authenticate
+      // (aes.c++ `decryptFinalHelper`): the lengths are the ciphertext's
+      // without its tag, which is what the plaintext would have been.
+      if (!encrypting && name === "AES-GCM") {
+        const length = Math.max(_toBuf(data).byteLength - tagLength / 8, 0);
+        throw _operationError(
+          "Decryption failed. This could be due to a ciphertext authentication " +
+          "failure, bad padding, incorrect CryptoKey, or another algorithm-specific " +
+          `reason. Input length was ${length}, output length expected to be ` +
+          `${length} for AES-GCM`);
+      }
       throw _operationError(
         name + (encrypting ? " encrypt failed" : " decrypt failed"),
       );
@@ -366,18 +457,50 @@
     return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
   }
 
-  class SubtleCrypto {
+  // The operations behind SubtleCrypto's methods. A method checks its
+  // receiver, then hands its arguments here, and the operations that
+  // compose others (deriveKey, wrapKey, unwrapKey) call them here too,
+  // never through `this` or a property a script can replace: either
+  // would hand a non-extractable result's bytes to the script's own
+  // importKey, or a key's to its own encrypt.
+  const _ops = {
+    __proto__: null,
+
     async digest(algorithm, data) {
+      if (arguments.length < 1)
+        throw __celld.__jsg.execute("digest", "SubtleCrypto", 1, "string or HashAlgorithm");
+      const bytes = _bufferParam(data, "digest", "SubtleCrypto", 2);
       const name = _algorithmName(algorithm);
       if (!_DIGEST_ALGS.has(name)) {
-        throw _notSupported("unsupported digest algorithm: " + name);
+        throw _notSupported("Unrecognized or unimplemented digest algorithm requested.");
       }
-      const out = _digest(name, _toBuf(data));
+      const out = _digest(name, bytes);
       return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
-    }
+    },
 
     async importKey(format, keyData, algorithm, extractable, usages) {
       const name = _algorithmName(algorithm);
+      // workerd checks the format, then the algorithm (crypto.c++
+      // `importKeySync`), then that a buffer format has a buffer.
+      if (!_KEY_FORMATS.has(format)) {
+        throw _notSupported(`Unrecognized key import format "${format}".`);
+      }
+      if (!_WORKERD_ALGS.has(name)) {
+        throw _notSupported(
+          `Unrecognized key import algorithm "${_givenAlgorithmName(algorithm)}" requested.`);
+      }
+      // The data is a BufferSource or a JsonWebKey dictionary, and a buffer
+      // format takes only the first.
+      const buffer = keyData instanceof ArrayBuffer || ArrayBuffer.isView(keyData);
+      if (!buffer && (keyData === null || typeof keyData !== "object" &&
+          typeof keyData !== "function")) {
+        throw __celld.__jsg.execute(
+          "importKey", "SubtleCrypto", 2, "BufferSource or JsonWebKey");
+      }
+      if (format !== "jwk" && !buffer) {
+        throw new TypeError(
+          "Import data provided for buffer-based import formats must be a buffer source.");
+      }
       if (format === "raw" && (name === "HKDF" || name === "PBKDF2")) {
         // The spec makes KDF secrets non-extractable, so the password
         // material cannot come back out through exportKey.
@@ -393,7 +516,10 @@
       if (format === "raw" && _SECRET_KEY_ALGS.has(name)) {
         const raw = _toBuf(keyData).slice();
         if (name === "HMAC") {
-          const hash = _hashName(algorithm?.hash);
+          // An HMAC key names its hash; workerd has no default.
+          if (algorithm?.hash === undefined)
+            throw new TypeError('Missing field "hash" in "algorithm".');
+          const hash = _hashName(algorithm.hash);
           const length = _hmacImportLength(algorithm?.length, raw);
           return _makeKey(
             "secret", { name, hash: { name: hash }, length }, extractable, usages,
@@ -454,13 +580,24 @@
           format === "pkcs8" || (jwk && keyData?.d !== undefined)
             ? "private"
             : "public";
-        const imported = _extra("asym-key-import", {
-          key: jwk ? keyData : Array.from(_toBuf(keyData)),
-          format: jwk ? "jwk" : "der",
-          type: jwk ? null : format,
-          visibility,
-          passphrase: null,
-        });
+        let imported;
+        try {
+          imported = _extra("asym-key-import", {
+            key: jwk ? keyData : Array.from(_toBuf(keyData)),
+            format: jwk ? "jwk" : "der",
+            type: jwk ? null : format,
+            visibility,
+            passphrase: null,
+          });
+        } catch (error) {
+          // A DER document that does not parse is workerd's DataError
+          // (keys.c++); node:crypto's wording stays for node:crypto.
+          if (!jwk && /Failed to parse private key$/.test(String(error?.message))) {
+            throw new DOMException(
+              `Invalid ${format === "pkcs8" ? "PKCS8" : "SPKI"} input.`, "DataError");
+          }
+          throw error;
+        }
         return _makeKey(
           visibility,
           _keyAlgorithm(name, algorithm, imported.keyType, imported.details),
@@ -474,45 +611,32 @@
         );
       }
       throw _notSupported("unsupported key import");
-    }
+    },
 
     async exportKey(format, key) {
+      const state = _keyParam(key, "exportKey", 2);
+      // Before the format, as workerd checks (crypto.c++ `exportKey`).
+      if (!state.extractable) throw _notExtractable(state);
+      const material = state.material;
       // The `raw` form of a Secure Curves public key is its 32-byte point.
       // The branch below answers every `raw` request from the stored bytes,
       // which for an asymmetric key are its SPKI document -- so without this
       // arm an X25519 peer key exports as 44 bytes that no counterpart can
       // read, and nothing reports an error.
-      if (format === "raw" && key?.type === "public" &&
-          (key.__celldMaterial?.keyType === "ed25519" ||
-            key.__celldMaterial?.keyType === "x25519")) {
-        if (!key.extractable) {
-          throw new DOMException("key is not extractable", "InvalidAccessError");
-        }
+      if (format === "raw" && state.type === "public" &&
+          (material.keyType === "ed25519" || material.keyType === "x25519")) {
         return Uint8Array.from(_extra("asym-key-raw-public", {
-          der: Array.from(key.__celldMaterial.bytes),
+          der: Array.from(material.bytes),
         }).bytes).buffer;
       }
-      if (format === "raw" && key?.__celldMaterial?.bytes) {
-        if (!key.extractable) {
-          throw new DOMException("key is not extractable", "InvalidAccessError");
-        }
-        const raw = key.__celldMaterial.bytes;
+      if (format === "raw" && material.bytes) {
+        const raw = material.bytes;
         return raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
-      }
-      if (format === "jwk" && key?.__celldMaterial?.jwk) {
-        if (!key.extractable) {
-          throw new DOMException("key is not extractable", "InvalidAccessError");
-        }
-        return _jwkStruct(structuredClone(key.__celldMaterial.jwk));
       }
       // Asymmetric keys export from their normalized DER: spki and pkcs8 as
       // they are stored, jwk through the host.
-      const material = key?.__celldMaterial;
-      if (material?.keyType !== undefined) {
-        if (!key.extractable) {
-          throw new DOMException("key is not extractable", "InvalidAccessError");
-        }
-        const visibility = key.type;
+      if (material.keyType !== undefined) {
+        const visibility = state.type;
         if (format === "jwk") {
           return _jwkStruct(_extra("asym-key-export", {
             der: Array.from(material.bytes),
@@ -526,19 +650,20 @@
         }
       }
       throw _notSupported("unsupported key export");
-    }
+    },
 
     // Cloudflare's extension, not Web Crypto: a constant-time compare for
     // signatures and MACs, where `===` on a decoded string leaks by timing.
     // Equal lengths are required, so this cannot be used to probe length.
     timingSafeEqual(a, b) {
-      const left = _toBuf(a), right = _toBuf(b);
+      const left = _bufferParam(a, "timingSafeEqual", "SubtleCrypto", 1);
+      const right = _bufferParam(b, "timingSafeEqual", "SubtleCrypto", 2);
       if (left.byteLength !== right.byteLength) {
         throw new TypeError(
-          "Input buffers must have the same byte length");
+          "Input buffers must have the same byte length.");
       }
       return $$timingSafeEqual(left, right);
-    }
+    },
 
     // ECDH. `length` may be null or undefined, a recent spec change: the
     // shared secret is the curve's field size, so there is a right answer
@@ -546,6 +671,7 @@
     // HKDF and PBKDF2 have no natural output size, so for them a missing
     // or unaligned length is the OperationError the spec names.
     async deriveBits(algorithm, baseKey, length) {
+      const baseState = _keyParam(baseKey, "deriveBits", 2);
       const name = _algorithmName(algorithm);
       if (name === "HKDF" || name === "PBKDF2") {
         const bits = Number(length);
@@ -557,7 +683,7 @@
         if (!_DIGEST_ALGS.has(hash)) {
           throw _notSupported("unsupported " + name + " hash: " + hash);
         }
-        const ikm = baseKey.__celldMaterial.bytes;
+        const ikm = baseState.material.bytes;
         const salt = _toBuf(algorithm?.salt ?? new Uint8Array());
         let out;
         if (name === "HKDF") {
@@ -586,8 +712,8 @@
       if (name !== "ECDH" && name !== "X25519") {
         throw _notSupported("unsupported derive algorithm: " + name);
       }
-      const publicKey = algorithm?.public;
-      if (!publicKey || publicKey.type !== "public") {
+      const publicState = _keyState(algorithm?.public);
+      if (publicState?.type !== "public") {
         throw new TypeError(name + " requires a public key in algorithm.public");
       }
       // X25519 carries no `namedCurve`, so it cannot ride the curve match
@@ -595,8 +721,8 @@
       // answer the raw shared secret, so everything below is shared.
       const shared = Uint8Array.from(_extra(
         name === "X25519" ? "x25519-derive" : "ecdh-derive", {
-          private: Array.from(_toBuf(baseKey.__celldMaterial.bytes)),
-          public: Array.from(_toBuf(publicKey.__celldMaterial.bytes)),
+          private: Array.from(_toBuf(baseState.material.bytes)),
+          public: Array.from(_toBuf(publicState.material.bytes)),
         }).bytes);
       if (length === null || length === undefined) return shared.buffer;
       const bytes = Number(length) / 8;
@@ -604,9 +730,10 @@
         throw _operationError("requested length exceeds the derived secret");
       }
       return shared.slice(0, bytes).buffer;
-    }
+    },
 
     async deriveKey(algorithm, baseKey, derived, extractable, usages) {
+      _keyParam(baseKey, "deriveKey", 2);
       const name = _algorithmName(derived);
       // An HMAC key with no stated length defaults to its hash's block
       // size, which is what the spec's getKeyLength returns.
@@ -617,10 +744,10 @@
             ? ({ "SHA-384": 1024, "SHA-512": 1024 }[
               _hashName(derived?.hash)] ?? 512)
             : null);
-      const bits = await this.deriveBits(algorithm, baseKey, length);
-      return this.importKey(
+      const bits = await _ops.deriveBits(algorithm, baseKey, length);
+      return _ops.importKey(
         "raw", bits, derived, extractable, usages);
-    }
+    },
 
     async generateKey(algorithm, extractable, usages) {
       const name = _algorithmName(algorithm);
@@ -633,7 +760,9 @@
             "SHA-384": 48,
             "SHA-512": 64,
           };
-          const hash = _hashName(algorithm?.hash);
+          if (algorithm?.hash === undefined)
+            throw new TypeError('Missing field "hash" in "algorithm".');
+          const hash = _hashName(algorithm.hash);
           byteLength = algorithm?.length
             ? Number(algorithm.length) / 8
             : defaults[hash];
@@ -692,7 +821,8 @@
         if (kind === "ec") {
           const curve = _canonicalEcCurve(algorithm?.namedCurve);
           if (curve === undefined)
-            throw _notSupported("unsupported curve: " + algorithm?.namedCurve);
+            throw _notSupported(
+              `Unrecognized or unimplemented EC curve "${algorithm?.namedCurve}" requested.`);
           options.namedCurve = curve;
         }
         const pair = _extra("asym-key-generate", options);
@@ -718,15 +848,20 @@
           privateKey: half(pair.privateDer, "private", _PRIVATE_KEY_USAGES),
         };
       }
+      if (!_WORKERD_GENERATE_ALGS.has(name)) {
+        throw _notSupported(
+          `Unrecognized key generation algorithm "${_givenAlgorithmName(algorithm)}" requested.`);
+      }
       throw _notSupported("unsupported key algorithm: " + name);
-    }
+    },
 
     async sign(algorithm, key, data) {
-      const name = _algorithmName(algorithm || key?.algorithm);
+      const state = _keyParam(key, "sign", 2);
+      const name = _algorithmName(algorithm || state.algorithm);
       const bytes = _toBuf(data);
       if (name === "HMAC") {
-        const hash = _hashName(key?.algorithm?.hash);
-        const sig = _hmacSign(hash, key.__celldMaterial.bytes, bytes);
+        const hash = _hashName(state.algorithm?.hash);
+        const sig = _hmacSign(hash, state.material.bytes, bytes);
         if (!sig) throw _operationError("HMAC sign failed");
         return sig.buffer.slice(sig.byteOffset, sig.byteOffset + sig.byteLength);
       }
@@ -741,7 +876,7 @@
               : null;
       if (!operation) throw _notSupported("unsupported sign algorithm: " + name);
       if (name === "ECDSA") {
-        if (_canonicalEcCurve(key?.algorithm?.namedCurve) !== "P-256") {
+        if (_canonicalEcCurve(state.algorithm?.namedCurve) !== "P-256") {
           throw _notSupported("ECDSA signatures support only P-256");
         }
         if (_hashName(algorithm?.hash) !== "SHA-256") {
@@ -749,24 +884,25 @@
         }
       }
       const result = _extra(operation, {
-        key: Array.from(key?.__celldMaterial?.bytes || []),
+        key: Array.from(state.material.bytes || []),
         data: Array.from(bytes),
         // RSA carries its hash on the key; the others ignore the field.
-        hash: _hashName(key?.algorithm?.hash),
+        hash: _hashName(state.algorithm?.hash),
         saltLength: name === "RSA-PSS" ? _rsaPssSaltLength(algorithm, true) : undefined,
       });
       if (result.saltTooLong) {
         throw _operationError("key too small for signing with given digest and salt length");
       }
       return Uint8Array.from(result.bytes).buffer;
-    }
+    },
 
     async verify(algorithm, key, signature, data) {
-      const name = _algorithmName(algorithm || key?.algorithm);
+      const state = _keyParam(key, "verify", 2);
+      const name = _algorithmName(algorithm || state.algorithm);
       if (name === "HMAC") {
         return _hmacVerify(
-          _hashName(key?.algorithm?.hash),
-          key.__celldMaterial.bytes,
+          _hashName(state.algorithm?.hash),
+          state.material.bytes,
           _toBuf(signature),
           _toBuf(data),
         );
@@ -787,10 +923,10 @@
       if (!operation) {
         throw _notSupported("unsupported verify algorithm: " + name);
       }
-      const material = key?.__celldMaterial?.bytes;
+      const material = state.material.bytes;
       if (!material) throw _notSupported("verify needs an spki public key");
       if (name === "ECDSA") {
-        if (_canonicalEcCurve(key?.algorithm?.namedCurve) !== "P-256") {
+        if (_canonicalEcCurve(state.algorithm?.namedCurve) !== "P-256") {
           throw _notSupported("ECDSA signatures support only P-256");
         }
         if (_hashName(algorithm?.hash) !== "SHA-256") {
@@ -803,26 +939,27 @@
         signature: Array.from(_toBuf(signature)),
         // ECDSA carries its hash on the call, RSASSA on the key.
         hash: _hashName(
-          name === "ECDSA" ? algorithm?.hash : key?.algorithm?.hash,
+          name === "ECDSA" ? algorithm?.hash : state.algorithm?.hash,
         ),
         // RSA-PSS verifies with the salt length it signed with; the others
         // have none.
         saltLength: name === "RSA-PSS" ? _rsaPssSaltLength(algorithm, false) : undefined,
       }).ok;
-    }
+    },
 
     async encrypt(algorithm, key, data) {
+      const state = _keyParam(key, "encrypt", 2);
       const name = _algorithmName(algorithm);
       if (_AES_MODES.has(name)) {
-        return _aes(name, algorithm, key, data, true);
+        return _aes(name, algorithm, state, data, true);
       }
       if (name === "RSA-OAEP") {
-        const hash = _hashName(key?.algorithm?.hash);
+        const hash = _hashName(state.algorithm?.hash);
         if (!_RSA_OAEP_HASHES.has(hash)) {
           throw _notSupported("unsupported RSA-OAEP hash: " + hash);
         }
         const result = _extra("rsa-oaep-encrypt", {
-          key: Array.from(key?.__celldMaterial?.bytes || []),
+          key: Array.from(state.material.bytes || []),
           data: Array.from(_toBuf(data)),
           hash,
           label: _rsaOaepLabel(algorithm),
@@ -830,42 +967,46 @@
         return Uint8Array.from(result.bytes).buffer;
       }
       throw _notSupported("unsupported encrypt algorithm: " + name);
-    }
+    },
 
     // wrapKey and unwrapKey compose the primitives exactly the way the
     // spec defines them: export + encrypt, and decrypt + import. A
     // jwk-format key crosses as its JSON bytes.
     async wrapKey(format, key, wrappingKey, wrapAlgorithm) {
-      const exported = await this.exportKey(format, key);
+      _keyParam(key, "wrapKey", 2);
+      _keyParam(wrappingKey, "wrapKey", 3);
+      const exported = await _ops.exportKey(format, key);
       const raw = format === "jwk"
         ? new TextEncoder().encode(JSON.stringify(exported))
         : exported;
-      return this.encrypt(wrapAlgorithm, wrappingKey, raw);
-    }
+      return _ops.encrypt(wrapAlgorithm, wrappingKey, raw);
+    },
 
     async unwrapKey(
       format, wrapped, unwrappingKey, unwrapAlgorithm,
       algorithm, extractable, usages,
     ) {
-      const raw = await this.decrypt(unwrapAlgorithm, unwrappingKey, wrapped);
+      _keyParam(unwrappingKey, "unwrapKey", 3);
+      const raw = await _ops.decrypt(unwrapAlgorithm, unwrappingKey, wrapped);
       const keyData = format === "jwk"
         ? JSON.parse(new TextDecoder().decode(raw))
         : raw;
-      return this.importKey(format, keyData, algorithm, extractable, usages);
-    }
+      return _ops.importKey(format, keyData, algorithm, extractable, usages);
+    },
 
     async decrypt(algorithm, key, data) {
+      const state = _keyParam(key, "decrypt", 2);
       const name = _algorithmName(algorithm);
       if (_AES_MODES.has(name)) {
-        return _aes(name, algorithm, key, data, false);
+        return _aes(name, algorithm, state, data, false);
       }
       if (name === "RSA-OAEP") {
-        const hash = _hashName(key?.algorithm?.hash);
+        const hash = _hashName(state.algorithm?.hash);
         if (!_RSA_OAEP_HASHES.has(hash)) {
           throw _notSupported("unsupported RSA-OAEP hash: " + hash);
         }
         const result = _extra("rsa-oaep-decrypt", {
-          key: Array.from(key?.__celldMaterial?.bytes || []),
+          key: Array.from(state.material.bytes || []),
           data: Array.from(_toBuf(data)),
           hash,
           label: _rsaOaepLabel(algorithm),
@@ -873,6 +1014,61 @@
         return Uint8Array.from(result.bytes).buffer;
       }
       throw _notSupported("unsupported decrypt algorithm: " + name);
+    },
+  };
+  Object.freeze(_ops);
+  const _apply = Reflect.apply;
+  // A method of the one SubtleCrypto, `crypto.subtle`: any other receiver
+  // is refused before anything runs, synchronously, as JSG refuses one.
+  const _subtleCall = (receiver, op, args) => {
+    if (receiver !== subtle) throw __celld.__illegalInvocation();
+    return _apply(op, undefined, args);
+  };
+
+  // The one SubtleCrypto is `crypto.subtle`; a script cannot make another.
+  class SubtleCrypto {
+    constructor(...args) {
+      if (args[0] !== kMakeKey) throw new TypeError("Illegal constructor");
+    }
+    digest(algorithm, data) {
+      return _subtleCall(this, _ops.digest, arguments);
+    }
+    importKey(format, keyData, algorithm, extractable, usages) {
+      return _subtleCall(this, _ops.importKey, arguments);
+    }
+    exportKey(format, key) {
+      return _subtleCall(this, _ops.exportKey, arguments);
+    }
+    timingSafeEqual(a, b) {
+      return _subtleCall(this, _ops.timingSafeEqual, arguments);
+    }
+    deriveBits(algorithm, baseKey, length) {
+      return _subtleCall(this, _ops.deriveBits, arguments);
+    }
+    deriveKey(algorithm, baseKey, derived, extractable, usages) {
+      return _subtleCall(this, _ops.deriveKey, arguments);
+    }
+    generateKey(algorithm, extractable, usages) {
+      return _subtleCall(this, _ops.generateKey, arguments);
+    }
+    sign(algorithm, key, data) {
+      return _subtleCall(this, _ops.sign, arguments);
+    }
+    verify(algorithm, key, signature, data) {
+      return _subtleCall(this, _ops.verify, arguments);
+    }
+    encrypt(algorithm, key, data) {
+      return _subtleCall(this, _ops.encrypt, arguments);
+    }
+    wrapKey(format, key, wrappingKey, wrapAlgorithm) {
+      return _subtleCall(this, _ops.wrapKey, arguments);
+    }
+    unwrapKey(format, wrapped, unwrappingKey, unwrapAlgorithm, algorithm,
+      extractable, usages) {
+      return _subtleCall(this, _ops.unwrapKey, arguments);
+    }
+    decrypt(algorithm, key, data) {
+      return _subtleCall(this, _ops.decrypt, arguments);
     }
   }
 
@@ -889,7 +1085,7 @@
       h(12) + h(13) + h(14) + h(15);
   };
 
-  const subtle = new SubtleCrypto();
+  const subtle = new SubtleCrypto(kMakeKey);
   // workerd's `crypto` is an instance of its Crypto class: its methods,
   // `subtle` and DigestStream are its prototype's, which has the tag. celld
   // has no Crypto global (plan 1.63), so the class is reachable only as the
@@ -902,6 +1098,10 @@
     getRandomValues(array) {
       // Web IDL brand check, observable via node:crypto's webcrypto alias.
       if (this !== crypto) throw __celld.__illegalInvocation();
+      // A view, as workerd's parameter is, and then an integer-typed one.
+      if (!ArrayBuffer.isView(array)) {
+        throw __celld.__jsg.execute("getRandomValues", "Crypto", 1, "ArrayBufferView");
+      }
       if (
         !(array instanceof Int8Array) &&
         !(array instanceof Uint8Array) &&
@@ -930,6 +1130,7 @@
     },
 
     randomUUID() {
+      if (this !== crypto) throw __celld.__illegalInvocation();
       return _uuid(_randomValues);
     },
   });
@@ -957,10 +1158,12 @@
     #digest;
     #state;
     constructor(algorithm) {
+      if (arguments.length < 1)
+        throw __celld.__jsg.construct("DigestStream", 1, "string or HashAlgorithm");
       const name = _algorithmName(algorithm);
       // DigestStream takes the CRC checksums too; `subtle.digest` does not.
       if (!_DIGEST_ALGS.has(name) && !_CRC_ALGS.has(name)) {
-        throw _notSupported("unsupported digest algorithm: " + name);
+        throw _notSupported("Unrecognized or unimplemented digest algorithm requested.");
       }
       const state = { chunks: [], written: 0, resolve: null, reject: null };
       const digest = new Promise((resolve, reject) => {

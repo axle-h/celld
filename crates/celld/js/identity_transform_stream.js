@@ -471,11 +471,12 @@ Object.setPrototypeOf(IdentityTransformStream, TransformStream);
 
 class FixedLengthStream extends IdentityTransformStream {
   constructor(expectedLength, queuingStrategy) {
-    // Workerd coerces through jsg's integer conversion, so
-    // a fraction truncates (0.00001 -> 0) and -0 is 0.
-    const length = Math.trunc(Number(expectedLength));
-    if (!Number.isInteger(length) || length < 0 ||
-        length > Number.MAX_SAFE_INTEGER)
+    // Workerd's parameter is a required uint64_t (its 'bigint'), so a
+    // fraction truncates (0.00001 -> 0) and -0 is 0.
+    if (arguments.length < 1)
+      throw __celld.__jsg.construct('FixedLengthStream', 1, 'bigint');
+    const length = __celld.__jsg.toUint64(expectedLength);
+    if (length > Number.MAX_SAFE_INTEGER)
       throw new TypeError(
         'FixedLengthStream requires an integer expected length less ' +
         'than 2^53.');

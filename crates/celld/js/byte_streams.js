@@ -105,7 +105,7 @@ class ReadableByteStreamController {
     for (const [name, fn] of [['start', startFn], ['pull', pullFn],
                               ['cancel', cancelFn]])
       if (fn !== undefined && typeof fn !== 'function')
-        throw new TypeError(`${name} must be a function`);
+        throw __celld.__jsg.field(name, 'UnderlyingSource', 'function');
     let auto = src.autoAllocateChunkSize;
     if (auto !== undefined) {
       auto = Number(auto);
@@ -163,12 +163,16 @@ class ReadableByteStreamController {
 
   enqueue(chunk) {
     const s = this._stream;
-    if (!ArrayBuffer.isView(chunk) || chunk.byteLength === 0 ||
-        chunk.buffer.byteLength === 0)
-      throw new TypeError(
-        'chunk must be a non-empty ArrayBufferView');
+    // A BufferSource, as workerd's parameter is: a view, or an ArrayBuffer
+    // taken whole.
+    if (chunk instanceof ArrayBuffer) chunk = new Uint8Array(chunk);
+    else if (!ArrayBuffer.isView(chunk))
+      throw __celld.__jsg.execute(
+        'enqueue', 'ReadableByteStreamController', 1, 'BufferSource');
+    if (chunk.byteLength === 0 || chunk.buffer.byteLength === 0)
+      throw new TypeError('Cannot enqueue a zero-length ArrayBuffer.');
     if (this._closeRequested || s._closed || s._errored)
-      throw new TypeError('Cannot enqueue a closed/errored stream');
+      throw new TypeError('This ReadableByteStreamController is closed.');
     const { byteOffset, byteLength } = chunk;
     const buffer = chunk.buffer.transfer();
     const first = this._pendingPullIntos[0];
@@ -209,7 +213,7 @@ class ReadableByteStreamController {
   close() {
     const s = this._stream;
     if (this._closeRequested || s._closed || s._errored)
-      throw new TypeError('Cannot close a closed/errored stream');
+      throw new TypeError('This ReadableStream is closed.');
     if (this._queueTotalSize > 0) {
       this._closeRequested = true;
       return;

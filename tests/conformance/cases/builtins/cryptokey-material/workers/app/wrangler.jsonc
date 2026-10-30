@@ -1,0 +1,11 @@
+// A CryptoKey's surface and its key material: what a script can see of a key
+// of each kind, and that a non-extractable key's bytes leave it through no
+// export path. celld once kept the material in an ordinary property, which
+// handed a non-extractable key's bytes to any script that read it.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "services": [{ "binding": "BACK", "service": "back" }]
+}

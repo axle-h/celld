@@ -296,25 +296,41 @@
       this.__document = [];
     }
 
+    // Both parameters are required (html-rewriter.h), and the handlers are
+    // a dictionary: undefined or null is empty, and anything else that is
+    // not an object is refused.
     on(selector, handlers) {
+      if (arguments.length < 1)
+        throw __celld.__jsg.execute("on", "HTMLRewriter", 1, "string");
+      selector = `${selector}`;
+      if (arguments.length < 2 || !__celld.__jsg.isDictionary(handlers))
+        throw __celld.__jsg.execute("on", "HTMLRewriter", 2, "ElementContentHandlers");
       this.__selectors.push({ selector: String(selector), handlers });
       return this;
     }
 
     onDocument(handlers) {
+      if (arguments.length < 1 || !__celld.__jsg.isDictionary(handlers))
+        throw __celld.__jsg.execute("onDocument", "HTMLRewriter", 1, "DocumentContentHandlers");
       this.__document.push(handlers);
       return this;
     }
 
     transform(response) {
-      if (!(response instanceof Response)) {
-        throw new TypeError(
-          "HTMLRewriter.transform() requires a Response argument");
+      if (!__celld.__isResponse(response)) {
+        throw __celld.__jsg.execute("transform", "HTMLRewriter", 1, "Response");
       }
-      // workerd rewrites a body in the request, so global scope refuses
-      // one; a response without a body needs none.
-      if (response.body !== null) __require_io_context();
-      const contentType = response.headers.get("content-type") || "";
+      if (__celld.__responseType(response) === "error")
+        throw __celld.__jsg.typeError("HTMLRewriter cannot transform an error response");
+      // The Response's own body and headers, whatever its properties say
+      // (html-rewriter.c++ `HTMLRewriter::transform`). Without a body there
+      // is nothing to rewrite, and the Response itself is the result.
+      const source = __celld.__responseBody(response);
+      if (source === null) return response;
+      // workerd rewrites a body in the request, so global scope refuses it.
+      __require_io_context();
+      const contentType =
+        __celld.__responseHeaders(response).get("content-type") || "";
       const charset = /;\s*charset=([^;\s]+)/i.exec(contentType);
       const config = {
         selectors: this.__selectors.map(({ selector, handlers }) => ({
@@ -332,20 +348,6 @@
       };
       if (charset) config.encoding = charset[1].replace(/^"|"$/g, "");
       const id = __hr_create(JSON.stringify(config));
-
-      // A 101 keeps its WebSocket, as in workerd: the body is rewritten,
-      // and the socket is not part of the body.
-      const init = __celld.__responseInit({
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-        webSocket: response.webSocket,
-      });
-      const source = response.body;
-      if (!source) {
-        __hr_free(id);
-        return new __celld.__Response(null, init);
-      }
 
       const state = {
         id,
@@ -374,7 +376,9 @@
         pull: () => __hrWake(state),
         cancel: (reason) => __hrCancel(state, reason),
       });
-      return new __celld.__Response(readable, init);
+      // The Response as the init: its status, status text, headers, `cf`
+      // and WebSocket, read from its state, as workerd copies them.
+      return new __celld.__Response(readable, response);
     }
   }
 

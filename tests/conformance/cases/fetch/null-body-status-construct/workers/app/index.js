@@ -1,6 +1,7 @@
 // A Response with a null body status (101, 204, 205 or 304) and a body:
 // workerd refuses one that is a stream or not empty, and treats an empty
-// buffer as no body (http.c++ Response::constructor). celld takes the body.
+// buffer as no body (http.c++ Response::constructor), as celld does (plan
+// 1.40).
 const attempt = (fn) => {
   try {
     const response = fn();

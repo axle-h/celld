@@ -1,6 +1,6 @@
 // Runtime APIs that throw at a Dynamic Worker's module scope. The report's
-// location is the Worker's own frame on both runtimes; the messages are the
-// APIs' own, and these differ between celld and workerd.
+// location is the Worker's own frame on both runtimes, and the messages are
+// the APIs' own (plan 1.40; builtins/api-error-text has many more).
 const handler = `export default { fetch() { return new Response("loaded"); } };`;
 
 const children = {

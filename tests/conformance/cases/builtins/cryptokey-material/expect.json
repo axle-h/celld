@@ -1,0 +1,694 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "secret": {
+          "own": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "descriptors": {
+            "usages": "data w=false e=true c=true object",
+            "algorithm": "data w=false e=true c=true object",
+            "extractable": "data w=false e=true c=true boolean",
+            "type": "data w=false e=true c=true string"
+          },
+          "forIn": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "keys": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "json": "{\"usages\":[\"encrypt\",\"decrypt\"],\"algorithm\":{\"name\":\"AES-GCM\",\"length\":128},\"extractable\":false,\"type\":\"secret\"}",
+          "assign": "{\"usages\":[\"encrypt\",\"decrypt\"],\"algorithm\":{\"name\":\"AES-GCM\",\"length\":128},\"extractable\":false,\"type\":\"secret\"}",
+          "spread": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "material": "undefined",
+          "materialIn": false,
+          "type": "secret",
+          "extractable": false,
+          "usages": [
+            "encrypt",
+            "decrypt"
+          ],
+          "algorithmName": "AES-GCM"
+        },
+        "hmac": {
+          "own": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "descriptors": {
+            "usages": "data w=false e=true c=true object",
+            "algorithm": "data w=false e=true c=true object",
+            "extractable": "data w=false e=true c=true boolean",
+            "type": "data w=false e=true c=true string"
+          },
+          "forIn": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "keys": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "json": "{\"usages\":[\"sign\",\"verify\"],\"algorithm\":{\"name\":\"HMAC\",\"hash\":{\"name\":\"SHA-256\"},\"length\":128},\"extractable\":false,\"type\":\"secret\"}",
+          "assign": "{\"usages\":[\"sign\",\"verify\"],\"algorithm\":{\"name\":\"HMAC\",\"hash\":{\"name\":\"SHA-256\"},\"length\":128},\"extractable\":false,\"type\":\"secret\"}",
+          "spread": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "material": "undefined",
+          "materialIn": false,
+          "type": "secret",
+          "extractable": false,
+          "usages": [
+            "sign",
+            "verify"
+          ],
+          "algorithmName": "HMAC"
+        },
+        "rsaPrivate": {
+          "own": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "descriptors": {
+            "usages": "data w=false e=true c=true object",
+            "algorithm": "data w=false e=true c=true object",
+            "extractable": "data w=false e=true c=true boolean",
+            "type": "data w=false e=true c=true string"
+          },
+          "forIn": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "keys": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "json": "{\"usages\":[\"sign\"],\"algorithm\":{\"name\":\"RSASSA-PKCS1-v1_5\",\"modulusLength\":1024,\"publicExponent\":{\"0\":1,\"1\":0,\"2\":1},\"hash\":{\"name\":\"SHA-256\"}},\"extractable\":false,\"type\":\"private\"}",
+          "assign": "{\"usages\":[\"sign\"],\"algorithm\":{\"name\":\"RSASSA-PKCS1-v1_5\",\"modulusLength\":1024,\"publicExponent\":{\"0\":1,\"1\":0,\"2\":1},\"hash\":{\"name\":\"SHA-256\"}},\"extractable\":false,\"type\":\"private\"}",
+          "spread": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "material": "undefined",
+          "materialIn": false,
+          "type": "private",
+          "extractable": false,
+          "usages": [
+            "sign"
+          ],
+          "algorithmName": "RSASSA-PKCS1-v1_5"
+        },
+        "rsaPublic": {
+          "own": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "descriptors": {
+            "usages": "data w=false e=true c=true object",
+            "algorithm": "data w=false e=true c=true object",
+            "extractable": "data w=false e=true c=true boolean",
+            "type": "data w=false e=true c=true string"
+          },
+          "forIn": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "keys": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "json": "{\"usages\":[\"verify\"],\"algorithm\":{\"name\":\"RSASSA-PKCS1-v1_5\",\"modulusLength\":1024,\"publicExponent\":{\"0\":1,\"1\":0,\"2\":1},\"hash\":{\"name\":\"SHA-256\"}},\"extractable\":true,\"type\":\"public\"}",
+          "assign": "{\"usages\":[\"verify\"],\"algorithm\":{\"name\":\"RSASSA-PKCS1-v1_5\",\"modulusLength\":1024,\"publicExponent\":{\"0\":1,\"1\":0,\"2\":1},\"hash\":{\"name\":\"SHA-256\"}},\"extractable\":true,\"type\":\"public\"}",
+          "spread": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "material": "undefined",
+          "materialIn": false,
+          "type": "public",
+          "extractable": true,
+          "usages": [
+            "verify"
+          ],
+          "algorithmName": "RSASSA-PKCS1-v1_5"
+        },
+        "ecPrivate": {
+          "own": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "descriptors": {
+            "usages": "data w=false e=true c=true object",
+            "algorithm": "data w=false e=true c=true object",
+            "extractable": "data w=false e=true c=true boolean",
+            "type": "data w=false e=true c=true string"
+          },
+          "forIn": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "keys": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "json": "{\"usages\":[\"sign\"],\"algorithm\":{\"name\":\"ECDSA\",\"namedCurve\":\"P-256\"},\"extractable\":false,\"type\":\"private\"}",
+          "assign": "{\"usages\":[\"sign\"],\"algorithm\":{\"name\":\"ECDSA\",\"namedCurve\":\"P-256\"},\"extractable\":false,\"type\":\"private\"}",
+          "spread": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "material": "undefined",
+          "materialIn": false,
+          "type": "private",
+          "extractable": false,
+          "usages": [
+            "sign"
+          ],
+          "algorithmName": "ECDSA"
+        },
+        "ed25519Private": {
+          "own": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "descriptors": {
+            "usages": "data w=false e=true c=true object",
+            "algorithm": "data w=false e=true c=true object",
+            "extractable": "data w=false e=true c=true boolean",
+            "type": "data w=false e=true c=true string"
+          },
+          "forIn": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "keys": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "json": "{\"usages\":[\"sign\"],\"algorithm\":{\"name\":\"Ed25519\"},\"extractable\":false,\"type\":\"private\"}",
+          "assign": "{\"usages\":[\"sign\"],\"algorithm\":{\"name\":\"Ed25519\"},\"extractable\":false,\"type\":\"private\"}",
+          "spread": [
+            "usages",
+            "algorithm",
+            "extractable",
+            "type"
+          ],
+          "material": "undefined",
+          "materialIn": false,
+          "type": "private",
+          "extractable": false,
+          "usages": [
+            "sign"
+          ],
+          "algorithmName": "Ed25519"
+        },
+        "getOwnPropertyNames": [
+          "usages",
+          "algorithm",
+          "extractable",
+          "type"
+        ],
+        "prototypeNames": [
+          "constructor"
+        ],
+        "symbols": 0
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "assign extractable": "TypeError(TypeError): Cannot assign to read only property 'extractable' of object '#<CryptoKey>'",
+        "define extractable": "returned true",
+        "define material": "returned object",
+        "export after tamper": "DOMException(InvalidAccessError): Attempt to export non-extractable AES-GCM key.",
+        "export proxy": "TypeError(TypeError): Failed to execute 'exportKey' on 'SubtleCrypto': parameter 2 is not of type 'CryptoKey'.",
+        "proxy traps": "returned {\"error\":\"TypeError(TypeError): Failed to execute 'sign' on 'SubtleCrypto': parameter 2 is not of type 'CryptoKey'.\",\"seen\":[]}"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "exportKey raw secret": "DOMException(InvalidAccessError): Attempt to export non-extractable AES-GCM key.",
+        "exportKey jwk secret": "DOMException(InvalidAccessError): Attempt to export non-extractable AES-GCM key.",
+        "exportKey raw hmac": "DOMException(InvalidAccessError): Attempt to export non-extractable HMAC key.",
+        "exportKey pkcs8 rsa": "DOMException(InvalidAccessError): Attempt to export non-extractable RSASSA-PKCS1-v1_5 key.",
+        "exportKey jwk rsa": "DOMException(InvalidAccessError): Attempt to export non-extractable RSASSA-PKCS1-v1_5 key.",
+        "exportKey pkcs8 ec": "DOMException(InvalidAccessError): Attempt to export non-extractable ECDSA key.",
+        "exportKey pkcs8 ed25519": "DOMException(InvalidAccessError): Attempt to export non-extractable Ed25519 key.",
+        "exportKey spki rsa public": "returned ArrayBuffer(162)",
+        "exportKey raw pbkdf2": "DOMException(InvalidAccessError): Attempt to export non-extractable PBKDF2 key.",
+        "wrapKey raw secret (AES-GCM)": "DOMException(InvalidAccessError): Attempt to export non-extractable AES-GCM key.",
+        "wrapKey jwk hmac (AES-GCM)": "DOMException(InvalidAccessError): Attempt to export non-extractable HMAC key.",
+        "wrapKey pkcs8 rsa (AES-GCM)": "DOMException(InvalidAccessError): Attempt to export non-extractable RSASSA-PKCS1-v1_5 key.",
+        "wrapKey extractable (AES-GCM)": "returned ArrayBuffer(32)",
+        "KeyObject.from secret type": "returned secret",
+        "KeyObject.from secret export buffer": "TypeError(TypeError): Unable to export non-extractable key",
+        "KeyObject.from secret export jwk": "TypeError(TypeError): Unable to export non-extractable key",
+        "KeyObject.from rsa export pkcs8": "TypeError(TypeError): Unable to export non-extractable key",
+        "KeyObject.from rsa export pem": "TypeError(TypeError): Unable to export non-extractable key",
+        "KeyObject.from ec export jwk": "TypeError(TypeError): Unable to export non-extractable key",
+        "KeyObject.from ed25519 export": "TypeError(TypeError): Unable to export non-extractable key",
+        "KeyObject.from rsa public export": "returned Buffer(162)",
+        "KeyObject equals non-extractable": "returned false"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "AES-GCM round trip": "returned 4",
+        "HMAC sign/verify": "returned true",
+        "RSA sign/verify": "returned true",
+        "ECDSA sign/verify": "returned true",
+        "Ed25519 sign/verify": "returned true",
+        "ECDH derive": "returned 32",
+        "PBKDF2 derive": "returned 16"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "structuredClone secret": "DOMException(DataCloneError): Could not serialize object of type \"CryptoKey\". This type does not support serialization.",
+        "structuredClone private": "DOMException(DataCloneError): Could not serialize object of type \"CryptoKey\". This type does not support serialization.",
+        "structuredClone in object": "DOMException(DataCloneError): Could not serialize object of type \"CryptoKey\". This type does not support serialization.",
+        "RPC secret": "DOMException(DataCloneError): Could not serialize object of type \"CryptoKey\". This type does not support serialization.",
+        "RPC in object": "DOMException(DataCloneError): Could not serialize object of type \"CryptoKey\". This type does not support serialization."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "createHmac(CryptoKey)": {
+          "handles": {
+            "Symbol(kHandle)": {
+              "own": [],
+              "prototype": [
+                "update",
+                "digest",
+                "constructor"
+              ]
+            },
+            "Symbol(kState)": {
+              "own": [
+                "Symbol(kFinalized)"
+              ],
+              "prototype": [
+                "constructor",
+                "__defineGetter__",
+                "__defineSetter__",
+                "hasOwnProperty",
+                "__lookupGetter__",
+                "__lookupSetter__",
+                "isPrototypeOf",
+                "propertyIsEnumerable",
+                "toString",
+                "valueOf",
+                "__proto__",
+                "toLocaleString"
+              ]
+            },
+            "Symbol(kCapture)": "boolean",
+            "Symbol(kCallback)": "object"
+          },
+          "reached": false
+        },
+        "createHmac(KeyObject)": {
+          "handles": {
+            "Symbol(kHandle)": {
+              "own": [],
+              "prototype": [
+                "update",
+                "digest",
+                "constructor"
+              ]
+            },
+            "Symbol(kState)": {
+              "own": [
+                "Symbol(kFinalized)"
+              ],
+              "prototype": [
+                "constructor",
+                "__defineGetter__",
+                "__defineSetter__",
+                "hasOwnProperty",
+                "__lookupGetter__",
+                "__lookupSetter__",
+                "isPrototypeOf",
+                "propertyIsEnumerable",
+                "toString",
+                "valueOf",
+                "__proto__",
+                "toLocaleString"
+              ]
+            },
+            "Symbol(kCapture)": "boolean",
+            "Symbol(kCallback)": "object"
+          },
+          "reached": false
+        },
+        "createHmac(bytes)": {
+          "handles": {
+            "Symbol(kHandle)": {
+              "own": [],
+              "prototype": [
+                "update",
+                "digest",
+                "constructor"
+              ]
+            },
+            "Symbol(kState)": {
+              "own": [
+                "Symbol(kFinalized)"
+              ],
+              "prototype": [
+                "constructor",
+                "__defineGetter__",
+                "__defineSetter__",
+                "hasOwnProperty",
+                "__lookupGetter__",
+                "__lookupSetter__",
+                "isPrototypeOf",
+                "propertyIsEnumerable",
+                "toString",
+                "valueOf",
+                "__proto__",
+                "toLocaleString"
+              ]
+            },
+            "Symbol(kCapture)": "boolean",
+            "Symbol(kCallback)": "object"
+          },
+          "reached": false
+        },
+        "createHash": {
+          "handles": {
+            "Symbol(kHandle)": {
+              "own": [],
+              "prototype": [
+                "update",
+                "digest",
+                "copy",
+                "constructor"
+              ]
+            },
+            "Symbol(kState)": {
+              "own": [
+                "Symbol(kFinalized)"
+              ],
+              "prototype": [
+                "constructor",
+                "__defineGetter__",
+                "__defineSetter__",
+                "hasOwnProperty",
+                "__lookupGetter__",
+                "__lookupSetter__",
+                "isPrototypeOf",
+                "propertyIsEnumerable",
+                "toString",
+                "valueOf",
+                "__proto__",
+                "toLocaleString"
+              ]
+            },
+            "Symbol(kCapture)": "boolean",
+            "Symbol(kCallback)": "object"
+          },
+          "reached": false
+        },
+        "Hash.copy": {
+          "handles": {
+            "Symbol(kHandle)": {
+              "own": [],
+              "prototype": [
+                "update",
+                "digest",
+                "copy",
+                "constructor"
+              ]
+            },
+            "Symbol(kState)": {
+              "own": [
+                "Symbol(kFinalized)"
+              ],
+              "prototype": [
+                "constructor",
+                "__defineGetter__",
+                "__defineSetter__",
+                "hasOwnProperty",
+                "__lookupGetter__",
+                "__lookupSetter__",
+                "isPrototypeOf",
+                "propertyIsEnumerable",
+                "toString",
+                "valueOf",
+                "__proto__",
+                "toLocaleString"
+              ]
+            },
+            "Symbol(kCapture)": "boolean",
+            "Symbol(kCallback)": "object"
+          },
+          "reached": false
+        },
+        "KeyObject.from(hmac)": {
+          "handles": {
+            "Symbol(kHandle)": {
+              "own": [
+                "usages",
+                "algorithm",
+                "extractable",
+                "type"
+              ],
+              "prototype": [
+                "constructor"
+              ]
+            }
+          },
+          "reached": false
+        },
+        "createSecretKey": {
+          "handles": {
+            "Symbol(kHandle)": {
+              "own": [
+                "usages",
+                "algorithm",
+                "extractable",
+                "type"
+              ],
+              "prototype": [
+                "constructor"
+              ]
+            }
+          },
+          "reached": false
+        },
+        "generateKeyPairSync private": {
+          "handles": {
+            "Symbol(kHandle)": {
+              "own": [
+                "usages",
+                "algorithm",
+                "extractable",
+                "type"
+              ],
+              "prototype": [
+                "constructor"
+              ]
+            }
+          }
+        },
+        "digest through the handle": "returned Uint8Array(32)",
+        "export through the KeyObject's handle": "DOMException(InvalidAccessError): Attempt to export non-extractable HMAC key.",
+        "hmac still signs": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "secret CryptoKey typed private": "TypeError(TypeError): Cannot create public key from secret or public key",
+        "secret KeyObject typed private": "TypeError(TypeError): Cannot create public key from secret or public key",
+        "public CryptoKey typed private": "TypeError(TypeError): Cannot create public key from secret or public key",
+        "private CryptoKey typed secret": "TypeError(TypeError): The \"key\" argument must be an instance of PrivateKeyObject. Received an instance of CryptoKey",
+        "private KeyObject": "returned ed25519",
+        "createHmac of a private KeyObject typed secret": "refused",
+        "createHmac of a private CryptoKey typed secret": "refused",
+        "sign after algorithm.hash is changed": "returned ArrayBuffer(32)"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "digest": {
+          "own": "resolved ArrayBuffer",
+          "plain": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "inherits": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "detached": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "importKey": {
+          "own": "resolved CryptoKey",
+          "plain": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "inherits": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "detached": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "exportKey": {
+          "own": "rejected DOMException(InvalidAccessError): Attempt to export non-extractable AES-GCM key.",
+          "plain": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "inherits": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "detached": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "generateKey": {
+          "own": "resolved CryptoKey",
+          "plain": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "inherits": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "detached": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "deriveBits": {
+          "own": "resolved ArrayBuffer",
+          "plain": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "inherits": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "detached": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "deriveKey": {
+          "own": "resolved CryptoKey",
+          "plain": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "inherits": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "detached": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "sign": {
+          "own": "resolved ArrayBuffer",
+          "plain": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "inherits": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "detached": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "verify": {
+          "own": "resolved Boolean",
+          "plain": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "inherits": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "detached": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "encrypt": {
+          "own": "resolved ArrayBuffer",
+          "plain": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "inherits": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "detached": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "decrypt": {
+          "own": "resolved ArrayBuffer",
+          "plain": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "inherits": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "detached": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "wrapKey": {
+          "own": "resolved ArrayBuffer",
+          "plain": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "inherits": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "detached": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "unwrapKey": {
+          "own": "resolved CryptoKey",
+          "plain": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "inherits": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "detached": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "timingSafeEqual": {
+          "own": "returned boolean",
+          "plain": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "inherits": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "detached": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details."
+        },
+        "deriveKey on a stand-in": {
+          "result": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "seen": []
+        },
+        "unwrapKey on a stand-in": {
+          "result": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "seen": []
+        },
+        "wrapKey on a stand-in": {
+          "result": "threw TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+          "seen": []
+        },
+        "deriveKey, importKey replaced": {
+          "result": "resolved CryptoKey",
+          "seen": []
+        },
+        "deriveKey, prototype deriveBits replaced": {
+          "result": "resolved CryptoKey",
+          "seen": []
+        },
+        "unwrapKey, prototype importKey replaced": {
+          "result": "resolved CryptoKey",
+          "seen": []
+        },
+        "unwrapKey, decrypt replaced": {
+          "result": "resolved CryptoKey",
+          "seen": []
+        },
+        "wrapKey, exportKey replaced": {
+          "result": "resolved ArrayBuffer",
+          "seen": []
+        },
+        "wrapKey, encrypt replaced": {
+          "result": "resolved ArrayBuffer",
+          "seen": []
+        }
+      }
+    }
+  ]
+}

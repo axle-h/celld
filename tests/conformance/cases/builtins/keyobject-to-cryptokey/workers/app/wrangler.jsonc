@@ -1,0 +1,8 @@
+// KeyObject.toCryptoKey() over a non-extractable key: the view keeps the
+// key's algorithm, hash and usages, and stays non-extractable.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"]
+}

@@ -96,10 +96,13 @@
             return buf.slice(0, w);
         }
         encodeInto(source, destination) {
+            // workerd's parameters are a 'String' and a 'Uint8Array', each
+            // required, converted in order.
+            if (arguments.length < 1)
+                throw __celld.__jsg.execute('encodeInto', 'TextEncoder', 1, 'String');
+            source = `${source}`;
             if (!(destination instanceof Uint8Array))
-                throw new TypeError(
-                    'encodeInto requires Uint8Array');
-            source = String(source);
+                throw __celld.__jsg.execute('encodeInto', 'TextEncoder', 2, 'Uint8Array');
             let read = 0, written = 0;
             for (let i = 0; i < source.length; ) {
                 let c = source.charCodeAt(i);
@@ -255,10 +258,20 @@
         #nativeId;
         // The UTF-16LE decoder before text_decoder_replace_surrogates.
         #utf16;
-        constructor(label = 'utf-8', options = {}) {
+        constructor(label = 'utf-8', options = undefined) {
+            // The label as given, which workerd's error quotes.
+            const given = `${label}`;
+            // ConstructorOptions is a dictionary with required members:
+            // undefined is empty, and null or a value that is not an object
+            // is refused.
+            if (options === undefined) options = {};
+            else if (options === null)
+                throw __celld.__jsg.nullDict('N7workerd3api11TextDecoder18ConstructorOptionsE');
+            else if (typeof options !== 'object' && typeof options !== 'function')
+                throw __celld.__jsg.construct('TextDecoder', 2, 'ConstructorOptions');
             // Per WHATWG encoding: strip ASCII whitespace
             // only (not Unicode -- \v, NBSP, etc. stay).
-            label = String(label)
+            label = given
                 .replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '')
                 .toLowerCase();
             // The WHATWG label set for utf-8 and utf-16, resolved here to
@@ -292,9 +305,7 @@
                 // normalizes the utf names to the spelling above.
                 const name = _tdLabel(label);
                 if (name === undefined) throw new RangeError(
-                    `The encoding label` +
-                    ` '${label}' is invalid.`
-                );
+                    `"${given}" is not a valid encoding.`);
                 enc = aliases[name] ?? name;
             }
             this.#encoding = enc;
@@ -306,10 +317,16 @@
         get encoding() { return this.#encoding; }
         get fatal() { return this.#fatal; }
         get ignoreBOM() { return this.#ignoreBOM; }
-        decode(input, options = {}) {
+        decode(input, options = undefined) {
+            // DecodeOptions is a dictionary, as ConstructorOptions is.
+            if (options === undefined) options = {};
+            else if (options === null)
+                throw __celld.__jsg.nullDict('N7workerd3api11TextDecoder13DecodeOptionsE');
+            else if (typeof options !== 'object' && typeof options !== 'function')
+                throw __celld.__jsg.execute('decode', 'TextDecoder', 2, 'DecodeOptions');
             const stream = !!options.stream;
             let b;
-            if (input == null) {
+            if (input === undefined) {
                 b = new Uint8Array(0);
             } else if (input instanceof ArrayBuffer) {
                 b = new Uint8Array(input);
@@ -333,11 +350,10 @@
                 // `.decode(42)` returned 42 NUL chars,
                 // `.decode("hello")` returned "" (no
                 // .length on a string maps to a 0-length
-                // buffer view), both spec-violating.
-                throw new TypeError(
-                    "TextDecoder.decode: input must be"
-                    + " a BufferSource",
-                );
+                // buffer view), both spec-violating. workerd names the
+                // type 'Array' (its kj::Array<const byte>), and refuses
+                // null as well.
+                throw __celld.__jsg.execute('decode', 'TextDecoder', 1, 'Array');
             }
             return this._decodeNative(b, stream);
         }

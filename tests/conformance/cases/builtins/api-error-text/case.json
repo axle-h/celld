@@ -1,0 +1,22 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path":"/?area=url"},
+    {"path":"/?area=base64"},
+    {"path":"/?area=headers"},
+    {"path":"/?area=request"},
+    {"path":"/?area=response"},
+    {"path":"/?area=encoding"},
+    {"path":"/?area=streams"},
+    {"path":"/?area=blob"},
+    {"path":"/?area=abort"},
+    {"path":"/?area=events"},
+    {"path":"/?area=clone"},
+    {"path":"/?area=crypto"},
+    {"path":"/?area=timers"},
+    {"path":"/?area=websocket"},
+    {"path":"/?area=cache"},
+    {"path":"/?area=fetch"},
+    {"path":"/?area=misc"}
+  ]
+}

@@ -11,7 +11,7 @@ const KEYS = ['protocol', 'username', 'password', 'hostname', 'port',
 
 // USVString: lone surrogates become U+FFFD so the value survives
 // JSON.stringify into the host op.
-const usv = (v) => String(v).toWellFormed();
+const usv = (v) => `${v}`.toWellFormed();
 
 // (URLPatternInit or USVString): null/undefined and objects convert as a
 // dictionary of USVString members (baseURL included), anything else as a
@@ -27,12 +27,20 @@ function toInput(v) {
 
 // Canonicalized 8-component values for a match input, or null when the
 // input does not parse as a URL (per spec, a non-match).
-function matchValues(input, baseURL) {
-  const json = $$urlPatternMatchInput(JSON.stringify(input), baseURL);
+// `method` names the call for workerd's error when the input cannot be
+// matched at all, as an init with a separate base URL cannot.
+function matchValues(input, baseURL, method) {
+  let json;
+  try {
+    json = $$urlPatternMatchInput(JSON.stringify(input), baseURL);
+  } catch {
+    throw new TypeError(`Failed to ${method} URLPattern`);
+  }
   return json === null ? null : JSON.parse(json);
 }
 
 const components = Symbol('components');
+const jsg = __celld.__jsg;
 
 class URLPattern {
   constructor(input, baseURLOrOptions, maybeOptions) {
@@ -43,17 +51,25 @@ class URLPattern {
     } else {
       options = baseURLOrOptions;
     }
+    // URLPatternOptions is a dictionary: undefined or null is empty, and a
+    // value that is not an object is refused (jsg/struct.h).
+    if (maybeOptions !== undefined && maybeOptions !== null &&
+        typeof maybeOptions !== 'object' && typeof maybeOptions !== 'function')
+      throw jsg.construct('URLPattern', 3, 'URLPatternOptions');
     const ignoreCase = !!(options && options.ignoreCase);
-    const parsed = JSON.parse($$urlPatternParse(
-      JSON.stringify(toInput(input)), baseURL, ignoreCase));
+    input = JSON.stringify(toInput(input));
+    // workerd's one error for a pattern or base URL that does not parse,
+    // which gives no reason.
+    let parsed;
     const flags = ignoreCase ? 'ui' : 'u';
-    for (const k of KEYS) {
-      const c = parsed[k];
-      try {
+    try {
+      parsed = JSON.parse($$urlPatternParse(input, baseURL, ignoreCase));
+      for (const k of KEYS) {
+        const c = parsed[k];
         c.regexp = new RegExp(c.regexpString, flags);
-      } catch (e) {
-        throw new TypeError(`Invalid ${k} pattern: ${e.message}`);
       }
+    } catch {
+      throw new TypeError('Failed to construct URLPattern');
     }
     this[components] = parsed;
   }
@@ -70,7 +86,7 @@ class URLPattern {
 
   test(input, baseURL) {
     if (baseURL !== undefined) baseURL = usv(baseURL);
-    const values = matchValues(toInput(input), baseURL);
+    const values = matchValues(toInput(input), baseURL, 'test');
     if (values === null) return false;
     const c = this[components];
     return KEYS.every((k, i) => c[k].regexp.test(values[i]));
@@ -79,7 +95,7 @@ class URLPattern {
   exec(input, baseURL) {
     input = toInput(input);
     if (baseURL !== undefined) baseURL = usv(baseURL);
-    const values = matchValues(input, baseURL);
+    const values = matchValues(input, baseURL, 'exec');
     if (values === null) return null;
     // An init input comes back as workerd's URLPatternInit struct, every
     // member optional (`__struct`).

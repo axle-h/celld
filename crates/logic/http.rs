@@ -13,9 +13,9 @@
 //! to the Worker as a string and never parses it, so an authority a URL parser
 //! refuses reaches the application intact. `new URL(request.url)` is how a
 //! Worker reads its own path and query, and that call then throws: a `Host` of
-//! `a]b` gives `TypeError: Invalid URL`. A client therefore turns every request
-//! into an application error, so a shape like `a]b` or `999.1.1.1` has to fail
-//! here rather than inside the isolate.
+//! `a]b` gives `TypeError: Invalid URL string.` A client therefore turns every
+//! request into an application error, so a shape like `a]b` or `999.1.1.1` has
+//! to fail here rather than inside the isolate.
 
 use std::net::Ipv6Addr;
 

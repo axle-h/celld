@@ -65,9 +65,7 @@
     "Illegal invocation: function called with incorrect `this` reference. " +
     "See https://developers.cloudflare.com/workers/observability/errors/" +
     "#illegal-invocation-errors for details.");
-  const badParameter = (method, type, index, expected) => new SafeTypeError(
-    `Failed to execute '${method}' on '${type}': parameter ${index} is not ` +
-    `of type '${expected}'.`);
+  const badParameter = __celld.__jsg.execute;
   // workerd's IoOwn error for state owned by another request.
   const foreignRequest = () => new SafeError(
     "Cannot perform I/O on behalf of a different request. I/O objects (such " +

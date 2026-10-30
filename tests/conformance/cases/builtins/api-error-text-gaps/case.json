@@ -1,0 +1,17 @@
+{
+  "workers": ["app"],
+  "xfail": "1.68",
+  "steps": [
+    {"path": "/?area=url"},
+    {"path": "/?area=headers"},
+    {"path": "/?area=request"},
+    {"path": "/?area=response"},
+    {"path": "/?area=encoding"},
+    {"path": "/?area=streams"},
+    {"path": "/?area=blob"},
+    {"path": "/?area=abort"},
+    {"path": "/?area=events"},
+    {"path": "/?area=crypto"},
+    {"path": "/?area=misc"}
+  ]
+}

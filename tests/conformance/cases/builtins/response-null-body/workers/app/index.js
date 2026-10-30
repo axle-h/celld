@@ -1,7 +1,7 @@
 // The Response constructor's checks on a body with a null body status (101,
 // 204, 205 and 304) and on statusText. workerd refuses a body there unless it
-// is empty, and a control character in statusText. celld accepts both (plan
-// 1.42).
+// is empty, and a control character in statusText, and so does celld (plan
+// 1.40).
 const attempt = (make) => {
   try {
     const response = make();

@@ -1,6 +1,5 @@
 {
   "workers": ["app"],
-  "xfail": "1.40",
   "steps": [
     {"path": "/?child=url"},
     {"path": "/?child=atob"},

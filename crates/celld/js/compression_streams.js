@@ -31,12 +31,16 @@ function bytes(chunk) {
     'ArrayBufferView).');
 }
 
-function make(format, decompress) {
-  format = `${format}`;
+// `args` are the constructor's, whose format is a required string.
+function make(args, decompress) {
+  if (args.length < 1)
+    throw __celld.__jsg.construct(
+      decompress ? 'DecompressionStream' : 'CompressionStream', 1, 'string');
+  const format = `${args[0]}`;
   if (format !== 'gzip' && format !== 'deflate' &&
       format !== 'deflate-raw')
     throw new TypeError(
-      `Unsupported compression format: '${format}'`);
+      "The compression format must be either 'deflate', 'deflate-raw' or 'gzip'.");
   const id = __zlib_stream_new(format, decompress);
   // The readable side's pull waits here for a write or the close.
   let waiting = null;
@@ -99,14 +103,14 @@ function make(format, decompress) {
 // accessors read (`__setTransformSides`); the base constructor never runs.
 class CompressionStream {
   constructor(format) {
-    const ts = make(format, false);
+    const ts = make(arguments, false);
     __celld.__setTransformSides(this, ts.readable, ts.writable);
   }
 }
 
 class DecompressionStream {
   constructor(format) {
-    const ts = make(format, true);
+    const ts = make(arguments, true);
     __celld.__setTransformSides(this, ts.readable, ts.writable);
   }
 }

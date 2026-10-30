@@ -32,15 +32,7 @@ if (!__celld.__performanceApi) (() => {
   const struct = __celld.__struct;
 
   // JSG's conversions and their errors (jsg/value.h, jsg/struct.h).
-  const execute = (method, owner, index, type) => new TypeError(
-    `Failed to execute '${method}' on '${owner}': parameter ${index} is not ` +
-    `of type '${type}'.`);
-  const construct = (owner, index, type) => new TypeError(
-    `Failed to construct '${owner}': constructor parameter ${index} is not ` +
-    `of type '${type}'.`);
-  const field = (name, owner, type) => new TypeError(
-    `Incorrect type for the '${name}' field on '${owner}': the provided ` +
-    `value is not of type '${type}'.`);
+  const { execute, construct, field } = __celld.__jsg;
   const isObject = (value) =>
     (typeof value === "object" && value !== null) || typeof value === "function";
   // A required parameter is refused when the call leaves it out (`given`

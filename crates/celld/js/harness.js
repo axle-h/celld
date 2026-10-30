@@ -253,7 +253,8 @@ function __bodyBytes(body) {
   if (body instanceof ArrayBuffer) return new Uint8Array(body.slice(0));
   if (ArrayBuffer.isView(body))
     return new Uint8Array(body.buffer, body.byteOffset, body.byteLength).slice();
-  return __encodeUtf8(String(body));
+  // ToString, which throws for a Symbol, as a USVString conversion does.
+  return __encodeUtf8(`${body}`);
 }
 // Bodies that carry their own Content-Type. A Blob's is its `type`, a
 // FormData serializes to multipart with a generated boundary, and a
@@ -717,6 +718,13 @@ for (const bodyStream of [CelldChunkStream, CelldBodyStream, CelldHttpBodyStream
 // with it is compressed unless it has `encodeBody: "manual"`.
 const __gzipEncoded = (headers) =>
   __ReflectApply(__HeadersGet, headers, ["content-encoding"]) === "gzip";
+// Whether text has a character below U+0020. workerd checks the bytes of
+// its UTF-8 form, which are those characters' and no others.
+const __hasControlCharacter = (text) => {
+  for (let i = 0; i < text.length; i++)
+    if (text.charCodeAt(i) < 0x20) return true;
+  return false;
+};
 const __nullBodyStatus = (status) =>
   status === 101 || status === 204 || status === 205 || status === 304;
 // The chunks of a body for a coder: a stream's, or the bytes as one.
@@ -946,6 +954,10 @@ class __Stamp {
   }
 }
 const __calledWithoutNew = __celld.__calledWithoutNew;
+// JSG's conversion errors (api_tags.js), and the type workerd names a
+// Headers init by.
+const __jsg = __celld.__jsg;
+const __headersInitType = __celld.__headersInitType;
 const __installMembers = __celld.__installMembers;
 let Body;
 // Body's state, which `__bodyInstance` puts on the object a Request or a
@@ -1115,6 +1127,14 @@ class __ResponseFields extends __Stamp {
         const self = new __ResponseFields(__bodyInstance(new.target,
           __oldAttributes ? __responseAttributes : null));
         const fromNetwork = origin === __NETWORK_RESPONSE;
+        // An init celld made (`__responseInit`) carries what a target sent.
+        const sent = fromNetwork ||
+          __ReflectApply(__WeakSetHas, __responseInits, [init]);
+        // The init is an InitializerDict or a Response: null is an empty
+        // dictionary, and anything else that is not an object is refused.
+        if (init === null) init = undefined;
+        else if (!__jsg.isDictionary(init))
+          throw __jsg.construct("Response", 2, "InitializerDict or Response");
         // Streaming/iterable detection runs only for object bodies, so
         // the common string path skips every instanceof below.
         let stream = null;
@@ -1155,6 +1175,9 @@ class __ResponseFields extends __Stamp {
             initStatus = init.status;
             initStatusText = init.statusText;
             initHeaders = init.headers;
+            if (initHeaders !== undefined && (initHeaders === null ||
+                typeof initHeaders !== "object" && typeof initHeaders !== "function"))
+              throw __jsg.field("headers", "InitializerDict", __headersInitType);
             initCf = init.cf;
             initWebSocket = init.webSocket;
             const initEncodeBody = init.encodeBody;
@@ -1191,6 +1214,21 @@ class __ResponseFields extends __Stamp {
               "200 to 599, inclusive.");
         } else if (self.#status !== 101) {
           throw new RangeError("Responses with a WebSocket must have status code 101.");
+        }
+        // No control character in the status text, which would let it
+        // inject a header (http.c++ `Response::constructor`).
+        if (!sent && self.#statusText !== undefined &&
+            __hasControlCharacter(self.#statusText))
+          throw __jsg.typeError("Invalid statusText");
+        // A null body status takes no body. workerd lets an empty buffered
+        // one through as no body, and refuses a stream or any bytes.
+        if (!sent && body !== undefined && body !== null &&
+            __nullBodyStatus(self.#status)) {
+          const raw = __bodyBytesRaw(self);
+          if (stream !== null || raw === null || raw.byteLength > 0)
+            throw __jsg.typeError(
+              "Response with null body status (101, 204, 205, or 304) cannot have a body.");
+          __setBodyStream(self, null);
         }
         // workerd makes any body but a stream in the request
         // (`Body::extractBody`), after these checks: global scope refuses it.
@@ -1237,6 +1275,9 @@ class __ResponseFields extends __Stamp {
         };
       }
       static json(data, init = {}) {
+        if (init === null) init = {};
+        else if (!__jsg.isDictionary(init))
+          throw __jsg.execute("json", "Response", 2, "InitializerDict or Response");
         const headers = new __Headers(init.headers || {});
         if (!headers.has("content-type"))
           headers.set("content-type", "application/json");
@@ -1250,7 +1291,12 @@ class __ResponseFields extends __Stamp {
             `${statusCode} is not a redirect status code. ` +
             "It must be one of: 301, 302, 303, 307, or 308.");
         }
-        const location = new URL(input).href;
+        let location;
+        try {
+          location = new URL(input).href;
+        } catch {
+          throw new TypeError(`Unable to parse URL: ${input}`);
+        }
         // workerd builds the Location header with the request's header
         // table, so global scope refuses it once the URL has parsed.
         __require_io_context();
@@ -1444,8 +1490,14 @@ const __requestInit = (fields) => {
 };
 // The init of a Response celld makes for itself, without a prototype for
 // the same reason.
-const __responseInit = __celld.__responseInit = (fields) =>
+// It is marked, so the constructor skips the checks a script's init gets:
+// celld builds these from what a target or the network sent.
+const __responseInits = new __SafeWeakSet();
+const __responseInit = __celld.__responseInit = (fields) => {
   __ObjectSetPrototypeOf(fields, null);
+  __ReflectApply(__WeakSetAdd, __responseInits, [fields]);
+  return fields;
+};
 // A script's `body` as RequestInitializerDict converts it, when it reads
 // it: a stream, a buffer, a view, a Blob, a FormData or a URLSearchParams as
 // it is, an iterable (`__iterableBody`) as a stream of its values, and
@@ -1492,6 +1544,10 @@ class __RequestFields extends __Stamp {
   // Whether the body is one-time, as an arrived request's is, so that a
   // redirect cannot send it again (`__fetchThrough`).
   #oneTimeBody = false;
+  // Whether the Request was given a body, empty or not, or adopted one: a
+  // bodiless request's is null in workerd, which celld's GET or HEAD
+  // checks on a copy read (`Request`).
+  #hasBody = false;
   // `encodeResponseBody`: whether a fetch() decodes a gzip response
   // ("automatic") or gives its body as it came ("manual").
   #encodeResponseBody = "automatic";
@@ -1515,15 +1571,35 @@ class __RequestFields extends __Stamp {
         const self = new __RequestFields(__bodyInstance(new.target,
           __oldAttributes ? __requestAttributes : null));
         const prior = __isRequest(input) ? input : null;
-        // workerd converts `input` before it reads `init`.
-        const url = prior !== null ? prior.#url : `${input}`;
+        const internalInit = __ReflectApply(__WeakSetHas, __requestInits, [init]);
+        // workerd converts `input` before it reads `init`, and both before
+        // it parses the URL (http.c++ `Request::constructor`).
+        if (prior === null && !internalInit && arguments.length < 1)
+          throw __jsg.construct("Request", 1, "Request or string");
+        let url = prior !== null ? prior.#url : `${input}`;
+        // The init is a RequestInitializerDict or a Request: null is an
+        // empty dictionary, and anything else that is not an object is
+        // refused.
+        if (init === null) init = undefined;
+        else if (!internalInit && !__jsg.isDictionary(init))
+          throw __jsg.construct("Request", 2, "RequestInitializerDict or Request");
+        // A script's URL must parse, and the Request keeps it as the URL
+        // Standard serializes it (fetch_standard_url, which celld always
+        // has). celld's own Requests carry URLs it already parsed.
+        if (prior === null && !internalInit) {
+          try {
+            url = __ReflectApply(__URLHref, new __URL(url), []);
+          } catch {
+            throw new TypeError(`Invalid URL: ${url}`);
+          }
+        }
         let method, headers, headersJson, redirect, cf, cache, signal, fetcher;
         let hasBody = false;
         let body = null;
         let internal = null;
         // A Headers this constructor made from a script's init.
         let madeHeaders = false;
-        if (__ReflectApply(__WeakSetHas, __requestInits, [init])) {
+        if (internalInit) {
           internal = init;
           method = init.method;
           headers = init.headersList;
@@ -1560,6 +1636,9 @@ class __RequestFields extends __Stamp {
           if (initMethod !== undefined) method = `${initMethod}`;
           const initHeaders = init.headers;
           if (initHeaders !== undefined) {
+            if (initHeaders === null || typeof initHeaders !== "object" &&
+                typeof initHeaders !== "function")
+              throw __jsg.field("headers", "RequestInitializerDict", __headersInitType);
             headers = new __Headers(initHeaders);
             madeHeaders = true;
           }
@@ -1578,6 +1657,8 @@ class __RequestFields extends __Stamp {
           const initIntegrity = init.integrity;
           const integrity = initIntegrity === undefined ? undefined : `${initIntegrity}`;
           signal = init.signal;
+          if (signal !== undefined && signal !== null && !__isAbortSignal(signal))
+            throw __jsg.field("signal", "RequestInitializerDict", "AbortSignal");
           const initEncoding = init.encodeResponseBody;
           const encoding = initEncoding === undefined ? undefined : `${initEncoding}`;
           if (cache !== undefined) self.#cache = __requestCacheMode(cache);
@@ -1624,6 +1705,21 @@ class __RequestFields extends __Stamp {
         if (internal === null && hasBody && body !== null && !__isRequest(init) &&
             !(body instanceof __ReadableStream))
           __require_io_context();
+        // A script's init that sets the method or the body is refused when
+        // the request is then a GET or HEAD with a body, whether the init
+        // gave it or the input Request did, which workerd has already taken
+        // from the input (http.c++ `Request::constructor`). An init that sets
+        // neither lets an input with both through.
+        const bodied = hasBody ? body !== null : prior !== null && prior.#hasBody;
+        if (internal === null && init !== undefined && !__isRequest(init) &&
+            (method !== undefined || hasBody) && bodied &&
+            (self.#method === "GET" || self.#method === "HEAD")) {
+          if (!hasBody) __setBodyRead(prior, true);
+          throw __jsg.typeError("Request with a GET or HEAD method cannot have a body.");
+        }
+        // A revived request's bytes are adopted once it is made
+        // (`__reviveRequest`).
+        self.#hasBody = bodied || internal?.adoptsBody === true;
         let stream = null;
         let typed = null;
         if (hasBody && body !== null && typeof body === "object") {
@@ -1942,6 +2038,10 @@ const __dataUrlResponse = (url) => {
 const __Request = __celld.__Request = Request;
 __celld.__isRequest = (value) => __isRequest(value);
 __celld.__isResponse = (value) => __isResponse(value);
+// A Response's body stream and headers, for HTMLRewriter's transform(),
+// which reads its state as workerd's does, not what its properties say.
+__celld.__responseBody = (response) => __bodyStream(response);
+__celld.__responseHeaders = (response) => __responseHeaders(response);
 __celld.__responseType = (response) => __responseType(response);
 const __URL = URL;
 const __URLHref = Object.getOwnPropertyDescriptor(URL.prototype, "href").get;
@@ -2073,7 +2173,9 @@ const __fetchedFrom = (response, urls) => {
 };
 // workerd asks for the request once the Request is made (`fetchImpl`), so
 // global scope refuses there, in the caller's frame, before the first await.
-globalThis.fetch = async (input, init) => {
+globalThis.fetch = async function fetch(input, init) {
+  if (arguments.length < 1)
+    throw __jsg.execute("fetch", "ServiceWorkerGlobalScope", 1, "Request or string");
   const rawUrl = typeof input === "string" ? input : input?.url;
   if (typeof rawUrl === "string" && rawUrl.startsWith("data:")) {
     __require_io_context();
@@ -2081,6 +2183,11 @@ globalThis.fetch = async (input, init) => {
   }
   const request = new __Request(input, init);
   __require_io_context();
+  // Only HTTP goes out (fetch_refuses_unknown_protocols, which celld always
+  // has): workerd refuses any other scheme, ws: and wss: included.
+  const url = __requestUrl(request);
+  if (!url.startsWith("http:") && !url.startsWith("https:"))
+    throw new TypeError(`Fetch API cannot load: ${url}`);
   return __fetchThrough(request, __fetchNetwork);
 };
 // The global fetch(), for celld's own callers (navigator.sendBeacon), so a
@@ -7439,6 +7546,7 @@ const __reviveRequest = (url, method, headers, redirect, cf, cache, body,
     }));
   const req = new __Request(url, __requestInit({
     method, headersList: headers, redirect, cf, cache, encodeResponseBody,
+    adoptsBody: true,
   }));
   __adoptBody(req, body);
   return req;
@@ -13978,19 +14086,12 @@ if (!globalThis.Event) {
     constructor(type, init = {}) {
       const defer = __deferEventAttributes;
       __deferEventAttributes = false;
-      if (arguments.length === 0)
-        throw new TypeError(
-          "Failed to construct 'Event': 1 argument required, but only " +
-          "0 present.");
-      if (init !== undefined && init !== null &&
-          typeof init !== "object")
-        throw new TypeError(
-          "Failed to construct 'Event': The provided value is not of " +
-          "type 'EventInit'.");
-      const options = init || {};
+      if (arguments.length === 0) throw __jsg.construct("Event", 1, "string");
       // Template interpolation, not String(): it must throw for a
       // Symbol, which String() would happily format.
       this.#type = `${type}`;
+      if (!__jsg.isDictionary(init)) throw __jsg.construct("Event", 2, "Init");
+      const options = init || {};
       this.#bubbles = !!options.bubbles;
       this.#cancelable = !!options.cancelable;
       this.#composed = !!options.composed;
@@ -14102,6 +14203,11 @@ if (!globalThis.CustomEvent) {
   globalThis.CustomEvent = class CustomEvent extends Event {
     #detail;
     constructor(type, init = {}) {
+      // Its own checks, which name it and its init: Event's would see the
+      // default init.
+      if (arguments.length === 0) throw __jsg.construct("CustomEvent", 1, "string");
+      if (!__jsg.isDictionary(init))
+        throw __jsg.construct("CustomEvent", 2, "CustomEventInit");
       super(type, init);
       this.#detail = init?.detail === undefined ? null : init.detail;
     }
@@ -14260,20 +14366,31 @@ if (!globalThis.EventTarget) {
     }
     addEventListener(type, callback, options = {}) {
       if (!(#listeners in this)) throw __illegalInvocation();
+      // The type and the handler are required, though the handler may be
+      // null or undefined (basics.h).
+      if (arguments.length < 2)
+        throw __jsg.execute("addEventListener", "EventTarget", arguments.length + 1,
+          arguments.length === 0 ? "string" : "function or HandlerObject");
+      type = `${type}`;
       if (callback === null || callback === undefined) return;
-      if (typeof callback !== "function" &&
-          typeof callback.handleEvent !== "function")
-        throw new TypeError(
-          "Failed to execute 'addEventListener' on 'EventTarget': " +
-          "parameter 2 is not of type 'EventListener'.");
+      if (typeof callback !== "function") {
+        if (typeof callback !== "object")
+          throw __jsg.execute("addEventListener", "EventTarget", 2,
+            "function or HandlerObject");
+        if (typeof callback.handleEvent !== "function")
+          throw __jsg.field("handleEvent", "HandlerObject", "function");
+      }
       const object = typeof options === "object" && options !== null;
       // Capture and passive are accepted for portability but must be
-      // false: Cells dispatches only at the target, so honouring them
-      // would silently change ordering.
-      if (object ? options.capture || options.passive : !!options)
-        throw new TypeError(
-          "Cells does not support the 'capture' or 'passive' options " +
-          "on addEventListener().");
+      // false, as workerd's are: listeners run only at the target.
+      if (object) {
+        if (options.capture)
+          throw new TypeError("addEventListener(): options.capture must be false.");
+        if (options.passive)
+          throw new TypeError("addEventListener(): options.passive must be false.");
+      } else if (options) {
+        throw new TypeError("addEventListener(): useCapture must be false.");
+      }
       const signal = object ? options.signal : undefined;
       if (signal && signal.aborted) return;
       const key = String(type);
@@ -14287,11 +14404,20 @@ if (!globalThis.EventTarget) {
     }
     removeEventListener(type, callback, options = {}) {
       if (!(#listeners in this)) throw __illegalInvocation();
+      // The type and the handler are required, and the handler is null,
+      // undefined or an object (basics.h).
+      if (arguments.length < 2)
+        throw __jsg.execute("removeEventListener", "EventTarget", arguments.length + 1,
+          arguments.length === 0 ? "string" : "Object");
+      type = `${type}`;
+      if (callback !== null && callback !== undefined &&
+          typeof callback !== "object" && typeof callback !== "function")
+        throw __jsg.execute("removeEventListener", "EventTarget", 2, "Object");
       const object = typeof options === "object" && options !== null;
       if (object ? options.capture : !!options)
-        throw new TypeError(
-          "Cells does not support the 'capture' option on " +
-          "removeEventListener().");
+        throw new TypeError(object
+          ? "removeEventListener(): options.capture must be false."
+          : "removeEventListener(): useCapture must be false.");
       this.#remove(String(type), callback);
     }
     #remove(type, callback) {
@@ -14302,7 +14428,7 @@ if (!globalThis.EventTarget) {
     dispatchEvent(event) {
       if (!(#listeners in this)) throw __illegalInvocation();
       if (!(event instanceof Event))
-        throw new TypeError("argument is not an Event");
+        throw __jsg.execute("dispatchEvent", "EventTarget", 1, "Event");
       if (__eventDispatching(event))
         throw new DOMException(
           "The event is already being dispatched.",
@@ -14589,6 +14715,8 @@ if (!globalThis.AbortSignal) {
       const c = new AbortController(); c.abort(reason); return c.signal;
     }
     static timeout(ms) {
+      // A required double (basics.h).
+      if (arguments.length < 1) throw __jsg.execute("timeout", "AbortSignal", 1, "number");
       const c = new AbortController();
       __setTimeout(() => c.abort(new DOMException(
         "The operation was aborted due to timeout", "TimeoutError",
@@ -14596,6 +14724,11 @@ if (!globalThis.AbortSignal) {
       return c.signal;
     }
     static any(signals) {
+      // An array of AbortSignals (basics.h), each checked before any is
+      // followed.
+      if (!__ArrayIsArray(signals)) throw __jsg.execute("any", "AbortSignal", 1, "Array");
+      for (let i = 0; i < signals.length; i++)
+        if (!__isAbortSignal(signals[i])) throw __jsg.element(i, "AbortSignal");
       const c = new AbortController();
       for (const signal of signals) {
         if (signal.aborted) { c.abort(signal.reason); break; }
@@ -14681,13 +14814,19 @@ if (!globalThis.Blob) {
         blob.#type = type;
       };
     }
-    constructor(parts = [], options = {}) {
+    constructor(parts = undefined, options = undefined) {
       // A File defines its own attributes first, then these
       // (`__deferBlobAttributes`).
       const defer = __deferBlobAttributes;
       __deferBlobAttributes = false;
       if (__oldAttributes && !defer) __instanceAttributes(this, __blobAttributes);
-      if (options && options.endings !== undefined)
+      // workerd's parts are an array, not any iterable, and its options a
+      // dictionary (blob.h); a File checks its own first.
+      if (parts === undefined) parts = [];
+      else if (!__ArrayIsArray(parts)) throw __jsg.construct("Blob", 1, "Array");
+      if (!__jsg.isDictionary(options)) throw __jsg.construct("Blob", 2, "Options");
+      options ??= {};
+      if (options.endings !== undefined)
         throw new Error(
           "The 'endings' field on 'Options' is not implemented.");
       // A type outside U+0020..U+007E is not a valid MIME type and is
@@ -15283,11 +15422,14 @@ if (!globalThis.File) {
       __isFile = (value) =>
         typeof value === "object" && value !== null && #name in value;
     }
-    constructor(parts, name, options = {}) {
-      if (arguments.length < 2)
-        throw new TypeError(
-          "Failed to construct 'File': 2 arguments required, but " +
-          `only ${arguments.length} present.`);
+    constructor(parts, name, options = undefined) {
+      // Converted in order (blob.h): the parts, an optional array, the
+      // name, a required string, and the options.
+      if (parts !== undefined && !__ArrayIsArray(parts))
+        throw __jsg.construct("File", 1, "Array");
+      if (arguments.length < 2) throw __jsg.construct("File", 2, "string");
+      name = `${name}`;
+      if (!__jsg.isDictionary(options)) throw __jsg.construct("File", 3, "Options");
       const set = __pinBase(File);
       __deferBlobAttributes = true;
       try {
@@ -15296,7 +15438,7 @@ if (!globalThis.File) {
         __unpinBase(File, set);
       }
       if (__oldAttributes) __instanceAttributes(this, __fileAttributes);
-      this.#name = String(name);
+      this.#name = name;
       const lm = options == null ? undefined : options.lastModified;
       if (lm === undefined) this.#lastModified = Date.now();
       else {
@@ -15370,11 +15512,10 @@ __celld.__parseFormData = (bytes, contentType) => {
   if (/^\s*application\/x-www-form-urlencoded/i.test(ct)) {
     // This form is decoded as UTF-8, so a declared charset that is not UTF-8
     // cannot be honoured. Refuse rather than mis-decode.
+    // workerd's text (form-data.c++ `assertUtf8`), and its three names.
     const charset = /;\s*charset\s*=\s*"?([^";]+)/i.exec(ct);
-    if (charset && !/^utf-?8$/i.test(charset[1].trim()))
-      throw new TypeError(
-        `Unsupported charset "${charset[1].trim()}". FormData can only ` +
-        "parse UTF-8 encoded bodies.");
+    if (charset && !/^(?:utf-?8|unicode-1-1-utf-8)$/i.test(charset[1].trim()))
+      throw new TypeError("Non-utf-8 application/x-www-form-urlencoded body.");
     const form = new FormData();
     for (const [key, value] of new URLSearchParams(
       new TextDecoder().decode(bytes)))
@@ -15387,10 +15528,13 @@ __celld.__parseFormData = (bytes, contentType) => {
       "parse the following MIME types: multipart/form-data, " +
       "application/x-www-form-urlencoded");
   const found = /boundary\s*=\s*(?:"([^"]*)"|([^;]+))/i.exec(ct);
+  // From here on, workerd's texts (form-data.c++ `parse` and
+  // `parseFormDataImpl`) for the same failures.
   if (!found)
     throw new TypeError(
-      "No boundary was found in the multipart/form-data " +
-      "Content-Type header.");
+      "No boundary string in Content-Type header. The multipart/form-data " +
+      "MIME type requires a boundary parameter, e.g. 'Content-Type: " +
+      "multipart/form-data; boundary=\"abcd\"'. See RFC 7578, section 4.");
   const boundary = (found[1] !== undefined ? found[1] : found[2]).trim();
   const form = new FormData();
   const delimiter = __encodeUtf8("--" + boundary);
@@ -15402,7 +15546,7 @@ __celld.__parseFormData = (bytes, contentType) => {
   let cursor = __delimiterIndex(bytes, delimiter, 0);
   if (cursor < 0)
     throw new TypeError(
-      "No boundary delimiter was found in the multipart/form-data body.");
+      "No initial boundary string (or you have a truncated message).");
   cursor += delimiter.length;
   for (;;) {
     // What follows a delimiter decides everything: "--" closes the body, a
@@ -15413,18 +15557,16 @@ __celld.__parseFormData = (bytes, contentType) => {
       : bytes[cursor] === __LF ? 1 : 0;
     if (lineBreak === 0)
       throw new TypeError(
-        "A boundary delimiter must be followed by CRLF, LF, or \"--\".");
+        "Boundary string was not succeeded by CRLF, LF, or '--'.");
     cursor += lineBreak;
     const partStart = cursor;
+    // A part with no delimiter after it is refused once its headers are
+    // read, as workerd reads them before it looks for the next delimiter.
     const next = __delimiterIndex(bytes, delimiter, partStart);
-    if (next < 0)
-      throw new TypeError(
-        "The multipart/form-data body ended without a closing boundary " +
-        "delimiter.");
     // The line break before a delimiter belongs to the delimiter, not to the
     // part it terminates.
-    let chunkEnd = next;
-    if (chunkEnd > partStart && bytes[chunkEnd - 1] === __LF) {
+    let chunkEnd = next < 0 ? bytes.length : next;
+    if (next >= 0 && chunkEnd > partStart && bytes[chunkEnd - 1] === __LF) {
       chunkEnd -= 1;
       if (chunkEnd > partStart && bytes[chunkEnd - 1] === __CR) chunkEnd -= 1;
     }
@@ -15448,7 +15590,7 @@ __celld.__parseFormData = (bytes, contentType) => {
     }
     if (headerEnd < 0)
       throw new TypeError(
-        "A FormData part's headers must be terminated by a blank line.");
+        "No multipart message header termination found.");
     // Part headers are text. Decoding this slice as UTF-8 keeps a non-ASCII
     // name or filename intact and cannot reach the part body.
     const rawHeaders = new TextDecoder().decode(
@@ -15466,8 +15608,7 @@ __celld.__parseFormData = (bytes, contentType) => {
     }
     if (disposition === null)
       throw new TypeError(
-        "Content-Disposition header is required for each FormData " +
-        "part.");
+        "No valid Content-Disposition header found in FormData part.");
     const kind = disposition.split(";")[0].trim();
     if (kind.toLowerCase() !== "form-data")
       throw new TypeError(
@@ -15486,8 +15627,10 @@ __celld.__parseFormData = (bytes, contentType) => {
     const name = param(__CD_NAME);
     if (name === undefined)
       throw new TypeError(
-        "Content-Disposition header for FormData part must have a " +
-        "name parameter.");
+        "Content-Disposition header in FormData part is missing a name.");
+    if (next < 0)
+      throw new TypeError(
+        "No subsequent boundary string after multipart message.");
     const filename = param(__CD_FILENAME);
     // A part without a filename is an entry value, which the spec defines as a
     // string, so this one part is decoded as UTF-8. A file part keeps its
@@ -15516,13 +15659,22 @@ __celld.__parseFormData = (bytes, contentType) => {
       },
     );
   };
+  // A method's required parameters, which the call must not leave out: the
+  // name, a 'string', then the value (form-data.h).
+  const required = (args, count, method) => {
+    if (args.length >= count) return;
+    throw __jsg.execute(method, "FormData", args.length + 1,
+      args.length === 0 ? "string" : "File or Blob or string");
+  };
   globalThis.FormData = class FormData {
     constructor() { this._entries = []; }
     append(name, value, filename) {
+      required(arguments, 2, "append");
       this._entries.push(
         [String(name), __formDataValue(value, filename)]);
     }
     set(name, value, filename) {
+      required(arguments, 2, "set");
       value = __formDataValue(value, filename);
       const key = String(name);
       // Spec: replace the first match in place, keeping its position,
@@ -15534,14 +15686,20 @@ __celld.__parseFormData = (bytes, contentType) => {
         if (this._entries[i][0] === key) this._entries.splice(i, 1);
     }
     get(name) {
+      required(arguments, 1, "get");
       const row = this._entries.find(([key]) => key === String(name));
       return row ? row[1] : null;
     }
     getAll(name) {
+      required(arguments, 1, "getAll");
       return this._entries.filter(([key]) => key === String(name)).map(([, value]) => value);
     }
-    has(name) { return this._entries.some(([key]) => key === String(name)); }
+    has(name) {
+      required(arguments, 1, "has");
+      return this._entries.some(([key]) => key === String(name));
+    }
     delete(name) {
+      required(arguments, 1, "delete");
       const key = String(name);
       // Splice in place: the iterators below read the live list, so the
       // array identity must survive a delete during iteration.
@@ -15571,9 +15729,7 @@ __celld.__parseFormData = (bytes, contentType) => {
     [Symbol.iterator]() { return this.entries(); }
     forEach(callback, thisArg) {
       if (typeof callback !== "function")
-        throw new TypeError(
-          "Failed to execute 'forEach' on 'FormData': parameter 1 is " +
-          "not of type 'Function'.");
+        throw __jsg.execute("forEach", "FormData", 1, "function");
       for (const [key, value] of this.entries())
         callback.call(thisArg, value, key, this);
     }
@@ -15754,6 +15910,9 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
     // socket id.
     const internal = __wsInit;
     __wsInit = null;
+    // The URL is a required string (web-socket.h).
+    if (internal === null && arguments.length < 1)
+      throw __jsg.construct("WebSocket", 1, "string");
     const set = __pinBase(WebSocket);
     try {
       super();
@@ -16508,7 +16667,12 @@ if (!globalThis.navigator) globalThis.navigator = {
   });
 }
 if (!globalThis.queueMicrotask)
-  globalThis.queueMicrotask = (f) => Promise.resolve().then(f);
+  globalThis.queueMicrotask = (f) => {
+    // workerd's parameter is a required function (global-scope.h).
+    if (typeof f !== "function")
+      throw __jsg.execute("queueMicrotask", "ServiceWorkerGlobalScope", 1, "function");
+    return Promise.resolve().then(f);
+  };
 // A test hook that exists only on a node started with
 // CELLD_CONFORMANCE_HOLD=1 (`limits/stuck-isolates`): a call that holds its
 // turn for `ms`, past any CPU limit, as a builtin that ignores a termination.
@@ -16584,8 +16748,6 @@ if (!globalThis.structuredClone) {
       type: data.mimeType,
       lastModified: data.lastModified,
     }),
-    CryptoKey: (data) => new CryptoKey(
-      data.keyType, data.algorithm, data.extractable, data.usages, data.material),
     DOMException: (data) => {
       const exception = new DOMException(data.message, data.name);
       if (data.stack !== undefined)
@@ -16623,6 +16785,13 @@ if (!globalThis.structuredClone) {
   defineHostType(AbortSignal.prototype, function() {
     throw __signalOutsideRpc();
   });
+  // So do streams (streams/readable.c++, writable.c++ `serialize`).
+  defineHostType(ReadableStream.prototype, function() {
+    throw new DOMException("ReadableStream can only be serialized for RPC.", "DataCloneError");
+  });
+  defineHostType(WritableStream.prototype, function() {
+    throw new DOMException("WritableStream can only be serialized for RPC.", "DataCloneError");
+  });
   // A Request and a Response serialize as workerd's do outside RPC: by
   // value, and a body is refused (`__hostValueOutsideRpc`).
   defineHostType(Request.prototype, function() {
@@ -16645,11 +16814,17 @@ if (!globalThis.structuredClone) {
   });
 
   globalThis.structuredClone = function(value, options) {
+    // A required value and an optional dictionary, whose `transfer` is an
+    // array (jsg/ser.h).
     if (arguments.length < 1)
-      throw new TypeError(
-        "Failed to execute 'structuredClone': 1 argument required");
-    const transfer = options?.transfer === undefined
-      ? [] : Array.from(options.transfer);
+      throw __jsg.execute("structuredClone", "ServiceWorkerGlobalScope", 1, "Value");
+    if (!__jsg.isDictionary(options))
+      throw __jsg.execute("structuredClone", "ServiceWorkerGlobalScope", 2,
+        "StructuredCloneOptions");
+    const transferOption = options?.transfer;
+    if (transferOption !== undefined && !__ArrayIsArray(transferOption))
+      throw __jsg.field("transfer", "StructuredCloneOptions", "Array");
+    const transfer = transferOption === undefined ? [] : Array.from(transferOption);
     const seen = new Set();
     for (let index = 0; index < transfer.length; index++) {
       const item = transfer[index];
@@ -16670,13 +16845,11 @@ if (!globalThis.structuredClone) {
     // later bootstrap script. Register every late type before V8 traverses the
     // graph. The delegate then sees host objects at any depth without a second
     // JavaScript traversal, which follows Deno's structured-clone design.
+    // A CryptoKey is refused with workerd's text, as its class has no
+    // serializer, so its material never crosses a clone.
     if (typeof CryptoKey === "function")
       defineHostType(CryptoKey.prototype, function() {
-        return {
-          type: "CryptoKey", keyType: this.type,
-          algorithm: this.algorithm, extractable: this.extractable,
-          usages: this.usages, material: this.__celldMaterial,
-        };
+        throw __rpcUnsupportedType(this);
       });
     for (const constructor of [
       URL, URLSearchParams, Headers, FormData,

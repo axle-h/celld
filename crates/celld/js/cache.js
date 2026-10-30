@@ -12,16 +12,20 @@
   const kCreate = Symbol("celld.Cache.create");
   let isCache;
 
-  // A key is a Request or URL string, and it must parse as an absolute
-  // http(s) URL -- the same rule and message as Workerd's validateUrl.
+  // A key is a Request or URL string. A string becomes a Request first,
+  // which refuses one that is not a URL as the Request constructor does,
+  // and the URL must then name a host, whatever its scheme -- the rule
+  // (kj::Url's HTTP_PROXY_REQUEST form) and message of Workerd's
+  // validateUrl.
   const asKey = (request) => {
     const url = request instanceof Request ? request.url : String(request);
     let parsed = null;
     try {
       parsed = new URL(url);
-    } catch { /* rejected below */ }
-    if (!parsed ||
-      (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
+    } catch {
+      throw new TypeError(`Invalid URL: ${url}`);
+    }
+    if (parsed.host === "") {
       throw new TypeError(
         "Invalid URL. Cache API keys must be fully-qualified, valid URLs.");
     }
@@ -46,7 +50,8 @@
     }
     if (response.bodyUsed) {
       throw new TypeError(
-        "Cannot cache a response whose body is already used.");
+        "Body has already been used. It can only be used once. Use tee() " +
+        "first if you need to read it twice.");
     }
     // Consume the body even though nothing is stored: put()'s contract
     // is that the response is disturbed when it returns, and a
@@ -70,6 +75,26 @@
     asKey(request);
     void options;
     return false;
+  };
+
+  // CacheQueryOptions (cache.h), as JSG converts the dictionary: undefined
+  // or null is empty and any other primitive is refused, then each field is
+  // read in the order of its JSG_STRUCT. `ignoreMethod` is a boolean, which
+  // celld's every-miss cache has no use for; workerd will not implement the
+  // other three, and refuses any of them given a value, null included, as
+  // JSG refuses a WontImplement field (jsg/util.c++).
+  const WONT_IMPLEMENT = ["ignoreSearch", "ignoreVary", "cacheName"];
+  const queryOptions = (options, method) => {
+    if (!__celld.__jsg.isDictionary(options))
+      throw __celld.__jsg.execute(method, "Cache", 2, "CacheQueryOptions");
+    if (options === undefined || options === null) return;
+    void options.ignoreMethod;
+    for (let i = 0; i < WONT_IMPLEMENT.length; i++) {
+      const field = WONT_IMPLEMENT[i];
+      if (options[field] !== undefined)
+        throw __celld.__jsg.error(
+          `The '${field}' field on 'CacheQueryOptions' is not implemented.`);
+    }
   };
 
   class Cache {
@@ -103,11 +128,21 @@
 
     match(request, options = undefined) {
       if (!isCache(this)) throw __celld.__illegalInvocation();
+      try {
+        queryOptions(options, "match");
+      } catch (error) {
+        return Promise.reject(error);
+      }
       return matchChecked(request, options);
     }
 
     delete(request, options = undefined) {
       if (!isCache(this)) throw __celld.__illegalInvocation();
+      try {
+        queryOptions(options, "delete");
+      } catch (error) {
+        return Promise.reject(error);
+      }
       return deleteChecked(request, options);
     }
   }
@@ -118,6 +153,9 @@
     }
 
     async open(cacheName) {
+      // A required string (cache.h).
+      if (arguments.length < 1)
+        throw __celld.__jsg.execute("open", "CacheStorage", 1, "string");
       if (String(cacheName).length >= 1024) {
         throw new TypeError("Cache name is too long.");
       }

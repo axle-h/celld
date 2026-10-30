@@ -1,0 +1,13 @@
+{
+  "workers": ["app", "back"],
+  "steps": [
+    {"path": "/?step=surface"},
+    {"path": "/?step=tamper"},
+    {"path": "/?step=exports"},
+    {"path": "/?step=use"},
+    {"path": "/?step=clone"},
+    {"path": "/?step=handles"},
+    {"path": "/?step=retyped"},
+    {"path": "/?step=receiver"}
+  ]
+}

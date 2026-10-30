@@ -38,6 +38,81 @@ __celld.__applyApiTags = (on) => {
   tagged.length = 0;
 };
 
+// JSG's TypeErrors for a value an API cannot convert to the type it takes
+// (jsg/util.c++ `typeErrorMessage`), one builder per place the value was:
+// a method's or a constructor's parameter (1-based, as the message counts),
+// an attribute's setter, a dictionary's field, an array's element (0-based)
+// or anywhere else, such as an element of a sequence. `owner` and `type` are
+// the names workerd's message gives, which are its C++ names: a parameter
+// of `atob` is a 'string', one of `btoa` a 'String'. A required parameter
+// the call leaves out gets the parameter's error (jsg/type-wrapper.h
+// `unwrap`), while an explicit `undefined` is converted, so a caller checks
+// `arguments.length`. Captured here, before any Worker code runs, so a
+// script that replaces TypeError does not change what an API throws.
+{
+  const JsgTypeError = TypeError;
+  const JsgError = Error;
+  const MathTrunc = Math.trunc;
+  __celld.__jsg = Object.freeze({
+    __proto__: null,
+    // An API's own TypeError or Error, with its text (JSG_REQUIRE).
+    typeError: (message) => new JsgTypeError(message),
+    error: (message) => new JsgError(message),
+    execute: (method, owner, index, type) => new JsgTypeError(
+      `Failed to execute '${method}' on '${owner}': parameter ${index} is ` +
+      `not of type '${type}'.`),
+    construct: (owner, index, type) => new JsgTypeError(
+      `Failed to construct '${owner}': constructor parameter ${index} is not ` +
+      `of type '${type}'.`),
+    setter: (name, owner, type) => new JsgTypeError(
+      `Failed to set the '${name}' property on '${owner}': the provided ` +
+      `value is not of type '${type}'.`),
+    field: (name, owner, type) => new JsgTypeError(
+      `Incorrect type for the '${name}' field on '${owner}': the provided ` +
+      `value is not of type '${type}'.`),
+    element: (index, type) => new JsgTypeError(
+      `Incorrect type for array element ${index}: the provided value is not ` +
+      `of type '${type}'.`),
+    other: (type) => new JsgTypeError(
+      `Incorrect type: the provided value is not of type '${type}'.`),
+    // Whether a value converts to a dictionary (jsg/struct.h): undefined
+    // and null do, as an empty one, and so does an object; anything else
+    // is refused with the error for where it was.
+    isDictionary: (value) => value === undefined || value === null ||
+      typeof value === "object" || typeof value === "function",
+    // A dictionary with required members made from undefined or null
+    // (jsg/struct.h), which workerd names by its mangled C++ type.
+    nullDict: (mangled) => new JsgTypeError(
+      `Cannot initialize ${mangled} with required members from an ` +
+      "undefined or null value."),
+    // A uint64_t, as JSG converts one (jsg/value.h): a BigInt must fit, and
+    // anything else goes through ToNumber, must be finite and not negative,
+    // and loses its fraction.
+    toUint64: (value) => {
+      if (typeof value === "bigint") {
+        if (value < 0n || value > 0xffffffffffffffffn)
+          throw new JsgTypeError(
+            "The value cannot be converted because it is either negative and " +
+            "this API expects a positive bigint, or the value would be truncated.");
+        return Number(value);
+      }
+      const n = +value;
+      if (n !== n || n === Infinity || n === -Infinity)
+        throw new JsgTypeError(
+          "The value cannot be converted because it is not an integer.");
+      if (n < 0)
+        throw new JsgTypeError(
+          "The value cannot be converted because it is negative and this " +
+          "API expects a positive bigint.");
+      if (n > 18446744073709551615)
+        throw new JsgTypeError(
+          "Value out of range. Must be less than or equal to " +
+          "18446744073709551615.");
+      return MathTrunc(n);
+    },
+  });
+}
+
 // workerd's TypeError for a method or accessor called on the wrong kind of
 // object.
 __celld.__illegalInvocation = () => new TypeError(

@@ -482,7 +482,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 47 | 1.38 (builtin `node:` and `cloudflare:` modules only under the flags that provide them, side-effect imports and re-exports scanned, per-module flags honoured) | done | `167bd1a` |
 | 48 | 1.39 (timers, random values, bodies, streams, `WebSocketPair`, `waitUntil` and the rest refused in global scope as workerd does; key generation and celld's own timers immune to replaced globals) | done | `c58b76a` |
 | 49 | Durable Object stub RPC calls begin in the order they were made (the `storage/nested-root-transactions` flake; see 1.65) | done | `247e708` |
-| 50+ | Phase 1 in plan order (1.40-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65, 1.66, 1.67), and the 1.4 props key-order follow-up | queued | |
+| 50 | 1.40 (workerd's error types and texts across the runtime APIs; non-extractable key material private, SubtleCrypto receivers checked, node:crypto handles private; Request/Response/Cache/HTMLRewriter checks) | done | (this commit) |
+| 51+ | Phase 1 in plan order (1.41-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65, 1.66, 1.67, 1.68), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -3183,6 +3184,229 @@ against workerd's source.
 
 **Tests.** `loader/startup-errors-api-text` loses its `xfail`.
 
+**As built (done).**
+- **The mechanism.** workerd's runtime APIs are C++, and JSG makes most of
+  their argument errors: `typeErrorMessage` in `jsg/util.c++` builds one
+  text per place a value failed to convert (a method's or a constructor's
+  parameter, a setter, a dictionary field, an array element, anything
+  else), naming the API's C++ type and the expected type by its C++ name
+  (`'string'` for `kj::String`, `'String'` for `jsg::JsString`, `'Array'`
+  for `kj::Array<byte>`, `'bigint'` for `uint64_t`, a `OneOf`'s names joined
+  by ` or `). A required parameter the call leaves out gets the same error
+  (`jsg/type-wrapper.h` `unwrap`), while an explicit `undefined` is
+  converted; a dictionary (`jsg/struct.h`) is empty from `undefined` or
+  `null` and refuses any other primitive, and one with a required member
+  refuses `null` with `Cannot initialize <mangled C++ name> with required
+  members from an undefined or null value.`; a `uint64_t` has its own three
+  texts (`jsg/value.h`). celld had these texts written out per call site
+  (performance.js, tracing.js, a few in harness.js) and none elsewhere.
+  `__celld.__jsg` (api_tags.js) now builds each of them, and has
+  `isDictionary` and `toUint64`; performance.js and tracing.js use it, and
+  so does every check below. It captures `TypeError` before Worker code
+  runs.
+- **The four in the table** are workerd's now: `$$urlParse` throws
+  `Invalid URL string.` (`url-standard.c++` `parseImpl`), atob's and btoa's
+  texts are `global-scope.c++`'s, the Headers sequence text is
+  `headers.c++`'s, and TextDecoder quotes the label as given (`"bogus" is not
+  a valid encoding.`, `encoding.c++`).
+- **The survey.** A Worker that makes the mistakes a program makes most
+  (missing and mistyped arguments, bad URLs, locked and closed streams, bad
+  keys) ran on workerd 1.20261001.1 and on celld, area by area; each text
+  here is the recording, read against the source named. Changed, by area:
+  - URL (`url-standard.c++`): the constructor's and `canParse`'s/`parse`'s
+    missing argument, the `href` setter's `'valid URL string'` setter error,
+    and USVString conversion that throws for a Symbol in every setter.
+    URLSearchParams: workerd's `Invalid URL search params sequence.` and
+    `'Sequence'` errors (a string is not a pair), a primitive init (`null`
+    included) converted to a string, every method's missing argument and
+    `forEach`'s `'function'`. URLPattern (`urlpattern-standard.c++`):
+    `Failed to construct URLPattern`, `Failed to test URLPattern` and
+    `Failed to exec URLPattern`, which give no reason, and the options'
+    `'URLPatternOptions'`.
+  - Headers (`headers.c++`): `Invalid header value.` with its period, the
+    constructor's `'Headers or Sequence or object'` (`null` included), the
+    `'Sequence'` error for a pair that is not one, every method's missing
+    argument and `forEach`'s; a record's Symbol keys are skipped, as
+    workerd's `GetOwnPropertyNames` walk skips them, where celld threw.
+  - Request and Response (`http.c++`): a script's Request URL is parsed and
+    kept as the URL Standard serializes it (fetch_standard_url, which celld
+    always has), so `new Request("bad")` throws `Invalid URL: bad` where it
+    made a Request; an init with a body for GET or HEAD is refused with
+    workerd's text, and so is an init that sets the method or the body of
+    a copy whose input Request has a body, empty or not (the input's body
+    is taken first, so the input is used after the refusal, as workerd
+    leaves it; an init that sets neither lets a GET with a body through);
+    a Response with a null body status and a stream or
+    bytes is refused, an empty one taken as no body, and `Invalid
+    statusText` for a control character (these close 1.42's null-body item
+    and its 1.64 twin: `builtins/response-null-body` and
+    `fetch/null-body-status-construct` lost their xfails; a Response celld
+    builds from what a target or the network sent, its init marked by
+    `__responseInit`, skips both checks); the inits' `'RequestInitializerDict
+    or Request'` and `'InitializerDict or Response'`, the `headers` and
+    `signal` field errors; `Response.redirect`'s `Unable to parse URL:`;
+    `Response.json`'s init. `fetch()`: its missing argument, and `Fetch API
+    cannot load: <url>` for a scheme other than http and https
+    (`Fetcher::parseUrl`), where celld's host op threw a plain `Error`
+    (`fetch: … relative URL without a base`, `builder error`, `has no
+    port`). A body that is a Symbol throws, as ToString does.
+  - TextEncoder/TextDecoder (`encoding.c++`): `decode`'s `'Array'` (null
+    included) and `'DecodeOptions'`, the constructor's
+    `'ConstructorOptions'` and its `null` text, `encodeInto`'s
+    `'String'`/`'Uint8Array'`. TextDecoderStream follows.
+  - Streams (`streams/standard.c++`, `readable.c++`, `writable.c++`,
+    `common.h`): `Unable to enqueue`, `This ReadableStream is closed.`, the
+    locked texts of `cancel`, `pipeTo` (no period on the writable's, as in
+    workerd), `pipeThrough` and `tee` (a comma, as in workerd), `This
+    WritableStream is currently locked to a writer.` and `… has been
+    closed.`; the dictionaries `UnderlyingSource`, `UnderlyingSink`,
+    `Transformer`, `StreamQueuingStrategy`, `Transform` and
+    `QueuingStrategyInit`, with their `'function'` field errors and a
+    `null` that is empty; `highWaterMark` and `FixedLengthStream`'s length
+    converted as `uint64_t` (so `1.5` is `1`, `Infinity` refused); `"bad" is
+    not a valid type of ReadableStream.`; the byte controller's texts and
+    its `'BufferSource'` (an ArrayBuffer is taken, as JSG takes one);
+    `ReadableStream.from`'s `'AsyncGenerator'`; the readable and writable
+    readers' constructors; `transformer.readableType must be undefined.`;
+    CompressionStream's format text and missing argument. Behaviour that
+    changed with them: a WritableStream sink's `type` is ignored (workerd
+    refuses it only in pedantic WPT mode, which celld refuses), and
+    `close()` of an errored WritableStream rejects with its error.
+  - Blob, File, FormData (`blob.h`, `form-data.c++`): parts must be an
+    array, the options a dictionary (`null` no longer throws a TypeError
+    of V8's), File's `'string'` name, FormData's missing arguments and
+    `'function'` (celld wrote `'Function'`), and the multipart parser's
+    texts, with the closing-delimiter check after the part's headers, as
+    workerd orders them; `unicode-1-1-utf-8` is a UTF-8 charset.
+  - AbortSignal (`basics.h`): `timeout`'s `'number'`, `any`'s `'Array'` and
+    element error. Events: the Event and CustomEvent constructors' texts,
+    `addEventListener`'s `'function or HandlerObject'` (a missing handler
+    included) and `HandlerObject`'s `handleEvent` field,
+    `removeEventListener`'s `'Object'`, `dispatchEvent`'s `'Event'`, and
+    workerd's `useCapture`/`options.capture`/`options.passive` texts in
+    place of celld's own.
+  - structuredClone (`jsg/ser.h`): `'Value'`, `'StructuredCloneOptions'`,
+    the `transfer` field, and `ReadableStream`/`WritableStream can only be
+    serialized for RPC.` where V8 named a private promise.
+  - Web Crypto (`crypto/*.c++`): `Unrecognized or unimplemented digest
+    algorithm requested.` (subtle and DigestStream), `Unrecognized key
+    import format`, `Unrecognized key import algorithm "<as written>"
+    requested.`, `Unrecognized key generation algorithm`, `Unrecognized or
+    unimplemented EC curve`, `Attempt to export non-extractable <alg> key.`
+    (checked first, as workerd does), `Missing field "iv"` and `"hash"` (an
+    HMAC key has no default hash: a behaviour change), AES-GCM's decryption
+    failure, `Invalid PKCS8 input.`/`Invalid SPKI input.` (DataError) for
+    DER that does not parse, `timingSafeEqual`'s texts, the `'BufferSource'`,
+    `'BufferSource or JsonWebKey'`, `'CryptoKey'` and `'ArrayBufferView'`
+    parameter errors, `randomUUID`'s receiver check, and `CryptoKey` and
+    `SubtleCrypto` as "Illegal constructor" (celld makes its keys through
+    `__celld.__makeCryptoKey`, node:crypto included).
+  - Cache (`cache.c++`): a key that is not a URL is the Request
+    constructor's `Invalid URL: <key>`, a key of any scheme with a host is
+    taken (kj's `HTTP_PROXY_REQUEST` parse), the options are a
+    `CacheQueryOptions` dictionary (a primitive other than `null` is
+    refused) whose fields are read in its struct's order, `ignoreMethod`
+    and then `ignoreSearch`, `ignoreVary` and `cacheName`, each refused
+    when given a value, `null` included, as JSG refuses a `WontImplement`
+    field (celld ignored them), `put` of a used body has the Body text, and
+    `open()`'s missing argument.
+  - WebSocket's missing URL, `queueMicrotask`'s `'function'` (part of
+    1.67's item), HTMLRewriter's `on`/`onDocument`/`transform` parameter
+    errors. `transform()` also reads the Response's own state, as
+    `HTMLRewriter::transform` does: an error response is refused (`HTMLRewriter
+    cannot transform an error response`), one without a body is returned
+    as it is, and the result is made with the Response as its init, so
+    a script's own `status`, `statusText`, `headers` or `body` property
+    changes nothing; celld built the init from those properties and
+    marked it as its own, which skipped the constructor's checks.
+  - The new throws use the TypeError and Error that `__celld.__jsg`
+    captured before any script ran (`typeError`, `error`), as its
+    conversion errors do.
+- **Key material (security, found by the review).** A CryptoKey kept its
+  bytes in an ordinary, readable `__celldMaterial` property, so
+  `key.__celldMaterial.bytes` gave a non-extractable key's raw bytes to any
+  script. A key's type, algorithm, extractability, usages and material are
+  now one private field (crypto.js `_keyState`), read only by crypto.js and
+  node_crypto.js (`__celld.__cryptoKeyState`); a SubtleCrypto method takes
+  a key only by that brand (`'CryptoKey'` parameter error, a Proxy of a key
+  included, as workerd refuses one), and every check reads the state, not
+  the properties. The public `usages`, `algorithm`, `extractable` and
+  `type` are workerd's own data properties, read-only, enumerable and
+  configurable, in its order, so a script may redefine them, as on
+  workerd, without changing what the key does. `structuredClone()` refuses
+  a CryptoKey with workerd's `Could not serialize object of type
+  "CryptoKey".` text, where celld cloned one, material included; RPC
+  already refused it. node:crypto's `KeyObject.export()` refuses a
+  non-extractable key (`Unable to export non-extractable key`, workerd's
+  `CryptoImpl::exportKey`) where it exported the bytes, and
+  `toCryptoKey()` keeps such a key's view non-extractable. The rest of
+  every export path already checked: `exportKey()` and `wrapKey()` refuse
+  first. `builtins/cryptokey-material` (49 probes on secret, HMAC, RSA,
+  EC, Ed25519, ECDH and PBKDF2 keys) records the surface, the tampering,
+  every export and wrap path, that the keys still sign, verify, encrypt
+  and derive, and the clone and RPC refusals; it fails at HEAD.
+  A second review found more paths, fixed here. node:crypto's HMAC handle
+  kept the key's bytes in an ordinary field, so
+  `hmac[Object.getOwnPropertySymbols(hmac)[0]].key` gave a non-extractable
+  key's bytes to `createHmac()`'s caller. A Hash's or Hmac's handle stays
+  under its own `kHandle` symbol, as workerd's C++ handle does, with that
+  handle's prototype (`update`, `digest`, `copy`, then `constructor`), and
+  keeps its key, chunks and digest in private fields; a KeyObject's handle
+  is its CryptoKey, as on workerd. `deriveKey()`, `wrapKey()` and
+  `unwrapKey()` composed the other methods through `this`, so a stand-in
+  receiver (`SubtleCrypto.prototype.deriveKey.call({deriveBits, importKey},
+  …)`) or a replaced `crypto.subtle.importKey` received a non-extractable
+  derived or unwrapped key's bytes. The operations are now module-internal
+  (crypto.js `_ops`) and call each other directly, and every method refuses
+  any receiver but `crypto.subtle`, an object inheriting from it included,
+  with a synchronous `Illegal invocation…` TypeError, as JSG does for a
+  promise-returning method. A key's state keeps its own copy of the
+  algorithm dictionary: changing `key.algorithm.hash.name` changed what an
+  HMAC or RSA key signed with. `createPublicKey()`, `createHmac()`,
+  `sign()` and `verify()` read a key's type from its state, where they
+  trusted the `type` a script can redefine: `createPublicKey()` of a
+  secret key retyped as private sent its bytes to the host's PKCS#8
+  parser, and now throws workerd's `Cannot create public key from secret
+  or public key`. `toCryptoKey()` used the KeyObject's `type` and let a
+  non-extractable key change its algorithm, hash and usages (ECDSA to
+  ECDH, RSA-PSS to RSA-OAEP `decrypt`); workerd has no `toCryptoKey()`
+  (`ERR_METHOD_NOT_IMPLEMENTED`). celld keeps its extension on purpose:
+  jose 6, which Cloudflare OS bundles, calls `keyObject.toCryptoKey()`
+  whenever it is a function, so workerd's throwing stub would break
+  signing with a KeyObject. celld's keeps the key's own algorithm,
+  hash and usages for a non-extractable key (`InvalidAccessError`), and an
+  extractable key, whose bytes can be exported and imported under any
+  algorithm anyway, is unchanged. `builtins/cryptokey-material` grew to 90
+  probes: what a script reaches through a Hash's, Hmac's or KeyObject's own
+  symbols (the key's bytes, by a walk of every own property and
+  prototype), retyped keys, and every SubtleCrypto method on its own, a
+  plain, an inheriting and no receiver, on a stand-in and with each
+  composed method replaced; each new probe fails before this fix.
+  `builtins/keyobject-to-cryptokey` (celld-only) pins `toCryptoKey()`.
+  Two differences remain, in 1.68: an object that only inherits from a
+  key is not one, where workerd's brand check walks the prototype chain,
+  and a secret KeyObject's `symmetricKeySize` is its byte length, where
+  workerd's reports the algorithm's length in bits.
+  Not changed, all in 1.68 with a case: an API class called without `new`
+  and an accessor on a foreign receiver (V8's texts), header names, the
+  methods celld takes, body reuse and locking (1.43), FixedLengthStream's
+  and IdentityTransformStream's write-side errors, HTMLRewriter's selector
+  errors, and the key usage, algorithm and length checks Web Crypto lacks.
+  Not surveyed: node: modules (their messages are Node's, which celld's
+  node_*.js mostly copy), the bindings' errors (KV, R2, D1, Queues, DO
+  storage: their own items), RPC, sockets, EventSource, MessageChannel,
+  Workflows and the AI shim. `body-defaults`, `api-error-text` and
+  `api-error-text-gaps` cover what the survey ran.
+- Tests: `builtins/api-error-text` (369 probes in 17 areas, recorded on
+  workerd) passes; it fails at HEAD in every area. `builtins/api-error-text-gaps`
+  (36 probes, xfail 1.68) records the rest. `loader/startup-errors-api-text`
+  lost its xfail.
+- Cost (lab, `ab -n 20000 -c 16`, medians of 5 interleaved rounds against
+  5b2d534): hello-world fetch 18640 → 18562 req/s (−0.4%); a Worker that
+  reads a request header, builds a Headers from a record, a POST Request
+  with a URL and a Response with an init 18233 → 18036 req/s (−1.1%); the
+  rounds' ranges overlap.
+
 ### 1.19 Trace context across DO RPC calls (found by 1.2)
 
 **Problem.** `op_rpc_call` and `RpcCallReq` carry no parent trace context,
@@ -3765,7 +3989,8 @@ legitimate cross-event uses.
   statusText`). celld accepts both. Responses that celld builds from the
   network and from other isolates must first get a null body for those
   statuses, as workerd builds them, or the check would refuse them. Pinned
-  by `builtins/response-null-body` (xfail).
+  by `builtins/response-null-body` (xfail). Done in 1.40: the check
+  applies to a script's init, and celld's own (`__responseInit`) skip it.
 - **Socket events of a stateless Worker after its response.** A message or
   close event that calls a Durable Object (or does other I/O) after the
   response has gone never gets an answer in celld: the call goes out, but
@@ -6158,7 +6383,8 @@ cap; unit tests for the caps.
   whose body is a stream or not empty, and treats an empty one as no body;
   celld takes the body. celld's own paths build such responses from what a
   target sent, so they need to pass a null body first. Pinned by
-  `fetch/null-body-status-construct` (xfail).
+  `fetch/null-body-status-construct` (xfail). Done in 1.40, as in 1.42's
+  entry.
 - **Content-Length of a body passed on.** A fetched gzip response a Worker
   returns unread keeps the upstream's `Content-Length` in workerd; celld
   sends it chunked (the listed difference "celld removes Content-Length from
@@ -6362,8 +6588,8 @@ cap; unit tests for the caps.
   workerd gives its SyntaxError. Pinned by `loader/global-scope-ops-gaps`
   (xfail), with the next.
 - **`queueMicrotask()`** is celld's polyfill, `Promise.resolve().then(f)`:
-  it returns a promise where workerd's returns `undefined`, takes anything
-  as its callback, and turns a callback's throw into a rejection rather than
+  it returns a promise where workerd's returns `undefined` (a callback that
+  is not a function is refused since 1.40), and turns a callback's throw into a rejection rather than
   a reported error. Pinned by `loader/global-scope-ops-gaps` (xfail).
 - **The order of a Request init's checks.** workerd refuses a body at module
   scope after checking `integrity`, the method and the headers, and before
@@ -6378,6 +6604,87 @@ cap; unit tests for the caps.
   decided whether they were refused at module scope; workerd's are native
   and use its own timers. They now use the harness's timers. Pinned by
   `builtins/replaced-globals` and `loader/global-scope-ops`.
+
+### 1.68 Gaps found by 1.40
+
+`builtins/api-error-text-gaps` (xfail) pins each, recorded on workerd
+1.20261001.1:
+- **API classes called without `new`.** celld's URL, URLSearchParams,
+  Headers, TextEncoder/TextDecoder, Blob/File, AbortController, Event and
+  its subclasses, EventTarget, DOMException and the stream classes but
+  ReadableStream are JS classes, so a call without `new` throws V8's
+  `Class constructor X cannot be invoked without 'new'`. workerd throws `Failed to construct 'X':
+  Please use the 'new' operator, this object constructor cannot be called
+  as a function.` Body, Request, Response and ReadableStream are functions
+  already (1.36 item 8, `__calledWithoutNew`, `__installMembers`); the rest
+  need the same treatment.
+- **A method or accessor on a foreign receiver.** Where celld's class
+  reads a private field without a brand check first (URL's accessors,
+  Headers' and URLSearchParams' methods, and others), V8 throws `Cannot
+  read private member #x from an object whose class did not declare it`.
+  workerd throws ``Illegal invocation: function called with incorrect
+  `this` reference. …`` (`__celld.__illegalInvocation`). A `#x in this`
+  check per member fixes each.
+- **Header names.** workerd's token check is per byte and passes a byte
+  above 0x7F (`header-validation.h`), so `append("é", …)` works and
+  `has("")` is false; celld refuses both with `Invalid header name.`. Taking
+  them means the outbound paths must send such a name, which hyper refuses.
+- **HTTP methods.** workerd takes every `kj::HttpMethod` but CONNECT
+  (`TRACE`, `PURGE`, `COPY`, `LOCK`, `MKCOL`, `MOVE`, `PROPFIND`,
+  `PROPPATCH`, `SEARCH`, `UNLOCK`, `ACL`, `REPORT`, …); celld takes seven
+  (`__HTTP_METHODS`).
+- **Body reuse and locking** (1.43, which lists them): `text()` twice,
+  `text()` of a body locked to a reader, and `new Request(used)` (workerd's
+  `Cannot reconstruct a Request with a used body.`). Not in 1.43 (found by
+  the key material review): after `await res.text()`, `res.body` is
+  unlocked and a reader reads the bytes again, and
+  `HTMLRewriter.transform()` of that Response rewrites them; workerd's body
+  is locked (`This ReadableStream is currently locked to a reader.`, and
+  `The ReadableStream has been locked to a reader.` from `transform()`).
+- **`formData()` of a string body.** Its Content-Type is missing
+  (1.43), so celld says `Parsing a Body as FormData requires a
+  Content-Type header.` where workerd gives the unrecognized-type text.
+- **Unquoted multipart parameters.** workerd's Content-Disposition grammar
+  takes only quoted values, so `name=a` reads as no name (`… is missing a
+  name.`); celld takes it.
+- **FixedLengthStream and IdentityTransformStream writes.** A short close
+  and a string written resolve on workerd, whose readable side fails
+  instead; celld rejects the write or close.
+- **HTMLRewriter selectors** are parsed by `transform()`, so `on("[", {})`
+  does not throw `Parser error: Unexpected end of selector.` as workerd's
+  does.
+- **Event subclasses** other than CustomEvent name `Event` in a missing
+  argument's error (`new ErrorEvent()`).
+- **Web Crypto checks.** No operation checks that the key's algorithm is
+  the one requested (`Requested algorithm "AES-GCM" does not match this
+  CryptoKey's algorithm "HMAC".`) or that the key lists the usage
+  (`Requested key usage "sign" does not match any usage listed in this
+  CryptoKey.`), both InvalidAccessError; `importKey()` checks no usage
+  (`Attempt to import secret AES-GCM key with invalid usage "sign".`) and
+  no AES length (`Imported AES key length must be 128, 192, or 256 bits
+  but provided 56.`); `generateKey()` makes a secret key with no usages
+  (`Secret/private CryptoKeys must have at least one usage.`); a secret key
+  cannot be imported from `jwk` (`unsupported key import`). 1.67 lists the
+  `generateKey()` ones; together they want a usage table per algorithm, as
+  workerd's `CryptoKeyUsageSet::validate`.
+- **`Crypto`** is not a global (1.63).
+- **CryptoKey brand and `symmetricKeySize`** (from the review's key
+  material fix). workerd takes an object that inherits from a CryptoKey as
+  that key (JSG unwraps through the prototype chain), so
+  `exportKey("raw", Object.create(key))` reaches the extractability check;
+  celld refuses it as not a `'CryptoKey'`. `KeyObject.from(key)
+  .symmetricKeySize` is the key's `algorithm.length | 0` on workerd, its
+  length in bits, where celld gives its bytes, as Node does; the gaps
+  case leaves it out, as it would need `nodejs_compat`. `createHmac()` of
+  a private or public key whose `type` was redefined as `secret` throws
+  Node's `Invalid key object type private, expected secret.`; workerd's
+  refuses it with its raw export's error (`Raw export of Ed25519 keys is
+  only allowed for public keys.`, `Cannot export "RSASSA-PKCS1-v1_5" in
+  "raw" format.`), which celld's `exportKey()` lacks too.
+  `builtins/cryptokey-material` checks only that both refuse.
+- **A copy's input body.** `new Request(input, init)` takes the input's
+  body on workerd, which leaves the input used; celld leaves a buffered
+  input unused unless the copy is refused.
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 

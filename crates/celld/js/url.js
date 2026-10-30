@@ -30,6 +30,9 @@
 // silent no-ops on href).
 (function () {
     const _urlParse = $$urlParse;
+    const _jsg = __celld.__jsg;
+    // A USVString as JSG converts one: ToString, which throws for a Symbol.
+    const _str = (v) => `${v}`;
 
     // WHATWG special schemes and their default ports. A port equal to its
     // scheme's default is not serialized, so both the `protocol` and `port`
@@ -75,9 +78,12 @@
         #searchParams = null;
 
         constructor(input, base) {
+            if (arguments.length < 1)
+                throw _jsg.construct('URL', 1, 'USVString');
+            // The op throws workerd's TypeError, `Invalid URL string.`
             const p = _urlParse(
-                String(input),
-                base !== undefined ? String(base)
+                _str(input),
+                base !== undefined ? _str(base)
                     : undefined,
             );
             this._apply(p);
@@ -101,7 +107,7 @@
 
         get protocol() { return this.#protocol; }
         set protocol(v) {
-            v = String(v);
+            v = _str(v);
             // Spec: trailing ':' is part of the property.
             if (!v.endsWith(':')) v += ':';
             this.#protocol = v;
@@ -113,13 +119,13 @@
 
         get username() { return this.#username; }
         set username(v) {
-            this.#username = String(v);
+            this.#username = _str(v);
             this._rebuildHref();
         }
 
         get password() { return this.#password; }
         set password(v) {
-            this.#password = String(v);
+            this.#password = _str(v);
             this._rebuildHref();
         }
 
@@ -129,7 +135,7 @@
                 : this.#hostname;
         }
         set host(v) {
-            v = String(v);
+            v = _str(v);
             const colon = v.indexOf(':');
             if (colon === -1) {
                 this.#hostname = v;
@@ -146,7 +152,7 @@
 
         get hostname() { return this.#hostname; }
         set hostname(v) {
-            this.#hostname = String(v);
+            this.#hostname = _str(v);
             this._rebuildHref();
         }
 
@@ -155,7 +161,7 @@
             // Spec accepts numeric strings; empty string
             // clears the port. Bad input is silently
             // ignored (matches browser behaviour).
-            v = String(v);
+            v = _str(v);
             if (v === '') this.#port = '';
             else if (/^\d+$/.test(v))
                 this.#port =
@@ -165,7 +171,7 @@
 
         get pathname() { return this.#pathname; }
         set pathname(v) {
-            v = String(v).replace(/[\t\n\r]/g, '');
+            v = _str(v).replace(/[\t\n\r]/g, '');
             // Spec: special-scheme URLs always have an
             // absolute path -- prepend '/' if missing.
             if (v && !v.startsWith('/')) v = '/' + v;
@@ -175,7 +181,7 @@
 
         get search() { return this.#search; }
         set search(v) {
-            v = String(v).replace(/[\t\n\r]/g, '');
+            v = _str(v).replace(/[\t\n\r]/g, '');
             if (v.startsWith('?')) v = v.slice(1);
             this.#search = v === '' ? '' : '?' + _encodeQuery(v);
             if (this.#searchParams) {
@@ -187,7 +193,7 @@
 
         get hash() { return this.#hash; }
         set hash(v) {
-            v = String(v).replace(/[\t\n\r]/g, '');
+            v = _str(v).replace(/[\t\n\r]/g, '');
             if (v === '') this.#hash = '';
             else if (!v.startsWith('#')) this.#hash = '#' + v;
             else this.#hash = v;
@@ -229,7 +235,14 @@
 
         get href() { return this.#href; }
         set href(v) {
-            this._apply(_urlParse(String(v)));
+            v = _str(v);
+            let p;
+            try {
+                p = _urlParse(v);
+            } catch {
+                throw _jsg.setter('href', 'URL', 'valid URL string');
+            }
+            this._apply(p);
         }
 
         _rebuildHref() {
@@ -265,23 +278,25 @@
         toString() { return this.#href; }
         toJSON() { return this.#href; }
 
+        // Both convert their arguments before they parse, so a missing or
+        // unconvertible argument throws rather than reading as a failed parse.
         static canParse(url, base) {
+            if (arguments.length < 1)
+                throw _jsg.execute('canParse', 'URL', 1, 'USVString');
+            url = _str(url);
+            if (base !== undefined) base = _str(base);
             try {
-                new URL(
-                    url,
-                    base !== undefined ? base
-                        : undefined,
-                );
+                new URL(url, base);
                 return true;
             } catch { return false; }
         }
         static parse(url, base) {
+            if (arguments.length < 1)
+                throw _jsg.execute('parse', 'URL', 1, 'USVString');
+            url = _str(url);
+            if (base !== undefined) base = _str(base);
             try {
-                return new URL(
-                    url,
-                    base !== undefined ? base
-                        : undefined,
-                );
+                return new URL(url, base);
             } catch { return null; }
         }
     };

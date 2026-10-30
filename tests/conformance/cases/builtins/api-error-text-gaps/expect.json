@@ -1,0 +1,97 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "href getter on {}": "TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+        "URL()": "TypeError(TypeError): Failed to construct 'URL': Please use the 'new' operator, this object constructor cannot be called as a function."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "append('é', 'c')": "returned undefined",
+        "has('')": "returned false",
+        "get on {}": "TypeError(TypeError): Illegal invocation: function called with incorrect `this` reference. See https://developers.cloudflare.com/workers/observability/errors/#illegal-invocation-errors for details.",
+        "Headers()": "TypeError(TypeError): Failed to construct 'Headers': Please use the 'new' operator, this object constructor cannot be called as a function."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "method 'TRACE'": "returned [object Request]",
+        "text twice": "TypeError(TypeError): Body has already been used. It can only be used once. Use tee() first if you need to read it twice.",
+        "new Request(used)": "TypeError(TypeError): Cannot reconstruct a Request with a used body.",
+        "copy leaves its input used": "returned true"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "text twice": "TypeError(TypeError): Body has already been used. It can only be used once. Use tee() first if you need to read it twice.",
+        "body locked then text": "TypeError(TypeError): This ReadableStream is currently locked to a reader.",
+        "body read after text": "TypeError(TypeError): This ReadableStream is currently locked to a reader.",
+        "HTMLRewriter transform of a used Response": "TypeError(TypeError): The ReadableStream has been locked to a reader."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "TextDecoder()": "TypeError(TypeError): Failed to construct 'TextDecoder': Please use the 'new' operator, this object constructor cannot be called as a function."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "text() of locked request body": "TypeError(TypeError): This ReadableStream is currently locked to a reader.",
+        "FixedLengthStream short": "returned undefined",
+        "IdentityTransformStream write string": "returned undefined"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "formData() on text": "TypeError(TypeError): Unrecognized Content-Type header value. FormData can only parse the following MIME types: multipart/form-data, application/x-www-form-urlencoded",
+        "Blob()": "TypeError(TypeError): Failed to construct 'Blob': Please use the 'new' operator, this object constructor cannot be called as a function.",
+        "formData() unquoted name": "TypeError(TypeError): Content-Disposition header in FormData part is missing a name."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "AbortController()": "TypeError(TypeError): Failed to construct 'AbortController': Please use the 'new' operator, this object constructor cannot be called as a function."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "EventTarget()": "TypeError(TypeError): Failed to construct 'EventTarget': Please use the 'new' operator, this object constructor cannot be called as a function.",
+        "Event()": "TypeError(TypeError): Failed to construct 'Event': Please use the 'new' operator, this object constructor cannot be called as a function.",
+        "new ErrorEvent()": "TypeError(TypeError): Failed to construct 'ErrorEvent': constructor parameter 1 is not of type 'string'."
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "exportKey of an object inheriting a key": "DOMException(InvalidAccessError): Attempt to export non-extractable AES-GCM key.",
+        "importKey AES length 7": "DOMException(DataError): Imported AES key length must be 128, 192, or 256 bits but provided 56.",
+        "importKey AES usage 'sign'": "DOMException(SyntaxError): Attempt to import secret AES-GCM key with invalid usage \"sign\".",
+        "importKey HMAC usages 'x'": "DOMException(SyntaxError): Attempt to import secret HMAC key with invalid usage \"x\".",
+        "importKey jwk bad": "DOMException(DataError): HMAC \"jwk\" key import requires a JSON Web Key with Key Type parameter (\"kty\") equal to \"oct\" (encountered \"undefined\").",
+        "generateKey AES no usages": "DOMException(SyntaxError): Secret/private CryptoKeys must have at least one usage.",
+        "encrypt with HMAC key": "DOMException(InvalidAccessError): Requested algorithm \"AES-GCM\" does not match this CryptoKey's algorithm \"HMAC\".",
+        "sign without usage": "DOMException(InvalidAccessError): Requested key usage \"sign\" does not match any usage listed in this CryptoKey.",
+        "new Crypto()": "TypeError(TypeError): Illegal constructor"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "new HTMLRewriter().on('[', {})": "TypeError(TypeError): Parser error: Unexpected end of selector.",
+        "DOMException()": "TypeError(TypeError): Failed to construct 'DOMException': Please use the 'new' operator, this object constructor cannot be called as a function."
+      }
+    }
+  ]
+}

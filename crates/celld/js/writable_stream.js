@@ -12,10 +12,24 @@
 
 // Brand-check sentinel for internal construction.
 const _wsc_brand = Symbol("WritableStreamController");
+// JSG's conversion errors (api_tags.js).
+const _jsg = __celld.__jsg;
+const LOCKED_TO_WRITER = "This WritableStream is currently locked to a writer.";
+const CLOSED = "This WritableStream has been closed.";
 
 // A stream another request owns (an IdentityTransformStream's writable)
 // refuses each operation with workerd's error (streams.js).
 const ioRefusal = __celld.__streamIo.refusal;
+
+// A dictionary's callback members, `names` beside their values `fns`: each
+// is a function or absent, or JSG refuses the field. An indexed loop, which
+// nothing a script patches on Array.prototype changes.
+const checkCallbacks = (owner, names, fns) => {
+  for (let i = 0; i < names.length; i++) {
+    if (fns[i] !== undefined && typeof fns[i] !== 'function')
+      throw _jsg.field(names[i], owner, 'function');
+  }
+};
 
 class WritableStreamDefaultController {
   #stream;
@@ -67,11 +81,9 @@ class WritableStreamDefaultWriter {
     if (__celld.__oldAttributes)
       __celld.__installAttributes(this, "WritableStreamDefaultWriter");
     if (!(stream instanceof WritableStream))
-      throw new TypeError(
-        "WritableStreamDefaultWriter requires a " +
-        "WritableStream argument");
+      throw _jsg.construct('WritableStreamDefaultWriter', 1, 'WritableStream');
     if (stream._locked)
-      throw new TypeError("WritableStream is locked");
+      throw new TypeError(LOCKED_TO_WRITER);
     this.#stream = stream;
     stream._locked = true;
     stream._writer = this;
@@ -256,36 +268,37 @@ class WritableStream {
     __celld.__deferWritableAttributes = false;
     if (__celld.__oldAttributes && !defer)
       __celld.__installAttributes(this, "WritableStream");
+    // Both are dictionaries (streams/common.h): undefined or null is
+    // empty, and a value that is not an object is refused.
+    if (!_jsg.isDictionary(underlyingSink))
+      throw _jsg.construct('WritableStream', 1, 'UnderlyingSink');
+    if (!_jsg.isDictionary(queuingStrategy))
+      throw _jsg.construct('WritableStream', 2, 'StreamQueuingStrategy');
     // Per spec: extract strategy fields first. Size is
     // read and validated before highWaterMark; invalid
     // size must beat invalid highWaterMark.
-    if (queuingStrategy !== undefined) {
+    if (queuingStrategy != null) {
       const size = queuingStrategy.size;
       if (size !== undefined
           && typeof size !== 'function')
-        throw new TypeError(
-          'strategy.size must be a function');
+        throw _jsg.field('size', 'StreamQueuingStrategy', 'function');
       this._sizeFn = size;
       const hwm = queuingStrategy.highWaterMark;
-      if (hwm !== undefined) {
-        const n = Number(hwm);
-        // Workerd throws TypeError here, not the spec's
-        // RangeError.
-        if (Number.isNaN(n) || n < 0)
-          throw new TypeError(
-            'highWaterMark must be non-negative');
-        this._hwm = n;
-      }
+      // A uint64_t in workerd, so a fraction is dropped.
+      if (hwm !== undefined) this._hwm = _jsg.toUint64(hwm);
     }
-    const sink = underlyingSink || {};
-    if (sink.type !== undefined)
-      throw new RangeError("Invalid type");
+    const sink = underlyingSink ?? {};
+    // workerd refuses a `type` only in its pedantic WPT mode, which celld
+    // does not have; otherwise it is ignored.
     this._sink = sink;
-    // Cache sink algorithms once per spec + bind this.
+    // Cache sink algorithms once per spec + bind this, checked in
+    // workerd's member order (streams/common.h `UnderlyingSink`).
     this._startFn = sink.start;
     this._writeFn = sink.write;
-    this._closeFn = sink.close;
     this._abortFn = sink.abort;
+    this._closeFn = sink.close;
+    checkCallbacks('UnderlyingSink', ['start', 'write', 'abort', 'close'],
+      [this._startFn, this._writeFn, this._abortFn, this._closeFn]);
     this._controller = new WritableStreamDefaultController(
       _wsc_brand, this);
     this._backpressure = this._queueSize >= this._hwm;
@@ -361,8 +374,7 @@ class WritableStream {
     if (this._state === 'errored')
       return Promise.reject(this._storedError);
     if (this._closing() || this._state === 'closed')
-      return Promise.reject(new TypeError(
-        "Cannot write to a closing/closed stream"));
+      return Promise.reject(new TypeError(CLOSED));
     if (this._state === 'erroring')
       return Promise.reject(this._storedError);
     return new Promise((resolve, reject) => {
@@ -374,13 +386,11 @@ class WritableStream {
   }
 
   _close() {
-    if (this._state === 'closed' ||
-        this._state === 'errored')
-      return Promise.reject(new TypeError(
-        "Stream already closed/errored"));
-    if (this._closing())
-      return Promise.reject(new TypeError(
-        "Stream already closing"));
+    // workerd rejects a close of an errored stream with its error.
+    if (this._state === 'errored')
+      return Promise.reject(this._storedError);
+    if (this._state === 'closed' || this._closing())
+      return Promise.reject(new TypeError(CLOSED));
     return new Promise((resolve, reject) => {
       this._closeRequest = { resolve, reject };
       if (this._backpressure &&
@@ -592,8 +602,7 @@ class WritableStream {
     const refused = ioRefusal(this);
     if (refused !== undefined) return refused;
     if (this._locked)
-      return Promise.reject(new TypeError(
-        "Cannot close a locked stream"));
+      return Promise.reject(new TypeError(LOCKED_TO_WRITER));
     return this._close();
   }
 
@@ -601,8 +610,7 @@ class WritableStream {
     const refused = ioRefusal(this);
     if (refused !== undefined) return refused;
     if (this._locked)
-      return Promise.reject(new TypeError(
-        "Cannot abort a locked stream"));
+      return Promise.reject(new TypeError(LOCKED_TO_WRITER));
     return this._abort(reason);
   }
 }
@@ -656,15 +664,29 @@ class TransformStream {
   get readable() { return sidesOf(this).readable; }
   get writable() { return sidesOf(this).writable; }
 
-  constructor(transformer = {}, writableStrategy,
+  constructor(transformer = undefined, writableStrategy,
               readableStrategy) {
+    // A Transformer is a dictionary (streams/common.h): undefined or null
+    // is empty, and a value that is not an object is refused.
+    if (!_jsg.isDictionary(transformer))
+      throw _jsg.construct('TransformStream', 1, 'Transformer');
+    transformer ??= {};
     // Cache transformer methods once (may include proto
     // chain); call with .call(transformer, ...) so `this`
-    // binds per spec.
+    // binds per spec. Read and checked in workerd's member order, then
+    // the types it refuses.
+    const readableType = transformer.readableType;
+    const writableType = transformer.writableType;
     const startFn = transformer.start;
     const transformFn = transformer.transform;
     const flushFn = transformer.flush;
     const cancelFn = transformer.cancel;
+    checkCallbacks('Transformer', ['start', 'transform', 'flush', 'cancel'],
+      [startFn, transformFn, flushFn, cancelFn]);
+    if (readableType !== undefined)
+      throw new TypeError("transformer.readableType must be undefined.");
+    if (writableType !== undefined)
+      throw new TypeError("transformer.writableType must be undefined.");
     let rsc;
     // State for cross-side coordination. cancelled ->
     // transformer.cancel already ran (or started). flushing

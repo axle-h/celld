@@ -214,6 +214,9 @@
 
   // ---- crypto_util ---------------------------------------------------------
   const kHandle = Symbol("kHandle");
+  // A CryptoKey's type, extractability and material, which only celld reads
+  // (crypto.js `_keyState`); undefined for anything that is not a key.
+  const keyState = __celld.__cryptoKeyState;
   const kState = Symbol("kState");
   const kFinalized = Symbol("kFinalized");
 
@@ -285,58 +288,71 @@
   // buffered chunks and a one-shot host op at digest time. `copy()` clones
   // the buffered chunks; digest-after-digest returns the cached bytes, and
   // update/copy after digest throw like Workerd's finalized context.
+  // A Hash or Hmac keeps its handle under an own symbol, as Workerd's does,
+  // so a script reaches the handle; its state is private, as the C++
+  // object's is, and an Hmac's holds the key's bytes.
   class HashHandle {
+    #info;
+    #chunks;
+    #result = null;
     constructor(algorithm, xofLen, _chunks) {
       const info = digestInfo(algorithm);
       if (!info) throw new Error("Digest method not supported");
       if (xofLen !== undefined && xofLen !== info[1])
         throw new Error("invalid digest size");
-      this.alg = algorithm;
-      this.info = info;
-      this.chunks = _chunks ? _chunks.slice() : [];
-      this.result = null;
+      this.#info = info;
+      this.#chunks = _chunks ? _chunks.slice() : [];
     }
     update(data) {
-      if (this.result)
+      if (this.#result)
         throw new Error("Hash context has already been finalized.");
-      this.chunks.push(copyU8(data));
+      this.#chunks.push(copyU8(data));
       return 1;
     }
     digest() {
-      if (this.result) return this.result.slice();
-      const out = $$digest(this.info[0], concatU8(this.chunks));
-      this.chunks = null;
-      this.result = out;
+      if (this.#result) return this.#result.slice();
+      const out = $$digest(this.#info[0], concatU8(this.#chunks));
+      this.#chunks = null;
+      this.#result = out;
       return out.slice();
     }
     copy(xofLen) {
-      if (this.result)
+      if (this.#result)
         throw new Error("Hash context has already been finalized.");
-      return new HashHandle(this.alg, xofLen, this.chunks);
+      return new HashHandle(this.#info[0], xofLen, this.#chunks);
     }
   }
   class HmacHandle {
+    #info;
+    #key;
+    #chunks = [];
     constructor(algorithm, key) {
       const info = digestInfo(algorithm);
       if (!info) throw new Error("Digest method not supported");
-      this.info = info;
+      this.#info = info;
       // key: bytes, or a CryptoKey (from a KeyObject or WebCrypto).
-      this.key = copyU8(
-        key instanceof CryptoKey ? key.__celldMaterial.bytes : key);
-      this.chunks = [];
+      const state = keyState(key);
+      this.#key = copyU8(state !== undefined ? state.material.bytes : key);
     }
     update(data) {
-      if (!this.chunks)
+      if (!this.#chunks)
         throw new Error("HMAC context has already been finalized.");
-      this.chunks.push(copyU8(data));
+      this.#chunks.push(copyU8(data));
       return 1;
     }
     digest() {
-      const sig = $$hmacSign(this.info[0], this.key, concatU8(this.chunks));
-      this.chunks = null;
+      const sig = $$hmacSign(this.#info[0], this.#key, concatU8(this.#chunks));
+      this.#chunks = null;
       if (!sig) throw new Error("HMAC digest failed");
       return sig;
     }
+  }
+  // A JSG class's prototype lists its methods, then `constructor`.
+  for (const klass of [HashHandle, HmacHandle]) {
+    delete klass.prototype.constructor;
+    Object.defineProperty(klass.prototype, "constructor", {
+      value: klass, writable: true, configurable: true,
+    });
   }
   function concatU8(chunks) {
     let total = 0;
@@ -372,8 +388,8 @@
       validateString(algorithm, "algorithm");
       this[kHandle] = new HashHandle(algorithm, xofLen);
     }
-    Transform.call(this, options);
     this[kState] = { [kFinalized]: false };
+    Transform.call(this, options);
     return this;
   }
   Hash.prototype.copy = function (options) {
@@ -422,10 +438,14 @@
     if (key instanceof KeyObject) {
       if (key.type !== "secret")
         throw ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE(key.type, "secret");
+      // `type` is a property a script may redefine; the key's own decides.
+      const type = keyState(key[kHandle])?.type;
+      if (type !== "secret")
+        throw ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE(type, "secret");
       this[kHandle] = new HmacHandle(hmac, key[kHandle]);
-    } else if (key instanceof CryptoKey) {
-      if (key.type !== "secret")
-        throw ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE(key.type, "secret");
+    } else if (keyState(key) !== undefined) {
+      if (keyState(key).type !== "secret")
+        throw ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE(keyState(key).type, "secret");
       this[kHandle] = new HmacHandle(hmac, key);
     } else if (
       typeof key !== "string" &&
@@ -442,8 +462,8 @@
       this[kHandle] =
         new HmacHandle(hmac, getArrayBufferOrView(key, "key", encoding));
     }
-    Transform.call(this, options);
     this[kState] = { [kFinalized]: false };
+    Transform.call(this, options);
     return this;
   }
   Hmac.prototype.update = Hash.prototype.update;
@@ -480,15 +500,16 @@
 
   const keyEquals = (a, b) => {
     if (a === b) return true;
-    if (!a.extractable || !b.extractable) return false;
-    const ab = a.__celldMaterial?.bytes, bb = b.__celldMaterial?.bytes;
+    const as = keyState(a), bs = keyState(b);
+    if (!as?.extractable || !bs?.extractable) return false;
+    const ab = as.material.bytes, bb = bs.material.bytes;
     if (!ab || !bb || ab.byteLength !== bb.byteLength) return false;
     let diff = 0;
     for (let i = 0; i < ab.byteLength; i++) diff |= ab[i] ^ bb[i];
     return diff === 0;
   };
   const keyMaterial = (key) => {
-    const bytes = key.__celldMaterial?.bytes;
+    const bytes = keyState(key)?.material.bytes;
     if (!bytes) {
       throw new Error(
         "key material is not exportable through node:crypto yet");
@@ -546,7 +567,8 @@
     static from(key) {
       if (!(key instanceof CryptoKey))
         throw ERR_INVALID_ARG_TYPE("key", "CryptoKey", key);
-      switch (key.type) {
+      // The key's own type, which a script cannot redefine.
+      switch (keyState(key)?.type) {
         case "secret":
           return Reflect.construct(function () {
             this[kHandle] = key;
@@ -564,6 +586,9 @@
     export(options = {}) {
       validateObject(options, "options");
       validateExportOptions(options, this.type);
+      // workerd's CryptoImpl::exportKey, whatever the format.
+      if (!keyState(this[kHandle])?.extractable)
+        throw new TypeError("Unable to export non-extractable key");
       const bytes = keyMaterial(this[kHandle]);
       // workerd's JsonWebKey struct (`__jwkStruct`).
       if (options.format === "jwk" && this.type === "secret") {
@@ -630,7 +655,7 @@
         String(error?.message ?? error).replace(/^crypto: /, ""));
     }
   };
-  const asymmetricMaterial = (key) => key.__celldMaterial ?? {};
+  const asymmetricMaterial = (key) => keyState(key)?.material ?? {};
   // The generation op does not carry a curve yet, so it always generates
   // P-256. Keep that limitation separate from imported-key conversion, which
   // accepts every curve that the shared Web Crypto implementation parses.
@@ -684,7 +709,7 @@
       WEB_CRYPTO_ALGORITHM[result.keyType], null, result.keyType,
       result.details);
     return KeyObject.from(
-      new CryptoKey(visibility, algorithm, true, [], material));
+      __celld.__makeCryptoKey(visibility, algorithm, true, [], material));
   }
 
   class AsymmetricKeyObject extends KeyObject {
@@ -705,6 +730,8 @@
       return asymmetricMaterial(this[kHandle]).keyType;
     }
     toCryptoKey(algorithm, extractable, usages) {
+      // The key's own state, not `this.type`, which a script may redefine.
+      const source = keyState(this[kHandle]);
       const material = asymmetricMaterial(this[kHandle]);
       const requestedName = typeof algorithm === "string"
         ? algorithm
@@ -731,17 +758,33 @@
       // KeyObject's storage handle loses all three requested values and makes
       // libraries such as jose reject a valid private key before signing.
       const requestedUsages = Array.from(usages);
-      const allowedUsages = contract[this.type];
+      const allowedUsages = contract[source.type];
       if (requestedUsages.some((usage) => !allowedUsages.includes(usage)) ||
-          (this.type === "private" && requestedUsages.length === 0)) {
+          (source.type === "private" && requestedUsages.length === 0)) {
         throw new DOMException(
-          `Invalid ${this.type} key usages`, "SyntaxError");
+          `Invalid ${source.type} key usages`, "SyntaxError");
       }
-      return new CryptoKey(
-        this.type,
-        __celld.$$keyAlgorithm(
-          requestedName, algorithm, material.keyType, material.details),
-        extractable,
+      const reported = __celld.$$keyAlgorithm(
+        requestedName, algorithm, material.keyType, material.details);
+      // A view of a non-extractable key does no more than the key does: its
+      // algorithm and hash, and none of the usages it lacks. Otherwise an
+      // ECDSA key would derive as ECDH, or an RSA-PSS key decrypt as
+      // RSA-OAEP. An extractable key's bytes can be exported and imported
+      // under any algorithm anyway. Workerd has no toCryptoKey() to follow.
+      if (!source.extractable &&
+          (reported.name !== source.algorithm.name ||
+            reported.hash?.name !== source.algorithm.hash?.name ||
+            requestedUsages.some((usage) => !source.usages.includes(usage)))) {
+        throw new DOMException(
+          "A non-extractable key cannot change its algorithm or gain a usage",
+          "InvalidAccessError");
+      }
+      return __celld.__makeCryptoKey(
+        source.type,
+        reported,
+        // A view of a non-extractable key's material stays non-extractable:
+        // it would otherwise export what the source key refuses to.
+        Boolean(extractable) && source.extractable,
         requestedUsages,
         material,
       );
@@ -778,7 +821,7 @@
     // inputs stay owned by the caller -- key material must be immutable.
     const bytes = copyU8(
       typeof key === "string" ? Buffer.from(key, encoding) : key);
-    const handle = new CryptoKey(
+    const handle = __celld.__makeCryptoKey(
       "secret", { name: "secret" }, true, [], { bytes });
     return KeyObject.from(handle);
   }
@@ -864,6 +907,12 @@
       if (key.type !== "private")
         throw ERR_INVALID_ARG_TYPE("key", "PrivateKeyObject", key);
       const handle = key instanceof CryptoKey ? key : key[kHandle];
+      // `type` above is a property a script may redefine, so the key's own
+      // type decides, as Workerd's CryptoImpl::createPublicKey checks it.
+      if (keyState(handle)?.type !== "private") {
+        throw new TypeError(
+          "Cannot create public key from secret or public key");
+      }
       return asymmetricKeyObject(
         keyOp("asym-key-public-from-private", {
           der: Array.from(asU8(asymmetricMaterial(handle).bytes)),
@@ -1032,8 +1081,10 @@
     const object = isKeyObject(key)
       ? key
       : (key instanceof CryptoKey ? KeyObject.from(key) : createPrivateKey(key));
-    if (object.type !== want) {
-      throw ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE(object.type, want);
+    // The key's own type: a KeyObject's `type` can be redefined.
+    const type = keyState(object[kHandle])?.type;
+    if (type !== want) {
+      throw ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE(type, want);
     }
     const material = asymmetricMaterial(object[kHandle]);
     if (material.keyType === undefined)
