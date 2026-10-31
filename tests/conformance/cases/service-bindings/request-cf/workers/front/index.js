@@ -1,6 +1,5 @@
 // A request's `cf` reaches the target of a Fetcher, directly and on each hop
-// of a followed redirect, through every kind of Fetcher. celld delivers it
-// only to a target in the caller's isolate (plan 1.41).
+// of a followed redirect, through every kind of Fetcher.
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 
 const serve = (request) => {

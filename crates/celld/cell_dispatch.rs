@@ -162,6 +162,8 @@ pub struct CallPayload {
     pub method: String,
     pub body: RequestBody,
     pub headers: Vec<(String, String)>,
+    /// The caller's `cf` as JSON text, or `None` when it set none.
+    pub cf: Option<String>,
 }
 
 /// The state of a fetch-style call that outlives one dispatch attempt.
@@ -209,6 +211,7 @@ pub fn split_do_call(
         body,
         body_guard,
         headers,
+        cf,
         reply,
         order,
         parent,
@@ -231,6 +234,7 @@ pub fn split_do_call(
             method,
             body,
             headers,
+            cf,
         },
         reply,
     )
@@ -351,6 +355,7 @@ pub async fn dispatch_call_attempt(
                 method,
                 body,
                 headers,
+                cf,
             } = payload;
             dispatch_local_fetch(
                 app,
@@ -362,6 +367,7 @@ pub async fn dispatch_call_attempt(
                     method,
                     body,
                     headers,
+                    cf,
                     request_id: call.request_id,
                     order: call.order.take(),
                     parent: call.parent,

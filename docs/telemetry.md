@@ -54,13 +54,14 @@ body holds only the message.
 Log files from earlier celld versions have no severity columns. Read a mix of
 versions with `union_by_name = true`.
 
-celld reads the W3C `traceparent` header on incoming requests and sends it on
-outbound `fetch()`. A malformed header starts a new trace. A Worker's call to
-a Durable Object, by `fetch()` or RPC, stays in one trace on any node. So does
-an RPC call to another script's entrypoint, to a loaded Worker or to a facet.
-A `fetch()` through a service binding or to a loaded Worker carries no
-context of its own: its target joins the caller's trace only through a
-`traceparent` header the caller sends.
+celld reads the W3C `traceparent` header on requests from clients and sends
+it on outbound `fetch()`. A malformed header starts a new trace. A Worker's
+call to a Durable Object, by `fetch()` or RPC, stays in one trace on any
+node. So does a call to another script's entrypoint, to a loaded Worker or to
+a facet, by `fetch()` or RPC, and a loaded Worker's `fetch()` through its
+`globalOutbound`. The host carries the caller's context on these calls, so a
+`traceparent` header a Worker sends to another Worker is only a header: it
+does not choose the trace the target joins.
 
 A loaded Worker's outbound `fetch()` sends a `traceparent` with the trace id
 of the request that called it, as that request's own outbound `fetch()` does.

@@ -237,6 +237,28 @@ pub enum WorkerRpcOperation {
     Call { path: Vec<String>, args: Vec<u8> },
 }
 
+/// Who sent a Worker's fetch event, which decides what its request carries
+/// besides the HTTP message.
+#[derive(Clone, Debug)]
+pub enum FetchSender {
+    /// A client of the node's public listener. The request's `cf` is `{}`,
+    /// because celld proves no edge metadata, and a `traceparent` header
+    /// names the trace the event joins.
+    Client,
+    /// Another Worker, through a Fetcher: a service binding, a Worker Loader
+    /// entrypoint, or a loaded Worker's `globalOutbound`. The host carries
+    /// what workerd carries beside the message (`SubrequestMetadata`), so the
+    /// request's headers are the caller's data and name no trace.
+    Worker {
+        /// The caller's `cf` as JSON text, workerd's cf blob, or `None` when
+        /// it set none. The target parses it when it is first read.
+        cf: Option<String>,
+        /// The calling handler's trace context, which the host read at the
+        /// call site, so the event joins the caller's trace.
+        parent: Option<telemetry::TraceContext>,
+    },
+}
+
 pub enum WorkerJob {
     Fetch {
         queued_at: std::time::Instant,
@@ -248,6 +270,7 @@ pub enum WorkerJob {
         method: String,
         body: js::RequestBody,
         headers: Vec<(String, String)>,
+        sender: FetchSender,
         request_id: Option<js::RequestId>,
         /// Receives one completed invocation report for Dynamic Worker tails.
         /// Ordinary fetches leave this empty.

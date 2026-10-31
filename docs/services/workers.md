@@ -60,6 +60,11 @@ have the shape Wrangler requires and otherwise ignores them. `environment` and
 any other key stop the deployment: celld has one deployment of each script,
 and no Wrangler environments.
 
+A `fetch()` through a binding gives the target what workerd gives it besides
+the request itself: the request's `cf`, frozen, and the caller's trace
+context. A body reaches it with a `Content-Length`, or chunked when its
+length is unknown, as over HTTP.
+
 A `fetch()` through a binding can answer with a WebSocket upgrade, as on
 Cloudflare. The caller passes the socket on by returning the response, also
 after a rebuild such as `new Response(r.body, r)`, through any number of hops.
@@ -78,6 +83,8 @@ call within the isolate has no limit, as on Cloudflare.
 - celld does not manage a custom domain or terminate TLS.
 - The keys of a service binding's `props` reach the target in sorted order,
   not in the order the config gives them.
+- A request's `cf` reaches another script's Worker only up to 64 KiB of JSON.
+  A larger one fails the `fetch()`.
 - `ctx.passThroughOnException()` has no effect, because celld has no CDN.
 - A WebSocket that a binding's target returns waits at most 30 seconds for
   the caller to take it from the response. celld then closes it with code

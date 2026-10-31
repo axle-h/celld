@@ -1,0 +1,37 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": "sent"
+    },
+    {
+      "status": 200,
+      "body": [
+        {
+          "url": "http://child.test/a-with-cf",
+          "hasCf": true,
+          "cf": {
+            "colo": "TAIL",
+            "n": [
+              1
+            ]
+          }
+        },
+        {
+          "url": "http://child.test/b-without-cf",
+          "hasCf": true,
+          "cf": "none"
+        },
+        {
+          "url": "http://child.test/c-deep-cf",
+          "hasCf": true,
+          "cf": {
+            "depth": 200
+          }
+        }
+      ]
+    }
+  ]
+}

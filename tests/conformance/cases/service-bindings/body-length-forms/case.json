@@ -1,0 +1,4 @@
+{
+  "workers": ["front", "back"],
+  "steps": [{"path": "/"}, {"path": "/forward", "method": "POST", "body": "forwarded"}]
+}

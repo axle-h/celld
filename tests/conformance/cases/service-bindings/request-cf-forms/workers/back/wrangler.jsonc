@@ -1,0 +1,6 @@
+// The target of front's service binding.
+{
+  "name": "back",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01"
+}

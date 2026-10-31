@@ -483,7 +483,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 48 | 1.39 (timers, random values, bodies, streams, `WebSocketPair`, `waitUntil` and the rest refused in global scope as workerd does; key generation and celld's own timers immune to replaced globals) | done | `c58b76a` |
 | 49 | Durable Object stub RPC calls begin in the order they were made (the `storage/nested-root-transactions` flake; see 1.65) | done | `247e708` |
 | 50 | 1.40 (workerd's error types and texts across the runtime APIs; non-extractable key material private, SubtleCrypto receivers checked, node:crypto handles private; Request/Response/Cache/HTMLRewriter checks) | done | `4d9c582` |
-| 51+ | Phase 1 in plan order (1.41-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65, 1.66, 1.67, 1.68), and the 1.4 props key-order follow-up | queued | |
+| 51 | 1.41 (every Fetcher carries workerd's body framing and `cf` to its target, across the tunnel too; trace context from the host, not a caller's header; bodiless client and tunnel requests arrive with a null body) | done | (this commit) |
+| 52+ | Phase 1 in plan order (1.42-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65, 1.66, 1.67, 1.68, 1.69), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -3650,6 +3651,164 @@ Each one differs from workerd 1.20261001.1:
   too. A target in the caller's isolate gets it. Pinned by
   `service-bindings/request-cf` (xfail).
 
+**As built.**
+- **What workerd does** (probed on 1.20261001.1, and read in
+  `api/http.c++` `fetchImplNoOutputLock`, `Request::constructor`,
+  `serializeCfBlobJson`; `api/global-scope.c++` `request()`;
+  `api/cf-property.c++`; `io/io-channels.h` `SubrequestMetadata`;
+  `api/trace.c++` `getCf`). Every kind of Fetcher behaves alike: another
+  script's service binding, a binding to the caller's own script,
+  `ctx.exports`, a Durable Object stub, a facet, a Worker Loader entrypoint
+  and a loaded Worker's `globalOutbound`.
+  - **Framing.** fetch() sends a body's length with the request, and an
+    explicitly empty body as `Content-Length: 0`; the target's `request()`
+    gives a body without either framing header the one its length implies:
+    `Content-Length` when known (bytes, a Blob, URLSearchParams, a
+    FixedLengthStream, a received request's body), `Transfer-Encoding:
+    chunked` for a stream of unknown length. A framing header the caller set
+    is kept as it is, even a wrong `Content-Length: 3` on a 7-byte body. The
+    target's `request.body` is null exactly when neither header is present
+    and no bytes arrive: a bodiless `POST` has a null body, and a `GET`
+    whose caller set `Content-Length: 0` has an empty, non-null one.
+  - **`cf`.** It travels beside the message, never as a header
+    (`SubrequestMetadata.cfBlobJson`), as `JSON.stringify` of the
+    subrequest's `cf` (the cache mode's additions included). The target
+    parses it on first read and freezes it all the way down; no `cf` gives
+    `undefined`. The `Request` constructor takes a JSON copy of the `cf` the
+    init gives (`deepClone`), so a later change to that object is not
+    seen, and `request.cf` is that copy, mutable; a copy or a clone of a
+    Request gets a JSON copy of its own, never frozen. So a `Date` becomes
+    its ISO string, `undefined` and functions drop, `NaN` becomes `null`, a
+    `BigInt` throws `TypeError: Do not know how to serialize a BigInt`, a
+    `null` or a string `cf` throws `TypeError: Incorrect type for the 'cf'
+    field on 'RequestInitializerDict': the provided value is not of type
+    'Object'.`, and a function throws `SyntaxError: "undefined" is not
+    valid JSON`. A forwarded received request carries its `cf` on.
+  - **Tail events.** A loaded Worker's fetch event has `request.cf`, the
+    parsed `cf` or `undefined`, and the key is always present.
+- **Design.**
+  - **Host.** `WorkerJob::Fetch` gains a `sender: FetchSender`
+    (`lib.rs`): `Client` for the public listener, or `Worker { cf, parent
+    }`, what a Fetcher carries beside the message, as workerd's
+    `SubrequestMetadata`. `SvcCallReq`, `ServiceFetch`, the stateless
+    pool's `fetch_target` and the loader's job carry it. `DoCallReq`,
+    `CallPayload`, `RuntimeFetch` and `CellJob::Fetch` carry `cf`. The ops
+    `__svc_call`, `__do_call`, `__loader_fetch`, `__facet_fetch` and
+    `op_fetch` (for a `globalOutbound` broker only) take it as JSON text,
+    at most `MAX_CF_SIZE` (64 KiB, see 1.69), and a client's request gets
+    `CLIENT_CF` (`{}`), as before. The `/do/` and `/runtime/` direct
+    ingress gives a client's too; the host's own calls to cells (cron arm,
+    queue settle) carry none.
+  - **Target framing** (`frame_incoming_body`, `js.rs`): every request that
+    enters a Worker or a cell from the host, a client's included, gets
+    global-scope.c++'s rule: a body when a framing header or bytes say so,
+    and the header its length implies when it has neither. The harness's
+    `__makeRequest` takes that as `bodyPresent`, in place of the old rule
+    (a null body for `GET` and `HEAD` only). A body the host knows is
+    empty must reach it as empty bytes, since a stream is chunked: client
+    ingress (`ingress_payload_parts`) and node B of the peer tunnel
+    (`inner_body`) hold a request whose body hyper has already ended, an
+    HTTP/1 request with neither `Content-Length` nor `Transfer-Encoding`
+    or an HTTP/2 one whose headers end the stream, so a client's bodiless
+    `POST`, `DELETE` or `OPTIONS`, an HTTP/1.0 `POST`, and a cross-node
+    Durable Object `GET` have a null body, as on workerd.
+  - **Caller framing** (`__bodyFraming`, `__targetHeaderList`): each
+    Fetcher's send adds the framing header its body implies, read before
+    the body is taken, since a stream is consumed to bytes on some paths.
+    It replaces the service binding's stream-only framing. A Durable Object
+    call with no body keeps sending the raw header JSON, so the routing hot
+    path still builds no Headers.
+  - **Same isolate** (`__receivedCopy`): a `ctx.exports` or self-binding
+    target gets the target's header list, the caller's `cf` as JSON text,
+    which it parses and freezes when read, and the `bodyPresent` rule.
+  - **Request** (`harness.js`): `#cf` is a JSON copy made by the
+    constructor (`__jsonCopy`), type-checked as JSG checks it; an arrived
+    request holds `#cfBlob`, parsed and frozen (`__deepFreeze`) on first
+    read; `#cfCopy()` gives a copy or a clone its own unfrozen copy (the
+    clone used `structuredClone`). `__subrequestCf` reads `cf` through the
+    private accessor, not the getter a script can replace. A Fetcher sends
+    an arrived request's `cf` on as the text it came as.
+  - **Peer tunnel.** A cross-node Durable Object fetch carries `cf` in the
+    `x-cells-cf` control header, base64 of the JSON so any text fits. Node
+    A writes it from the call and drops an application header of that
+    name; node B strips it from the application's headers and refuses a
+    malformed one with 400. `TUNNEL_VERSION` is 8: a version-7 peer would
+    pass the header to the application, and drop the `cf`. Stop-all, as
+    for 7 (`docs/README.md`).
+  - **Tails.** `TailReportState` reports the `cf` it was given as its JSON
+    text, which `tailEvents` (`harness.js`) parses, so no `cf` is lost to
+    serde_json's recursion limit of 128 and a malformed one fails the
+    delivery loudly; it makes `request.cf` an own `undefined` when there is
+    none.
+- **Trace context** (found while checking what a Fetcher carries). A
+  service binding's or a loaded Worker's `fetch()` carried no host context
+  (1.19's "Not changed"), and the target's drive honoured a `traceparent`
+  header as an ingress request's: a caller chose the trace its callee
+  joined by setting a header. workerd carries the caller's span beside the
+  message (`SubrequestMetadata.parentSpan`), and a header is only a header.
+  Now `FetchSender::Worker` carries the context the host read at the call
+  site (`current_trace_context`), the drive joins it with `child_of` as an
+  RPC does, and `inbound_parent` reads `traceparent` only for a `Client`.
+- **Security.**
+  - celld's host sets no `cf` field: a client's request has `{}`, so no
+    client-controlled header becomes edge metadata, as before. What a
+    caller puts in `cf` is its own data to its target, as on workerd; the
+    host never reads it. It crosses as a field of the host's call, never as
+    a header, so a Worker can't forge it with a header: the tunnel's
+    `x-cells-cf` is node A's, overwritten and stripped as the other control
+    headers are, and the public listener has no way to set it at all.
+  - Nothing of the caller's reaches a target that the caller didn't send:
+    `cf`, framing and the trace context come from the caller's own request
+    and handler. A trace id is a correlation id, not a secret (1.19).
+  - Inputs are bounded: `cf` at 64 KiB per call, checked before the text
+    is copied out of V8. The framing header is one fixed pair.
+  - Failures are loud: an oversize `cf` fails the call with an error that
+    says so, a malformed tunnel `cf` is a 400, and an unparseable `cf` blob
+    throws on the target's first read rather than being dropped.
+- **Tests.**
+  - `service-bindings/body-length` and `service-bindings/request-cf` lose
+    their xfail.
+  - New differential cases, each failing at HEAD:
+    `service-bindings/body-length-forms` (17 bodies, from no body to
+    caller-set framing and a Request, through all seven Fetcher kinds, and
+    a received request forwarded); `service-bindings/request-cf-forms` (17
+    ways to set `cf`, through the same seven, frozenness, the caller's copy,
+    the type errors, and a forward); `loader/tail-request-cf` (with a `cf`
+    200 levels deep).
+  - `service-bindings/request-cf-large` (xfail 1.69): a 100 KiB `cf`.
+  - `tracing/rpc-context` (celld-only): a new `/service-fetch` step, and
+    `/loader-fetch` now shows both fetches, with and without an
+    application `traceparent`, as children of the caller's span.
+  - Unit: `peer_tunnel::tests` (the `cf` crosses as any text, an
+    application header can't set it, a malformed one is refused; a body
+    crosses a real inner connection from node A's writer to node B's
+    reader with the framing the caller gave it, for `GET`, `HEAD`, a
+    bodiless `POST` and `DELETE`, `Content-Length: 0`, bytes and streams),
+    `js::incoming_framing_tests`, and
+    `tests::a_client_request_has_a_body_when_its_framing_says_so`
+    (`main.rs`: raw HTTP/1.x requests through client ingress, bodiless `POST`/`PUT`/`DELETE`/`OPTIONS`, an HTTP/1.0
+    `POST`, `Content-Length: 0`, chunked empty and with data). The
+    conformance runner's client always frames a body, so neither path is
+    reachable from a case.
+  - Internal suite: `WorkerJob::Fetch` (`sender`), `CellJob::Fetch`,
+    `RuntimeFetch`, `DoCallReq` and `CallPayload` (`cf`), `SvcCallReq` and
+    `ServiceFetch` (`sender`) gained fields;
+    `drive_stateless_fetch` is unchanged.
+- **Starter.** Cloudflare OS reads no `request.cf` and sets no `cf` or
+  `traceparent` between its Workers. The router forwards the request it
+  received to the backend and the gatekeepers through service bindings;
+  they now get its `cf` (`{}` from a client, frozen) and its framing, as on
+  Cloudflare. gatekeeper-github's webhook size check reads `Content-Length`,
+  which a forwarded request already had from the client.
+- **Cost** (lab, `ab -n 20000 -c 16`, medians of 5 interleaved rounds
+  against e47486c; one `celld dev` per round with two scripts): hello-world
+  fetch 18255 → 18433 req/s; a service binding's `GET` 16359 → 17090, a
+  `POST` with a byte body 16714 → 16828, a `GET` with a `cf` 17060 → 17228;
+  a Durable Object `GET` 16339 → 16477, `POST` 16314 → 16524;
+  `ctx.exports` `GET` 17862 → 17750 (−0.6%). Every range overlaps its
+  pair's: no measurable cost.
+- **Found.** 1.69.
+
 ### 1.21 WebSocket ids carry authority (found by 1.7) — security, next after 1.7
 
 **Problem.** WebSocket ownership is decided by values that JS can set:
@@ -6685,6 +6844,27 @@ cap; unit tests for the caps.
 - **A copy's input body.** `new Request(input, init)` takes the input's
   body on workerd, which leaves the input used; celld leaves a buffered
   input unused unless the copy is refused.
+
+### 1.69 Gaps found by 1.41
+
+- **`cf` size.** celld carries at most 64 KiB of `cf` JSON out of an
+  isolate, to another script, a Durable Object, a facet, a loaded Worker or
+  a `globalOutbound`; a larger one fails the call. workerd sets no bound.
+  The bound keeps the text within the peer tunnel's header buffer (hyper's
+  default, about 400 KiB with the request's own headers). A target in the
+  caller's isolate has no bound. Lifting it means carrying `cf` outside the
+  inner request's header block. Pinned by
+  `service-bindings/request-cf-large` (xfail).
+- **`cf` depth.** A `cf` nested past a stack's worth of levels throws
+  `RangeError: Maximum call stack size exceeded` on both runtimes, in
+  different places. workerd's `Request` constructor throws it, from its
+  native JSON copy, at about 5,100 levels of arrays (probed on
+  1.20261001.1), so no deeper `cf` reaches a target, and its target freezes
+  every `cf` that does. celld's constructor copies one with V8's JSON, which
+  takes far deeper ones, and the target's first read of `request.cf` throws
+  from the recursive `__deepFreeze` past some 10,000 to 30,000 levels
+  (debug build). No real `cf` comes near either depth; matching would mean
+  bounding the constructor's copy at workerd's depth.
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 

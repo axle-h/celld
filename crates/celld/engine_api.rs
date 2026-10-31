@@ -827,6 +827,9 @@ pub struct ServiceFetch {
     pub method: String,
     pub body: RequestBody,
     pub headers: Vec<(String, String)>,
+    /// What the caller's Worker sends beside the message: its `cf` and trace
+    /// context.
+    pub sender: crate::FetchSender,
     pub cancel: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
@@ -836,6 +839,9 @@ pub struct RuntimeFetch {
     pub method: String,
     pub body: RequestBody,
     pub headers: Vec<(String, String)>,
+    /// The caller's `cf` as JSON text, or `None` when it set none or the
+    /// request came from a client (see `FetchSender`).
+    pub cf: Option<String>,
     pub request_id: Option<RequestId>,
     /// Where this call sits in its caller's order for this cell.
     pub order: Option<crate::js::CallOrder>,

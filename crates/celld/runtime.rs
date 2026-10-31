@@ -129,7 +129,15 @@ impl RequestCancellationLifetime {
         headers: Vec<(String, String)>,
         reply: tokio::sync::oneshot::Sender<anyhow::Result<HttpResponse>>,
     ) -> impl std::future::Future<Output = ()> + Send + 'static {
-        let job = stateless_fetch_job_factory(None, url, method, body, headers, Some(self))(reply);
+        let job = stateless_fetch_job_factory(
+            None,
+            url,
+            method,
+            body,
+            headers,
+            crate::FetchSender::Client,
+            Some(self),
+        )(reply);
         drive_affiliated(slot.affiliate(), job, None)
     }
 
@@ -162,12 +170,14 @@ struct StatelessWorkerJob {
 }
 
 impl StatelessWorkerJob {
+    #[allow(clippy::too_many_arguments)]
     fn fetch(
         entrypoint: Option<crate::WorkerFetchEntrypoint>,
         url: String,
         method: String,
         body: js::RequestBody,
         headers: Vec<(String, String)>,
+        sender: crate::FetchSender,
         cancellation: RequestCancellationGuard,
         reply: tokio::sync::oneshot::Sender<anyhow::Result<HttpResponse>>,
     ) -> Self {
@@ -183,6 +193,7 @@ impl StatelessWorkerJob {
                 method,
                 body,
                 headers,
+                sender,
                 request_id,
                 tail_report: None,
                 reply,
@@ -212,13 +223,23 @@ fn stateless_fetch_job_factory(
     method: String,
     body: js::RequestBody,
     headers: Vec<(String, String)>,
+    sender: crate::FetchSender,
     cancellation: Option<Arc<RequestCancellationLifetime>>,
 ) -> impl FnOnce(tokio::sync::oneshot::Sender<anyhow::Result<HttpResponse>>) -> StatelessWorkerJob {
     // The factory crosses the admission await, so it owns retirement until it
     // transfers the same guard into the spawned driver's job.
     let cancellation = RequestCancellationGuard::new(cancellation);
     move |reply| {
-        StatelessWorkerJob::fetch(entrypoint, url, method, body, headers, cancellation, reply)
+        StatelessWorkerJob::fetch(
+            entrypoint,
+            url,
+            method,
+            body,
+            headers,
+            sender,
+            cancellation,
+            reply,
+        )
     }
 }
 
@@ -983,9 +1004,11 @@ impl RuntimeManager {
             headers,
             request_id,
             // A resident Worker fetch is not a cell event; its inbound
-            // traceparent is honored by the drive, from the headers.
+            // traceparent is honored by the drive, from the headers. It comes
+            // from a client, so it has a client's `cf`.
             order: _,
             parent: _,
+            cf: _,
         } = request;
         let request_id = request_id.context("resident Worker fetch requires a request id")?;
         let isolate = self
@@ -1018,6 +1041,7 @@ impl RuntimeManager {
             method,
             body,
             headers,
+            sender: crate::FetchSender::Client,
             request_id: Some(request_id),
             tail_report: None,
             reply,
@@ -1043,6 +1067,7 @@ impl RuntimeManager {
             method,
             body,
             headers,
+            sender,
             cancel,
         } = call;
         let generation = self.generation_by_id(generation);
@@ -1056,6 +1081,7 @@ impl RuntimeManager {
             method,
             body,
             headers,
+            sender,
             Some(cancellation.clone()),
         );
         receive_service_fetch_response(response, cancellation, cancel).await
@@ -1638,6 +1664,7 @@ impl RuntimeManager {
             method,
             body,
             headers,
+            cf,
             request_id,
             order,
             parent,
@@ -1672,6 +1699,7 @@ impl RuntimeManager {
             method,
             body,
             headers,
+            cf,
             reply,
             order,
         };
@@ -2233,16 +2261,22 @@ pub(crate) fn restored_alarm_for_test(
     restored_alarm_from_persisted(cell, persisted, |_| covered)
 }
 
-/// The calling handler's trace context, which the host read at an RPC call
-/// site. The caller's sampling decision stands, as for a cell event.
+/// The calling handler's trace context, which the host read at the call site
+/// of an RPC or a Worker's fetch. The caller's sampling decision stands, as
+/// for a cell event.
 fn caller_parent(job: &crate::WorkerJob) -> Option<crate::telemetry::TraceContext> {
     match job {
-        crate::WorkerJob::Rpc { parent, .. } => *parent,
+        crate::WorkerJob::Rpc { parent, .. }
+        | crate::WorkerJob::Fetch {
+            sender: crate::FetchSender::Worker { parent, .. },
+            ..
+        } => *parent,
         _ => None,
     }
 }
 
-/// The caller's trace context, when the ingress request carried one.
+/// The caller's trace context, when the ingress request carried one. A
+/// Worker's fetch has its caller's from the host, never from its headers.
 /// Malformed headers are ignored; nothing here is trusted for anything
 /// but correlation and (under parentbased samplers, deliberately) the
 /// sampling decision.
@@ -2250,7 +2284,12 @@ fn inbound_parent(job: &crate::WorkerJob) -> Option<crate::telemetry::ParentCont
     if !crate::telemetry::active() {
         return None;
     }
-    let crate::WorkerJob::Fetch { headers, .. } = job else {
+    let crate::WorkerJob::Fetch {
+        headers,
+        sender: crate::FetchSender::Client,
+        ..
+    } = job
+    else {
         return None;
     };
     headers
@@ -3055,10 +3094,19 @@ impl StatelessRuntime {
         headers: Vec<(String, String)>,
         cancellation: Option<Arc<RequestCancellationLifetime>>,
     ) -> impl std::future::Future<Output = anyhow::Result<HttpResponse>> + Send + 'static {
-        self.fetch_target(None, url, method, body, headers, cancellation)
+        self.fetch_target(
+            None,
+            url,
+            method,
+            body,
+            headers,
+            crate::FetchSender::Client,
+            cancellation,
+        )
     }
 
     /// Serve one default or named stateless Worker entrypoint.
+    #[allow(clippy::too_many_arguments)]
     fn fetch_target(
         &self,
         entrypoint: Option<crate::WorkerFetchEntrypoint>,
@@ -3066,11 +3114,19 @@ impl StatelessRuntime {
         method: String,
         body: js::RequestBody,
         headers: Vec<(String, String)>,
+        sender: crate::FetchSender,
         cancellation: Option<Arc<RequestCancellationLifetime>>,
     ) -> impl std::future::Future<Output = anyhow::Result<HttpResponse>> + Send + 'static {
         let runtime = self.clone();
-        let make_job =
-            stateless_fetch_job_factory(entrypoint, url, method, body, headers, cancellation);
+        let make_job = stateless_fetch_job_factory(
+            entrypoint,
+            url,
+            method,
+            body,
+            headers,
+            sender,
+            cancellation,
+        );
         async move {
             let shedding = crate::ownership_store::node_is_shedding();
             runtime

@@ -8,6 +8,8 @@
     {"otlp": {"spans": ["celld.fetch", "around-service", "celld.fetch", "in-service"]}},
     {"path": "/loader"},
     {"otlp": {"spans": ["celld.fetch", "around-loader", "celld.fetch", "in-loader"]}},
+    {"path": "/service-fetch"},
+    {"otlp": {"spans": ["celld.fetch", "around-service-fetch", "celld.fetch", "in-service-fetch", "celld.fetch", "in-service-fetch"]}},
     {"path": "/loader-fetch"},
     {"otlp": {"spans": ["celld.fetch", "around-loader-fetch", "celld.fetch", "in-loader-fetch", "celld.fetch", "in-loader-fetch"]}},
     {"path": "/facet"},

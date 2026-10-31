@@ -1,0 +1,12 @@
+// A Worker Loader whose loaded Worker has a Tail Worker, and an object the
+// tail handler records into.
+{
+  "name": "app",
+  "main": "index.js",
+  "compatibility_date": "2026-01-01",
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "durable_objects": {
+    "bindings": [{ "name": "TAIL_LOG", "class_name": "TailLog" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TailLog"] }]
+}

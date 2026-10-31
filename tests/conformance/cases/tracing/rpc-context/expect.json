@@ -89,34 +89,89 @@
           {
             "name": "celld.fetch",
             "kind": "server",
-            "attributes": {
-              "celld.parent_remote": true
-            },
-            "parent": "remote",
             "children": [
               {
-                "name": "in-loader-fetch",
-                "kind": "internal"
+                "name": "around-service-fetch",
+                "kind": "internal",
+                "children": [
+                  {
+                    "name": "celld.fetch",
+                    "kind": "server",
+                    "attributes": {
+                      "celld.parent_remote": false
+                    },
+                    "children": [
+                      {
+                        "name": "in-service-fetch",
+                        "kind": "internal"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "celld.fetch",
+                    "kind": "server",
+                    "attributes": {
+                      "celld.parent_remote": false
+                    },
+                    "children": [
+                      {
+                        "name": "in-service-fetch",
+                        "kind": "internal"
+                      }
+                    ]
+                  }
+                ]
               }
             ]
-          },
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "own": "true",
+        "app": "true"
+      }
+    },
+    {
+      "otlp": {
+        "spans": [
           {
             "name": "celld.fetch",
             "kind": "server",
             "children": [
               {
                 "name": "around-loader-fetch",
-                "kind": "internal"
-              }
-            ]
-          },
-          {
-            "name": "celld.fetch",
-            "kind": "server",
-            "children": [
-              {
-                "name": "in-loader-fetch",
-                "kind": "internal"
+                "kind": "internal",
+                "children": [
+                  {
+                    "name": "celld.fetch",
+                    "kind": "server",
+                    "attributes": {
+                      "celld.parent_remote": false
+                    },
+                    "children": [
+                      {
+                        "name": "in-loader-fetch",
+                        "kind": "internal"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "celld.fetch",
+                    "kind": "server",
+                    "attributes": {
+                      "celld.parent_remote": false
+                    },
+                    "children": [
+                      {
+                        "name": "in-loader-fetch",
+                        "kind": "internal"
+                      }
+                    ]
+                  }
+                ]
               }
             ]
           }

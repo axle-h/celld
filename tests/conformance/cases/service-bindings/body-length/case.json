@@ -1,5 +1,4 @@
 {
   "workers": ["front", "back"],
-  "xfail": "1.41",
   "steps": [{"path": "/"}]
 }

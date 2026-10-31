@@ -2020,6 +2020,7 @@ mod tests {
                 method: "GET".to_string(),
                 body: crate::js::RequestBody::Bytes(Default::default()),
                 headers: Vec::new(),
+                sender: crate::FetchSender::Client,
                 request_id: None,
                 tail_report: None,
                 reply,

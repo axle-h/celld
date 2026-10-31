@@ -218,6 +218,8 @@ pub struct DoCallReq {
     /// Owns a streamed body while the call waits for routing or admission.
     pub body_guard: RequestBodyGuard,
     pub headers: Vec<(String, String)>,
+    /// The caller's `cf` as JSON text, or `None` when it set none.
+    pub cf: Option<String>,
     pub reply: tokio::sync::oneshot::Sender<Result<HttpResponse>>,
     /// Where this call sits in its caller's order for this cell.
     pub order: Option<CallOrder>,
@@ -681,6 +683,8 @@ pub enum CellJob {
         method: String,
         body: RequestBody,
         headers: Vec<(String, String)>,
+        /// The caller's `cf` as JSON text, or `None` when it set none.
+        cf: Option<String>,
         reply: tokio::sync::oneshot::Sender<Result<HttpResponse>>,
         /// Where this call sits in its caller's order for this cell, if it
         /// came from a script rather than from a peer or the ingress.
@@ -4950,6 +4954,9 @@ struct TailReportState {
     url: String,
     method: String,
     headers: serde_json::Map<String, serde_json::Value>,
+    /// The request's `cf` as JSON text. workerd's event has none without one
+    /// (`TraceItem::FetchEventInfo::Request::getCf`).
+    cf: Option<String>,
     response_status: Option<u16>,
     failure: Option<TailException>,
 }
@@ -5007,15 +5014,21 @@ impl TailReportState {
             "ok"
         };
         let exceptions: Vec<_> = self.failure.into_iter().collect();
+        let mut request = serde_json::json!({
+            "headers": self.headers,
+            "method": self.method,
+            "url": self.url,
+        });
+        // As its text, which the harness parses: no re-parse here to lose a
+        // `cf` nested past serde_json's recursion limit, and a malformed one
+        // fails the delivery where the harness parses it.
+        if let Some(cf) = self.cf {
+            request["cf"] = serde_json::Value::String(cf);
+        }
         let event = serde_json::json!([{
             "scriptName": self.script_name,
             "event": {
-                "request": {
-                    "cf": {},
-                    "headers": self.headers,
-                    "method": self.method,
-                    "url": self.url,
-                },
+                "request": request,
                 "response": self.response_status.map(|status| serde_json::json!({
                     "status": status,
                 })),
@@ -6695,6 +6708,7 @@ fn begin<'s>(
         method,
         body,
         headers,
+        sender,
         request_id,
         tail_report,
         reply,
@@ -6729,8 +6743,13 @@ fn begin<'s>(
         Some(entrypoint) => FetchTarget::Entrypoint(entrypoint),
         None => FetchTarget::Default(fetch),
     };
-    let started = start_fetch(tc, target, &url, &method, body, &headers, request_id);
+    let cf = match &sender {
+        crate::FetchSender::Client => Some(CLIENT_CF),
+        crate::FetchSender::Worker { cf, .. } => cf.as_deref(),
+    };
     let tail_headers = tail_request_headers(&headers);
+    let tail_cf = tail_report.as_ref().and(cf).map(str::to_string);
+    let started = start_fetch(tc, target, &url, &method, body, headers, cf, request_id);
     let mut tail_report = tail_report.map(|reply| TailReportState {
         reply,
         script_name: runtime_state.script_name.clone(),
@@ -6738,6 +6757,7 @@ fn begin<'s>(
         url,
         method,
         headers: tail_headers,
+        cf: tail_cf,
         response_status: None,
         failure: None,
     });
@@ -7458,7 +7478,8 @@ fn begin_cell(tc: &mut v8::PinScope, job: CellJob, event_time: i64) -> Begun {
             url,
             method,
             body,
-            headers,
+            mut headers,
+            cf,
             reply,
             order: _,
         } => {
@@ -7466,6 +7487,7 @@ fn begin_cell(tc: &mut v8::PinScope, job: CellJob, event_time: i64) -> Begun {
                 let _ = reply.send(Err(error));
                 return Begun::Nothing;
             }
+            let bodied = frame_incoming_body(&body, &mut headers);
             let body_stream_id = body.stream_id();
             start_cell_event(
                 tc,
@@ -7501,6 +7523,8 @@ fn begin_cell(tc: &mut v8::PinScope, job: CellJob, event_time: i64) -> Begun {
                             None => v8::null(tc).into(),
                         },
                         stream_id,
+                        cf_value(tc, cf.as_deref()),
+                        v8::Boolean::new(tc, bodied).into(),
                     ];
                     let recv = v8::undefined(tc).into();
                     f.call(tc, recv, &arguments)
@@ -7939,18 +7963,21 @@ enum FetchTarget<'s> {
 ///
 /// The caller owns the `IoContext` and must have it current: `__beginEvent`
 /// runs here, and the frame it pushes belongs to this request.
+#[allow(clippy::too_many_arguments)]
 fn start_fetch<'s>(
     tc: &mut v8::PinScope<'s, '_>,
     target: FetchTarget<'s>,
     url: &str,
     method: &str,
     body: RequestBody,
-    headers: &[(String, String)],
+    mut headers: Vec<(String, String)>,
+    cf: Option<&str>,
     request_id: Option<RequestId>,
 ) -> Result<Started<'s>> {
+    let bodied = frame_incoming_body(&body, &mut headers);
     let req = match request_id {
-        Some(_) => make_incoming_request(tc, url, method, body, headers),
-        None => make_request(tc, url, method, body, headers),
+        Some(_) => make_incoming_request(tc, url, method, body, &headers, cf, bodied),
+        None => make_request(tc, url, method, body, &headers, cf, bodied),
     }?;
     let recv = v8::undefined(tc).into();
     let ret = match target {
@@ -10363,6 +10390,13 @@ fn op_svc_call_impl(
                 )
             }
         };
+    let sender = match cf_arg(scope, args.get(8)) {
+        Ok(cf) => crate::FetchSender::Worker {
+            cf,
+            parent: current_trace_context(scope),
+        },
+        Err(error) => return loader_throw(scope, &error),
+    };
     let body_guard = match body.stream_id() {
         Some(stream_id) => match current_context()
             .transfer_body_stream(stream_id, &websocket::owner_of(&event_context(scope)))
@@ -10407,6 +10441,7 @@ fn op_svc_call_impl(
         body,
         body_guard,
         headers,
+        sender,
         reply: tx,
     };
     let ws_issuer = Some(ws_caller(scope));
@@ -10463,6 +10498,32 @@ fn dynamic_worker_code_limit() -> usize {
 /// prevent that unbounded host allocation, so every op that accepts call props
 /// must enforce the limit.
 const MAX_PROPS_SIZE: usize = 1024 * 1024;
+
+/// The most JSON text a request's `cf` can carry to another isolate. workerd
+/// sets no bound. celld holds the text on a host job for the whole call, and
+/// a call to a Durable Object on another node carries it in a peer tunnel
+/// header, which hyper's header buffer (about 400 KiB) must hold with the
+/// request's own headers. Over it, the call fails at once, loudly.
+const MAX_CF_SIZE: usize = 64 * 1024;
+
+/// A Fetcher op's `cf`: the JSON text the harness serialized, or `None` when
+/// the request has none.
+fn cf_arg(scope: &mut v8::PinScope, value: v8::Local<v8::Value>) -> Result<Option<String>, String> {
+    if value.is_null_or_undefined() {
+        return Ok(None);
+    }
+    let Ok(text) = v8::Local::<v8::String>::try_from(value) else {
+        return Err("the request's cf is not JSON text".to_string());
+    };
+    let size = text.utf8_length(scope);
+    if size > MAX_CF_SIZE {
+        return Err(format!(
+            "The request's cf ({size} bytes as JSON) exceeds the maximum of \
+             {MAX_CF_SIZE} bytes that celld carries to another Worker."
+        ));
+    }
+    Ok(Some(text.to_rust_string_lossy(scope)))
+}
 
 /// `props`, refused with `kind`'s name when it is over [`MAX_PROPS_SIZE`].
 fn props_within_limit(kind: &str, props: Vec<u8>) -> Result<Vec<u8>, String> {
@@ -11387,6 +11448,13 @@ fn op_loader_fetch(
             }
         };
     let want_tail_report = args.get(9).boolean_value(scope);
+    let sender = match cf_arg(scope, args.get(11)) {
+        Ok(cf) => crate::FetchSender::Worker {
+            cf,
+            parent: current_trace_context(scope),
+        },
+        Err(error) => return loader_throw(scope, &error),
+    };
     // The caller's AbortSignal cancels through the registry that
     // `__do_call_cancel` already reads, as a service-binding call does. Only a
     // call with a signal registers, because nothing else can name the id.
@@ -11445,6 +11513,7 @@ fn op_loader_fetch(
             method,
             body,
             headers,
+            sender,
             // A loaded Worker receives an incoming request like a service
             // target does. The lifetime below supplies the id, which selects
             // the stream-aware construction path and gives an abandoned
@@ -12167,6 +12236,10 @@ fn op_facet_fetch(
             Ok(headers) => headers,
             Err(error) => return loader_throw(scope, &format!("facet headers: {error}")),
         };
+    let cf = match cf_arg(scope, args.get(12)) {
+        Ok(cf) => cf,
+        Err(error) => return loader_throw(scope, &error),
+    };
     let mut body_guard = match body.stream_id() {
         Some(stream_id) => match current_context()
             .transfer_body_stream(stream_id, &websocket::owner_of(&event_context(scope)))
@@ -12215,6 +12288,7 @@ fn op_facet_fetch(
             method,
             body,
             headers,
+            cf,
             reply,
             order: None,
         };
@@ -12497,6 +12571,10 @@ fn op_do_call_impl(
                 )
             }
         };
+    let cf = match cf_arg(scope, args.get(7)) {
+        Ok(cf) => cf,
+        Err(error) => return loader_throw(scope, &error),
+    };
     let body_guard = match body.stream_id() {
         Some(stream_id) => match current_context()
             .transfer_body_stream(stream_id, &websocket::owner_of(&event_context(scope)))
@@ -12535,6 +12613,7 @@ fn op_do_call_impl(
         body,
         body_guard,
         headers,
+        cf,
         reply: tx,
         order,
         parent: current_trace_context(scope),
@@ -12874,6 +12953,30 @@ fn op_fetch(
         None => RequestBodyGuard(None),
     };
     if let EgressPolicy::Broker(broker) = egress {
+        // The globalOutbound Fetcher is a Worker, so the request carries what
+        // a service binding's does: the framing header the caller's body
+        // gives it, its `cf`, and the caller's trace context. The network
+        // gets neither the header, which its HTTP client writes itself, nor
+        // the `cf`.
+        let framing = args.get(8);
+        if framing.is_string() {
+            match serde_json::from_str::<(String, String)>(&framing.to_rust_string_lossy(scope)) {
+                Ok(framing) => headers.push(framing),
+                Err(error) => {
+                    return loader_throw(
+                        scope,
+                        &format!("fetch: the request framing is not a header: {error}"),
+                    )
+                }
+            }
+        }
+        let sender = match cf_arg(scope, args.get(9)) {
+            Ok(cf) => crate::FetchSender::Worker {
+                cf,
+                parent: current_trace_context(scope),
+            },
+            Err(error) => return loader_throw(scope, &error),
+        };
         let (request_id, cancel, cancel_guard) = if cancellable {
             let request_id = next_do_request_id();
             let (cancel_sender, cancel_receiver) = tokio::sync::oneshot::channel();
@@ -12901,6 +13004,7 @@ fn op_fetch(
             body: body.unwrap_or_else(|| RequestBody::Bytes(Vec::new().into())),
             body_guard,
             headers,
+            sender,
             reply: tx,
         };
         let ws_issuer = Some(ws_caller(scope));
@@ -18994,6 +19098,109 @@ use modules::{
     ModuleRegistry,
 };
 use v8_strings::key as static_key;
+/// The `cf` of a request from a client of the public listener, as JSON text.
+/// celld proves no edge metadata, so it is empty, and no client-controlled
+/// header becomes a country or a colo.
+pub const CLIENT_CF: &str = "{}";
+
+/// A request's `cf` for the harness: its JSON text, which the Request parses
+/// and freezes when it is first read, or undefined for none.
+fn cf_value<'s>(tc: &mut v8::PinScope<'s, '_>, cf: Option<&str>) -> v8::Local<'s, v8::Value> {
+    match cf {
+        Some(cf) => v8::String::new(tc, cf).unwrap().into(),
+        None => v8::undefined(tc).into(),
+    }
+}
+
+/// Whether a request that arrives has a body, and its framing header, as
+/// workerd's `ServiceWorkerGlobalScope::request` decides them
+/// (global-scope.c++): it has one when `Content-Length` or
+/// `Transfer-Encoding` says so, or when bytes arrive, and a body with neither
+/// header gets one, its length when it is known and `chunked` otherwise. A
+/// Worker's Fetcher sends the header itself when the caller's body has a
+/// length the target can't see, as an empty one or a sized stream.
+pub fn frame_incoming_body(body: &RequestBody, headers: &mut Vec<(String, String)>) -> bool {
+    let framed = headers.iter().any(|(name, _)| {
+        name.eq_ignore_ascii_case("content-length")
+            || name.eq_ignore_ascii_case("transfer-encoding")
+    });
+    if framed {
+        return true;
+    }
+    match body {
+        RequestBody::Bytes(bytes) if bytes.is_empty() => false,
+        RequestBody::Bytes(bytes) => {
+            headers.push(("content-length".to_string(), bytes.len().to_string()));
+            true
+        }
+        RequestBody::Stream(_) => {
+            headers.push(("transfer-encoding".to_string(), "chunked".to_string()));
+            true
+        }
+    }
+}
+
+#[cfg(test)]
+mod incoming_framing_tests {
+    use super::*;
+    use bytes::Bytes;
+
+    fn framed(body: RequestBody, headers: &[(&str, &str)]) -> (bool, Vec<(String, String)>) {
+        let mut headers = headers
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        let bodied = frame_incoming_body(&body, &mut headers);
+        (bodied, headers)
+    }
+
+    fn header(name: &str, value: &str) -> (String, String) {
+        (name.to_string(), value.to_string())
+    }
+
+    /// No framing header and no bytes is no body; bytes get their length and
+    /// a stream is chunked, as workerd's `request()` frames them.
+    #[test]
+    fn a_body_without_framing_gets_its_length_or_chunked() {
+        assert_eq!(
+            framed(RequestBody::Bytes(Bytes::new()), &[]),
+            (false, vec![])
+        );
+        assert_eq!(
+            framed(RequestBody::Bytes(Bytes::from_static(b"payload")), &[]),
+            (true, vec![header("content-length", "7")])
+        );
+        assert_eq!(
+            framed(RequestBody::Stream(1), &[]),
+            (true, vec![header("transfer-encoding", "chunked")])
+        );
+    }
+
+    /// A framing header, in any case, says there is a body, even an empty
+    /// one, and is kept as it is.
+    #[test]
+    fn a_framing_header_says_there_is_a_body() {
+        for name in ["Content-Length", "transfer-encoding"] {
+            let value = if name == "Content-Length" {
+                "0"
+            } else {
+                "chunked"
+            };
+            assert_eq!(
+                framed(RequestBody::Bytes(Bytes::new()), &[(name, value)]),
+                (true, vec![header(name, value)])
+            );
+        }
+        assert_eq!(
+            framed(
+                RequestBody::Bytes(Bytes::from_static(b"payload")),
+                &[("content-length", "3")]
+            ),
+            (true, vec![header("content-length", "3")])
+        );
+    }
+}
+
 /// Like `make_request`, but marks the request as incoming. Its signal is
 /// registered only if the handler actually suspends, preserving the
 /// synchronous request path.
@@ -19003,6 +19210,8 @@ fn make_incoming_request<'s>(
     method: &str,
     body: RequestBody,
     headers: &[(String, String)],
+    cf: Option<&str>,
+    bodied: bool,
 ) -> Result<v8::Local<'s, v8::Value>> {
     let f = internal_function(tc, "__makeIncomingRequest")?;
     let url = v8::String::new(tc, url).unwrap();
@@ -19025,11 +19234,21 @@ fn make_incoming_request<'s>(
             v8::Number::new(tc, id as f64).into(),
         ),
     };
+    let cf = cf_value(tc, cf);
+    let bodied = v8::Boolean::new(tc, bodied).into();
     let recv = v8::undefined(tc).into();
     f.call(
         tc,
         recv,
-        &[url.into(), method.into(), body, headers.into(), stream_id],
+        &[
+            url.into(),
+            method.into(),
+            body,
+            headers.into(),
+            stream_id,
+            cf,
+            bodied,
+        ],
     )
     .ok_or_else(|| anyhow!("__makeIncomingRequest threw"))
 }
@@ -19063,6 +19282,8 @@ fn make_request<'s>(
     method: &str,
     body: RequestBody,
     headers: &[(String, String)],
+    cf: Option<&str>,
+    bodied: bool,
 ) -> Result<v8::Local<'s, v8::Value>> {
     let f = internal_function(tc, "__makeRequest")?;
     let u = v8::String::new(tc, url).unwrap();
@@ -19070,9 +19291,25 @@ fn make_request<'s>(
     let bytes = body.into_held_bytes().unwrap_or_default();
     let b = bytes_value(tc, bytes);
     let h = v8::String::new(tc, &serde_json::to_string(headers)?).unwrap();
-    let recv = v8::undefined(tc).into();
-    f.call(tc, recv, &[u.into(), m.into(), b, h.into()])
-        .ok_or_else(|| anyhow!("makeRequest threw"))
+    let undefined = v8::undefined(tc).into();
+    let incoming_signal = v8::Boolean::new(tc, false).into();
+    let cf = cf_value(tc, cf);
+    let bodied = v8::Boolean::new(tc, bodied).into();
+    f.call(
+        tc,
+        undefined,
+        &[
+            u.into(),
+            m.into(),
+            b,
+            h.into(),
+            undefined,
+            incoming_signal,
+            cf,
+            bodied,
+        ],
+    )
+    .ok_or_else(|| anyhow!("makeRequest threw"))
 }
 
 fn read_response(scope: &mut v8::PinScope, ret: v8::Local<v8::Value>) -> Result<HttpResponse> {

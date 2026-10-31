@@ -9,8 +9,8 @@
 //! interprets the inner bytes, so the headers the cell must receive
 //! byte-faithful (`Host`, `Content-Length`, `Upgrade`) are data here, not
 //! metadata. Per-call control (scope, cell name, request id, capacity
-//! handoff, the caller's trace context, the caller) rides `x-cells-*` headers on the
-//! inner request; node A overwrites and node B strips them, so the reserved
+//! handoff, the caller's trace context, the caller, the request's `cf`) rides
+//! `x-cells-*` headers on the inner request; node A overwrites and node B strips them, so the reserved
 //! names cannot be smuggled by an application in either direction.
 //!
 //! Idle tunnels are pooled per peer and reused for sequential calls — plain
@@ -22,6 +22,7 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 
+use base64::Engine;
 use bytes::Bytes;
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
@@ -38,7 +39,7 @@ use super::*;
 use celld::js::HttpChunkStream;
 
 pub(crate) const TUNNEL_PROTOCOL: &str = "celld-tunnel";
-pub(crate) const TUNNEL_VERSION: &str = "7";
+pub(crate) const TUNNEL_VERSION: &str = "8";
 pub(crate) const VERSION_HEADER: &str = "x-cells-tunnel-version";
 pub(crate) const KIND_HEADER: &str = "x-cells-tunnel-kind";
 pub(crate) const SCOPE_HEADER: &str = "x-cells-scope";
@@ -55,11 +56,14 @@ pub(crate) const TRACE_HEADER: &str = "x-cells-traceparent";
 pub(crate) const CALLER_HEADER: &str = "x-cells-caller";
 /// The cell whose event made a script's call, when one did.
 pub(crate) const CALLER_EVENT_HEADER: &str = "x-cells-caller-event";
+/// The request's `cf`, the JSON text the caller's Worker gave it, in base64
+/// so any text fits a header. Absent when the request has none.
+pub(crate) const CF_HEADER: &str = "x-cells-cf";
 
 /// The inner headers node A owns. A overwrites them on the way in and B
 /// strips them on the way out, so an application header with a reserved name
 /// is dropped rather than obeyed.
-const CONTROL_HEADERS: [&str; 7] = [
+const CONTROL_HEADERS: [&str; 8] = [
     SCOPE_HEADER,
     NAME_HEADER,
     REQUEST_ID_HEADER,
@@ -67,6 +71,7 @@ const CONTROL_HEADERS: [&str; 7] = [
     TRACE_HEADER,
     CALLER_HEADER,
     CALLER_EVENT_HEADER,
+    CF_HEADER,
 ];
 
 /// The caller of a tunneled call as it crosses: the script by name, since a
@@ -170,6 +175,8 @@ pub(crate) struct TunnelControl {
     pub(crate) capacity_handoff: bool,
     pub(crate) parent: Option<celld::telemetry::TraceContext>,
     pub(crate) caller: TunnelCaller,
+    /// The request's `cf` as JSON text, or `None` when it has none.
+    pub(crate) cf: Option<String>,
 }
 
 /// The caller's trace context from an inner request, as a remote parent.
@@ -192,6 +199,21 @@ fn tunnel_control(headers: &hyper::HeaderMap) -> Result<TunnelControl, Box<HttpR
         .filter(|scope| celld_logic::cell::valid_cell_scope(scope))
         .ok_or_else(|| Box::new(peer_response(malformed_scope())))?;
     let caller = TunnelCaller::read(headers).ok_or_else(|| Box::new(missing_caller()))?;
+    let cf = match headers.get(CF_HEADER) {
+        None => None,
+        Some(value) => Some(
+            base64::engine::general_purpose::STANDARD
+                .decode(value.as_bytes())
+                .ok()
+                .and_then(|cf| String::from_utf8(cf).ok())
+                .ok_or_else(|| {
+                    Box::new(peer_response(response(
+                        StatusCode::BAD_REQUEST,
+                        "the tunneled call's cf is malformed",
+                    )))
+                })?,
+        ),
+    };
     Ok(TunnelControl {
         scope,
         name: headers
@@ -205,6 +227,7 @@ fn tunnel_control(headers: &hyper::HeaderMap) -> Result<TunnelControl, Box<HttpR
         capacity_handoff: headers.get(HANDOFF_HEADER).is_some(),
         parent: trace_parent(headers),
         caller,
+        cf,
     })
 }
 
@@ -236,6 +259,7 @@ impl TunnelControl {
             url,
             method,
             headers,
+            cf: self.cf,
             request_id: self.request_id,
             capacity_handoff: self.capacity_handoff,
             parent: self.parent,
@@ -445,18 +469,8 @@ async fn serve_do(upgraded: hyper::upgrade::Upgraded, app: AppHandle) {
             };
             let (parts, body) = inner.into_parts();
             let headers = application_headers(&parts.headers);
-            // Streaming by construction: the inner body is handed to the
-            // isolate as a stream whatever its size, bounded the way the
-            // enveloped path bounded its frame.
-            let limited = http_body_util::Limited::new(body, MAX_PEER_FORWARD_BODY_BYTES);
-            let chunks: HttpChunkStream = Box::pin(
-                http_body_util::BodyStream::new(limited)
-                    .try_filter_map(|frame| async move { Ok(frame.into_data().ok()) })
-                    .map_ok(|data: Bytes| data.to_vec())
-                    .map_err(|error| error.to_string()),
-            );
-            let stream_id = match celld::js::register_body_stream(chunks) {
-                Ok(stream_id) => stream_id,
+            let body = match inner_body(body) {
+                Ok(body) => body,
                 Err(error) => {
                     return Ok(peer_response(response(
                         StatusCode::SERVICE_UNAVAILABLE,
@@ -464,7 +478,6 @@ async fn serve_do(upgraded: hyper::upgrade::Upgraded, app: AppHandle) {
                     )));
                 }
             };
-            let body = celld::js::RequestBody::Stream(stream_id);
             let (scope, fetch) =
                 control.into_fetch(parts.uri.to_string(), parts.method.to_string(), headers);
             let outcome = dispatch_forwarded_fetch(app.clone(), scope, fetch, body).await;
@@ -526,6 +539,29 @@ async fn serve_do(upgraded: hyper::upgrade::Upgraded, app: AppHandle) {
         .serve_connection(upgraded, service)
         .with_upgrades()
         .await;
+}
+
+/// The body of an inner request as node B hands it to the isolate.
+///
+/// Streaming by construction: a body is a stream whatever its size, bounded
+/// the way the enveloped path bounded its frame. An inner request whose
+/// framing says no bytes follow, as node A writes a caller's empty body with
+/// neither `Content-Length` nor `Transfer-Encoding`, is empty bytes instead,
+/// so the target gets a null body and no framing header, as on workerd; a
+/// stream would arrive chunked. A caller's own `Content-Length: 0` crosses as
+/// a header and still says there is a body.
+fn inner_body(body: Incoming) -> Result<celld::js::RequestBody, String> {
+    if body.is_end_stream() {
+        return Ok(celld::js::RequestBody::Bytes(Bytes::new()));
+    }
+    let limited = http_body_util::Limited::new(body, MAX_PEER_FORWARD_BODY_BYTES);
+    let chunks: HttpChunkStream = Box::pin(
+        http_body_util::BodyStream::new(limited)
+            .try_filter_map(|frame| async move { Ok(frame.into_data().ok()) })
+            .map_ok(|data: Bytes| data.to_vec())
+            .map_err(|error| error.to_string()),
+    );
+    celld::js::register_body_stream(chunks).map(celld::js::RequestBody::Stream)
 }
 
 type TunnelSender = hyper::client::conn::http1::SendRequest<TunnelBody>;
@@ -709,6 +745,12 @@ fn inner_request(
     }
     if let Some(parent) = &control.parent {
         inner = inner.header(TRACE_HEADER, celld::telemetry::traceparent(parent));
+    }
+    if let Some(cf) = &control.cf {
+        inner = inner.header(
+            CF_HEADER,
+            base64::engine::general_purpose::STANDARD.encode(cf),
+        );
     }
     inner = control.caller.write(inner);
     Ok(inner.body(body)?)
@@ -1068,6 +1110,7 @@ mod tests {
             capacity_handoff: false,
             parent,
             caller: TunnelCaller::Host,
+            cf: None,
         }
     }
 
@@ -1341,6 +1384,165 @@ mod tests {
         let script = script_caller().resolve(known);
         assert!(script.admit(&dlq).is_err());
         assert!(!script.internal());
+    }
+
+    /// A request's `cf` crosses to node B as the caller's JSON text, any
+    /// text included, and reaches the fetch node B dispatches. An
+    /// application header of the reserved name is dropped on both sides, so
+    /// a Worker cannot give its callee another `cf` than its request's.
+    #[test]
+    fn the_cf_crosses_the_tunnel_and_an_application_cannot_set_it() {
+        let cf = r#"{"city":"Zürich 😀","quote\"key":"a\nb"}"#.to_string();
+        let forged = vec![(CF_HEADER.to_string(), "e30=".to_string())];
+        let with_cf = TunnelControl {
+            cf: Some(cf.clone()),
+            ..control(None)
+        };
+        let request = inner_request(
+            &with_cf,
+            "http://object/",
+            "GET",
+            &forged,
+            full_body(Bytes::new()),
+        )
+        .unwrap();
+        assert_eq!(request.headers().get_all(CF_HEADER).iter().count(), 1);
+        let headers = application_headers(request.headers());
+        assert!(headers.iter().all(|(name, _)| name != CF_HEADER));
+        let (_, fetch) = tunnel_control(request.headers())
+            .expect("a well-formed control")
+            .into_fetch("http://object/".to_string(), "GET".to_string(), headers);
+        assert_eq!(fetch.cf.as_deref(), Some(cf.as_str()));
+
+        let request = inner_request(
+            &control(None),
+            "http://object/",
+            "GET",
+            &forged,
+            full_body(Bytes::new()),
+        )
+        .unwrap();
+        assert!(request.headers().get(CF_HEADER).is_none());
+        let Ok(arrived) = tunnel_control(request.headers()) else {
+            panic!("a well-formed control");
+        };
+        assert_eq!(arrived.cf, None);
+    }
+
+    /// A `cf` that is not base64 of UTF-8 text comes from a peer of another
+    /// version, and node B refuses the call rather than guessing.
+    #[test]
+    fn a_malformed_cf_is_refused() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(SCOPE_HEADER, "Object:00".parse().unwrap());
+        headers.insert(CALLER_HEADER, "host".parse().unwrap());
+        headers.insert(CF_HEADER, "not base64!".parse().unwrap());
+        assert!(tunnel_control(&headers).is_err());
+        headers.insert(CF_HEADER, "/w==".parse().unwrap());
+        assert!(tunnel_control(&headers).is_err());
+    }
+
+    /// What the target's `request()` sees of a body that crossed the
+    /// tunnel: whether it has one, its framing headers, and its bytes.
+    type Arrived = (bool, Vec<(String, String)>, Vec<u8>);
+
+    /// A caller's request as node A sends it: method, headers and body.
+    type Sent = (&'static str, Vec<(String, String)>, TunnelBody);
+
+    /// Send each request through node A's writer over a real inner HTTP/1
+    /// connection, and read it with node B's `inner_body`, as `serve_do` does.
+    async fn across_the_tunnel(requests: Vec<Sent>) -> Vec<Arrived> {
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let (arrived_tx, mut arrived_rx) = tokio::sync::mpsc::unbounded_channel::<Arrived>();
+        let service = service_fn(move |inner: Request<Incoming>| {
+            let arrived_tx = arrived_tx.clone();
+            async move {
+                let (parts, body) = inner.into_parts();
+                let mut headers = application_headers(&parts.headers);
+                let body = inner_body(body).expect("the body registers");
+                let bodied = celld::js::frame_incoming_body(&body, &mut headers);
+                let bytes = match &body {
+                    celld::js::RequestBody::Bytes(bytes) => bytes.to_vec(),
+                    celld::js::RequestBody::Stream(stream_id) => {
+                        celld::js::take_body_stream(*stream_id)
+                            .unwrap()
+                            .try_concat()
+                            .await
+                            .unwrap()
+                    }
+                };
+                headers.retain(|(name, _)| {
+                    name.eq_ignore_ascii_case("content-length")
+                        || name.eq_ignore_ascii_case("transfer-encoding")
+                });
+                arrived_tx.send((bodied, headers, bytes)).unwrap();
+                Ok::<_, Infallible>(Response::new(full_body(Bytes::new())))
+            }
+        });
+        tokio::spawn(
+            hyper::server::conn::http1::Builder::new()
+                .serve_connection(TokioIo::new(server_io), service),
+        );
+        let (mut sender, connection) = hyper::client::conn::http1::Builder::new()
+            .handshake::<_, TunnelBody>(TokioIo::new(client_io))
+            .await
+            .unwrap();
+        tokio::spawn(connection);
+        let mut arrived = Vec::new();
+        for (method, headers, body) in requests {
+            let request =
+                inner_request(&control(None), "http://object/", method, &headers, body).unwrap();
+            let response = sender.send_request(request).await.unwrap();
+            response.into_body().collect().await.unwrap();
+            arrived.push(arrived_rx.recv().await.unwrap());
+        }
+        arrived
+    }
+
+    /// A Durable Object on another node gets a caller's body as workerd's
+    /// `request()` gives it (global-scope.c++): a call with no body and no
+    /// framing header has a null body, whatever its method, and a caller's
+    /// own framing, `Content-Length: 0` on a `GET` or an explicitly empty
+    /// body, still says there is one.
+    #[tokio::test]
+    async fn a_body_crosses_the_tunnel_with_the_framing_the_caller_gave_it() {
+        let length = |value: &str| vec![("content-length".to_string(), value.to_string())];
+        let chunked = vec![("transfer-encoding".to_string(), "chunked".to_string())];
+        let stream = |chunks: Vec<&'static [u8]>| {
+            let chunks: HttpChunkStream = Box::pin(futures_util::stream::iter(
+                chunks.into_iter().map(|chunk| Ok(chunk.to_vec())),
+            ));
+            stream_body(chunks)
+        };
+        let arrived = across_the_tunnel(vec![
+            ("GET", vec![], full_body(Bytes::new())),
+            ("HEAD", vec![], full_body(Bytes::new())),
+            ("POST", vec![], full_body(Bytes::new())),
+            ("DELETE", vec![], full_body(Bytes::new())),
+            ("GET", length("0"), full_body(Bytes::new())),
+            ("POST", length("0"), full_body(Bytes::new())),
+            ("POST", length("4"), full_body(Bytes::from_static(b"data"))),
+            ("PUT", vec![], full_body(Bytes::from_static(b"data"))),
+            ("POST", chunked.clone(), stream(vec![b"da", b"ta"])),
+            ("POST", chunked.clone(), stream(vec![])),
+        ])
+        .await;
+        let none = (false, vec![], vec![]);
+        assert_eq!(
+            arrived,
+            vec![
+                none.clone(),
+                none.clone(),
+                none.clone(),
+                none,
+                (true, length("0"), vec![]),
+                (true, length("0"), vec![]),
+                (true, length("4"), b"data".to_vec()),
+                (true, length("4"), b"data".to_vec()),
+                (true, chunked.clone(), b"data".to_vec()),
+                (true, chunked, vec![]),
+            ]
+        );
     }
 
     #[test]

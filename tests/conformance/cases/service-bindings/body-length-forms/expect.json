@@ -1,0 +1,748 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "back": {
+          "none": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "head": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "postNoBody": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "string": {
+            "contentLength": "7",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "empty": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "emptyBytes": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "arrayBuffer": {
+            "contentLength": "6",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "bytes!"
+          },
+          "view": {
+            "contentLength": "2",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "hi"
+          },
+          "blob": {
+            "contentLength": "8",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "blobbody"
+          },
+          "params": {
+            "contentLength": "9",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "a=1&b=two"
+          },
+          "stream": {
+            "contentLength": null,
+            "transferEncoding": "chunked",
+            "nullBody": false,
+            "text": "stream"
+          },
+          "fixedStream": {
+            "contentLength": "5",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "fixed"
+          },
+          "ownLength": {
+            "contentLength": "7",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "ownWrongLength": {
+            "contentLength": "3",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "ownChunked": {
+            "contentLength": null,
+            "transferEncoding": "chunked",
+            "nullBody": false,
+            "text": "payload"
+          },
+          "lengthOnGet": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "request": {
+            "contentLength": "14",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "from a Request"
+          }
+        },
+        "self": {
+          "none": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "head": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "postNoBody": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "string": {
+            "contentLength": "7",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "empty": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "emptyBytes": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "arrayBuffer": {
+            "contentLength": "6",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "bytes!"
+          },
+          "view": {
+            "contentLength": "2",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "hi"
+          },
+          "blob": {
+            "contentLength": "8",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "blobbody"
+          },
+          "params": {
+            "contentLength": "9",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "a=1&b=two"
+          },
+          "stream": {
+            "contentLength": null,
+            "transferEncoding": "chunked",
+            "nullBody": false,
+            "text": "stream"
+          },
+          "fixedStream": {
+            "contentLength": "5",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "fixed"
+          },
+          "ownLength": {
+            "contentLength": "7",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "ownWrongLength": {
+            "contentLength": "3",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "ownChunked": {
+            "contentLength": null,
+            "transferEncoding": "chunked",
+            "nullBody": false,
+            "text": "payload"
+          },
+          "lengthOnGet": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "request": {
+            "contentLength": "14",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "from a Request"
+          }
+        },
+        "loopback": {
+          "none": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "head": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "postNoBody": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "string": {
+            "contentLength": "7",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "empty": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "emptyBytes": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "arrayBuffer": {
+            "contentLength": "6",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "bytes!"
+          },
+          "view": {
+            "contentLength": "2",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "hi"
+          },
+          "blob": {
+            "contentLength": "8",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "blobbody"
+          },
+          "params": {
+            "contentLength": "9",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "a=1&b=two"
+          },
+          "stream": {
+            "contentLength": null,
+            "transferEncoding": "chunked",
+            "nullBody": false,
+            "text": "stream"
+          },
+          "fixedStream": {
+            "contentLength": "5",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "fixed"
+          },
+          "ownLength": {
+            "contentLength": "7",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "ownWrongLength": {
+            "contentLength": "3",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "ownChunked": {
+            "contentLength": null,
+            "transferEncoding": "chunked",
+            "nullBody": false,
+            "text": "payload"
+          },
+          "lengthOnGet": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "request": {
+            "contentLength": "14",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "from a Request"
+          }
+        },
+        "object": {
+          "none": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "head": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "postNoBody": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "string": {
+            "contentLength": "7",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "empty": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "emptyBytes": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "arrayBuffer": {
+            "contentLength": "6",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "bytes!"
+          },
+          "view": {
+            "contentLength": "2",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "hi"
+          },
+          "blob": {
+            "contentLength": "8",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "blobbody"
+          },
+          "params": {
+            "contentLength": "9",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "a=1&b=two"
+          },
+          "stream": {
+            "contentLength": null,
+            "transferEncoding": "chunked",
+            "nullBody": false,
+            "text": "stream"
+          },
+          "fixedStream": {
+            "contentLength": "5",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "fixed"
+          },
+          "ownLength": {
+            "contentLength": "7",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "ownWrongLength": {
+            "contentLength": "3",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "ownChunked": {
+            "contentLength": null,
+            "transferEncoding": "chunked",
+            "nullBody": false,
+            "text": "payload"
+          },
+          "lengthOnGet": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "request": {
+            "contentLength": "14",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "from a Request"
+          }
+        },
+        "loader": {
+          "none": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "head": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "postNoBody": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "string": {
+            "contentLength": "7",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "empty": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "emptyBytes": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "arrayBuffer": {
+            "contentLength": "6",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "bytes!"
+          },
+          "view": {
+            "contentLength": "2",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "hi"
+          },
+          "blob": {
+            "contentLength": "8",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "blobbody"
+          },
+          "params": {
+            "contentLength": "9",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "a=1&b=two"
+          },
+          "stream": {
+            "contentLength": null,
+            "transferEncoding": "chunked",
+            "nullBody": false,
+            "text": "stream"
+          },
+          "fixedStream": {
+            "contentLength": "5",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "fixed"
+          },
+          "ownLength": {
+            "contentLength": "7",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "ownWrongLength": {
+            "contentLength": "3",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "ownChunked": {
+            "contentLength": null,
+            "transferEncoding": "chunked",
+            "nullBody": false,
+            "text": "payload"
+          },
+          "lengthOnGet": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "request": {
+            "contentLength": "14",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "from a Request"
+          }
+        },
+        "facet": {
+          "none": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "head": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "postNoBody": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "string": {
+            "contentLength": "7",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "empty": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "emptyBytes": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "arrayBuffer": {
+            "contentLength": "6",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "bytes!"
+          },
+          "view": {
+            "contentLength": "2",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "hi"
+          },
+          "blob": {
+            "contentLength": "8",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "blobbody"
+          },
+          "params": {
+            "contentLength": "9",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "a=1&b=two"
+          },
+          "stream": {
+            "contentLength": null,
+            "transferEncoding": "chunked",
+            "nullBody": false,
+            "text": "stream"
+          },
+          "fixedStream": {
+            "contentLength": "5",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "fixed"
+          },
+          "ownLength": {
+            "contentLength": "7",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "ownWrongLength": {
+            "contentLength": "3",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "ownChunked": {
+            "contentLength": null,
+            "transferEncoding": "chunked",
+            "nullBody": false,
+            "text": "payload"
+          },
+          "lengthOnGet": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "request": {
+            "contentLength": "14",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "from a Request"
+          }
+        },
+        "globalOutbound": {
+          "none": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "head": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "postNoBody": {
+            "contentLength": null,
+            "transferEncoding": null,
+            "nullBody": true,
+            "text": ""
+          },
+          "string": {
+            "contentLength": "7",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "empty": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "emptyBytes": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "arrayBuffer": {
+            "contentLength": "6",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "bytes!"
+          },
+          "view": {
+            "contentLength": "2",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "hi"
+          },
+          "blob": {
+            "contentLength": "8",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "blobbody"
+          },
+          "params": {
+            "contentLength": "9",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "a=1&b=two"
+          },
+          "stream": {
+            "contentLength": null,
+            "transferEncoding": "chunked",
+            "nullBody": false,
+            "text": "stream"
+          },
+          "fixedStream": {
+            "contentLength": "5",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "fixed"
+          },
+          "ownLength": {
+            "contentLength": "7",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "ownWrongLength": {
+            "contentLength": "3",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "payload"
+          },
+          "ownChunked": {
+            "contentLength": null,
+            "transferEncoding": "chunked",
+            "nullBody": false,
+            "text": "payload"
+          },
+          "lengthOnGet": {
+            "contentLength": "0",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": ""
+          },
+          "request": {
+            "contentLength": "14",
+            "transferEncoding": null,
+            "nullBody": false,
+            "text": "from a Request"
+          }
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "contentLength": "9",
+        "transferEncoding": null,
+        "nullBody": false,
+        "text": "forwarded"
+      }
+    }
+  ]
+}

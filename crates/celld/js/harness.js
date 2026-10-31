@@ -69,6 +69,17 @@ const __URLSearchParams = URLSearchParams;
 const __ObjectGetPrototypeOf = Object.getPrototypeOf;
 const __ObjectPrototype = Object.prototype;
 const __ObjectCreate = Object.create;
+const __ObjectFreeze = Object.freeze;
+// A copy of a value through JSON, as V8's JSON::Stringify and JSON::Parse
+// make it (jsg's `jsonClone`).
+const __jsonCopy = (value) => __jsonParse(__jsonStringify(value));
+// A JSON value frozen all the way down (jsg's `recursivelyFreeze`).
+const __deepFreeze = (value) => {
+  if (value === null || typeof value !== "object") return value;
+  const keys = __ObjectKeys(value);
+  for (let at = 0; at < keys.length; at++) __deepFreeze(value[keys[at]]);
+  return __ObjectFreeze(value);
+};
 const __ArrayPush = Array.prototype.push;
 // A derived class's `super()` calls whatever the class's [[Prototype]] is
 // at that moment, which a script can set (`Object.setPrototypeOf(File,
@@ -122,9 +133,9 @@ let __isBody, __bodyBytesRaw, __setBodyBytesRaw, __bodyStream,
   __setBodyStream, __bodyRead, __setBodyRead, __bodyText, __setBodyText,
   __blobBytesOf, __blobTypeOf, __setBlobBytes, __setBlobType;
 let __requestUrl, __setRequestUrl, __requestMethod, __requestRedirect,
-  __requestCf, __setRequestCf, __requestHeaders, __requestHeadersJson,
-  __requestHeaderList, __requestEncodeResponseBody, __responseEncodeBody,
-  __setResponseEncodeBody;
+  __requestCf, __setRequestCf, __requestCfJson, __requestHasBody,
+  __requestHeaders, __requestHeadersJson, __requestHeaderList,
+  __requestEncodeResponseBody, __responseEncodeBody, __setResponseEncodeBody;
 let __responseStatus, __responseStatusText, __responseHeaders, __responseUrl,
   __setResponseUrl, __responseRedirected, __setResponseRedirected,
   __responseType, __setResponseType, __responseCf, __responseWebSocket,
@@ -1435,13 +1446,13 @@ const __checkCfCacheControl = (cf, cache) => {
 const __CACHE_TTL_NO_STORE = -1;
 const __subrequestCf = (req) => {
   const cache = __requestCache(req);
-  const cf = req.cf;
+  const cf = __requestCf(req);
   if (cache === undefined && (cf === null || typeof cf !== "object" ||
       "cacheControl" in cf || !("cacheTtl" in cf) || cf.cacheTtl === undefined))
     return cf;
   // A JSON copy, as workerd's CfProperty clones it (cf-property.c++), so a
   // key whose value is undefined is not there.
-  const out = cf === undefined || cf === null ? {} : __jsonParse(__jsonStringify(cf));
+  const out = cf === undefined || cf === null ? {} : __jsonCopy(cf);
   if (cache === "no-store") {
     if ("cacheTtl" in out) {
       if (out.cacheTtl !== __CACHE_TTL_NO_STORE)
@@ -1476,7 +1487,10 @@ const __subrequestCf = (req) => {
 // copy a same-isolate target receives (`received`), give its headers as a
 // raw list (`headersList`) or JSON (`headersJson`) that `get headers()`
 // builds a Headers from only when they are read, and say whether it has a
-// body (`hasBody`).
+// body (`hasBody`). A request that arrives also gives the `cf` its caller
+// sent, as JSON text or undefined (`cfBlob`), and whether its framing says
+// it has a body (`bodyPresent`), which decides a null body in place of the
+// method.
 const __requestInits = new __SafeWeakSet();
 // The signals of arrived requests (the client's), which a subrequest made
 // from such a Request, or a copy of it, does not carry.
@@ -1537,8 +1551,15 @@ class __RequestFields extends __Stamp {
   // Request's own without one (`#thisSignal`, made when it is first read).
   #signal = null;
   #thisSignal = null;
-  // undefined when it has none, as workerd's is.
+  // The `cf`, as workerd's CfProperty keeps it (cf-property.c++): undefined
+  // when it has none, otherwise a JSON copy of the object it was given, made
+  // when the Request is, so changing that object later changes nothing here.
+  // A copy and a clone get a JSON copy of their own.
   #cf = undefined;
+  // A request that arrived holds its caller's `cf` as the JSON text it came
+  // as, which `cf` parses on its first read and freezes all the way down, as
+  // workerd does with the cf blob a request carries.
+  #cfBlob = undefined;
   // The cache mode: undefined, "no-store" or "no-cache".
   #cache = undefined;
   // Whether the body is one-time, as an arrived request's is, so that a
@@ -1551,6 +1572,19 @@ class __RequestFields extends __Stamp {
   // `encodeResponseBody`: whether a fetch() decodes a gzip response
   // ("automatic") or gives its body as it came ("manual").
   #encodeResponseBody = "automatic";
+  #cfOf() {
+    if (this.#cfBlob !== undefined) {
+      this.#cf = __deepFreeze(__jsonParse(this.#cfBlob));
+      this.#cfBlob = undefined;
+    }
+    return this.#cf;
+  }
+  // A JSON copy of the `cf`, which a copy or a clone of this Request gets
+  // (`CfProperty::deepClone`): never frozen, even when this one's is.
+  #cfCopy() {
+    if (this.#cfBlob !== undefined) return __jsonParse(this.#cfBlob);
+    return this.#cf === undefined ? undefined : __jsonCopy(this.#cf);
+  }
   #headersOf() {
     if (this.#headers === null) {
       const source = this.#headersJson !== undefined
@@ -1594,6 +1628,9 @@ class __RequestFields extends __Stamp {
           }
         }
         let method, headers, headersJson, redirect, cf, cache, signal, fetcher;
+        // Whether the init set the `cf`, even to none: a Request as the init
+        // always does.
+        let ownCf = false;
         let hasBody = false;
         let body = null;
         let internal = null;
@@ -1608,6 +1645,7 @@ class __RequestFields extends __Stamp {
           body = init.body;
           redirect = init.redirect;
           cf = init.cf;
+          ownCf = cf !== undefined;
           cache = init.cache;
           signal = init.signal;
           if (init.encodeResponseBody !== undefined)
@@ -1624,7 +1662,8 @@ class __RequestFields extends __Stamp {
           body = __bodyStream(init);
           redirect = init.#redirect;
           fetcher = init.#fetcher;
-          cf = init.#cf;
+          cf = init.#cfCopy();
+          ownCf = true;
           signal = init.#signal;
           self.#cache = init.#cache;
           self.#encodeResponseBody = init.#encodeResponseBody;
@@ -1652,6 +1691,10 @@ class __RequestFields extends __Stamp {
           // Kept for `fetcher`; celld sends nothing through it.
           fetcher = init.fetcher;
           cf = init.cf;
+          if (cf !== undefined && (cf === null ||
+              typeof cf !== "object" && typeof cf !== "function"))
+            throw __jsg.field("cf", "RequestInitializerDict", "Object");
+          ownCf = cf !== undefined;
           const initCache = init.cache;
           if (initCache !== undefined) cache = `${initCache}`;
           const initIntegrity = init.integrity;
@@ -1662,7 +1705,12 @@ class __RequestFields extends __Stamp {
           const initEncoding = init.encodeResponseBody;
           const encoding = initEncoding === undefined ? undefined : `${initEncoding}`;
           if (cache !== undefined) self.#cache = __requestCacheMode(cache);
-          if (cf !== null && typeof cf === "object") __checkCfCacheControl(cf, cache);
+          // A JSON copy, made now (`CfProperty`): JSON's errors are thrown
+          // here, and a value it can't hold is dropped or becomes null.
+          if (ownCf) {
+            cf = __jsonCopy(cf);
+            __checkCfCacheControl(cf, cache);
+          }
           if (encoding !== undefined && encoding !== "manual" && encoding !== "automatic")
             throw new TypeError(`encodeResponseBody: unexpected value: ${encoding}`);
           // A copy of a Request keeps no mode of its input's, as in workerd.
@@ -1718,8 +1766,9 @@ class __RequestFields extends __Stamp {
           throw __jsg.typeError("Request with a GET or HEAD method cannot have a body.");
         }
         // A revived request's bytes are adopted once it is made
-        // (`__reviveRequest`).
-        self.#hasBody = bodied || internal?.adoptsBody === true;
+        // (`__reviveRequest`). A request that arrives has a body when its
+        // framing says so (`bodyPresent`, `frame_incoming_body`).
+        self.#hasBody = internal?.bodyPresent ?? (bodied || internal?.adoptsBody === true);
         let stream = null;
         let typed = null;
         if (hasBody && body !== null && typeof body === "object") {
@@ -1777,14 +1826,17 @@ class __RequestFields extends __Stamp {
         }
         __setBodyStream(self, stream !== null
           ? stream
-          : self.#method === "GET" || self.#method === "HEAD"
-            ? null : new CelldBodyStream(self));
+          : (internal?.bodyPresent ?? (self.#method !== "GET" && self.#method !== "HEAD"))
+            ? new CelldBodyStream(self) : null);
         self.#redirect = redirect === undefined
           ? (prior ? prior.#redirect : "follow")
           : __parseRedirectMode(redirect);
         self.#fetcher = fetcher === undefined
           ? (prior !== null ? prior.#fetcher : null) : fetcher;
-        self.#cf = cf === undefined ? (prior ? prior.#cf : undefined) : cf;
+        if (internal !== null && "cfBlob" in internal)
+          self.#cfBlob = internal.cfBlob;
+        else
+          self.#cf = ownCf ? cf : prior !== null ? prior.#cfCopy() : undefined;
         self.#signal = suppliedSignal ? signal
           : signal === undefined && prior !== null ? prior.#signal : null;
         return self;
@@ -1813,9 +1865,18 @@ class __RequestFields extends __Stamp {
         __setRequestUrl = (request, url) => { request.#url = url; };
         __requestMethod = (request) => request.#method;
         __requestRedirect = (request) => request.#redirect;
-        __requestCf = (request) => request.#cf;
+        __requestCf = (request) => request.#cfOf();
         // The `cf` a subrequest carries (`__subrequestCf`).
-        __setRequestCf = (request, cf) => { request.#cf = cf; };
+        __setRequestCf = (request, cf) => {
+          request.#cf = cf;
+          request.#cfBlob = undefined;
+        };
+        // The `cf` as the JSON text a Fetcher sends its target, workerd's cf
+        // blob, or undefined for none. An arrived request's goes on unparsed.
+        __requestCfJson = (request) => request.#cfBlob !== undefined
+          ? request.#cfBlob
+          : request.#cf === undefined ? undefined : __jsonStringify(request.#cf);
+        __requestHasBody = (request) => request.#hasBody;
         __requestHeaders = (request) => request.#headersOf();
         // The headers as JSON for the host, without building a Headers that
         // nothing read.
@@ -1844,7 +1905,7 @@ class __RequestFields extends __Stamp {
           signal: this.#signal ?? undefined,
           hasBody: body !== null,
           body,
-          cf: this.#cf === undefined ? undefined : structuredClone(this.#cf),
+          cf: this.#cfCopy(),
         }));
         request.#cache = this.#cache;
         request.#fetcher = this.#fetcher;
@@ -1880,7 +1941,7 @@ class __RequestFields extends __Stamp {
       }
       get cf() {
         if (!__isRequest(this)) throw __illegalInvocation();
-        return this.#cf;
+        return this.#cfOf();
       }
       get integrity() {
         if (!__isRequest(this)) throw __illegalInvocation();
@@ -1915,21 +1976,20 @@ const __responseAttributes = __attributeTable([
   [Body.prototype, "body"],
 ]);
 const __makeRequest = __celld.__makeRequest = (
-  url, method, body, headersJson = "[]", signal = undefined,
-  incomingSignal = false,
+  url, method, body, headersJson, signal, incomingSignal, cfBlob, bodyPresent,
 ) => new __Request(url, __requestInit({
   // The raw header JSON, not a parsed object: an incoming request whose
   // handler never reads `.headers` (a hello world, or a Worker that only
   // routes to a cell) then never parses it. See `get headers()`.
-  // celld cannot prove Cloudflare edge metadata, so the object stays empty.
-  // In particular, no client-controlled header becomes a country or a colo;
-  // the forwarded-authority trust flag does not establish geolocation trust.
+  // The `cf` is the host's JSON text: a client's is `{}` (CLIENT_CF), since
+  // celld cannot prove Cloudflare edge metadata, and a Worker's is the one
+  // its caller set, or undefined. Parsed only if the handler reads it.
   // Every incoming request has redirect mode "manual", as in workerd
   // (`ServiceWorkerGlobalScope::request`): a Worker that forwards the request
   // it received then hands a redirect back to its own client instead of
   // following it.
-  method, hasBody: true, body, headersJson, signal, cf: {}, redirect: "manual",
-  oneTimeBody: true, incomingSignal,
+  method, hasBody: true, body, headersJson, signal, cfBlob, bodyPresent,
+  redirect: "manual", oneTimeBody: true, incomingSignal,
 }));
 const __fmt = (a) => a.map((x) => {
   if (typeof x === "string") return x;
@@ -1966,6 +2026,35 @@ globalThis.console = {
 };
 
 // async-op shims: outbound fetch + timers, driven by the host event loop.
+// The framing header a Fetcher's target gets for a request that has a body
+// and neither a `Content-Length` nor a `Transfer-Encoding` header: the
+// body's length when it is known, `0` included, and `chunked` for a stream
+// of unknown length. workerd's fetch() sends a body's length with the
+// request and `Content-Length: 0` for an empty one (http.c++), and the
+// target's request() makes a header of it (global-scope.c++). A request
+// with no body gets neither, and a header the caller set is kept. `list` is
+// the request's header list, and null comes back when nothing is added.
+const __bodyFraming = (req, list) => {
+  if (!__requestHasBody(req)) return null;
+  for (let at = 0; at < list.length; at++) {
+    const name = __ReflectApply(__StringToLowerCase, list[at][0], []);
+    if (name === "content-length" || name === "transfer-encoding") return null;
+  }
+  const bytes = __bodyBytesOf(req);
+  if (bytes !== null) return ["content-length", `${__typedLength(bytes)}`];
+  const length = __bodyStream(req)._expectedLength;
+  return length === undefined
+    ? ["transfer-encoding", "chunked"]
+    : ["content-length", `${length}`];
+};
+// The header list a Fetcher sends a Worker for `req`: its own, verbatim (see
+// the note on the outbound `fetch`), with the framing its body gives it.
+const __targetHeaderList = (req) => {
+  const list = __ReflectApply(__HeadersList, __requestHeaders(req), []);
+  const framing = __bodyFraming(req, list);
+  if (framing !== null) list[list.length] = framing;
+  return list;
+};
 // Move one request body through a host subrequest seam. A body that already
 // names a host stream keeps that stream incremental. An ordinary JavaScript
 // stream has no host owner, so it uses the existing byte fallback.
@@ -2210,22 +2299,28 @@ const __fetchNetwork = async (req, chain, container) => {
   // The caller's signal, never the incoming request's own.
   const signal = __requestSubrequestSignal(req);
   if (signal?.aborted) throw signal.reason;
+  // The header list, not the iterator: the iterator sorts, lower-cases and
+  // combines, so `Array.from(req.headers)` would send one `X-Trace: a, b`
+  // for two appends and put celld's casing on the wire in place of the
+  // author's. `op_fetch` builds the request with `RequestBuilder::header`,
+  // which appends, so repeats survive. When this isolate's network is a
+  // globalOutbound Fetcher, the host adds the framing header and the `cf`
+  // that a Worker target gets; the network gets neither. The framing is
+  // read before the body is taken below.
+  const list = __ReflectApply(__HeadersList, __requestHeaders(req), []);
+  const framing = __bodyFraming(req, list);
   // The bytes go to the host as a typed array, the same way every other
   // subrequest op takes a body. Encoding them as a JSON number array cost
   // roughly ten times the body in transient allocation, and it corrupted
   // nothing only because the host decoded the same shape back.
   const { body, streamId } = await __subrequestBody(
     req, ["GET", "HEAD"].includes(req.method));
-  // The header list, not the iterator: the iterator sorts, lower-cases and
-  // combines, so `Array.from(req.headers)` would send one `X-Trace: a, b`
-  // for two appends and put celld's casing on the wire in place of the
-  // author's. `op_fetch` builds the request with `RequestBuilder::header`,
-  // which appends, so repeats survive.
   const dispatch = __op_fetch(
-    req.method, req.url, body,
-    JSON.stringify(req.headers.__celldHeaderList),
+    req.method, req.url, body, __jsonStringify(list),
     streamId, signal != null,
     container, chain.deadline,
+    framing === null ? undefined : __jsonStringify(framing),
+    __requestCfJson(req),
   );
   if (signal) {
     // An abort and the response can cross, leaving a body stream nobody
@@ -4455,11 +4550,12 @@ class DurableObjectFacets {
     // One request to the facet; fetch() follows its redirects back through
     // it (see __fetchThrough).
     const send = async ([loader, className, id, propsSc], req) => {
-      const headers = JSON.stringify(req.headers.__celldHeaderList);
+      const headers = __jsonStringify(__targetHeaderList(req));
       const { body, streamId } = await __subrequestBody(req);
       const response = __hostRecord(await __facet_fetch(
         loader, className, __objectState.scope(manager.#state), record.owner,
-        name, id, propsSc, req.url, req.method, body, headers, streamId));
+        name, id, propsSc, req.url, req.method, body, headers, streamId,
+        __requestCfJson(req)));
       const responseBody = response.streamId !== undefined
         ? new CelldHttpBodyStream(response.streamId)
         : response.body !== undefined ? response.body
@@ -5736,6 +5832,19 @@ __celld.__makeLoader = () => {
       limitsJson: JSON.stringify(options?.limits ?? null),
     };
   };
+  // A loaded Worker's tail events, from the host's report. A fetch event's
+  // request has a `cf`, undefined when the fetch carried none, as workerd's
+  // `TraceItem` has (the report, being JSON, leaves it out). The report
+  // carries a `cf` as its JSON text, parsed here.
+  const tailEvents = (report) => {
+    const events = __jsonParse(report);
+    for (let at = 0; at < events.length; at++) {
+      const request = events[at].event?.request;
+      if (request === undefined) continue;
+      request.cf = __ObjectHasOwn(request, "cf") ? __jsonParse(request.cf) : undefined;
+    }
+    return events;
+  };
   const makeEntrypoint = (loadPromise, entrypoint, propsSc, limitsJson) => {
     // One request to the entrypoint; fetch() follows its redirects back
     // through it (see __fetchThrough).
@@ -5744,22 +5853,21 @@ __celld.__makeLoader = () => {
       // service binding.
       const signal = __requestSubrequestSignal(req);
       if (signal?.aborted) throw signal.reason;
-      // The verbatim header list; see the note on the outbound `fetch`.
       // The loaded worker rebuilds a `Headers` from these pairs, so a
       // repeat and its casing survive the isolate boundary.
-      const headers = JSON.stringify(req.headers.__celldHeaderList);
+      const headers = __jsonStringify(__targetHeaderList(req));
       const { body, streamId } = await __subrequestBody(req);
       const loaded = __loader_fetch(
         id, req.url, req.method, body, headers, streamId, entrypoint,
         propsSc === undefined ? new Uint8Array() : propsSc,
-        limitsJson, tails.length !== 0, signal != null);
+        limitsJson, tails.length !== 0, signal != null, __requestCfJson(req));
       const dispatch = tails.length === 0 ? loaded : loaded[0];
       const response = signal
         ? __awaitCancellableDoCall(dispatch, signal)
         : dispatch;
       if (tails.length !== 0) {
         const delivery = loaded[1]
-          .then((report) => JSON.parse(report))
+          .then((report) => tailEvents(report))
           .then((events) => Promise.allSettled(
             tails.map((tail) => tail.tail(events))))
           .then((results) => {
@@ -6096,6 +6204,28 @@ __celld.__propsBytes = (binding, json) => {
   return bytes;
 };
 
+// The copy of `req` a target in the caller's isolate receives, as a target
+// in another isolate gets it: an incoming request's signal and redirect mode
+// (see __makeRequest), the header list a Fetcher sends (`list`, from
+// `__targetHeaderList`), the `cf` its caller sent, frozen once it is read,
+// and a body when its framing says it has one (`frame_incoming_body`).
+const __receivedCopy = (req, list, signal) => {
+  let bodyPresent = __requestHasBody(req);
+  for (let at = 0; !bodyPresent && at < list.length; at++) {
+    const name = __ReflectApply(__StringToLowerCase, list[at][0], []);
+    bodyPresent = name === "content-length" || name === "transfer-encoding";
+  }
+  return new __Request(req, __requestInit({
+    headersList: list,
+    signal,
+    redirect: "manual",
+    received: true,
+    incomingSignal: true,
+    cfBlob: __requestCfJson(req),
+    bodyPresent,
+  }));
+};
+
 const __makeServiceBinding = __celld.__makeServiceBinding =
   (script, entrypoint = null, propsSc = undefined) => {
   // One request to the target. fetch() follows its redirects back through
@@ -6103,22 +6233,10 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
   const send = async (req) => {
     const signal = __requestSubrequestSignal(req);
     if (signal?.aborted) throw signal.reason;
-    // A stream body advertises its length the way the HTTP layer
-    // would: known length -> Content-Length, unknown -> chunked. On the
-    // target's copy only: a redirect sends the caller's headers again.
-    let framing = null;
-    if (__bodyBytesOf(req) === null &&
-        !req.headers.has("content-length") &&
-        !req.headers.has("transfer-encoding")) {
-      const length = req.body._expectedLength;
-      framing = length === undefined
-        ? ["transfer-encoding", "chunked"]
-        : ["content-length", String(length)];
-    }
-    const framed = (copy) => {
-      if (framing !== null) copy.headers.set(framing[0], framing[1]);
-      return copy;
-    };
+    // The target's headers, with the framing the body gives them
+    // (`__bodyFraming`). Only the target's: a redirect sends the caller's
+    // headers again.
+    const list = __targetHeaderList(req);
     // Fast path: the target is this same script, so its handler lives in
     // this isolate. Skip the op + pool-thread hop and call it directly,
     // inside its own event so the target's waitUntil does not attach to
@@ -6136,12 +6254,7 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
       const requestController = new AbortController();
       const dispatch = __dispatchEntrypointFetch(
         entrypoint ?? "default",
-        framed(new __Request(req, __requestInit({
-          signal: requestController.signal,
-          redirect: "manual",
-          received: true,
-          incomingSignal: true,
-        }))),
+        __receivedCopy(req, list, requestController.signal),
         propsSc ?? null);
       const response = signal
         ? await __raceCallerAbort(dispatch, signal, () =>
@@ -6160,12 +6273,7 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
       // mode (see __makeRequest), so it needs its own Request rather than
       // the caller's, and an abandoned call rejects at once.
       const requestController = new AbortController();
-      const incoming = framed(new __Request(req, __requestInit({
-        signal: requestController.signal,
-        redirect: "manual",
-        received: true,
-        incomingSignal: true,
-      })));
+      const incoming = __receivedCopy(req, list, requestController.signal);
       __cell.svcDepth = (__cell.svcDepth || 0) + 1;
       const ctx = __beginEvent();
       const dispatch = (async () => {
@@ -6185,12 +6293,10 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
         response, requestController, true);
       return __wrapServiceResponse(response, req);
     }
-    // The verbatim header list; see the note on the outbound `fetch`. The
-    // target isolate rebuilds a `Headers` from these pairs, so a repeat and
-    // its casing survive the crossing.
-    const list = req.headers.__celldHeaderList;
-    if (framing !== null) list.push(framing);
-    const headers = JSON.stringify(list);
+    // The target isolate rebuilds a `Headers` from these pairs, so a repeat
+    // and its casing survive the crossing.
+    const headers = __jsonStringify(list);
+    const cf = __requestCfJson(req);
     // Cross-isolate calls carry exact bytes. A host-backed stream transfers
     // its one source to the target, and another stream uses the byte fallback.
     const { body, streamId } = await __subrequestBody(req);
@@ -6198,11 +6304,11 @@ const __makeServiceBinding = __celld.__makeServiceBinding =
       ? __awaitCancellableDoCall(
         __svc_call_cancellable(
           script, req.url, req.method, body, headers, streamId, entrypoint,
-          propsSc),
+          propsSc, cf),
         signal)
       : __svc_call(
         script, req.url, req.method, body, headers, streamId, entrypoint,
-        propsSc)));
+        propsSc, cf)));
     const responseBody = r.streamId !== undefined
       ? new CelldHttpBodyStream(r.streamId)
       : r.body !== undefined
@@ -8906,6 +9012,23 @@ class DurableObjectNamespace {
     const send = async (req) => {
         const signal = __requestSubrequestSignal(req);
         if (signal?.aborted) throw signal.reason;
+        // Forward the request's headers to the cell as JSON. When they were
+        // never materialized -- a Worker that only routes to a cell reads
+        // none -- pass the raw header string straight through, so the whole
+        // dispatch never builds a Headers object on either side.
+        //
+        // Both branches now carry the same shape. The raw string is the
+        // wire list the host handed in, so the materialized branch must send
+        // the header list too, not the iterator; see the note on the
+        // outbound `fetch`. Reading `.headers` on a forwarded request used
+        // to change what the cell received.
+        //
+        // A request with a body sends the framing its body gives it
+        // (`__bodyFraming`), read before the body is taken below.
+        const headersJson = __requestHasBody(req)
+          ? __jsonStringify(__targetHeaderList(req))
+          : __requestHeadersJson(req);
+        const cf = __requestCfJson(req);
         // A body already backed by a host stream forwards to the cell as its
         // stream id, so a proxied upload to a cell on this node costs a chunk
         // rather than the whole body (#156). The host keeps it a stream for a
@@ -8930,26 +9053,15 @@ class DurableObjectNamespace {
           __bodyStream(req)._disturbed = true;
           __bodyStream(req).getReader();
         }
-        // Forward the request's headers to the cell as JSON. When they were
-        // never materialized -- a Worker that only routes to a cell reads
-        // none -- pass the raw header string straight through, so the whole
-        // dispatch never builds a Headers object on either side.
-        //
-        // Both branches now carry the same shape. The raw string is the
-        // wire list the host handed in, so the materialized branch must send
-        // the header list too, not the iterator; see the note on the
-        // outbound `fetch`. Reading `.headers` on a forwarded request used
-        // to change what the cell received.
-        const headersJson = __requestHeadersJson(req);
         const r = __hostRecord(await invoke(() => {
           if (!signal) return __do_call(
             scope, dispatchName ?? null, req.url, req.method, body_,
-            headersJson, bodyStreamId,
+            headersJson, bodyStreamId, cf,
           );
           return __awaitCancellableDoCall(
             __do_call_cancellable(
               scope, dispatchName ?? null, req.url, req.method, body_,
-              headersJson, bodyStreamId,
+              headersJson, bodyStreamId, cf,
             ),
             signal,
           );
@@ -9065,13 +9177,14 @@ const __attachResponseRequestCancellation = (
 // reads, so the whole body is never resident. `request.body` is a stream
 // in both cases.
 __celld.__makeIncomingRequest = (
-  url, method, body, headersJson, streamId,
+  url, method, body, headersJson, streamId, cfBlob, bodyPresent,
 ) => __makeRequest(
   url, method,
   streamId === undefined ? body : new CelldHttpBodyStream(streamId),
-  headersJson, undefined, true);
+  headersJson, undefined, true, cfBlob, bodyPresent);
 const __dispatchTo = __celld.__dispatchTo = async (
-  scope, url, method, body, headersJson, requestId = null, bodyStreamId = null,
+  scope, url, method, body, headersJson, requestId, bodyStreamId, cfBlob,
+  bodyPresent,
 ) => {
   // A routed body that must not be collected crosses as a host stream id; the
   // handler here reads it in parts. A held body arrives as its bytes.
@@ -9095,6 +9208,8 @@ const __dispatchTo = __celld.__dispatchTo = async (
           headersJson,
           requestController.signal,
           true,
+          cfBlob,
+          bodyPresent,
         ))));
     })();
     // The caller's abandonment reaches the target through

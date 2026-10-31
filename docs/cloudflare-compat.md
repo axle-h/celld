@@ -65,8 +65,21 @@ An unsupported feature that does not cause an error is a defect.
 - The `cache` request option follows its flags (see
   [Honoured flags](#honoured-flags)). It changes what a subrequest carries,
   as in workerd; celld has no edge cache for it to change.
-- An inbound `Request` has a `cf` object without Cloudflare edge fields. celld
-  cannot prove the geolocation, colo, or TLS metadata.
+- A `Request` from a client has an empty `cf` object, without Cloudflare edge
+  fields. celld cannot prove the geolocation, colo, or TLS metadata. A
+  request from another Worker, through a service binding, `ctx.exports`, a
+  Durable Object stub, a facet, a Worker Loader entrypoint or a loaded
+  Worker's `globalOutbound`, has the `cf` its caller set, on every hop of a
+  followed redirect, or none. As in workerd, a request's `cf` is a JSON copy
+  made with the `Request`, and the one a Worker receives is frozen.
+- A request a Worker sends to another Worker reaches it framed as over HTTP:
+  a body of known length has a `Content-Length`, `0` for an empty one, a
+  stream of unknown length has `Transfer-Encoding: chunked`, and a request
+  without a body has neither, so its `body` is null. A framing header the
+  caller set is kept, and gives the target a body even on a `GET`.
+- The `cf` a request carries to a Worker in another isolate is at most
+  64 KiB as JSON. A larger one fails the call with an error; workerd sets no
+  bound.
 - celld removes `Content-Length` from a Worker response, except for a `HEAD`
   response.
 - A body with `Content-Encoding: gzip` is handled as in workerd: a response

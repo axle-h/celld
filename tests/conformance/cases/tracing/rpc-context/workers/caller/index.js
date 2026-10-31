@@ -1,10 +1,12 @@
-// Calls each RPC path inside a custom span, so the transcript shows whether
-// the callee's spans join the caller's trace. `/loopback` is the one path
-// that stays in the caller's isolate.
+// Calls each RPC path, and a service binding's and a loaded Worker's fetch(),
+// inside a custom span, so the transcript shows whether the callee's spans
+// join the caller's trace. `/loopback` is the one path that stays in the
+// caller's isolate.
 import { DurableObject, WorkerEntrypoint, tracing } from "cloudflare:workers";
 
-// A traceparent the application sets itself, which a loaded Worker's fetch()
-// honors as an ingress request's is honored.
+// A traceparent the application sets itself. A Worker's fetch() carries its
+// caller's context from the host, so the target's spans join the caller's
+// trace and this header is only data (plan 1.41).
 const APP_TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
 
 // A loaded Worker: a fetch handler for `/loader-fetch`, an entrypoint for
@@ -73,6 +75,12 @@ export default {
         );
       case "/loopback":
         return tracing.enterSpan("around-loopback", async () => new Response(await ctx.exports.Local.work()));
+      case "/service-fetch":
+        return tracing.enterSpan("around-service-fetch", async () => {
+          const own = await (await env.CALLEE.fetch("http://callee/")).text();
+          const app = await (await env.CALLEE.fetch("http://callee/", { headers: { traceparent: APP_TRACEPARENT } })).text();
+          return Response.json({ own, app });
+        });
       case "/loader-fetch":
         return tracing.enterSpan("around-loader-fetch", async () => {
           const entry = loaded(env).getEntrypoint();

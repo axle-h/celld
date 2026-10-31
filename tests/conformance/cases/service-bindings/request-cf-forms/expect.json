@@ -1,0 +1,844 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "back": {
+          "none": "undefined",
+          "init": {
+            "cf": {
+              "colo": "TEST"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "request": {
+            "cf": {
+              "colo": "REQ"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "requestWithInit": {
+            "cf": {
+              "colo": "INIT"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "changed": {
+            "cf": {
+              "colo": "BEFORE",
+              "added": 1
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "json": {
+            "cf": {
+              "date": "1970-01-01T00:00:00.000Z",
+              "nan": null,
+              "nested": {
+                "list": [
+                  1,
+                  null
+                ]
+              }
+            },
+            "frozen": true,
+            "nestedFrozen": true
+          },
+          "array": {
+            "cf": [
+              "a",
+              {
+                "b": 1
+              }
+            ],
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "noStore": {
+            "cf": {
+              "colo": "TEST",
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "noStoreWithoutCf": {
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "cacheTtl": {
+            "cf": {
+              "cacheTtl": 5,
+              "cacheControl": "max-age=5"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "post": {
+            "cf": {
+              "colo": "POST"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "unicode": {
+            "cf": {
+              "city": "Zürich 😀",
+              "quote\"key": "a\nb"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "callerCopy": {
+            "cf": {
+              "colo": "MINE",
+              "after": true
+            },
+            "same": false,
+            "frozen": false
+          },
+          "bigint": {
+            "error": "TypeError: Do not know how to serialize a BigInt"
+          },
+          "null": {
+            "error": "TypeError: Incorrect type for the 'cf' field on 'RequestInitializerDict': the provided value is not of type 'Object'."
+          },
+          "string": {
+            "error": "TypeError: Incorrect type for the 'cf' field on 'RequestInitializerDict': the provided value is not of type 'Object'."
+          },
+          "function": {
+            "error": "SyntaxError: \"undefined\" is not valid JSON"
+          }
+        },
+        "self": {
+          "none": "undefined",
+          "init": {
+            "cf": {
+              "colo": "TEST"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "request": {
+            "cf": {
+              "colo": "REQ"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "requestWithInit": {
+            "cf": {
+              "colo": "INIT"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "changed": {
+            "cf": {
+              "colo": "BEFORE",
+              "added": 1
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "json": {
+            "cf": {
+              "date": "1970-01-01T00:00:00.000Z",
+              "nan": null,
+              "nested": {
+                "list": [
+                  1,
+                  null
+                ]
+              }
+            },
+            "frozen": true,
+            "nestedFrozen": true
+          },
+          "array": {
+            "cf": [
+              "a",
+              {
+                "b": 1
+              }
+            ],
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "noStore": {
+            "cf": {
+              "colo": "TEST",
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "noStoreWithoutCf": {
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "cacheTtl": {
+            "cf": {
+              "cacheTtl": 5,
+              "cacheControl": "max-age=5"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "post": {
+            "cf": {
+              "colo": "POST"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "unicode": {
+            "cf": {
+              "city": "Zürich 😀",
+              "quote\"key": "a\nb"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "callerCopy": {
+            "cf": {
+              "colo": "MINE",
+              "after": true
+            },
+            "same": false,
+            "frozen": false
+          },
+          "bigint": {
+            "error": "TypeError: Do not know how to serialize a BigInt"
+          },
+          "null": {
+            "error": "TypeError: Incorrect type for the 'cf' field on 'RequestInitializerDict': the provided value is not of type 'Object'."
+          },
+          "string": {
+            "error": "TypeError: Incorrect type for the 'cf' field on 'RequestInitializerDict': the provided value is not of type 'Object'."
+          },
+          "function": {
+            "error": "SyntaxError: \"undefined\" is not valid JSON"
+          }
+        },
+        "loopback": {
+          "none": "undefined",
+          "init": {
+            "cf": {
+              "colo": "TEST"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "request": {
+            "cf": {
+              "colo": "REQ"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "requestWithInit": {
+            "cf": {
+              "colo": "INIT"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "changed": {
+            "cf": {
+              "colo": "BEFORE",
+              "added": 1
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "json": {
+            "cf": {
+              "date": "1970-01-01T00:00:00.000Z",
+              "nan": null,
+              "nested": {
+                "list": [
+                  1,
+                  null
+                ]
+              }
+            },
+            "frozen": true,
+            "nestedFrozen": true
+          },
+          "array": {
+            "cf": [
+              "a",
+              {
+                "b": 1
+              }
+            ],
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "noStore": {
+            "cf": {
+              "colo": "TEST",
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "noStoreWithoutCf": {
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "cacheTtl": {
+            "cf": {
+              "cacheTtl": 5,
+              "cacheControl": "max-age=5"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "post": {
+            "cf": {
+              "colo": "POST"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "unicode": {
+            "cf": {
+              "city": "Zürich 😀",
+              "quote\"key": "a\nb"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "callerCopy": {
+            "cf": {
+              "colo": "MINE",
+              "after": true
+            },
+            "same": false,
+            "frozen": false
+          },
+          "bigint": {
+            "error": "TypeError: Do not know how to serialize a BigInt"
+          },
+          "null": {
+            "error": "TypeError: Incorrect type for the 'cf' field on 'RequestInitializerDict': the provided value is not of type 'Object'."
+          },
+          "string": {
+            "error": "TypeError: Incorrect type for the 'cf' field on 'RequestInitializerDict': the provided value is not of type 'Object'."
+          },
+          "function": {
+            "error": "SyntaxError: \"undefined\" is not valid JSON"
+          }
+        },
+        "object": {
+          "none": "undefined",
+          "init": {
+            "cf": {
+              "colo": "TEST"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "request": {
+            "cf": {
+              "colo": "REQ"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "requestWithInit": {
+            "cf": {
+              "colo": "INIT"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "changed": {
+            "cf": {
+              "colo": "BEFORE",
+              "added": 1
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "json": {
+            "cf": {
+              "date": "1970-01-01T00:00:00.000Z",
+              "nan": null,
+              "nested": {
+                "list": [
+                  1,
+                  null
+                ]
+              }
+            },
+            "frozen": true,
+            "nestedFrozen": true
+          },
+          "array": {
+            "cf": [
+              "a",
+              {
+                "b": 1
+              }
+            ],
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "noStore": {
+            "cf": {
+              "colo": "TEST",
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "noStoreWithoutCf": {
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "cacheTtl": {
+            "cf": {
+              "cacheTtl": 5,
+              "cacheControl": "max-age=5"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "post": {
+            "cf": {
+              "colo": "POST"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "unicode": {
+            "cf": {
+              "city": "Zürich 😀",
+              "quote\"key": "a\nb"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "callerCopy": {
+            "cf": {
+              "colo": "MINE",
+              "after": true
+            },
+            "same": false,
+            "frozen": false
+          },
+          "bigint": {
+            "error": "TypeError: Do not know how to serialize a BigInt"
+          },
+          "null": {
+            "error": "TypeError: Incorrect type for the 'cf' field on 'RequestInitializerDict': the provided value is not of type 'Object'."
+          },
+          "string": {
+            "error": "TypeError: Incorrect type for the 'cf' field on 'RequestInitializerDict': the provided value is not of type 'Object'."
+          },
+          "function": {
+            "error": "SyntaxError: \"undefined\" is not valid JSON"
+          }
+        },
+        "loader": {
+          "none": "undefined",
+          "init": {
+            "cf": {
+              "colo": "TEST"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "request": {
+            "cf": {
+              "colo": "REQ"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "requestWithInit": {
+            "cf": {
+              "colo": "INIT"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "changed": {
+            "cf": {
+              "colo": "BEFORE",
+              "added": 1
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "json": {
+            "cf": {
+              "date": "1970-01-01T00:00:00.000Z",
+              "nan": null,
+              "nested": {
+                "list": [
+                  1,
+                  null
+                ]
+              }
+            },
+            "frozen": true,
+            "nestedFrozen": true
+          },
+          "array": {
+            "cf": [
+              "a",
+              {
+                "b": 1
+              }
+            ],
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "noStore": {
+            "cf": {
+              "colo": "TEST",
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "noStoreWithoutCf": {
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "cacheTtl": {
+            "cf": {
+              "cacheTtl": 5,
+              "cacheControl": "max-age=5"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "post": {
+            "cf": {
+              "colo": "POST"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "unicode": {
+            "cf": {
+              "city": "Zürich 😀",
+              "quote\"key": "a\nb"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "callerCopy": {
+            "cf": {
+              "colo": "MINE",
+              "after": true
+            },
+            "same": false,
+            "frozen": false
+          },
+          "bigint": {
+            "error": "TypeError: Do not know how to serialize a BigInt"
+          },
+          "null": {
+            "error": "TypeError: Incorrect type for the 'cf' field on 'RequestInitializerDict': the provided value is not of type 'Object'."
+          },
+          "string": {
+            "error": "TypeError: Incorrect type for the 'cf' field on 'RequestInitializerDict': the provided value is not of type 'Object'."
+          },
+          "function": {
+            "error": "SyntaxError: \"undefined\" is not valid JSON"
+          }
+        },
+        "facet": {
+          "none": "undefined",
+          "init": {
+            "cf": {
+              "colo": "TEST"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "request": {
+            "cf": {
+              "colo": "REQ"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "requestWithInit": {
+            "cf": {
+              "colo": "INIT"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "changed": {
+            "cf": {
+              "colo": "BEFORE",
+              "added": 1
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "json": {
+            "cf": {
+              "date": "1970-01-01T00:00:00.000Z",
+              "nan": null,
+              "nested": {
+                "list": [
+                  1,
+                  null
+                ]
+              }
+            },
+            "frozen": true,
+            "nestedFrozen": true
+          },
+          "array": {
+            "cf": [
+              "a",
+              {
+                "b": 1
+              }
+            ],
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "noStore": {
+            "cf": {
+              "colo": "TEST",
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "noStoreWithoutCf": {
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "cacheTtl": {
+            "cf": {
+              "cacheTtl": 5,
+              "cacheControl": "max-age=5"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "post": {
+            "cf": {
+              "colo": "POST"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "unicode": {
+            "cf": {
+              "city": "Zürich 😀",
+              "quote\"key": "a\nb"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "callerCopy": {
+            "cf": {
+              "colo": "MINE",
+              "after": true
+            },
+            "same": false,
+            "frozen": false
+          },
+          "bigint": {
+            "error": "TypeError: Do not know how to serialize a BigInt"
+          },
+          "null": {
+            "error": "TypeError: Incorrect type for the 'cf' field on 'RequestInitializerDict': the provided value is not of type 'Object'."
+          },
+          "string": {
+            "error": "TypeError: Incorrect type for the 'cf' field on 'RequestInitializerDict': the provided value is not of type 'Object'."
+          },
+          "function": {
+            "error": "SyntaxError: \"undefined\" is not valid JSON"
+          }
+        },
+        "globalOutbound": {
+          "none": "undefined",
+          "init": {
+            "cf": {
+              "colo": "TEST"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "request": {
+            "cf": {
+              "colo": "REQ"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "requestWithInit": {
+            "cf": {
+              "colo": "INIT"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "changed": {
+            "cf": {
+              "colo": "BEFORE",
+              "added": 1
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "json": {
+            "cf": {
+              "date": "1970-01-01T00:00:00.000Z",
+              "nan": null,
+              "nested": {
+                "list": [
+                  1,
+                  null
+                ]
+              }
+            },
+            "frozen": true,
+            "nestedFrozen": true
+          },
+          "array": {
+            "cf": [
+              "a",
+              {
+                "b": 1
+              }
+            ],
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "noStore": {
+            "cf": {
+              "colo": "TEST",
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "noStoreWithoutCf": {
+            "cf": {
+              "cacheTtl": -1,
+              "cacheLevel": "bypass",
+              "cacheControl": "no-store"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "cacheTtl": {
+            "cf": {
+              "cacheTtl": 5,
+              "cacheControl": "max-age=5"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "post": {
+            "cf": {
+              "colo": "POST"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "unicode": {
+            "cf": {
+              "city": "Zürich 😀",
+              "quote\"key": "a\nb"
+            },
+            "frozen": true,
+            "nestedFrozen": null
+          },
+          "callerCopy": {
+            "cf": {
+              "colo": "MINE",
+              "after": true
+            },
+            "same": false,
+            "frozen": false
+          },
+          "bigint": {
+            "error": "TypeError: Do not know how to serialize a BigInt"
+          },
+          "null": {
+            "error": "TypeError: Incorrect type for the 'cf' field on 'RequestInitializerDict': the provided value is not of type 'Object'."
+          },
+          "string": {
+            "error": "TypeError: Incorrect type for the 'cf' field on 'RequestInitializerDict': the provided value is not of type 'Object'."
+          },
+          "function": {
+            "error": "SyntaxError: \"undefined\" is not valid JSON"
+          }
+        },
+        "forwarded": {
+          "cf": {
+            "colo": "FWD"
+          },
+          "frozen": true,
+          "nestedFrozen": null
+        }
+      }
+    }
+  ]
+}

@@ -1,4 +1,5 @@
-// A named entrypoint whose method records a span of its own.
+// A named entrypoint whose method and fetch handler record a span of their
+// own.
 import { WorkerEntrypoint, tracing } from "cloudflare:workers";
 
 export class Work extends WorkerEntrypoint {
@@ -7,6 +8,10 @@ export class Work extends WorkerEntrypoint {
       span.setAttribute("side", "service");
       return "worked";
     });
+  }
+
+  fetch() {
+    return tracing.enterSpan("in-service-fetch", (span) => new Response(String(span.isTraced)));
   }
 }
 

@@ -778,6 +778,7 @@ async fn arm_cron_schedule(app: AppHandle, cell: String) -> anyhow::Result<()> {
             body_guard: celld::js::RequestBodyGuard::of(&body),
             body,
             headers: Vec::new(),
+            cf: None,
             reply,
             order: None,
             parent: None,
@@ -1171,6 +1172,7 @@ async fn dispatch_do_call(app: AppHandle, call: DoCallReq) {
                 method,
                 body,
                 headers,
+                cf,
             } = &payload;
             if dispatcher.observe(&node, epoch) {
                 let cancel = if deliver_abort_to_handler {
@@ -1208,6 +1210,7 @@ async fn dispatch_do_call(app: AppHandle, call: DoCallReq) {
                         capacity_handoff: epoch == 0,
                         parent,
                         caller: peer_tunnel::TunnelCaller::of(caller),
+                        cf: cf.clone(),
                     };
                     let attempt_body = match body {
                         celld::js::RequestBody::Bytes(bytes) => {
@@ -1818,9 +1821,15 @@ fn ingress_payload_parts(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok());
     // A method that carries no body does not stream. There is nothing to
-    // pull, and a stream costs the handler one operation to learn this.
-    let bodyless =
-        matches!(parts.method, hyper::Method::GET | hyper::Method::HEAD) || declared == Some(0);
+    // pull, and a stream costs the handler one operation to learn this. A
+    // request whose framing says no bytes follow is held too, whatever its
+    // method: hyper ends the body of an HTTP/1 request with neither
+    // `Content-Length` nor `Transfer-Encoding`, and an HTTP/2 request whose
+    // headers end the stream. As bytes it reaches the Worker as workerd gives
+    // it, with a null body and no framing header; a stream would be chunked.
+    let bodyless = matches!(parts.method, hyper::Method::GET | hyper::Method::HEAD)
+        || declared == Some(0)
+        || body.is_end_stream();
     if bodyless || declared.is_some_and(|length| length < INGRESS_STREAM_THRESHOLD) {
         return Ok((
             url,
@@ -1997,6 +2006,8 @@ async fn dispatch_cell_fetch(
         body_guard: celld::js::RequestBodyGuard::of(&body),
         body,
         headers,
+        // A client's, as a Worker's request from the public listener has.
+        cf: Some(celld::js::CLIENT_CF.to_string()),
         reply,
         // An ingress call has no caller in this process to be ordered against.
         order: None,
@@ -2044,6 +2055,8 @@ pub(crate) struct ForwardedFetch {
     pub(crate) url: String,
     pub(crate) method: String,
     pub(crate) headers: Vec<(String, String)>,
+    /// The caller's `cf` as JSON text, from the tunnel's control header.
+    pub(crate) cf: Option<String>,
     pub(crate) request_id: Option<celld::js::RequestId>,
     pub(crate) capacity_handoff: bool,
     /// The caller's trace context, from the tunnel's control header.
@@ -2080,6 +2093,7 @@ pub(crate) async fn dispatch_forwarded_fetch(
         url,
         method,
         headers,
+        cf,
         request_id,
         capacity_handoff,
         parent,
@@ -2136,6 +2150,7 @@ pub(crate) async fn dispatch_forwarded_fetch(
                                 method,
                                 body: request_body,
                                 headers,
+                                cf,
                                 request_id,
                                 // A peer's call has no caller in this process.
                                 order: None,
@@ -2570,6 +2585,7 @@ async fn dispatch_service_call(app: AppHandle, call: SvcCallReq) {
                     method: call.method,
                     body: call.body,
                     headers: call.headers,
+                    sender: call.sender,
                     cancel: call.cancel,
                 })
                 .await
@@ -2672,6 +2688,7 @@ async fn dispatch_queue_batch(app: AppHandle, call: QueueDispatchReq) {
             body_guard: celld::js::RequestBodyGuard::of(&body),
             body,
             headers: vec![("content-type".to_string(), "application/json".to_string())],
+            cf: None,
             reply,
             order: None,
             parent: None,
@@ -5891,6 +5908,101 @@ mod tests {
         assert_eq!(
             runtime_response(worker_response(204), false).status(),
             StatusCode::NO_CONTENT
+        );
+    }
+
+    /// What a Worker's `request()` sees of a client's raw request: whether
+    /// it has a body, its framing headers, and its bytes.
+    async fn ingress_body(raw: &'static [u8]) -> (bool, Vec<(String, String)>, Vec<u8>) {
+        use tokio::io::AsyncWriteExt;
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let (arrived_tx, mut arrived_rx) = mpsc::unbounded_channel();
+        let service = service_fn(move |request: Request<Incoming>| {
+            let arrived_tx = arrived_tx.clone();
+            async move {
+                let Ok((_, _, body, mut headers)) = ingress_payload(request, false, 1 << 20).await
+                else {
+                    panic!("the request is admitted");
+                };
+                let bodied = celld::js::frame_incoming_body(&body, &mut headers);
+                let bytes = match &body {
+                    celld::js::RequestBody::Bytes(bytes) => bytes.to_vec(),
+                    celld::js::RequestBody::Stream(stream_id) => {
+                        let mut stream = celld::js::take_body_stream(*stream_id).unwrap();
+                        let mut bytes = Vec::new();
+                        while let Some(chunk) = stream.next().await {
+                            bytes.extend(chunk.unwrap());
+                        }
+                        bytes
+                    }
+                };
+                headers.retain(|(name, _)| {
+                    name.eq_ignore_ascii_case("content-length")
+                        || name.eq_ignore_ascii_case("transfer-encoding")
+                });
+                arrived_tx.send((bodied, headers, bytes)).unwrap();
+                Ok::<_, Infallible>(Response::new(Full::new(Bytes::new())))
+            }
+        });
+        tokio::spawn(http1::Builder::new().serve_connection(TokioIo::new(server), service));
+        client.write_all(raw).await.unwrap();
+        arrived_rx.recv().await.expect("the request arrives")
+    }
+
+    /// A client's request has a body exactly when workerd's `request()`
+    /// gives it one (global-scope.c++): a framing header says so. A request
+    /// with neither `Content-Length` nor `Transfer-Encoding` has a null body
+    /// and gains no framing header, whatever its method or HTTP version.
+    #[tokio::test]
+    async fn a_client_request_has_a_body_when_its_framing_says_so() {
+        let header = |name: &str, value: &str| vec![(name.to_string(), value.to_string())];
+        let none = (false, vec![], vec![]);
+        for raw in [
+            &b"GET / HTTP/1.1\r\nhost: a\r\n\r\n"[..],
+            b"POST / HTTP/1.1\r\nhost: a\r\n\r\n",
+            b"PUT / HTTP/1.1\r\nhost: a\r\n\r\n",
+            b"DELETE / HTTP/1.1\r\nhost: a\r\n\r\n",
+            b"OPTIONS / HTTP/1.1\r\nhost: a\r\n\r\n",
+            b"POST / HTTP/1.0\r\nhost: a\r\n\r\n",
+        ] {
+            assert_eq!(
+                ingress_body(raw).await,
+                none,
+                "{}",
+                String::from_utf8_lossy(raw)
+            );
+        }
+        assert_eq!(
+            ingress_body(b"POST / HTTP/1.1\r\nhost: a\r\ncontent-length: 0\r\n\r\n").await,
+            (true, header("content-length", "0"), vec![])
+        );
+        assert_eq!(
+            ingress_body(b"GET / HTTP/1.1\r\nhost: a\r\ncontent-length: 0\r\n\r\n").await,
+            (true, header("content-length", "0"), vec![])
+        );
+        assert_eq!(
+            ingress_body(b"POST / HTTP/1.1\r\nhost: a\r\ncontent-length: 4\r\n\r\ndata").await,
+            (true, header("content-length", "4"), b"data".to_vec())
+        );
+        assert_eq!(
+            ingress_body(
+                b"POST / HTTP/1.1\r\nhost: a\r\ntransfer-encoding: chunked\r\n\r\n0\r\n\r\n"
+            )
+            .await,
+            (true, header("transfer-encoding", "chunked"), vec![])
+        );
+        assert_eq!(
+            ingress_body(
+                b"POST / HTTP/1.1\r\nhost: a\r\ntransfer-encoding: chunked\r\n\r\n\
+                  2\r\nda\r\n2\r\nta\r\n0\r\n\r\n"
+            )
+            .await,
+            (
+                true,
+                header("transfer-encoding", "chunked"),
+                b"data".to_vec()
+            )
         );
     }
 }
