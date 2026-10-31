@@ -1,0 +1,20 @@
+{
+  "workers": ["app", "back"],
+  "steps": [
+    {"path": "/dial-caller-first"},
+    {"path": "/dial-caller-first-half"},
+    {"path": "/dial-server-first"},
+    {"path": "/dial-server-first-half"},
+    {"path": "/upgrade-caller-first"},
+    {"path": "/upgrade-caller-first-half"},
+    {"path": "/upgrade-server-first"},
+    {"path": "/upgrade-server-first-half"},
+    {"path": "/binding-caller-first"},
+    {"path": "/binding-caller-first-half"},
+    {"path": "/binding-server-first"},
+    {"path": "/binding-server-first-half"},
+    {"path": "/other-caller-first"},
+    {"path": "/other-server-first"},
+    {"path": "/seen"}
+  ]
+}

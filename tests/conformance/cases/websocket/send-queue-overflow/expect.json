@@ -52,6 +52,10 @@
             1011,
             "celld closed this WebSocket: more than 32 MiB of sent messages waited for the peer to read them",
             true
+          ],
+          [
+            "error",
+            "Uncaught Error: Network connection lost."
           ]
         ],
         "object": [

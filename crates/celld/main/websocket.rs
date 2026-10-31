@@ -918,10 +918,6 @@ type SocketReader<S> = fastwebsockets::FragmentCollectorRead<tokio::io::ReadHalf
 /// Close details: the code, the reason, and whether the close was clean.
 type CloseState = (u16, String, bool);
 
-/// The reason of the close event of a socket whose peer's connection ended
-/// without a Close: kj's text, which workerd reports.
-const DISCONNECTED_WITHOUT_CLOSE: &str = "WebSocket disconnected without sending Close frame.";
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CloseInitiator {
     Peer,
@@ -1255,7 +1251,11 @@ where
             loop {
                 let Ok(frame) = reader.read_frame(&mut obligated).await else {
                     return Some(PumpClose {
-                        state: (1006, DISCONNECTED_WITHOUT_CLOSE.to_string(), false),
+                        state: (
+                            1006,
+                            celld::js::DISCONNECTED_WITHOUT_CLOSE.to_string(),
+                            false,
+                        ),
                         initiator: CloseInitiator::Transport,
                     });
                 };
@@ -2015,7 +2015,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             close.state,
-            (1006, DISCONNECTED_WITHOUT_CLOSE.to_string(), false)
+            (
+                1006,
+                celld::js::DISCONNECTED_WITHOUT_CLOSE.to_string(),
+                false
+            )
         );
         drop(application);
     }
@@ -2306,7 +2310,7 @@ mod tests {
         );
         assert!(matches!(
             pipe.caller_queue.recv().await,
-            Some(WsPull::Close(4005, reason, true)) if reason == "reply"
+            Some(WsPull::Close(4005, reason, true, _)) if reason == "reply"
         ));
     }
 

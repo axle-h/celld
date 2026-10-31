@@ -285,6 +285,14 @@ pub struct Slot {
     queue_producers: Mutex<std::collections::HashMap<String, usize>>,
     turns: AtomicUsize,
     requests: AtomicUsize,
+    /// Those of `requests` that only their open WebSockets keep, which
+    /// admission does not count ([`Affiliation::hold_for_sockets`]).
+    sockets: AtomicUsize,
+    /// The node's count of them, and its bound ([`node_socket_requests`]).
+    socket_requests: Arc<SocketRequests>,
+    /// Whether the pool belongs to a superseded generation, shared with it.
+    /// A Worker Loader's slot shares its loader's.
+    generation: Arc<GenerationRetirement>,
     /// The pool's admission bell, cloned into every slot so an
     /// `Affiliation` drop can ring it without holding the pool.
     freed: Arc<tokio::sync::Notify>,
@@ -406,6 +414,7 @@ impl Slot {
         IsolateLoad {
             turns: self.turns.load(Ordering::Relaxed),
             requests: self.requests.load(Ordering::Relaxed),
+            sockets: self.sockets.load(Ordering::Relaxed),
             cells: self.cells.load(Ordering::Relaxed),
             // A stuck turn holds the isolate: placement skips it until the
             // turn returns, before the grace condemns it.
@@ -766,13 +775,19 @@ impl Slot {
     /// this heap and every later turn must come back here.
     pub fn affiliate(self: &Arc<Self>) -> Affiliation {
         self.requests.fetch_add(1, Ordering::Relaxed);
-        Affiliation(self.clone())
+        Affiliation(self.clone(), AtomicBool::new(false))
     }
 
     /// A slot holding a Worker Loader's Worker, whose stuck isolates count
-    /// toward `stuck`.
-    pub(crate) fn loaded_worker(worker: js::Worker, owner: Arc<Owner>) -> Arc<Self> {
-        Self::outside_pool(worker, true, Some(owner))
+    /// toward `stuck`. `generation` is the loader's
+    /// ([`Slot::generation`]): the loaded Worker lives as long as the
+    /// loader's isolate holds it, so it retires with the loader's generation.
+    pub(crate) fn loaded_worker(
+        worker: js::Worker,
+        owner: Arc<Owner>,
+        generation: Arc<GenerationRetirement>,
+    ) -> Arc<Self> {
+        Self::outside_pool(worker, true, Some(owner), generation)
     }
 
     /// A slot holding a Worker outside a placement pool.
@@ -783,6 +798,7 @@ impl Slot {
         worker: js::Worker,
         loaded_worker: bool,
         owner: Option<Arc<Owner>>,
+        generation: Arc<GenerationRetirement>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|me| Slot {
             me: me.clone(),
@@ -795,6 +811,9 @@ impl Slot {
             queue_producers: Mutex::new(std::collections::HashMap::new()),
             turns: AtomicUsize::new(0),
             requests: AtomicUsize::new(0),
+            sockets: AtomicUsize::new(0),
+            socket_requests: node_socket_requests(),
+            generation,
             freed: Arc::new(tokio::sync::Notify::new()),
             reclaim: None,
             loaded_worker,
@@ -817,11 +836,21 @@ impl Slot {
 
     #[cfg(any(test, celld_internal_tests))]
     pub fn for_test(worker: js::Worker) -> Arc<Self> {
-        Self::outside_pool(worker, false, None)
+        Self::outside_pool(worker, false, None, Arc::default())
     }
 
     #[cfg(test)]
     pub(crate) fn vacant_for_request_cancellation_test() -> Arc<Self> {
+        Self::vacant_for_test(Arc::new(SocketRequests::new(usize::MAX)), Arc::default())
+    }
+
+    /// A slot with no worker that counts the requests only their sockets
+    /// keep in `socket_requests`, and retires with `generation`.
+    #[cfg(test)]
+    fn vacant_for_test(
+        socket_requests: Arc<SocketRequests>,
+        generation: Arc<GenerationRetirement>,
+    ) -> Arc<Self> {
         Arc::new_cyclic(|me| Slot {
             me: me.clone(),
             id: 0,
@@ -833,6 +862,9 @@ impl Slot {
             queue_producers: Mutex::new(std::collections::HashMap::new()),
             turns: AtomicUsize::new(0),
             requests: AtomicUsize::new(0),
+            sockets: AtomicUsize::new(0),
+            socket_requests,
+            generation,
             freed: Arc::new(tokio::sync::Notify::new()),
             reclaim: None,
             loaded_worker: false,
@@ -1008,6 +1040,32 @@ impl Slot {
         notified.await;
     }
 
+    /// How long ago this slot's pool came to belong to a superseded
+    /// generation ([`Pool::retire_all`]), so a request that only its
+    /// WebSockets keep lets the isolate go rather than hold it while they
+    /// stay open.
+    pub(crate) fn generation_retired_for(&self) -> Option<std::time::Duration> {
+        self.generation.retired_for()
+    }
+
+    /// The retirement this slot's pool shares, which a Worker it loads
+    /// shares too ([`Slot::loaded_worker`]).
+    pub(crate) fn generation(&self) -> Arc<GenerationRetirement> {
+        self.generation.clone()
+    }
+
+    /// Resolves once [`generation_retired_for`](Self::generation_retired_for)
+    /// has a value.
+    pub(crate) async fn until_generation_retired(&self) {
+        let notified = self.generation.wake.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if self.generation.is_retired() {
+            return;
+        }
+        notified.await;
+    }
+
     /// The cell `scope` of this isolate failed a commit and must move to a
     /// new instance (`js::do_instances::cell_broken`).
     pub(crate) fn mark_broken(&self, scope: &str) {
@@ -1053,16 +1111,39 @@ impl Slot {
 }
 
 /// A request's claim on the isolate that ran its first turn.
-pub struct Affiliation(Arc<Slot>);
+pub struct Affiliation(Arc<Slot>, AtomicBool);
 
 impl Affiliation {
     pub fn slot(&self) -> &Arc<Slot> {
         &self.0
     }
+
+    /// The request has answered and only its open WebSockets keep it: give
+    /// its admission slot back, and count it among the node's socket
+    /// requests instead, while they have room. It still holds the isolate,
+    /// whose heap keeps its events' state, until it ends. Past the bound it
+    /// keeps its slot. Returns whether it holds none.
+    pub fn hold_for_sockets(&self) -> bool {
+        if self.1.load(Ordering::Relaxed) {
+            return true;
+        }
+        if !self.0.socket_requests.reserve() {
+            return false;
+        }
+        self.1.store(true, Ordering::Relaxed);
+        self.0.sockets.fetch_add(1, Ordering::Relaxed);
+        // The slot it gave back can take a waiting request.
+        self.0.freed.notify_one();
+        true
+    }
 }
 
 impl Drop for Affiliation {
     fn drop(&mut self) {
+        if self.1.load(Ordering::Relaxed) {
+            self.0.sockets.fetch_sub(1, Ordering::Relaxed);
+            self.0.socket_requests.release();
+        }
         self.0.requests.fetch_sub(1, Ordering::Relaxed);
         // Exactly one admission waiter per freed slot: `notify_one` hands
         // the capacity to a single parked request, where waking them all
@@ -1151,6 +1232,78 @@ impl Drop for Residency {
 
 type Build = Arc<dyn Fn() -> Result<js::Worker> + Send + Sync>;
 
+/// The node's requests that only their open WebSockets keep, and the most it
+/// may hold outside admission (`CELLD_MAX_SOCKET_REQUESTS`).
+struct SocketRequests {
+    held: AtomicUsize,
+    max: usize,
+}
+
+impl SocketRequests {
+    fn new(max: usize) -> Self {
+        Self {
+            held: AtomicUsize::new(0),
+            max,
+        }
+    }
+
+    fn reserve(&self) -> bool {
+        let mut held = self.held.load(Ordering::Relaxed);
+        while held < self.max {
+            match self.held.compare_exchange_weak(
+                held,
+                held + 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(now) => held = now,
+            }
+        }
+        false
+    }
+
+    fn release(&self) {
+        self.held.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// One count and bound for the whole node, across every pool, generation
+/// and Worker Loader slot: what such a request holds is node memory
+/// ([`crate::runtime::max_socket_requests`]), and a bound per pool would
+/// multiply with the scripts and generations a node runs.
+static NODE_SOCKET_REQUESTS: OnceLock<Arc<SocketRequests>> = OnceLock::new();
+
+fn node_socket_requests() -> Arc<SocketRequests> {
+    NODE_SOCKET_REQUESTS
+        .get_or_init(|| Arc::new(SocketRequests::new(crate::runtime::max_socket_requests())))
+        .clone()
+}
+
+/// Whether a pool belongs to a superseded generation, since when, and the
+/// bell that tells its requests so.
+#[derive(Default)]
+pub(crate) struct GenerationRetirement {
+    /// When the generation first retired.
+    retired_at: OnceLock<std::time::Instant>,
+    wake: tokio::sync::Notify,
+}
+
+impl GenerationRetirement {
+    fn retire(&self) {
+        let _ = self.retired_at.set(std::time::Instant::now());
+        self.wake.notify_waiters();
+    }
+
+    fn retired_for(&self) -> Option<std::time::Duration> {
+        self.retired_at.get().map(std::time::Instant::elapsed)
+    }
+
+    fn is_retired(&self) -> bool {
+        self.retired_at.get().is_some()
+    }
+}
+
 pub struct Pool {
     slots: RwLock<Vec<Arc<Slot>>>,
     limits: PoolLimits,
@@ -1164,7 +1317,10 @@ pub struct Pool {
     /// after this is set starts out retiring: a placement that snapshotted
     /// the old generation just before the flip can still land, but nothing
     /// it builds outlives the work it was built for.
-    retired: AtomicBool,
+    retired: Arc<GenerationRetirement>,
+    /// The node's requests that only their open WebSockets keep, shared with
+    /// its slots.
+    socket_requests: Arc<SocketRequests>,
     /// Keeps admission and cell placement from racing isolate retirement.
     /// Stateless admission takes a shared guard, while maintenance and cell
     /// placement take the exclusive guard.
@@ -1186,7 +1342,8 @@ impl Pool {
             freed: Arc::new(tokio::sync::Notify::new()),
             reclaim: Arc::new(tokio::sync::Notify::new()),
             admission_wait,
-            retired: AtomicBool::new(false),
+            retired: Arc::default(),
+            socket_requests: node_socket_requests(),
             maintenance: RwLock::new(()),
             owner: None,
         }
@@ -1277,12 +1434,15 @@ impl Pool {
             queue_producers: Mutex::new(std::collections::HashMap::new()),
             turns: AtomicUsize::new(0),
             requests: AtomicUsize::new(0),
+            sockets: AtomicUsize::new(0),
+            socket_requests: self.socket_requests.clone(),
+            generation: self.retired.clone(),
             freed: self.freed.clone(),
             reclaim: Some(self.reclaim.clone()),
             loaded_worker: false,
             cells: AtomicUsize::new(0),
             adopted_cells: AtomicUsize::new(0),
-            retiring: AtomicBool::new(self.retired.load(Ordering::Relaxed)),
+            retiring: AtomicBool::new(self.retired.is_retired()),
             condemned: std::sync::atomic::AtomicU8::new(NOT_CONDEMNED),
             condemn_hook: OnceLock::new(),
             condemned_wake: tokio::sync::Notify::new(),
@@ -1529,7 +1689,7 @@ impl Pool {
     /// enforces by refusing a housed isolate.
     pub fn retire_all(&self) {
         let _maintenance = self.maintenance.write().expect("pool poisoned");
-        self.retired.store(true, Ordering::Relaxed);
+        self.retired.retire();
         for slot in self.slots.read().expect("pool poisoned").iter() {
             if !slot.retiring.swap(true, Ordering::Relaxed) {
                 tracing::info!(isolate = %slot.heap_id, slot = slot.id, "isolate retiring");
@@ -1753,6 +1913,75 @@ mod tests {
             *order.lock().unwrap(),
             ["a-settle", "s-cancel", "b-start", "a-start"]
         );
+    }
+
+    /// A request that only its sockets keep gives its admission slot back
+    /// while the node's bound has room, and keeps it past the bound. The
+    /// bound is the node's: a slot of another pool, or a Worker Loader's,
+    /// counts against the same one.
+    #[test]
+    fn a_request_its_sockets_keep_leaves_admission_within_the_bound() {
+        let node = Arc::new(SocketRequests::new(2));
+        let slot = Slot::vacant_for_test(node.clone(), Arc::default());
+        let other = Slot::vacant_for_test(node.clone(), Arc::default());
+        let held = |slot: &Slot| {
+            let load = slot.observe();
+            (load.requests, load.sockets)
+        };
+        let first = slot.affiliate();
+        let second = slot.affiliate();
+        let elsewhere = other.affiliate();
+        assert!(first.hold_for_sockets());
+        assert!(first.hold_for_sockets(), "a second call holds nothing more");
+        assert!(elsewhere.hold_for_sockets());
+        assert!(!second.hold_for_sockets(), "past the node's bound");
+        assert_eq!(held(&slot), (2, 1));
+        assert_eq!(held(&other), (1, 1));
+        drop(elsewhere);
+        assert!(second.hold_for_sockets(), "the bound has room again");
+        assert_eq!(held(&slot), (2, 2));
+        drop(first);
+        drop(second);
+        assert_eq!(held(&slot), (0, 0));
+        assert_eq!(node.held.load(Ordering::Relaxed), 0);
+    }
+
+    /// A slot that shares another's generation, as a Worker Loader's shares
+    /// its loader's, retires with it, at the instant the generation retired
+    /// rather than when a request first looks.
+    #[test]
+    fn a_shared_generation_retires_at_its_own_instant() {
+        let loader = Slot::vacant_for_request_cancellation_test();
+        let loaded = Slot::vacant_for_test(Arc::new(SocketRequests::new(1)), loader.generation());
+        assert_eq!(loaded.generation_retired_for(), None);
+        loader.generation.retire();
+        let wait = std::time::Duration::from_millis(20);
+        std::thread::sleep(wait);
+        loader.generation.retire();
+        let retired_for = loaded.generation_retired_for().expect("retired");
+        assert!(retired_for >= wait, "the first retirement counts");
+    }
+
+    /// Retiring a pool's generation wakes the requests its sockets keep.
+    #[test]
+    fn a_retired_generation_wakes_its_slots() {
+        let slot = Slot::vacant_for_request_cancellation_test();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let retired = slot.until_generation_retired();
+            tokio::pin!(retired);
+            let wait = std::time::Duration::from_millis(10);
+            assert!(tokio::time::timeout(wait, retired.as_mut()).await.is_err());
+            assert_eq!(slot.generation_retired_for(), None);
+            slot.generation.retire();
+            retired.await;
+            assert!(slot.generation_retired_for().is_some());
+            // Once retired, it answers at once.
+            slot.until_generation_retired().await;
+        });
     }
 
     fn job_after(name: &'static str, order: &Arc<Mutex<Vec<&'static str>>>) -> TurnJob {

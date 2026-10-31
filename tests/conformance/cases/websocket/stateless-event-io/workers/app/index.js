@@ -1,8 +1,8 @@
 // A stateless Worker's WebSocket events do I/O after its response has gone:
-// each event calls a Durable Object and records whether the call answered.
-// workerd keeps the request while its socket is open, so every call
-// answers. In celld the request ends with the socket's last read, and the
-// close event's call never answers (plan 1.42).
+// each event calls a Durable Object twice, and the message event echoes
+// only once both calls answered, so the client closes after them. workerd
+// keeps the request while its socket is open, so every call answers, and
+// the waitUntil work the events add runs to its end.
 import { DurableObject } from "cloudflare:workers";
 
 export class Log extends DurableObject {
@@ -26,13 +26,12 @@ export default {
     const [client, server] = Object.values(new WebSocketPair());
     server.accept();
     const record = (entry) =>
-      ctx.waitUntil(log.push(entry).then((pushed) => log.push(`${pushed} answered`)));
+      log.push(entry).then((pushed) => log.push(`${pushed} answered`));
     server.addEventListener("message", (event) => {
-      record(`message ${event.data}`);
-      server.send(`echo:${event.data}`);
+      ctx.waitUntil(record(`message ${event.data}`).then(() => server.send(`echo:${event.data}`)));
     });
     server.addEventListener("close", (event) => {
-      record(`close ${event.code}`);
+      ctx.waitUntil(record(`close ${event.code}`));
       server.close(event.code, "bye");
     });
     return new Response(null, { status: 101, webSocket: client });

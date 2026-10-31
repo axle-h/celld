@@ -1,0 +1,58 @@
+{
+  "workerd": "1.20261001.1",
+  "steps": [
+    {
+      "status": 200,
+      "body": [
+        "open",
+        [
+          "close",
+          1005,
+          "",
+          true,
+          3
+        ],
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "close",
+          1005,
+          "",
+          true,
+          3
+        ],
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "closed early",
+          1
+        ],
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ],
+        [
+          "close",
+          1006,
+          "Failed to establish websocket connection",
+          false,
+          3
+        ]
+      ]
+    }
+  ]
+}

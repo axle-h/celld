@@ -1,0 +1,12 @@
+{
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "twoSockets": "200 plain",
+        "threeSockets": "503 Worker refused: node is at its stateless request limit",
+        "closed": [1000, 1000, 1000]
+      }
+    }
+  ]
+}

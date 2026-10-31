@@ -257,6 +257,7 @@ pub fn validate() -> anyhow::Result<()> {
         "CELLD_MAX_OUTBOUND_WEBSOCKETS",
         "CELLD_MAX_REQUEST_BODY_BYTES",
         "CELLD_MAX_REQUESTS",
+        "CELLD_MAX_SOCKET_REQUESTS",
         "CELLD_MAX_TCP_SOCKETS",
         "CELLD_RECOVERY_RETRY_MS",
         "CELLD_RECOVERY_RETRIES",

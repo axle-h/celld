@@ -103,7 +103,8 @@ celld egress policy: 10.0.0.5:8080 is not a public address, so this node refuses
 ```
 
 `new WebSocket()` reports the same `TypeError` as the `error` of its `error`
-event, followed by a `close` event with code 1006.
+event, whose message is `Uncaught TypeError: ` and the text above, followed by
+a `close` event with code 1006.
 
 ### Allow an internal service
 
@@ -332,6 +333,15 @@ owner, so a hibernatable socket still works after the object wakes.
   auto-response pair act on the running Durable Object, whichever object's
   `ctx` they are called on, as in workerd, and throw a `TypeError` outside a
   Durable Object event.
+- **Idle sockets.** A stateless request that only its open WebSockets keep
+  gives its admission slot back, so clients that hold sockets open cannot
+  take every `CELLD_MAX_REQUESTS` slot. The node holds at most
+  `CELLD_MAX_SOCKET_REQUESTS` such requests across every script, deployment
+  and Dynamic Worker, sized by default to an eighth of its memory, and one
+  past that keeps its slot ([limitations](limitations.md#websockets)).
+  Their events run under the request's CPU limit, and the `waitUntil` work
+  they add is let go as it settles, so a long-lived socket cannot pile its
+  events' values up in the isolate's heap.
 
 ## Body stream ownership
 

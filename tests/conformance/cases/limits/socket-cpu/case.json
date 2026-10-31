@@ -1,0 +1,9 @@
+{
+  "kind": "celld-only",
+  "reason": "celld limits (plan 1.34): workerd run locally enforces no CPU limit (its limit enforcer is a no-op)",
+  "workers": ["app"],
+  "steps": [
+    {"ws": "/", "send": ["m"], "repeat": 200, "stall": 1, "close": 1000, "receive": 2},
+    {"path": "/"}
+  ]
+}

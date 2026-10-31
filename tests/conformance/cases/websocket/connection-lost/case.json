@@ -1,0 +1,17 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/pair"},
+    {"ws": "/auto", "send": ["a"], "close": 1000},
+    {"ws": "/half?half", "send": ["a"], "close": 1000},
+    {"ws": "/late?late", "send": ["a"], "close": 1000},
+    {"ws": "/first", "send": ["first"]},
+    {"ws": "/object-auto", "send": ["a"], "close": 1000},
+    {"ws": "/object-first", "send": ["first"]},
+    {"ws": "/object-hibernate", "send": ["a"], "close": 1000},
+    {"ws": "/object-hibernate-first", "send": ["first"]},
+    {"path": "/bound-caller-first"},
+    {"path": "/bound-object-first"},
+    {"path": "/seen"}
+  ]
+}

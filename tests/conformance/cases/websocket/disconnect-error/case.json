@@ -1,0 +1,9 @@
+{
+  "workers": ["app", "back"],
+  "xfail": "1.70",
+  "steps": [
+    {"ws": "/drop", "send": ["a"], "drop": true},
+    {"path": "/unanswered"},
+    {"path": "/seen"}
+  ]
+}

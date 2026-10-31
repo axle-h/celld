@@ -61,6 +61,12 @@ pub struct IsolateLoad {
     /// Requests whose JS state lives here, running or awaiting. Each one
     /// pins a promise and its closures in this isolate's heap.
     pub requests: usize,
+    /// Those of `requests` that only their open WebSockets keep: the request
+    /// has answered, and what is left of it is its sockets' events. They
+    /// hold the heap as any request does, but not an admission slot; the
+    /// shell bounds them across the node instead
+    /// (`CELLD_MAX_SOCKET_REQUESTS`).
+    pub sockets: usize,
     /// Cells hosted here: realms this isolate holds, one per cell.
     ///
     /// The third quantity, and unlike the other two it does not come back on
@@ -185,7 +191,11 @@ impl PoolLoad {
 /// actually measures it.
 pub fn admit(load: &PoolLoad, shedding: bool) -> Result<Placement, Refusal> {
     if let Some(max) = load.limits.max_requests {
-        let held: usize = load.isolates.iter().map(|l| l.requests).sum();
+        let held: usize = load
+            .isolates
+            .iter()
+            .map(|l| l.requests.saturating_sub(l.sockets))
+            .sum();
         if held >= max {
             return Err(if shedding {
                 // Reported ahead of fullness: a full node drains on its own,
@@ -313,6 +323,10 @@ pub fn place_cell(load: &PoolLoad) -> Placement {
 /// forever — refused new work, never drained, never freed — which is a
 /// smaller pool and a leak at the same time.
 ///
+/// **Nor is one that requests held only by their sockets keep.** A socket
+/// closes when its client says so, so such an isolate would not empty
+/// either, and the pool would grow a replacement for every one it retired.
+///
 /// Cell and stateless pools both run this maintenance decision. The cell pool
 /// uses this filter to reclaim empty heaps after eviction while preserving
 /// every isolate that still holds a realm.
@@ -344,7 +358,54 @@ pub fn retire(load: &PoolLoad) -> Option<IsolateId> {
     }
 
     load.live()
-        .filter(|(_, l)| l.cells == 0)
+        .filter(|(_, l)| l.cells == 0 && l.sockets == 0)
         .min_by_key(|(id, l)| (l.requests, std::cmp::Reverse(*id)))
         .map(|(id, _)| id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pool(isolates: Vec<IsolateLoad>) -> PoolLoad {
+        PoolLoad {
+            isolates,
+            limits: PoolLimits {
+                grow_at: 2,
+                shrink_under: 1,
+                max_stateless: 4,
+                max_requests: Some(2),
+                max_cells: 32,
+            },
+        }
+    }
+
+    fn holding(requests: usize, sockets: usize) -> IsolateLoad {
+        IsolateLoad {
+            requests,
+            sockets,
+            ..IsolateLoad::default()
+        }
+    }
+
+    /// Requests that only their sockets keep take no admission slot.
+    #[test]
+    fn admission_counts_no_request_that_only_its_sockets_keep() {
+        assert_eq!(
+            admit(&pool(vec![holding(3, 2)]), false),
+            Ok(Placement::Existing(0))
+        );
+        assert_eq!(
+            admit(&pool(vec![holding(3, 1)]), false),
+            Err(Refusal::NodeFull)
+        );
+    }
+
+    /// An isolate that such requests keep would not empty, so it is never
+    /// the one retired.
+    #[test]
+    fn an_isolate_its_sockets_keep_is_not_retired() {
+        assert_eq!(retire(&pool(vec![holding(1, 1), holding(2, 0)])), Some(1));
+        assert_eq!(retire(&pool(vec![holding(1, 1)])), None);
+    }
 }

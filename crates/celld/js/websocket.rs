@@ -763,6 +763,10 @@ fn dialed<'s>(
     object.into()
 }
 
+/// The refusal of a dial from an isolate whose network the host does not
+/// reach for it: a closed one, or a `globalOutbound` Fetcher, which the
+/// callers send the upgrade to (`brokered`) before they ask. The host must
+/// never dial for such an isolate, so this refuses it too.
 fn egress_refusal(scope: &mut v8::PinScope) -> Option<&'static str> {
     match &actor_runtime_state(scope).egress {
         EgressPolicy::Allow => None,
@@ -770,10 +774,13 @@ fn egress_refusal(scope: &mut v8::PinScope) -> Option<&'static str> {
             Some("This worker is not permitted to access the internet via global functions.")
         }
         EgressPolicy::Broker(_) => Some(
-            "A globalOutbound Fetcher cannot broker `new WebSocket()` in celld; fetch() with \
-             an `Upgrade: websocket` header reaches it.",
+            "This worker's globalOutbound Fetcher carries its WebSockets; the host dials none.",
         ),
     }
+}
+
+fn brokered(scope: &mut v8::PinScope) -> bool {
+    matches!(actor_runtime_state(scope).egress, EgressPolicy::Broker(_))
 }
 
 /// `__ws_upgrade(url, headers, container)`: `fetch(url, { headers: { Upgrade:
@@ -792,7 +799,7 @@ pub(super) fn op_ws_upgrade(
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
-    if matches!(actor_runtime_state(scope).egress, EgressPolicy::Broker(_)) {
+    if brokered(scope) {
         rv.set(v8::null(scope).into());
         return;
     }
@@ -904,13 +911,19 @@ pub(super) fn op_ws_next(
     };
     let async_id = asyncrt::enqueue_io_context(async move {
         let Some(queue) = queue else {
-            return Ok(WsPull::Close(1006, "socket is not registered".into(), false).encode());
+            return Ok(WsPull::Close(
+                1006,
+                "socket is not registered".into(),
+                false,
+                CloseReport::Reply,
+            )
+            .encode());
         };
         let mut queue = queue.lock().await;
         Ok(queue
             .recv()
             .await
-            .unwrap_or_else(|| WsPull::Close(1006, String::new(), false))
+            .unwrap_or_else(|| WsPull::Close(1006, String::new(), false, CloseReport::Reply))
             .encode())
     });
     rv.set(promise_for(scope, async_id));
@@ -957,11 +970,19 @@ pub(super) fn op_ws_half_open(
 /// `{ id, ready }`, where `ready` resolves with a JSON envelope: the chosen
 /// subprotocol, or the egress policy's refusal, which the caller reports as a
 /// `TypeError`.
+///
+/// Returns null, and dials nothing, when this isolate's network is a
+/// `globalOutbound` Fetcher: the caller sends the upgrade to it as workerd
+/// does, and the Fetcher's 101 carries the socket back.
 pub(super) fn op_ws_connect(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
 ) {
+    if brokered(scope) {
+        rv.set(v8::null(scope).into());
+        return;
+    }
     // Each dial is a subrequest, as `op_fetch` is, and so is each hop of a
     // followed redirect, which dials again.
     if let Err(error) = event_context(scope).charge_subrequest() {

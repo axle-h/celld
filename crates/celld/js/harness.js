@@ -5758,6 +5758,8 @@ const __wrapServiceResponse = (res, req) => {
     const serverState = __wsState(server);
     clientState.loopback = server;
     serverState.loopback = client;
+    clientState.fetcherEnd = "caller";
+    serverState.fetcherEnd = "server";
     for (const frame of serverState.pending.splice(0)) {
       // "send-binary" joined this queue with outbound sockets; without a case
       // of its own it fell through to the close branch and tore the pair down
@@ -16079,6 +16081,9 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       // `new WebSocket(url)` made it. Any other socket sends nothing until
       // it is accepted.
       dialed,
+      // "caller" or "server" for the ends of a socket that a service binding
+      // to this script carries (`__wsFetcherLost`).
+      fetcherEnd: undefined,
       pumping: false,
       pumpDone: undefined,
       // The token of a Worker socket that a subrequest's 101 handed over,
@@ -16126,6 +16131,12 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
         "WebSocket Constructor: The url scheme must be ws or wss.",
         "SyntaxError");
     }
+    // Any `#` starts a fragment, an empty one included.
+    if (target.includes("#")) {
+      throw new DOMException(
+        "WebSocket Constructor: The url fragment must be empty.",
+        "SyntaxError");
+    }
     s.url = target;
     // A Durable Object socket is pushed events by the host so it can revive
     // a hibernated cell. A Worker socket has no cell: the isolate polls it,
@@ -16151,6 +16162,13 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
         "SyntaxError");
     }
     const dial = __ws_connect(target, __jsonStringList(requested));
+    if (dial === null) {
+      // This isolate's network is a globalOutbound Fetcher, which the
+      // upgrade goes to as a request.
+      s.polled = true;
+      __registerWaitUntil(this.#dialFetcher(parsed, requested));
+      return;
+    }
     s.id = dial.id;
     __socketSet(s.id, this);
     const connection = dial.ready;
@@ -16164,29 +16182,86 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       return outcome.protocol;
     });
     opened.then((protocol) => {
-      if (s.readyState === __WS_CLOSING) {
-        if (s.pendingClose) {
-          const [code, reason] = s.pendingClose;
-          __ws_close(s.id, code, reason);
-        }
+      // close() cancelled the dial, and the socket already failed. The
+      // connection that opened meanwhile gets the Close.
+      if (s.pendingClose) {
+        const [code, reason] = s.pendingClose;
+        __ws_close(s.id, code, reason);
         return;
       }
       if (s.readyState !== __WS_CONNECTING) return;
       s.protocol = protocol;
       s.readyState = __WS_OPEN;
       __wsFire(this, new Event("open"), true);
-    }, (error) => {
-      if (s.readyState === __WS_CLOSED) return;
-      s.readyState = __WS_CLOSED;
-      __socketDelete(s.id);
-      // The connection's own error, then the abnormal close. Not through
-      // #dispatchClose, which returns for a closed socket and would add its
-      // generic error event: a failed dial fired the error and never the close.
-      __wsFire(this, new ErrorEvent("error", { message: String(error?.message || error), error }), false);
-      const event = new CloseEvent("close", { code: 1006, reason: "", wasClean: false });
-      __eventTrust(event);
-      __wsFire(this, event, false);
+    }, (error) => this.#failDial(error));
+  }
+  // A dial that failed: the connection's own error, then the abnormal
+  // close, as workerd's `initConnection` reports it. Not through
+  // #dispatchClose, which returns for a closed socket and would add its
+  // generic error event: a failed dial fired the error and never the close.
+  #failDial(error) {
+    const s = this.#s;
+    if (s.readyState === __WS_CLOSED) return;
+    s.readyState = __WS_CLOSED;
+    __socketDelete(s.id);
+    const message = error instanceof Error
+      ? `Uncaught ${error.name}: ${error.message}`
+      : `Uncaught ${String(error)}`;
+    __wsFire(this, new ErrorEvent("error", { message, error }), false);
+    const event = new CloseEvent("close", {
+      code: 1006,
+      reason: "Failed to establish websocket connection",
+      wasClean: false,
     });
+    __eventTrust(event);
+    __wsFire(this, event, false);
+  }
+  // `new WebSocket(url)` through a globalOutbound Fetcher: the upgrade
+  // request workerd's constructor sends, to the Fetcher, whose 101 carries a
+  // socket this one then takes over, as accept() takes one a fetch()
+  // upgrade returned. workerd follows no redirect here.
+  async #dialFetcher(url, requested) {
+    const s = this.#s;
+    try {
+      // The scheme as http(s), and no credentials (`HTTP_PROXY_REQUEST`).
+      url.protocol = url.protocol === "ws:" ? "http:" : "https:";
+      url.username = "";
+      url.password = "";
+      const headersList = [["upgrade", "websocket"]];
+      if (requested.length > 0)
+        headersList.push(["sec-websocket-protocol", requested.join(", ")]);
+      const response = await __fetchNetwork(new __Request(url.href, __requestInit({
+        method: "GET",
+        headersList,
+        hasBody: false,
+      })), { __proto__: null });
+      const status = __responseStatus(response);
+      const socket = status === 101 ? __responseWebSocket(response) : null;
+      if (socket === null) {
+        __bodyStream(response)?.cancel().catch(() => {});
+        throw new TypeError(
+          "Failed to establish the WebSocket connection: expected server to reply with " +
+          `HTTP status code 101 (switching protocols), but received ${status} instead.`);
+      }
+      // close() cancelled the dial, or the request ended, meanwhile. What
+      // the 101 carried is released with the request.
+      if (s.readyState === __WS_CLOSED) return;
+      // The socket the 101 carries is the client end of the Fetcher's, not
+      // yet bound. This one takes its id and binding and binds it now.
+      const taken = socket.#s;
+      s.id = taken.id;
+      s.handoff = taken.handoff;
+      s.boundTarget = taken.boundTarget;
+      s.target = taken.target;
+      s.outbound = true;
+      this.#bindReceived();
+      // workerd reports null when the server chose no subprotocol.
+      s.protocol = __ReflectApply(__HeadersGet, __responseHeaders(response),
+        ["sec-websocket-protocol"]);
+      __wsFire(this, new Event("open"), true);
+    } catch (error) {
+      this.#failDial(error);
+    }
   }
   // A socket that a pair or a response made is OPEN until it closes, as in
   // workerd, even while it waits for accept(): only a dialed one connects.
@@ -16214,12 +16289,15 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       ? __crossObjectError()
       : __ctxError("Native");
   }
-  // The pump ends only when the socket closes, so it must NOT be registered
-  // as waitUntil work: that would hold the request open for as long as the
-  // socket lives, and the host reclaims an abandoned socket only once the
-  // request has retired. Its `__ws_next` ops are driven while the request
-  // runs and normally resolve with the host's 1001 "request ended" close.
-  // They resolve as 1006 only if the sender disappears without a close frame.
+  // The pump ends only when the socket closes, so a socket the request
+  // dialed does NOT register it as waitUntil work: that would hold the
+  // request open for as long as the socket lives, and the host reclaims an
+  // abandoned socket only once the request has retired. Its `__ws_next` ops
+  // are driven while the request runs and normally resolve with the host's
+  // 1001 "request ended" close. They resolve as 1006 only if the sender
+  // disappears without a close frame. A socket the request returned or
+  // accepted from a subrequest does register it, as workerd keeps such a
+  // request while its socket is open.
   #startPump() {
     const s = this.#s;
     if (!s.pumping) {
@@ -16237,6 +16315,11 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
       const frame = await __ws_next(s.id);
       const tag = frame[0];
       const body = frame.subarray(1);
+      // A dial that close() cancelled delivers nothing.
+      if (s.pendingClose !== null) {
+        if (tag === 3) return;
+        continue;
+      }
       if (tag === 0) {
         this.#dispatchMessage(new TextDecoder().decode(body));
       } else if (tag === 1) {
@@ -16251,7 +16334,7 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
         }
       } else {
         const info = __jsonParse(new TextDecoder().decode(body));
-        this.#dispatchClose(info.code, info.reason, info.wasClean);
+        this.#dispatchClose(info.code, info.reason, info.wasClean, info.lost);
         return;
       }
     }
@@ -16308,44 +16391,50 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
     // A socket obtained from a `fetch()` upgrade is already connected and
     // delivers nothing until it is accepted; this is where it starts.
     if (s.outbound && s.readyState === __WS_CONNECTING) {
-      // Bind before the pump: the op registers this socket's queue on this
-      // thread, so the first `__ws_next` cannot run ahead of it. A refused
-      // bind throws and leaves the socket as it was.
-      if (s.boundTarget !== null && !s.bound) {
-        const id = __ws_bind_target(__wsTargetJson(s.boundTarget));
-        s.bound = true;
-        s.id = id;
-      }
-      if (s.handoff !== undefined) {
-        // The server end is a Worker socket in another isolate. The host
-        // bridges it to this socket. A refused bind throws and leaves the
-        // socket as it was; a bound one no longer names the server end.
-        const scope = __currentActorScope();
-        __ws_bind_worker_handoff(s.id, s.handoff);
-        s.accepted = true;
-        s.handoff = undefined;
-        s.handoffAccepted = true;
-        s.readyState = __WS_OPEN;
-        const pump = this.#startPump();
-        // A stateless request ends when its response and waitUntil work do,
-        // and its sockets close with it. Workerd keeps a request alive
-        // while a socket it accepted is open, which is what a Worker that
-        // relays this socket to its own client needs. A Durable Object's
-        // event keeps its pending I/O without this.
-        if (!scope) __registerWaitUntil(pump);
-        return;
-      }
-      s.accepted = true;
-      s.readyState = __WS_OPEN;
-      if (s.polled) {
-        const pump = this.#startPump();
-        // As for a handed-over socket above: a Durable Object's socket that
-        // a stateless request accepted keeps that request while it is open.
-        if (s.bound && !__currentActorScope()) __registerWaitUntil(pump);
-      }
+      this.#bindReceived();
       return;
     }
     s.accepted = true;
+  }
+  // Start a socket that a subrequest's upgrade returned: join it to the
+  // socket it names, and read it from now on.
+  #bindReceived() {
+    const s = this.#s;
+    // Bind before the pump: the op registers this socket's queue on this
+    // thread, so the first `__ws_next` cannot run ahead of it. A refused
+    // bind throws and leaves the socket as it was.
+    if (s.boundTarget !== null && !s.bound) {
+      const id = __ws_bind_target(__wsTargetJson(s.boundTarget));
+      s.bound = true;
+      s.id = id;
+    }
+    if (s.handoff !== undefined) {
+      // The server end is a Worker socket in another isolate. The host
+      // bridges it to this socket. A refused bind throws and leaves the
+      // socket as it was; a bound one no longer names the server end.
+      const scope = __currentActorScope();
+      __ws_bind_worker_handoff(s.id, s.handoff);
+      s.accepted = true;
+      s.handoff = undefined;
+      s.handoffAccepted = true;
+      s.readyState = __WS_OPEN;
+      const pump = this.#startPump();
+      // A stateless request ends when its response and waitUntil work do,
+      // and its sockets close with it. Workerd keeps a request alive
+      // while a socket it accepted is open, which is what a Worker that
+      // relays this socket to its own client needs. A Durable Object's
+      // event keeps its pending I/O without this.
+      if (!scope) __wsKeepRequest(pump);
+      return;
+    }
+    s.accepted = true;
+    s.readyState = __WS_OPEN;
+    if (s.polled) {
+      const pump = this.#startPump();
+      // As for a handed-over socket above: a Durable Object's socket that
+      // a stateless request accepted keeps that request while it is open.
+      if (s.bound && !__currentActorScope()) __wsKeepRequest(pump);
+    }
   }
   // workerd's refusal of send() and close() on a socket that a pair or a
   // response made and that nothing accepted yet.
@@ -16363,6 +16452,8 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
     // half-open one, whose peer's Close arrived, still can.
     if (s.closedOutgoing)
       throw new TypeError("Can't call WebSocket send() after close().");
+    // A dial that close() cancelled drops it, as workerd's released socket.
+    if (s.pendingClose !== null) return;
     this.#requireAccepted();
     if (s.readyState !== __WS_OPEN && !(s.readyState === __WS_CLOSING && s.closedIncoming))
       throw new DOMException("WebSocket is not open", "InvalidStateError");
@@ -16432,17 +16523,23 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
     // A second close() does nothing, as in workerd, and neither does one on
     // a socket that has ended. A half-open socket, whose peer's Close has
     // arrived, still sends its own: that reply is the one the peer sees.
-    if (s.closedOutgoing || s.readyState === __WS_CLOSED) {
+    if (s.closedOutgoing || s.readyState === __WS_CLOSED || s.pendingClose !== null) {
       return;
     }
     this.#requireAccepted();
     const connecting = s.readyState === __WS_CONNECTING;
-    s.closedOutgoing = true;
-    s.readyState = s.closedIncoming ? __WS_CLOSED : __WS_CLOSING;
     if (s.outbound && connecting) {
+      // workerd cancels a dial that has not connected (`AwaitingConnection`),
+      // which then fails as a dial does, with the cancellation's
+      // DISCONNECTED error. Until then it reads OPEN, and ignores send().
       s.pendingClose = [code, reason];
+      s.readyState = __WS_OPEN;
+      __PromiseResolve().then(() =>
+        this.#failDial(new Error("Network connection lost.")));
       return;
     }
+    s.closedOutgoing = true;
+    s.readyState = s.closedIncoming ? __WS_CLOSED : __WS_CLOSING;
     if (s.outbound) {
       __ws_close(s.id, code, reason);
       return;
@@ -16515,10 +16612,22 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
   // same code and reason before its close event fires, so it is CLOSED
   // then; a half-open one is CLOSING until the Worker calls close().
   // Workerd web-socket.c++ LegacyWebSocketAdapter::readLoop.
-  #dispatchClose(code, reason, wasClean) {
+  //
+  // `lost` says when the end of the connection is reported as an error
+  // ("before" or "after" the close event, or "none"), where the host knows
+  // better than the default: an end that replies to its peer's Close in this
+  // turn, automatically or from a close listener, reports it after its close
+  // event. In workerd the closing handshake ends the socket's pipe while the
+  // reply's write is still being reported, which fails it with
+  // DISCONNECTED (`websocket/error-after-close`). A reply made later, and a
+  // hibernatable socket, report nothing.
+  #dispatchClose(code, reason, wasClean, lost) {
     const s = this.#s;
     if (s.readyState === __WS_CLOSED || s.closedIncoming) return;
     s.closedIncoming = true;
+    const peerFirst = !s.closedOutgoing;
+    if (lost === undefined && s.fetcherEnd !== undefined)
+      lost = __wsFetcherLost(s.fetcherEnd, peerFirst);
     if (wasClean && !s.allowHalfOpen && !s.closedOutgoing) {
       s.closedOutgoing = true;
       this.#sendClose(code, reason);
@@ -16539,11 +16648,32 @@ const __WebSocket = globalThis.WebSocket = class WebSocket extends EventTarget {
           : "WebSocket closed abnormally",
       }), false);
     }
+    if (wasClean && lost === "before") this.#reportLost();
     const event = new CloseEvent("close", { code, reason, wasClean });
     __eventTrust(event);
     __wsFire(this, event, false);
+    if (wasClean && (lost === "after" ||
+        lost === undefined && peerFirst && s.closedOutgoing && !s.hibernatable))
+      queueMicrotask(() => this.#reportLost());
+  }
+  // workerd's error event for a connection that ended: a DISCONNECTED
+  // exception, which jsg reports as "Network connection lost."
+  #reportLost() {
+    const error = new Error("Network connection lost.");
+    __wsFire(this, new ErrorEvent("error", {
+      message: `Uncaught Error: ${error.message}`,
+      error,
+    }), false);
   }
 };
+// When an end of a socket that a service binding to this script carries
+// reports its connection's end: the caller as the host's bridge has a
+// Fetcher's caller report it (`CloseReport`), before its close event when its
+// Close was answered and by default when it answers. The server end never
+// does here, while one in another script does after its close event when its
+// Close was answered (`loader/global-outbound-websocket-dial-close`).
+const __wsFetcherLost = (end, peerFirst) =>
+  end === "caller" ? (peerFirst ? undefined : "before") : "none";
 // workerd's ready-state constants, on the class and its prototype in its
 // order, read-only and configurable (JSG_STATIC_CONSTANT). The spec's names
 // and workerd's READY_STATE_* aliases.
@@ -17119,6 +17249,16 @@ const __registerWaitUntil = __celld.__registerWaitUntil = (promise) => {
   });
   __wait_until(tracked);
 };
+// The read loop of a WebSocket that keeps its stateless request while it is
+// open, registered as waitUntil work as workerd's `startReadLoop` does. The
+// host tells it from other work: once the request has answered and only
+// these loops are left, the request holds no admission slot.
+const __wsKeepRequest = (pump) => {
+  const tracked = Promise.resolve(pump).catch((error) => {
+    console.error("waitUntil rejected", error);
+  });
+  __wait_until(tracked, true);
+};
 // `props` are the per-stub props a loopback service stub carries
 // (ctx.props); `exports` is built once, on first access.
 // An invocation without props gets its own empty object: `ctx.props` is
@@ -17616,7 +17756,11 @@ __celld.__readResponse = (r) => {
       serverState.target = { __proto__: null, id: workerSocketId, scope: "" };
       serverState.polled = true;
       __socketSet(workerSocketId, server);
-      __wsStartPump(server);
+      const pump = __wsStartPump(server);
+      // workerd keeps the request while the socket's read loop runs
+      // (`startReadLoop`'s waitUntil), so its events can still do I/O
+      // after the response, and the waitUntil work they add runs too.
+      if (!__currentActorScope()) __wsKeepRequest(pump);
       __wsFlushPending(server);
     }
   }

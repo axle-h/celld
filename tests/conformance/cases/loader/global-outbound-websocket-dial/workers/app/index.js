@@ -1,7 +1,9 @@
 // A Dynamic Worker whose globalOutbound is a Fetcher dials with
 // `new WebSocket()`. workerd sends the upgrade to the Fetcher, this script's
-// `Outbound` entrypoint, whose 101 opens the socket. celld refuses the dial
-// (plan 1.42); loader/global-outbound-websocket has the fetch() upgrade.
+// `Outbound` entrypoint, whose 101 opens the socket (plan 1.42). The caller
+// closed first, so it reports the end of the connection before its close
+// event. loader/global-outbound-websocket has the fetch() upgrade, and
+// loader/global-outbound-websocket-dial-request and -dial-close the rest.
 import { WorkerEntrypoint } from "cloudflare:workers";
 
 export class Outbound extends WorkerEntrypoint {

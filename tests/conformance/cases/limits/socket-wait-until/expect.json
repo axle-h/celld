@@ -1,0 +1,22 @@
+{
+  "steps": [
+    {
+      "frames": [
+        "survived 640"
+      ],
+      "close": {
+        "code": 1000,
+        "reason": "done"
+      },
+      "ended": true
+    },
+    {
+      "status": 200,
+      "body": "survived 640"
+    },
+    {
+      "status": 200,
+      "body": "answering"
+    }
+  ]
+}

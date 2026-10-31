@@ -303,7 +303,9 @@ The `tail` and `email` handlers are unavailable.
   workerd sends no Ping.
 - A connection that ends without a Close gives a close event with code 1006
   and workerd's reason, `WebSocket disconnected without sending Close
-  frame.`
+  frame.` celld fires an `error` event first, which workerd does not. A
+  caller that never answers its Fetcher's Close before its request ends
+  leaves the server end such a close.
 - `send()` never waits or throws, as in workerd, and there is no
   `bufferedAmount`. workerd queues whatever a Worker sends. celld bounds what
   waits on the host for a peer that reads slowly:
@@ -343,9 +345,41 @@ The `tail` and `email` handlers are unavailable.
   mention facets. workerd has no limit.
 - A Dynamic Worker whose `globalOutbound` is a Fetcher can make a `fetch()`
   upgrade: the request goes to the Fetcher, as any other request does, and
-  its 101 carries the socket back. `new WebSocket()` there throws an error
-  that points to that `fetch()` upgrade instead. workerd sends a
-  `new WebSocket()` upgrade to the Fetcher too.
+  its 101 carries the socket back. `new WebSocket()` sends the Fetcher
+  workerd's upgrade request: a `GET` to the URL as `http:` or `https:`
+  without its credentials, with `Upgrade: websocket` and the subprotocols
+  offered. Any answer other than a 101 with a WebSocket, a redirect
+  included, fails the socket with workerd's `TypeError` (`Failed to
+  establish the WebSocket connection: expected server to reply with HTTP
+  status code 101 ...`). celld offers no `permessage-deflate`, so such a
+  socket's `extensions` is empty where workerd's reports the offer.
+- A `new WebSocket()` that fails reports an `error` event whose message is
+  workerd's (`Uncaught TypeError: ...`), then a close event with code 1006
+  and the reason `Failed to establish websocket connection`. `close()` before
+  the socket opens cancels the dial the same way, with `Network connection
+  lost.`: until then the socket reads OPEN and drops what it sends. A dial
+  that connected meanwhile gets the Close; workerd abandons the handshake.
+  A URL with a fragment throws a `SyntaxError`, as in workerd.
+- An end that replies to its peer's Close in the same turn, automatically or
+  from a close listener, then fires an `error` event, `Uncaught Error:
+  Network connection lost.`, after its close event, as workerd's ends do
+  when the closing handshake ends their pipe. The end that closed first
+  fires none, nor does a hibernatable socket or one that replies later. A
+  socket a Fetcher (a service binding, or a Dynamic Worker's
+  `globalOutbound`) carries follows workerd's pipe: its caller's end fires
+  the error before its close event when it closed first, and the server end
+  fires it after its close event when it closed first and never when it
+  replied. The server end of a service binding to the same script fires
+  none.
+- A stateless Worker's request lasts while a socket it returned is open, as
+  workerd's does, so the socket's events can still do I/O and add
+  `waitUntil` work. The events share the request's CPU limit, as on
+  Cloudflare, which tops the limit up for each message only in a Durable
+  Object: a socket whose events together pass it ends with its request, and
+  its client's connection closes without a Close (1006). After a deployment,
+  celld closes such a socket of the old version with code 1012 once
+  `CELLD_DEPLOY_MAX_AGE_S` has passed, as it closes a Durable Object's; a
+  Dynamic Worker's goes with its loader's version.
 - A response with a WebSocket to a request without `Upgrade: websocket` fails,
   as in workerd. A Durable Object's `stub.fetch()` call then rejects, and an
   HTTP client receives status 500. The server end of the socket receives a close

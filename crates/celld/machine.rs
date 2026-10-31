@@ -119,7 +119,7 @@ pub fn ownership_on_evict_from_environment() -> anyhow::Result<OwnershipOnEvict>
 /// (containers), the machine otherwise.
 #[cfg(target_os = "linux")]
 #[allow(clippy::disallowed_methods)] // cgroup and `/proc` files describe the host.
-fn total_memory_bytes() -> Option<u64> {
+pub(crate) fn total_memory_bytes() -> Option<u64> {
     if let Some(limit) = crate::memory::cgroup_limit_bytes() {
         return Some(limit);
     }
@@ -135,7 +135,7 @@ fn total_memory_bytes() -> Option<u64> {
 }
 
 #[cfg(target_os = "macos")]
-fn total_memory_bytes() -> Option<u64> {
+pub(crate) fn total_memory_bytes() -> Option<u64> {
     let mut size: u64 = 0;
     let mut len = std::mem::size_of::<u64>();
     let ok = unsafe {
@@ -151,7 +151,7 @@ fn total_memory_bytes() -> Option<u64> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn total_memory_bytes() -> Option<u64> {
+pub(crate) fn total_memory_bytes() -> Option<u64> {
     None
 }
 

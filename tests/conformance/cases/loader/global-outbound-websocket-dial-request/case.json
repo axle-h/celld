@@ -1,0 +1,11 @@
+{
+  "workers": ["app"],
+  "steps": [
+    {"path": "/socket"},
+    {"path": "/protocols"},
+    {"path": "/plain"},
+    {"path": "/redirect"},
+    {"path": "/early"},
+    {"path": "/fragment"}
+  ]
+}

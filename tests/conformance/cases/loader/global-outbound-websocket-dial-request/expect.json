@@ -1,0 +1,177 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": [
+        [
+          "constructed",
+          0,
+          "ws://outbound.test/socket",
+          ""
+        ],
+        [
+          "open",
+          1,
+          null
+        ],
+        {
+          "method": "GET",
+          "url": "http://outbound.test/socket",
+          "headers": [
+            [
+              "upgrade",
+              "websocket"
+            ]
+          ],
+          "body": null,
+          "cf": null
+        },
+        [
+          "error",
+          "Uncaught Error: Network connection lost.",
+          "Error: Network connection lost."
+        ],
+        [
+          "close",
+          1000,
+          "",
+          true,
+          3
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "constructed",
+          0,
+          "wss://user:secret@outbound.test/protocols?q=1",
+          ""
+        ],
+        [
+          "open",
+          1,
+          "b"
+        ],
+        {
+          "method": "GET",
+          "url": "https://outbound.test/protocols?q=1",
+          "headers": [
+            [
+              "sec-websocket-protocol",
+              "a, b"
+            ],
+            [
+              "upgrade",
+              "websocket"
+            ]
+          ],
+          "body": null,
+          "cf": null
+        },
+        [
+          "error",
+          "Uncaught Error: Network connection lost.",
+          "Error: Network connection lost."
+        ],
+        [
+          "close",
+          1000,
+          "",
+          true,
+          3
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "constructed",
+          0,
+          "ws://outbound.test/plain",
+          ""
+        ],
+        [
+          "error",
+          "Uncaught TypeError: Failed to establish the WebSocket connection: expected server to reply with HTTP status code 101 (switching protocols), but received 200 instead.",
+          "TypeError: Failed to establish the WebSocket connection: expected server to reply with HTTP status code 101 (switching protocols), but received 200 instead."
+        ],
+        [
+          "close",
+          1006,
+          "Failed to establish websocket connection",
+          false,
+          3
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "constructed",
+          0,
+          "ws://outbound.test/redirect",
+          ""
+        ],
+        [
+          "error",
+          "Uncaught TypeError: Failed to establish the WebSocket connection: expected server to reply with HTTP status code 101 (switching protocols), but received 302 instead.",
+          "TypeError: Failed to establish the WebSocket connection: expected server to reply with HTTP status code 101 (switching protocols), but received 302 instead."
+        ],
+        [
+          "close",
+          1006,
+          "Failed to establish websocket connection",
+          false,
+          3
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "constructed",
+          0,
+          "ws://outbound.test/early",
+          ""
+        ],
+        [
+          "closed early",
+          1
+        ],
+        "sent",
+        [
+          "error",
+          "Uncaught Error: Network connection lost.",
+          "Error: Network connection lost."
+        ],
+        [
+          "close",
+          1006,
+          "Failed to establish websocket connection",
+          false,
+          3
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "SyntaxError",
+          "WebSocket Constructor: The url fragment must be empty."
+        ],
+        [
+          "SyntaxError",
+          "WebSocket Constructor: The url fragment must be empty."
+        ]
+      ]
+    }
+  ]
+}

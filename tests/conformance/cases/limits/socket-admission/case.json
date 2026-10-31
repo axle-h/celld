@@ -1,0 +1,13 @@
+{
+  "kind": "celld-only",
+  "reason": "celld's admission bounds (CELLD_MAX_REQUESTS, CELLD_MAX_SOCKET_REQUESTS), which workerd lacks; a Worker that dials its own origin",
+  "env": {
+    "CELLD_FETCH_PRIVATE_ALLOW": "127.0.0.1:${PUBLIC_PORT}",
+    "CELLD_MAX_REQUESTS": "2",
+    "CELLD_MAX_SOCKET_REQUESTS": "2"
+  },
+  "workers": ["app"],
+  "steps": [
+    {"path": "/hold"}
+  ]
+}

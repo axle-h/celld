@@ -484,7 +484,8 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 49 | Durable Object stub RPC calls begin in the order they were made (the `storage/nested-root-transactions` flake; see 1.65) | done | `247e708` |
 | 50 | 1.40 (workerd's error types and texts across the runtime APIs; non-extractable key material private, SubtleCrypto receivers checked, node:crypto handles private; Request/Response/Cache/HTMLRewriter checks) | done | `4d9c582` |
 | 51 | 1.41 (every Fetcher carries workerd's body framing and `cf` to its target, across the tunnel too; trace context from the host, not a caller's header; bodiless client and tunnel requests arrive with a null body) | done | `3fa66db` |
-| 52+ | Phase 1 in plan order (1.42-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65, 1.66, 1.67, 1.68, 1.69), and the 1.4 props key-order follow-up | queued | |
+| 52 | 1.42 (a returned WebSocket keeps its stateless request, held outside admission under a node-wide socket bound and retired with its generation; settled `waitUntil` work released; `new WebSocket()` through `globalOutbound`; workerd's error event after a clean close) | done | (this commit) |
+| 53+ | Phase 1 in plan order (1.43-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65, 1.66, 1.67, 1.68, 1.69, 1.70), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
 
@@ -4166,6 +4167,215 @@ legitimate cross-event uses.
   needs `ws` steps for that. Pinned by `websocket/error-after-close`
   (xfail).
 
+**As built (done).**
+- **Null body status and `statusText`**: nothing left; 1.40 did it.
+- **Socket events of a stateless Worker after its response.** The server
+  end of a pair that a stateless Worker returns in its 101 registers its
+  pump as `waitUntil` work (`__readResponse`, `harness.js`), as workerd's
+  `startReadLoop` puts the read loop in a `waitUntil`. The request lasts
+  while the socket's read side is open, so its events' I/O answers and the
+  `waitUntil` work they add runs. The same holds for the server end that a
+  Fetcher's caller receives, as in workerd. A socket the request itself
+  dialed still ends with it (1.70). `POST /shutdown` with such a socket
+  open behaves as before (checked: the client gets 1006 after 2 s on both
+  builds). `websocket/stateless-event-io` loses its xfail; it now echoes
+  only once both of its event's calls answered, since the old version
+  depended on how fast the client's Close followed the echo.
+  - *Admission.* The read loop registers through `__wsKeepRequest`
+    (`__wait_until(promise, true)`), which the `IoContext` keeps apart from
+    other `waitUntil` work. Once the request has answered and only such
+    loops are pending (`only_sockets_keep`, checked in `settle`), the entry
+    is `kept_by_sockets`, and the driver moves its `Affiliation` out of
+    admission (`hold_for_sockets`): it still pins the heap (`requests`),
+    but `isolate::admit` counts `requests - sockets`, so idle sockets no
+    longer fill `CELLD_MAX_REQUESTS` (reviewed: two idle sockets under
+    `CELLD_MAX_REQUESTS=2` made plain requests 503; HEAD `fe23562` did the
+    same, since the pump's op kept the entry in flight there too). The
+    node holds at most `CELLD_MAX_SOCKET_REQUESTS` such requests, one count
+    (`pool::NODE_SOCKET_REQUESTS`) shared by every pool, generation and
+    Worker Loader slot; one past that keeps its slot. A per-pool bound
+    (as first built) multiplied with scripts and generations, and loader
+    slots had none. Each such request costs about 110 KiB of RSS (3,000
+    idle sockets on a warm `celld dev` node: 88 -> 416 MB), so the default
+    is an eighth of the node's memory (cgroup limit, else host) at 128 KiB
+    each, from 256 to 32,768 (the hibernatable-socket limit of one Durable
+    Object), 4,096 when the memory is unknown: 8,192 (1 GiB) on an 8 GiB
+    node. RSS shedding does not lower it: shedding stops growth but keeps
+    admitting (`isolate::admit`), and refusing a socket its place would
+    only move it back into an admission slot, freeing nothing and letting
+    idle clients shut the node to new requests. `isolate::retire` skips an
+    isolate with any (it would not empty, and the pool would grow a
+    replacement for each one it retired). No existing WebSocket cap fitted:
+    the 1.22 handoff caps are per request and the outbound cap per cell.
+  - *`waitUntil` of socket events.* Registrations are pruned as they
+    settle (`IoEventState::prune_settled`): after each turn of a request
+    with background work, in `only_sockets_keep`, and on registration once
+    twice what stayed pending (at least 64) is held, so pruning costs
+    amortised O(1). Before, each `ctx.waitUntil` from a socket event joined
+    `other_work` and `late_wait_until` for the socket's life (the late batch
+    folds in only when the aggregate, which includes the read loop,
+    settles), with its value: a 256 KiB value per message reached the
+    isolate's heap limit at message 511 and retired the isolate with every
+    socket in it. The handler frame held its registrations the same way
+    until it ended. Settled work extends nothing, since the aggregates are
+    `allSettled`, and workerd's `TaskSet` drops a task as it settles. A
+    frame records that it registered (`IoEventFrame::registered`), so the
+    registration window still opens when all its work already settled.
+  - *Rollover.* Such a request in a superseded generation's isolate closes
+    its returned sockets with 1012 `service restart` and ends as a shutdown
+    does once `CELLD_DEPLOY_MAX_AGE_S` has passed (`Wake::RetireSockets`,
+    `Slot::until_generation_retired`), as a resident Durable Object's
+    forced swap does, so the isolate frees (probed by flipping a `celld dev`
+    node's pointer: 1012 after the max age, then `isolate freed`; HEAD kept
+    the socket and the isolate until the client left). The socket's server
+    end gets no event, as in a forced swap. The max age runs from the
+    retirement (`GenerationRetirement` records its instant; probed: retired
+    at 03.044, freed at 06.045 under `CELLD_DEPLOY_MAX_AGE_S=3`), and fires
+    once: a shutdown turn that cannot enter the isolate leaves the request
+    unfinished, so the driver ends it host-side
+    (`InFlight::retire_for_shutdown`) rather than fire again every pass. A
+    Worker Loader's slot shares its loader's `GenerationRetirement`
+    (`LoaderReload::generation`, from the slot whose turn loaded it): the
+    loaded Worker lives while the loader's isolate holds it, which ends
+    when the loader's generation drains, so its sockets get the same 1012.
+  - *CPU.* The socket's events share the request's CPU limit for the
+    connection's life. That is workerd's rule: its read loop calls
+    `LimitEnforcer::topUpActor()` per message, which does nothing outside
+    an actor (`limit-enforcer.h`), and Cloudflare's per-message reset is a
+    Durable Object's. Past the limit the request fails as any request does,
+    and its client's connection ends without a Close (1006); the server
+    end gets no event. `limits/socket-cpu` pins it.
+- **`new WebSocket()` through a `globalOutbound` Fetcher.** `__ws_connect`
+  answers null for a brokered isolate, as `__ws_upgrade` does (and
+  `egress_refusal` still refuses a brokered isolate, so no later caller can
+  dial for one), and the
+  constructor sends workerd's upgrade request through `__fetchNetwork`
+  (`#dialFetcher`): a `GET` to the URL as `http:`/`https:` without its
+  credentials, `Upgrade: websocket`, and the subprotocols as one
+  `Sec-WebSocket-Protocol`. No redirect is followed. A 101 with a socket
+  hands its id and binding (a handed-over Worker socket or a Durable
+  Object's) to the dialed socket, which binds it as `accept()` binds a
+  `fetch()` upgrade's (`#bindReceived`, split out of `accept()`), so the
+  host checks are the ones that path has. The subprotocol is the 101's
+  header, null without one, as in workerd. Anything else fails the socket
+  with workerd's `TypeError`. A failed dial now reports workerd's message
+  (`Uncaught TypeError: ...`) and close reason (`Failed to establish
+  websocket connection`), on the network path too, so the celld-only
+  `fetch-public/websocket` and `fetch-public/internal-listener` transcripts
+  gained the prefix. `close()` before a dial connects cancels it as
+  workerd does: the socket reads OPEN, drops sends, and fails with
+  `Network connection lost.`; a connection that opened meanwhile gets the
+  Close. A URL with a fragment throws workerd's `SyntaxError` (`The url
+  fragment must be empty.`), which celld dialed without the fragment.
+  `loader/global-outbound-websocket-dial` loses its xfail.
+- **The `error` event after a clean close.** Not wrangler's proxy: workerd
+  run directly fires it too (`lib/workerd-direct.mjs` already had `ws`
+  steps). Probed on 1.20261001.1, it is workerd's pipe reporting the closing
+  handshake's end (`DISCONNECTED`, `Network connection lost.`) on an end
+  whose last write is still being reported:
+  - An end that replies to its peer's Close in the same turn (auto-reply
+    or from a close listener) fires it after its close event: a pair
+    returned to a client by a stateless Worker or a Durable Object, a pair
+    with both ends in one isolate, both ends of a Durable Object socket
+    accepted from `stub.fetch`, and a dialed or `fetch()`-upgraded network
+    socket. The end that closed first, an end that replies in a later turn,
+    and a hibernatable socket fire none.
+  - A socket a Fetcher carries differs: its caller's end fires it before
+    its close event when it closed first; the server end fires it after its
+    close event when it closed first and never when it replied. Over a
+    service binding to the same script the server end fires none.
+
+  `#dispatchClose` applies the default rule, and the host says where it
+  differs: `WsPull::Close` gained a `CloseReport` (`Reply`, `Quiet`,
+  `Before`, `After`; JSON `lost`), which the handoff bridge sets by which
+  leg's Close passed first (`BridgeReports`). A same-script service binding,
+  which celld joins inside the isolate, marks its ends (`fetcherEnd`,
+  `__wsFetcherLost`). The bridge also marks the caller as owing a reply
+  when the server end closes first (`ws_peer_closed`), so a caller whose
+  request ends unanswered drops the socket without a Close, and the bridge
+  closes a side whose peer left with kj's reason, `WebSocket disconnected
+  without sending Close frame.` (was empty), as workerd does. The mark is
+  made only for a socket still registered, under the registry's lock, so a
+  bridge that reports after `unregister` leaves nothing behind.
+  `websocket/error-after-close` loses its xfail.
+- **Security.** Tenant code reaches no new authority: the Fetcher dial is
+  the brokered `fetch()` upgrade it already had, with the subrequest charge
+  of `op_fetch`, and the socket it takes comes from the host's response
+  record, bound through the same owner and grant checks. `CloseReport`
+  comes only from the host; a script cannot call `#dispatchClose`. The
+  error events carry no data. Keeping a stateless request while its
+  returned socket is open holds what that socket held before (the socket
+  was open anyway); the request's CPU budget covers the socket's events, as
+  it already did for a handed-over socket (1.22). Such a request holds no
+  admission slot, within the node-wide `CELLD_MAX_SOCKET_REQUESTS` (above),
+  so clients holding idle sockets cannot shut a node with
+  `CELLD_MAX_REQUESTS` to plain requests, nor hold more than that bound's
+  memory, Dynamic Workers included. A socket's events cannot pile their
+  `waitUntil` values up in the heap.
+- **Tests.** New differential cases: `websocket/connection-lost` (every
+  default-rule path), `loader/global-outbound-websocket-dial-close`
+  (`new WebSocket()`, `fetch()` upgrade, same-script and cross-script
+  bindings, by who closes first and how the other replies) and
+  `loader/global-outbound-websocket-dial-request` (the request, the
+  subprotocol, a 200 and a 302, a close before open, a fragment).
+  `websocket/connection-lost` also has a hibernatable socket, closed by its
+  client (answered from `webSocketClose`: workerd answers no Close for a
+  hibernatable socket, and unanswered the client waited until the object
+  hibernated) and by the object. New celld-only cases:
+  `websocket/dialed-connection-lost`, recorded from workerd run directly;
+  `limits/socket-admission` (`CELLD_MAX_REQUESTS=2` and
+  `CELLD_MAX_SOCKET_REQUESTS=2`: a plain request gets in past two idle
+  sockets, and one past a third gets 503); `limits/socket-cpu` (200
+  messages of about 10 ms each under a 200 ms limit: one frame, then 1006
+  without a Close); `limits/socket-wait-until` (640 socket messages, then
+  640 handler iterations, each a `waitUntil` of a settled 256 KiB value;
+  without the pruning the socket ends at message 511 and the handler fails
+  too). New xfails for 1.70: `websocket/disconnect-error`,
+  `loader/global-outbound-websocket-dial-extensions`. Every new case, the
+  three that lost their xfail, `send-queue-overflow` and the two
+  `fetch-public` cases fail at HEAD (`fe23562`), except
+  `limits/socket-cpu`, which pins what HEAD already did (at HEAD
+  `limits/socket-admission`'s second socket is refused). Unit tests: the
+  bridge's reports by who closed first and its peer-closed mark, which a
+  socket gone first does not get, the report's encoding; four bridge tests
+  now expect kj's disconnect reason; admission without, and retirement
+  past, requests that only their sockets keep (`celld-logic`); the
+  node-wide bound on them across two slots, a generation shared as a
+  loader's is and timed from its retirement, and the generation's wake
+  (`pool`); the default bound by node memory (`runtime`). The `ws_registry`
+  tests flaked about once in six full runs: `asyncrt::services()` answers
+  with a fallback until some test installs the process runtime and with
+  that runtime's services after, so a socket that `worker_socket()`
+  registered just before was looked up just after in the other services
+  and was not there; the panic, under the pull registry's lock, poisoned
+  it for every later test. `worker_socket()` now installs the runtime
+  first and unwraps nothing under a lock, the tests wait up to 10 s for a
+  spawned task's effect, and a dropped `WorkerWebSocket` unregisters
+  through a poisoned lock rather than panic again (a drop also runs while
+  a panic unwinds, where a second one aborts). 40 consecutive
+  `cargo test -p celld ws_registry` runs passed.
+- **Out-of-tree suites.** `WsPull::Close` has a fourth field, and
+  `WsPullSender::send_reported_close` is new. `IsolateLoad` has
+  `sockets`; `Slot::loaded_worker` takes the loader's
+  `GenerationRetirement`; `__wait_until` takes a second argument.
+- **Docs.** `docs/cloudflare-compat.md` (the Fetcher dial, failed and
+  cancelled dials, the connection-lost rule, the request's lifetime, its
+  CPU limit and rollover, the disconnect error), `docs/limitations.md`
+  (also `CELLD_MAX_SOCKET_REQUESTS` and the CPU limit), `docs/security.md`
+  (also idle sockets), `docs/README.md` (`CELLD_DEPLOY_MAX_AGE_S`,
+  `CELLD_MAX_SOCKET_REQUESTS`),
+  `docs/services/dynamic-workers.md`.
+- **Cost.** No request or message hot path changed: the close path builds
+  one more JSON field when the host chose a report, the pump checks one
+  field per frame, and a 101 registers one `waitUntil`. The admission fix
+  adds a `Global` per `waitUntil` and a check per turn of an answered
+  request with a socket. hello-world, `ab -n 20000 -c 16`, three
+  interleaved runs against HEAD's lab build: 18,951 vs 19,076 req/s (HEAD
+  vs this), noise. The re-review fixes add a prune of the held
+  registrations per turn of a request with background work, O(what is
+  pending), and a shared atomic per socket hold: 18,953 vs 18,803 req/s
+  (HEAD vs this, three interleaved runs), noise.
+
 ### 1.23 `Response.clone()` on fetched bodies (found by 0.5)
 
 `clone()` on a fetched Response throws "Cannot clone a streaming response
@@ -6865,6 +7075,42 @@ cap; unit tests for the caps.
   from the recursive `__deepFreeze` past some 10,000 to 30,000 levels
   (debug build). No real `cf` comes near either depth; matching would mean
   bounding the constructor's copy at workerd's depth.
+
+### 1.70 Gaps found by 1.42
+
+- **An error event before an abnormal close.** For a connection that ends
+  without a Close, workerd fires only the close event (1006), and celld
+  fires an `error` event first (`WebSocket closed abnormally: ...`), in
+  `#dispatchClose` and, for a hibernatable socket, through
+  `webSocketError`. Keep the error for celld's own overflow closes, which
+  workerd lacks. Pinned by `websocket/disconnect-error` (xfail), which also
+  has a Fetcher's server end whose caller's request ended unanswered.
+- **`permessage-deflate` through a Fetcher.** workerd's `new WebSocket()`
+  offers it under `web_socket_compression`, and a Worker's 101 agrees to
+  the offer, so the socket's `extensions` reads `permessage-deflate`.
+  celld offers nothing and reports "" (with 1.64's negotiation gap).
+  Pinned by `loader/global-outbound-websocket-dial-extensions` (xfail).
+- **A socket a stateless request dialed ends with the request.** workerd
+  keeps the request while any accepted socket's read loop runs, dialed
+  ones included (`startReadLoop`). celld closes a dialed network socket
+  with 1001 `request ended` when the request retires. Not pinned: when
+  celld's request retires against the server's first frame is a race, so a
+  case would flake.
+- **A cancelled dial that connected.** workerd's `close()` before a dial
+  connects abandons the handshake; celld cannot cancel a handshake under
+  way, so a connection that opened meanwhile gets the Close. The socket's
+  events match. Not pinned: in workerd it depends on whether the handshake
+  finished first.
+- **The URL a Fetcher's `new WebSocket()` sends.** workerd sends the URL as
+  `kj::Url` writes it (`HTTP_PROXY_REQUEST`, no percent-decoding, control
+  characters encoded); celld sends WHATWG's serialisation, and `new
+  Request()` parses it again. They differ (probed): an explicit default
+  port (`ws://h:80/` reaches the Fetcher as `http://h:80/` in workerd,
+  `http://h/` in celld), non-ASCII path or query characters (raw in
+  workerd, percent-encoded in celld), a tab (`%09` in workerd, removed in
+  celld), an empty path (none in workerd, `/` in celld) and `%2e%2e`
+  segments (kept in workerd, resolved in celld). Matching needs `kj::Url`'s
+  parser and a Request that keeps the URL as given. Not pinned.
 
 ### 1.29 RPC serialisation follow-ups (found by 1.13)
 

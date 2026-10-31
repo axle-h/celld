@@ -278,7 +278,9 @@ call from a request that already runs in the object does not wait, so that
 request can finish on the old code. After
 `CELLD_DEPLOY_MAX_AGE_S` seconds (default 60; 0 forces at once), celld
 forces the move: it cancels the running work and closes regular WebSockets
-with code 1012, as Cloudflare does. During the move, a request on one
+with code 1012, as Cloudflare does. It closes the WebSockets of a stateless
+request on the previous deployment the same way, once only they keep the
+request. During the move, a request on one
 deployment can call a Durable Object on the other, so two adjacent
 versions must accept each other's calls. `/state` reports the deployment
 of each resident object.
@@ -738,9 +740,10 @@ unset variable selects its default. A Boolean variable accepts only `0` or
 | `CELLD_ESBUILD` | The path of the esbuild executable (0.28.0, 0.28.1 or 0.28.2) |
 | `CELLD_ACTIVATIONS` | Concurrent cold-cell activations (default: 8 per CPU, at least 16, at most 128) |
 | `CELLD_DEPLOY_POLL_S` | The deployment pointer poll interval in seconds (default: 30) |
-| `CELLD_DEPLOY_MAX_AGE_S` | Seconds before celld forces a resident Durable Object onto a new deployment (default: 60; 0 forces at once) |
+| `CELLD_DEPLOY_MAX_AGE_S` | Seconds before celld forces a resident Durable Object onto a new deployment, and closes the WebSockets of a stateless request on the previous one (default: 60; 0 forces at once) |
 | `CELLD_OPERATION_DEADLINE_MS` | The deadline for a non-restore operation (default: 15000) |
 | `CELLD_MAX_CELL_REQUESTS` | Concurrent fetch events for one Durable Object (default: 64) |
+| `CELLD_MAX_SOCKET_REQUESTS` | Stateless requests that only their open WebSockets keep, which hold no admission slot, across the node (default: an eighth of the node's memory at 128 KiB each, from 256 to 32768) |
 | `CELLD_MAX_TCP_SOCKETS` | Open `connect()` sockets one request or Durable Object may hold (default: 32) |
 | `CELLD_MAX_REQUEST_BODY_BYTES` | The body limit for a public Worker request or a direct Durable Object request (default: 1 GiB) |
 | `CELLD_MAX_RESIDENT_CELLS` | The hard limit for resident cells, enforced at admission |

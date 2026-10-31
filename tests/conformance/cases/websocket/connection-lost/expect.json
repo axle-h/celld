@@ -1,0 +1,261 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": {
+        "pair-b": [
+          [
+            "close",
+            4000,
+            "a first",
+            true
+          ],
+          [
+            "error",
+            "Uncaught Error: Network connection lost.",
+            "Error: Network connection lost."
+          ]
+        ],
+        "pair-a": [
+          [
+            "close",
+            4000,
+            "a first",
+            true
+          ]
+        ]
+      }
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 1000,
+        "reason": ""
+      }
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 1000,
+        "reason": "replies"
+      }
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 1000,
+        "reason": "late"
+      }
+    },
+    {
+      "frames": [],
+      "close": {
+        "code": 4001,
+        "reason": "server first"
+      }
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 1000,
+        "reason": ""
+      }
+    },
+    {
+      "frames": [],
+      "close": {
+        "code": 4001,
+        "reason": "server first"
+      }
+    },
+    {
+      "frames": [
+        "echo:a"
+      ],
+      "close": {
+        "code": 1000,
+        "reason": "replies"
+      }
+    },
+    {
+      "frames": [],
+      "close": {
+        "code": 4001,
+        "reason": "server first"
+      }
+    },
+    {
+      "status": 200,
+      "body": [
+        "echo:a",
+        [
+          "close",
+          4000,
+          "caller first",
+          true
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "close",
+          4001,
+          "server first",
+          true
+        ],
+        [
+          "error",
+          "Uncaught Error: Network connection lost.",
+          "Error: Network connection lost."
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": {
+        "worker": {
+          "pair-b": [
+            [
+              "close",
+              4000,
+              "a first",
+              true
+            ],
+            [
+              "error",
+              "Uncaught Error: Network connection lost.",
+              "Error: Network connection lost."
+            ]
+          ],
+          "pair-a": [
+            [
+              "close",
+              4000,
+              "a first",
+              true
+            ]
+          ],
+          "auto": [
+            [
+              "close",
+              1000,
+              "",
+              true
+            ],
+            [
+              "error",
+              "Uncaught Error: Network connection lost.",
+              "Error: Network connection lost."
+            ]
+          ],
+          "half": [
+            [
+              "close",
+              1000,
+              "",
+              true
+            ],
+            [
+              "error",
+              "Uncaught Error: Network connection lost.",
+              "Error: Network connection lost."
+            ]
+          ],
+          "late": [
+            [
+              "close",
+              1000,
+              "",
+              true
+            ],
+            [
+              "replying"
+            ]
+          ],
+          "first": [
+            [
+              "close",
+              4001,
+              "",
+              true
+            ]
+          ]
+        },
+        "object": {
+          "object-auto": [
+            [
+              "close",
+              1000,
+              "",
+              true
+            ],
+            [
+              "error",
+              "Uncaught Error: Network connection lost.",
+              "Error: Network connection lost."
+            ]
+          ],
+          "object-first": [
+            [
+              "close",
+              4001,
+              "",
+              true
+            ]
+          ],
+          "bound-caller-first": [
+            [
+              "close",
+              4000,
+              "caller first",
+              true
+            ],
+            [
+              "error",
+              "Uncaught Error: Network connection lost.",
+              "Error: Network connection lost."
+            ]
+          ],
+          "bound-object-first": [
+            [
+              "close",
+              4001,
+              "server first",
+              true
+            ]
+          ]
+        },
+        "hibernating": {
+          "object-hibernate": [
+            [
+              "close",
+              1000,
+              "",
+              true
+            ]
+          ],
+          "object-hibernate-first": [
+            [
+              "close",
+              4001,
+              "",
+              true
+            ]
+          ]
+        }
+      }
+    }
+  ]
+}

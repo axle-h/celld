@@ -1,0 +1,10 @@
+{
+  "kind": "celld-only",
+  "reason": "celld limits (plan 1.32): workerd run locally enforces no isolate memory limit, so retained waitUntil values never fail there",
+  "workers": ["app"],
+  "steps": [
+    {"ws": "/", "send": ["m"], "repeat": 640, "close": 1000, "receive": 1},
+    {"path": "/handler"},
+    {"path": "/"}
+  ]
+}

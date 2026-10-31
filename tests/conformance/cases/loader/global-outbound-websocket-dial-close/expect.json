@@ -1,0 +1,360 @@
+{
+  "workerd": "1.20261001.1",
+  "wrangler": "4.147.0",
+  "steps": [
+    {
+      "status": 200,
+      "body": [
+        "server:a",
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ],
+        [
+          "close",
+          4000,
+          "caller first",
+          true
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        "server:a",
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ],
+        [
+          "close",
+          4000,
+          "server replies",
+          true
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "close",
+          4001,
+          "server first",
+          true
+        ],
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "close",
+          4001,
+          "server first",
+          true
+        ],
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        "server:a",
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ],
+        [
+          "close",
+          4000,
+          "caller first",
+          true
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        "server:a",
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ],
+        [
+          "close",
+          4000,
+          "server replies",
+          true
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "close",
+          4001,
+          "server first",
+          true
+        ],
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "close",
+          4001,
+          "server first",
+          true
+        ],
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        "server:a",
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ],
+        [
+          "close",
+          4000,
+          "caller first",
+          true
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        "server:a",
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ],
+        [
+          "close",
+          4000,
+          "server replies",
+          true
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "close",
+          4001,
+          "server first",
+          true
+        ],
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "close",
+          4001,
+          "server first",
+          true
+        ],
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        "server:a",
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ],
+        [
+          "close",
+          4000,
+          "caller first",
+          true
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": [
+        [
+          "close",
+          4001,
+          "server first",
+          true
+        ],
+        [
+          "error",
+          "Uncaught Error: Network connection lost."
+        ]
+      ]
+    },
+    {
+      "status": 200,
+      "body": {
+        "dial-caller-first": [
+          [
+            "close",
+            4000,
+            "caller first",
+            true
+          ]
+        ],
+        "dial-caller-first-half": [
+          [
+            "close",
+            4000,
+            "caller first",
+            true
+          ]
+        ],
+        "dial-server-first": [
+          [
+            "close",
+            4001,
+            "server first",
+            true
+          ],
+          [
+            "error",
+            "Uncaught Error: Network connection lost."
+          ]
+        ],
+        "dial-server-first-half": [
+          [
+            "close",
+            4001,
+            "caller replies",
+            true
+          ],
+          [
+            "error",
+            "Uncaught Error: Network connection lost."
+          ]
+        ],
+        "upgrade-caller-first": [
+          [
+            "close",
+            4000,
+            "caller first",
+            true
+          ]
+        ],
+        "upgrade-caller-first-half": [
+          [
+            "close",
+            4000,
+            "caller first",
+            true
+          ]
+        ],
+        "upgrade-server-first": [
+          [
+            "close",
+            4001,
+            "server first",
+            true
+          ],
+          [
+            "error",
+            "Uncaught Error: Network connection lost."
+          ]
+        ],
+        "upgrade-server-first-half": [
+          [
+            "close",
+            4001,
+            "caller replies",
+            true
+          ],
+          [
+            "error",
+            "Uncaught Error: Network connection lost."
+          ]
+        ],
+        "binding-caller-first": [
+          [
+            "close",
+            4000,
+            "caller first",
+            true
+          ]
+        ],
+        "binding-caller-first-half": [
+          [
+            "close",
+            4000,
+            "caller first",
+            true
+          ]
+        ],
+        "binding-server-first": [
+          [
+            "close",
+            4001,
+            "server first",
+            true
+          ]
+        ],
+        "binding-server-first-half": [
+          [
+            "close",
+            4001,
+            "caller replies",
+            true
+          ]
+        ],
+        "other-caller-first": [
+          [
+            "close",
+            4000,
+            "caller first",
+            true
+          ]
+        ],
+        "other-server-first": [
+          [
+            "close",
+            4001,
+            "server first",
+            true
+          ],
+          [
+            "error",
+            "Uncaught Error: Network connection lost."
+          ]
+        ]
+      }
+    }
+  ]
+}

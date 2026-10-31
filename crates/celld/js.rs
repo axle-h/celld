@@ -5320,6 +5320,10 @@ pub struct InFlight {
     /// The subset of `ops` that can run while referenced work is live but
     /// cannot keep this event alive by themselves.
     unrefed_ops: std::collections::HashSet<u64>,
+    /// The request answered, and only its WebSockets' read loops keep it
+    /// now: its sockets' events may still run for as long as their clients
+    /// stay. Set once, by `settle`.
+    kept_by_sockets: bool,
     /// The alarm bookkeeping this entry still owes, if it is one.
     alarm: Option<AlarmClaim>,
     started: Instant,
@@ -5616,6 +5620,20 @@ impl InFlight {
     /// where the event ended without ever entering the isolate again.
     pub fn owes_alarm(&self) -> bool {
         self.alarm.is_some()
+    }
+
+    /// Whether the request answered and only its open WebSockets keep it
+    /// (`kept_by_sockets`).
+    pub fn kept_by_sockets(&self) -> bool {
+        self.kept_by_sockets
+    }
+
+    /// Close the WebSockets this request returned in its response, with a
+    /// Close frame of `code` and `reason` to their clients.
+    pub fn close_kept_sockets(&self, code: u16, reason: &str) {
+        for id in self.context.returned_sockets.lock().unwrap().iter() {
+            crate::ws_registry::ws_close(*id, code, reason);
+        }
     }
 
     /// Done when the response is sent and no referenced work remains.
@@ -5925,6 +5943,13 @@ impl InFlight {
         self.background = None;
         self.context.seal_wait_until();
         self.context.close_sockets();
+    }
+
+    /// End an answered request as a shutdown does, without entering
+    /// JavaScript: for when the shutdown turn could not run.
+    pub fn retire_for_shutdown(&mut self) {
+        self.retire_background_for_shutdown();
+        self.abandon();
     }
 }
 
@@ -6795,6 +6820,7 @@ fn begin<'s>(
                 ops: std::collections::HashSet::new(),
                 io_context_ops: std::collections::HashSet::new(),
                 unrefed_ops: std::collections::HashSet::new(),
+                kept_by_sockets: false,
                 alarm: None,
                 started: Instant::now(),
                 trace: None,
@@ -6894,6 +6920,7 @@ fn begin_entrypoint_rpc(
                 ops: std::collections::HashSet::new(),
                 io_context_ops: std::collections::HashSet::new(),
                 unrefed_ops: std::collections::HashSet::new(),
+                kept_by_sockets: false,
                 alarm: None,
                 started: event_started,
                 trace: None,
@@ -7137,6 +7164,7 @@ fn begin_queue(
                 ops: std::collections::HashSet::new(),
                 io_context_ops: std::collections::HashSet::new(),
                 unrefed_ops: std::collections::HashSet::new(),
+                kept_by_sockets: false,
                 alarm: None,
                 started: Instant::now(),
                 trace: None,
@@ -7371,6 +7399,7 @@ fn start_cell_event<'s>(
                 ops: std::collections::HashSet::new(),
                 io_context_ops: std::collections::HashSet::new(),
                 unrefed_ops: std::collections::HashSet::new(),
+                kept_by_sockets: false,
                 alarm: None,
                 started: event_started,
                 trace: None,
@@ -7430,6 +7459,7 @@ fn start_cell_event<'s>(
                     ops: std::collections::HashSet::new(),
                     io_context_ops: std::collections::HashSet::new(),
                     unrefed_ops: std::collections::HashSet::new(),
+                    kept_by_sockets: false,
                     alarm: None,
                     started: event_started,
                     trace: None,
@@ -7930,6 +7960,18 @@ fn settle(tc: &mut v8::PinScope, entry: &mut InFlight) {
                 entry.context.seal_wait_until();
             }
         }
+    }
+    if !entry.kept_by_sockets
+        && entry.reply.is_none()
+        && entry.gated_reply.is_none()
+        && entry.background.is_some()
+    {
+        entry.kept_by_sockets = entry.context.only_sockets_keep(tc);
+    } else if entry.background.is_some() {
+        // Work registered after the background aggregate was built joins
+        // the next one only once this one settles, which for a request its
+        // sockets keep is when they close: release what has settled now.
+        entry.context.prune_settled_wait_until(tc);
     }
 }
 
@@ -10659,6 +10701,9 @@ struct LoaderReload {
     pacing: Mutex<LoaderPacing>,
     /// The script that loaded it, which its stuck turns count against.
     owner: Arc<crate::turn_owner::Owner>,
+    /// The loader's generation retirement, which each isolate the Worker
+    /// loads into shares ([`crate::pool::Slot::loaded_worker`]).
+    generation: Arc<crate::pool::GenerationRetirement>,
 }
 
 /// The backoff between loads of a Worker whose isolates keep reaching the
@@ -10768,7 +10813,11 @@ impl LoaderReload {
             };
             let (error, transient) = match loaded {
                 Ok(Ok(worker)) => {
-                    let slot = crate::pool::Slot::loaded_worker(worker, reload.owner.clone());
+                    let slot = crate::pool::Slot::loaded_worker(
+                        worker,
+                        reload.owner.clone(),
+                        reload.generation.clone(),
+                    );
                     // Weak: the state holds the slot, so a strong reference
                     // here would keep both alive for good.
                     let owner = Arc::downgrade(&reload);
@@ -11375,6 +11424,11 @@ fn op_loader_load(
         pacing: Mutex::new(LoaderPacing::default()),
         // Counted against the script that loaded it, which chose its code.
         owner: crate::turn_owner::owner(&owner.principal.script),
+        // The loader's isolate holds the Worker, so the Worker retires with
+        // the loader's generation.
+        generation: crate::pool::current_slot()
+            .map(|slot| slot.generation())
+            .unwrap_or_default(),
     });
     let loaded = LoadedWorker {
         state,
@@ -14704,6 +14758,7 @@ mod scope_grant_op_tests {
                 config: Mutex::new(Some(config)),
                 pacing: Mutex::new(LoaderPacing::default()),
                 owner: crate::turn_owner::owner("loaded"),
+                generation: Arc::default(),
             }),
         };
         let owner = LoaderOwner::fresh("parent", 0);
@@ -14728,6 +14783,7 @@ mod scope_grant_op_tests {
                 config: Mutex::new(None),
                 pacing: Mutex::new(LoaderPacing::default()),
                 owner: crate::turn_owner::owner("loaded"),
+                generation: Arc::default(),
             }),
         }
     }
@@ -17008,6 +17064,10 @@ fn op_atob(
 #[derive(Default)]
 struct IoEventFrame {
     wait_until: Vec<v8::Global<v8::Promise>>,
+    /// Whether the frame collected any `waitUntil` work, settled or not:
+    /// pruning can empty `wait_until`, and the registration window opens on
+    /// registration, not on what is still pending.
+    registered: bool,
     arm_gates: Vec<ArmGateRx>,
 }
 
@@ -17025,6 +17085,54 @@ struct IoEventState {
     wait_until_active: bool,
     ended_arm_gates: Vec<ArmGateRx>,
     arm_gates_sealed: bool,
+    /// The registered `waitUntil` work, in two parts: the read loops of
+    /// WebSockets that keep the request (`__wsKeepRequest`), and the rest.
+    /// Pruned as they settle, so that once the request has answered the
+    /// driver can tell when only its sockets keep it
+    /// ([`IoContext::only_sockets_keep`]).
+    socket_work: Vec<v8::Global<v8::Promise>>,
+    other_work: Vec<v8::Global<v8::Promise>>,
+    /// How many registrations may be held before a registration prunes the
+    /// settled ones itself, between the driver's prunes after each turn
+    /// ([`IoContext::prune_settled_wait_until`]). Doubles with what stays
+    /// pending, so pruning on registration costs amortised O(1).
+    prune_at: usize,
+}
+
+/// The floor of [`IoEventState::prune_at`].
+const WAIT_UNTIL_PRUNE_FLOOR: usize = 64;
+
+impl IoEventState {
+    fn held_wait_until(&self) -> usize {
+        self.frames
+            .iter()
+            .map(|frame| frame.wait_until.len())
+            .sum::<usize>()
+            + self.late_wait_until.len()
+            + self.socket_work.len()
+            + self.other_work.len()
+    }
+
+    /// Drop every registration that has settled. Settled work extends
+    /// nothing — the aggregates are `allSettled` — but holding it would hold
+    /// its value for as long as the request lives, which for a request its
+    /// WebSockets keep is the sockets' life: workerd's `TaskSet` drops a task
+    /// as it settles.
+    fn prune_settled(&mut self, scope: &mut v8::PinScope) {
+        let mut pending = |promise: &v8::Global<v8::Promise>| {
+            matches!(
+                v8::Local::new(scope, promise).state(),
+                v8::PromiseState::Pending
+            )
+        };
+        for frame in &mut self.frames {
+            frame.wait_until.retain(&mut pending);
+        }
+        self.late_wait_until.retain(&mut pending);
+        self.socket_work.retain(&mut pending);
+        self.other_work.retain(&mut pending);
+        self.prune_at = (2 * self.held_wait_until()).max(WAIT_UNTIL_PRUNE_FLOOR);
+    }
 }
 
 /// The writable directory subset of Workerd's per-request virtual filesystem.
@@ -17820,19 +17928,65 @@ impl IoContext {
         } else {
             events.ended_arm_gates.append(&mut frame.arm_gates);
         }
-        if events.frames.is_empty() && !frame.wait_until.is_empty() {
-            events.wait_until_active = true;
+        if frame.registered {
+            match events.frames.last_mut() {
+                Some(parent) => parent.registered = true,
+                // Pruning may have emptied the frame. With nothing pending no
+                // aggregate is built, so nothing would settle to close the
+                // window; leave it shut, as an aggregate of settled work
+                // would have shut it at once.
+                None => events.wait_until_active = !frame.wait_until.is_empty(),
+            }
         }
         Some(frame.wait_until)
     }
 
-    fn register_wait_until(&self, promise: v8::Global<v8::Promise>) {
+    /// Register `waitUntil` work, `socket` when it is a WebSocket's read loop
+    /// that keeps the request.
+    fn register_wait_until(
+        &self,
+        scope: &mut v8::PinScope,
+        promise: v8::Global<v8::Promise>,
+        socket: bool,
+    ) {
         let mut events = self.events.lock().unwrap();
-        if let Some(frame) = events.frames.last_mut() {
-            frame.wait_until.push(promise);
+        let events = &mut *events;
+        let registered = if let Some(frame) = events.frames.last_mut() {
+            frame.wait_until.push(promise.clone());
+            frame.registered = true;
+            true
         } else if events.wait_until_active {
-            events.late_wait_until.push(promise);
+            events.late_wait_until.push(promise.clone());
+            true
+        } else {
+            false
+        };
+        if registered {
+            if socket {
+                events.socket_work.push(promise);
+            } else {
+                events.other_work.push(promise);
+            }
+            if events.held_wait_until() >= events.prune_at.max(WAIT_UNTIL_PRUNE_FLOOR) {
+                events.prune_settled(scope);
+            }
         }
+    }
+
+    /// Drop the registered `waitUntil` work that has settled
+    /// ([`IoEventState::prune_settled`]).
+    fn prune_settled_wait_until(&self, scope: &mut v8::PinScope) {
+        self.events.lock().unwrap().prune_settled(scope);
+    }
+
+    /// Whether, of the `waitUntil` work registered so far, only WebSockets'
+    /// read loops are still pending: the request lives on for its sockets'
+    /// events alone. Drops what has settled.
+    fn only_sockets_keep(&self, scope: &mut v8::PinScope) -> bool {
+        let mut events = self.events.lock().unwrap();
+        let events = &mut *events;
+        events.prune_settled(scope);
+        events.other_work.is_empty() && !events.socket_work.is_empty()
     }
 
     /// Whether imported `waitUntil()` has request-associated work to extend.
@@ -17857,6 +18011,8 @@ impl IoContext {
         let mut events = self.events.lock().unwrap();
         events.wait_until_active = false;
         events.late_wait_until.clear();
+        events.socket_work.clear();
+        events.other_work.clear();
     }
 
     fn register_arm_gate(&self, gate: ArmGateRx) -> Result<(), ArmGateRx> {
@@ -18420,8 +18576,10 @@ fn op_wait_until<'s>(
             Err(_) => return,
         },
     };
+    let socket = args.get(1).is_true();
     if let Some(context) = reaction_or_current_context(scope) {
-        context.register_wait_until(v8::Global::new(scope, promise));
+        let promise = v8::Global::new(scope, promise);
+        context.register_wait_until(scope, promise, socket);
     }
 }
 

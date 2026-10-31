@@ -650,8 +650,38 @@ pub enum WsPull {
     Open(String),
     Text(String),
     Binary(Vec<u8>),
-    Close(u16, String, bool),
+    /// The code, the reason, whether the close was clean, and how the end
+    /// that reads it reports its connection's end.
+    Close(u16, String, bool, CloseReport),
 }
+
+/// When a socket whose peer's Close arrived fires workerd's error event for
+/// the end of its connection, `Network connection lost.`
+///
+/// In workerd a closing handshake tears the socket's pipe down, and an end
+/// whose last write is still being reported when that happens reports the
+/// disconnect too. Which end that is follows from who closed first and from
+/// the path the frames take, so the host, which carries them, says.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CloseReport {
+    /// An end that replies to the peer's Close in the same turn, automatically
+    /// or from its close handler, fires the error after its close event.
+    #[default]
+    Reply,
+    /// No error: the server end of a Fetcher's socket, replying to the
+    /// caller's Close.
+    Quiet,
+    /// The error, then the close event: the caller of a Fetcher, whose Close
+    /// the server end answered.
+    Before,
+    /// The close event, then the error: the server end of a Fetcher, whose
+    /// Close the caller answered.
+    After,
+}
+
+/// The reason of the close event of a socket whose peer's connection ended
+/// without a Close: kj's text, which workerd reports.
+pub const DISCONNECTED_WITHOUT_CLOSE: &str = "WebSocket disconnected without sending Close frame.";
 
 /// Maximum charged bytes for non-terminal frames in one isolate-polled
 /// WebSocket input queue.
@@ -670,16 +700,23 @@ impl WsPull {
             WsPull::Text(text) => (WS_PULL_TAG_TEXT, text.into_bytes()),
             WsPull::Binary(bytes) => (WS_PULL_TAG_BINARY, bytes),
             WsPull::Open(protocol) => (WS_PULL_TAG_OPEN, protocol.into_bytes()),
-            WsPull::Close(code, reason, was_clean) => (
-                WS_PULL_TAG_CLOSE,
-                serde_json::json!({
+            WsPull::Close(code, reason, was_clean, report) => {
+                let mut close = serde_json::json!({
                     "code": code,
                     "reason": reason,
                     "wasClean": was_clean,
-                })
-                .to_string()
-                .into_bytes(),
-            ),
+                });
+                let lost = match report {
+                    CloseReport::Reply => None,
+                    CloseReport::Quiet => Some("none"),
+                    CloseReport::Before => Some("before"),
+                    CloseReport::After => Some("after"),
+                };
+                if let Some(lost) = lost {
+                    close["lost"] = lost.into();
+                }
+                (WS_PULL_TAG_CLOSE, close.to_string().into_bytes())
+            }
         };
         let mut framed = Vec::with_capacity(body.len() + 1);
         framed.push(tag);
@@ -760,7 +797,7 @@ impl WsPull {
         let payload = match self {
             Self::Open(protocol) | Self::Text(protocol) => protocol.len(),
             Self::Binary(bytes) => bytes.len(),
-            Self::Close(_, reason, _) => reason.len(),
+            Self::Close(_, reason, ..) => reason.len(),
         };
         std::mem::size_of::<Self>().saturating_add(payload)
     }
@@ -774,8 +811,8 @@ impl WsPullSender {
 
     pub async fn send(&self, frame: WsPull) -> Result<(), WsPull> {
         let frame = match frame {
-            WsPull::Close(code, reason, was_clean) => {
-                return self.send_close(code, reason, was_clean);
+            WsPull::Close(code, reason, was_clean, report) => {
+                return self.send_terminal(WsPull::Close(code, reason, was_clean, report));
             }
             frame => frame,
         };
@@ -822,7 +859,21 @@ impl WsPullSender {
     /// owns capacity. Closing the semaphore wakes every sender that still waits
     /// for capacity, so a stopped isolate cannot keep a host socket task alive.
     pub fn send_close(&self, code: u16, reason: String, was_clean: bool) -> Result<(), WsPull> {
-        let frame = WsPull::Close(code, reason, was_clean);
+        self.send_terminal(WsPull::Close(code, reason, was_clean, CloseReport::Reply))
+    }
+
+    /// [`Self::send_close`] for a clean close whose end reports its
+    /// connection's end as `report` says.
+    pub fn send_reported_close(
+        &self,
+        code: u16,
+        reason: String,
+        report: CloseReport,
+    ) -> Result<(), WsPull> {
+        self.send_terminal(WsPull::Close(code, reason, true, report))
+    }
+
+    fn send_terminal(&self, frame: WsPull) -> Result<(), WsPull> {
         #[cfg(all(test, celld_internal_tests))]
         let bytes = frame.queue_bytes();
         let mut state = self.state.lock().unwrap();
@@ -905,11 +956,16 @@ pub fn ws_pull_register(id: u64, rx: WsPullReceiver) {
 }
 
 pub fn ws_pull_unregister(id: u64) {
-    ws_pull().lock().unwrap().remove(&id);
+    ws_pull()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&id);
     // The owner goes with the last registration. A socket whose output side
     // is still registered keeps it, so its own code can still close it.
     let registry = ws_registry();
-    let mut registry = registry.lock().unwrap();
+    let mut registry = registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !registry.outputs.contains_key(&id)
         && !registry.metadata.contains_key(&id)
         && !registry.worker_handoffs.contains_key(&id)
@@ -943,6 +999,9 @@ impl WorkerWebSocket {
 }
 
 impl Drop for WorkerWebSocket {
+    /// Both unregistrations take a poisoned lock as it is: a drop also runs
+    /// while a panic unwinds, where a second panic aborts the process, and
+    /// one panicking holder must not take down every socket after it.
     fn drop(&mut self) {
         ws_pull_unregister(self.id);
         ws_unregister(self.id);
@@ -1375,7 +1434,22 @@ enum BridgeLeg {
     DestinationGone,
 }
 
+/// How the end that one direction of a bridge carries a Close to reports its
+/// connection's end: when that Close is the first of the bridge, and when it
+/// is the reply to the other side's.
+struct BridgeReports {
+    first: CloseReport,
+    reply: CloseReport,
+    /// The receiving end, when it is the caller's: its owner then owes the
+    /// first Close a reply, and a request that ends before it replies drops
+    /// the socket without one, as workerd does.
+    replies: Option<u64>,
+}
+
 /// Carry one direction of a bridge until a Close passes or a side goes away.
+///
+/// `closed` says whether the other direction already carried a Close, which
+/// makes this one its reply.
 ///
 /// Each frame waits for room in the receiving queue, so that queue holds at
 /// most its budget, and what the sending side sends meanwhile waits in its
@@ -1383,7 +1457,12 @@ enum BridgeLeg {
 /// read makes it overflow, which closes the sending side's socket as a TCP
 /// peer that does not read would. The other direction runs separately and
 /// is never held up by this one.
-async fn carry_bridge_leg(from: &mut WsOutReceiver, to: &WsPullSender) -> BridgeLeg {
+async fn carry_bridge_leg(
+    from: &mut WsOutReceiver,
+    to: &WsPullSender,
+    reports: BridgeReports,
+    closed: &std::sync::atomic::AtomicBool,
+) -> BridgeLeg {
     let overflow = from.watch().overflow();
     tokio::pin!(overflow);
     loop {
@@ -1391,7 +1470,17 @@ async fn carry_bridge_leg(from: &mut WsOutReceiver, to: &WsPullSender) -> Bridge
             Some(WsOut::Text(text)) => WsPull::Text(text),
             Some(WsOut::Binary(bytes)) => WsPull::Binary(bytes),
             Some(WsOut::Close(code, reason)) => {
-                let _ = to.send_close(code, reason, true);
+                let report = if closed.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    reports.reply
+                } else {
+                    // Before the Close is queued, since the caller's request
+                    // can retire as soon as it reads it.
+                    if let Some(id) = reports.replies {
+                        ws_peer_closed(id);
+                    }
+                    reports.first
+                };
+                let _ = to.send_reported_close(code, reason, report);
                 return if from.overflowed() {
                     BridgeLeg::Overflowed
                 } else {
@@ -1429,10 +1518,14 @@ pub(crate) struct WorkerHandoffBridge {
 /// gets the overflow's Close, and the sender closes abnormally.
 ///
 /// A Close from either side reaches the other with the same code and reason.
-/// A Close is a question that the other side answers, automatically or when
-/// its Worker calls `close()`, so the bridge waits up to
-/// [`WORKER_BRIDGE_CLOSE_TIMEOUT`] for that reply before it closes the side
-/// that asked abnormally. A side that goes away without a Close closes the
+/// workerd's pipe reports the closing handshake's end as an error event on
+/// some ends, by who closed first: the caller after its close event when it
+/// replied, and before it when it asked; the server end after its close
+/// event when it asked, and never when it replied
+/// (`loader/global-outbound-websocket-dial-close`). A Close is a question
+/// that the other side answers, automatically or when its Worker calls
+/// `close()`, so the bridge waits up to [`WORKER_BRIDGE_CLOSE_TIMEOUT`] for
+/// that reply before it closes the side that asked abnormally. A side that goes away without a Close closes the
 /// other with 1006, which reports an error there.
 ///
 /// Ends with both queues terminated and both sockets unregistered.
@@ -1454,8 +1547,27 @@ async fn bridge_worker_handoff_within(
     let target_pull = target.inbound();
     let (caller_watch, target_watch) = (from_caller.watch(), from_target.watch());
     {
-        let to_target = carry_bridge_leg(&mut from_caller, &target_pull);
-        let to_caller = carry_bridge_leg(&mut from_target, &caller_pull);
+        let closed = std::sync::atomic::AtomicBool::new(false);
+        let to_target = carry_bridge_leg(
+            &mut from_caller,
+            &target_pull,
+            BridgeReports {
+                first: CloseReport::Quiet,
+                reply: CloseReport::After,
+                replies: None,
+            },
+            &closed,
+        );
+        let to_caller = carry_bridge_leg(
+            &mut from_target,
+            &caller_pull,
+            BridgeReports {
+                first: CloseReport::Reply,
+                reply: CloseReport::Before,
+                replies: Some(caller),
+            },
+            &closed,
+        );
         tokio::pin!(to_target, to_caller);
         crate::asyncrt::select! {
             leg = &mut to_target => match leg {
@@ -1476,10 +1588,11 @@ async fn bridge_worker_handoff_within(
             },
         }
     }
-    // Whatever is still open closes abnormally. A queue that already holds
-    // its Close refuses a second one.
-    let _ = caller_pull.send_close(1006, String::new(), false);
-    let _ = target_pull.send_close(1006, String::new(), false);
+    // Whatever is still open closes abnormally, as a connection that ended
+    // without a Close. A queue that already holds its Close refuses a second
+    // one.
+    let _ = caller_pull.send_close(1006, DISCONNECTED_WITHOUT_CLOSE.to_string(), false);
+    let _ = target_pull.send_close(1006, DISCONNECTED_WITHOUT_CLOSE.to_string(), false);
     // Each side reads what is still queued, its Close last, before its
     // registration goes. A side that stopped reading is not waited for long.
     let _ = asyncrt::timeout(close_timeout, async {
@@ -2326,12 +2439,22 @@ pub fn ws_register_outbound(id: u64, scope: &str, facet: Option<FacetSocket>) {
 /// socket must still be able to read the close waiting there, and
 /// `ws_pull_unregister` removes the owner with the queue.
 pub fn ws_unregister(id: u64) {
-    let meta = ws_registry().lock().unwrap().unregister(id);
+    let registry = ws_registry();
+    let lock = || {
+        registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
+    let meta = lock().unregister(id);
     // Neither this nor `ws_pull_unregister` holds both locks at once. Each
     // removes its own registration before it looks at the other's, so
     // whichever runs second removes the owner.
-    if !ws_pull().lock().unwrap().contains_key(&id) {
-        ws_registry().lock().unwrap().owners.remove(&id);
+    let pulled = ws_pull()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains_key(&id);
+    if !pulled {
+        lock().owners.remove(&id);
     }
     if let Some(meta) = meta.filter(|meta| !meta.hibernatable) {
         decrement_regular_ws(&meta.scope);
@@ -2933,8 +3056,15 @@ pub fn ws_is_hibernatable(id: u64) -> bool {
 /// The peer of socket `id` sent its Close, and the socket is waiting for its
 /// owner's reply. A request that retires then ends the connection without a
 /// Close of its own, as workerd drops the socket of an ended request.
+///
+/// Marks only a socket still registered: `unregister` clears the mark, so
+/// one made after it would stay for good.
 pub fn ws_peer_closed(id: u64) {
-    ws_registry().lock().unwrap().peer_closed.insert(id);
+    let registry = ws_registry();
+    let mut registry = registry.lock().unwrap();
+    if registry.metadata.contains_key(&id) || registry.outputs.contains_key(&id) {
+        registry.peer_closed.insert(id);
+    }
 }
 
 /// The request that returned these Worker sockets in its response has ended.
@@ -3035,18 +3165,31 @@ pub(crate) mod tests {
     use super::*;
     use std::time::Duration;
 
+    /// The process's services, which every registration of these tests
+    /// uses. `asyncrt::services()` answers with a fallback until a test
+    /// installs the process runtime, and with that runtime's own after: a
+    /// socket registered just before another test installed it was looked up
+    /// in the other services just after, and was not there. So install it
+    /// before any registration.
+    pub(crate) fn registries() {
+        asyncrt::test_host_runtime();
+    }
+
     /// A Worker socket registered as `__readResponse` registers one: an
     /// input queue the server end reads and an output registration with no
     /// sink yet, which buffers what the server end sends.
     pub(crate) fn worker_socket() -> (WorkerWebSocket, WsPullReceiverHandle) {
+        registries();
         let id = ws_next_id();
         let (inbound, queue) = ws_pull_channel();
         ws_pull_register(id, queue);
         ws_register_outbound(id, "", None);
-        let queue = ws_pull().lock().unwrap().get(&id).cloned().unwrap();
+        // Not unwrapped under the lock: a failure here must not poison the
+        // registry for every other test.
+        let queue = ws_pull().lock().unwrap().get(&id).cloned();
         (
             WorkerWebSocket::new(id, inbound),
-            WsPullReceiverHandle(id, queue),
+            WsPullReceiverHandle(id, queue.expect("the queue just registered")),
         )
     }
 
@@ -3055,23 +3198,29 @@ pub(crate) mod tests {
 
     impl WsPullReceiverHandle {
         pub(crate) fn registered(&self) -> bool {
-            ws_pull().lock().unwrap().contains_key(&self.0)
-                && ws_registry().lock().unwrap().metadata.contains_key(&self.0)
+            let pulled = ws_pull().lock().unwrap().contains_key(&self.0);
+            pulled && ws_registry().lock().unwrap().metadata.contains_key(&self.0)
         }
 
         /// The close the server end reads next, as (code, reason).
         pub(crate) async fn next_close(&self) -> Option<(u16, String)> {
             let mut queue = self.1.lock().await;
-            match asyncrt::timeout(Duration::from_secs(1), queue.recv()).await {
-                Ok(Some(WsPull::Close(code, reason, _))) => Some((code, reason)),
+            match asyncrt::timeout(SETTLE, queue.recv()).await {
+                Ok(Some(WsPull::Close(code, reason, ..))) => Some((code, reason)),
                 _ => None,
             }
         }
     }
 
+    /// How long a test waits for a spawned task's effect before it fails:
+    /// long, since a loaded test run can hold a task back for a while, and it
+    /// costs nothing when the effect comes.
+    const SETTLE: Duration = Duration::from_secs(10);
+
     /// Wait for a spawned release to drop its socket.
     pub(crate) async fn released(queue: &WsPullReceiverHandle) -> bool {
-        for _ in 0..100 {
+        let deadline = asyncrt::mono_ms() + SETTLE.as_millis() as u64;
+        while asyncrt::mono_ms() < deadline {
             if !queue.registered() {
                 return true;
             }
@@ -3350,6 +3499,7 @@ pub(crate) mod tests {
     /// A bridge between a caller end the test reads and a server end, with
     /// the senders of both sides' frames.
     struct TestBridge {
+        caller_id: u64,
         caller: WsPullReceiver,
         to_bridge_from_caller: WsOutSender,
         to_bridge_from_target: WsOutSender,
@@ -3362,14 +3512,18 @@ pub(crate) mod tests {
         let (caller_pull, caller) = ws_pull_channel();
         let (to_bridge_from_caller, from_caller) = ws_out_channel();
         let (to_bridge_from_target, from_target) = ws_out_channel();
+        let caller_id = ws_next_id();
+        // Registered as `__ws_bind_worker_handoff` registers it.
+        ws_register_outbound(caller_id, "", None);
         let bridge = WorkerHandoffBridge {
-            caller: ws_next_id(),
+            caller: caller_id,
             caller_pull,
             from_caller,
             target,
             from_target,
         };
         TestBridge {
+            caller_id,
             caller,
             to_bridge_from_caller,
             to_bridge_from_target,
@@ -3380,7 +3534,7 @@ pub(crate) mod tests {
 
     fn close_of(frame: Option<WsPull>) -> Option<(u16, String, bool)> {
         match frame {
-            Some(WsPull::Close(code, reason, clean)) => Some((code, reason, clean)),
+            Some(WsPull::Close(code, reason, clean, _)) => Some((code, reason, clean)),
             _ => None,
         }
     }
@@ -3422,6 +3576,98 @@ pub(crate) mod tests {
             );
             bridge.done.await.unwrap();
         });
+    }
+
+    fn report_of(frame: Option<WsPull>) -> Option<CloseReport> {
+        match frame {
+            Some(WsPull::Close(.., report)) => Some(report),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_bridge_reports_the_end_of_the_connection_by_who_closed_first() {
+        asyncrt::test_host_runtime().block_on(async {
+            // The server end first: the caller replies as any socket does,
+            // and its request now owes that reply; the server end reports
+            // after its close event.
+            let mut bridge = start_bridge(Duration::from_secs(5));
+            bridge
+                .to_bridge_from_target
+                .send(WsOut::Close(4001, "first".into()))
+                .unwrap();
+            assert_eq!(
+                report_of(bridge.caller.recv().await),
+                Some(CloseReport::Reply)
+            );
+            assert!(ws_registry()
+                .lock()
+                .unwrap()
+                .peer_closed
+                .contains(&bridge.caller_id));
+            bridge
+                .to_bridge_from_caller
+                .send(WsOut::Close(4001, "reply".into()))
+                .unwrap();
+            assert_eq!(
+                report_of(bridge.target.1.lock().await.recv().await),
+                Some(CloseReport::After)
+            );
+            bridge.done.await.unwrap();
+            // The caller first: the server end's reply reports nothing, and
+            // the caller reports before its close event.
+            let mut bridge = start_bridge(Duration::from_secs(5));
+            bridge
+                .to_bridge_from_caller
+                .send(WsOut::Close(4000, "first".into()))
+                .unwrap();
+            assert_eq!(
+                report_of(bridge.target.1.lock().await.recv().await),
+                Some(CloseReport::Quiet)
+            );
+            bridge
+                .to_bridge_from_target
+                .send(WsOut::Close(4000, "reply".into()))
+                .unwrap();
+            assert_eq!(
+                report_of(bridge.caller.recv().await),
+                Some(CloseReport::Before)
+            );
+            assert!(!ws_registry()
+                .lock()
+                .unwrap()
+                .peer_closed
+                .contains(&bridge.caller_id));
+            bridge.done.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn a_peer_close_marks_only_a_registered_socket() {
+        registries();
+        let peer_closed = |id| ws_registry().lock().unwrap().peer_closed.contains(&id);
+        let id = ws_next_id();
+        ws_register_outbound(id, "", None);
+        ws_peer_closed(id);
+        assert!(peer_closed(id));
+        ws_unregister(id);
+        assert!(!peer_closed(id));
+        // A mark that comes after the socket went would never be cleared.
+        ws_peer_closed(id);
+        assert!(!peer_closed(id));
+    }
+
+    #[test]
+    fn a_close_encodes_its_report_only_when_the_host_chose_one() {
+        let close = |report| {
+            let encoded = WsPull::Close(1000, "r".into(), true, report).encode();
+            assert_eq!(encoded[0], WS_PULL_TAG_CLOSE);
+            serde_json::from_slice::<serde_json::Value>(&encoded[1..]).unwrap()
+        };
+        assert!(close(CloseReport::Reply).get("lost").is_none());
+        assert_eq!(close(CloseReport::Quiet)["lost"], "none");
+        assert_eq!(close(CloseReport::Before)["lost"], "before");
+        assert_eq!(close(CloseReport::After)["lost"], "after");
     }
 
     #[test]
@@ -3694,7 +3940,7 @@ pub(crate) mod tests {
                 "a sender is left"
             );
             drop(copy);
-            asyncrt::timeout(Duration::from_secs(1), closed)
+            asyncrt::timeout(SETTLE, closed)
                 .await
                 .expect("no sender is left");
         });
@@ -3804,7 +4050,7 @@ pub(crate) mod tests {
             // The caller never answers.
             assert_eq!(
                 bridge.target.next_close().await,
-                Some((1006, String::new()))
+                Some((1006, DISCONNECTED_WITHOUT_CLOSE.to_string()))
             );
             bridge.done.await.unwrap();
         });
@@ -3825,7 +4071,7 @@ pub(crate) mod tests {
             // The server end never answers.
             assert_eq!(
                 close_of(bridge.caller.recv().await),
-                Some((1006, String::new(), false))
+                Some((1006, DISCONNECTED_WITHOUT_CLOSE.to_string(), false))
             );
             bridge.done.await.unwrap();
         });
@@ -3862,11 +4108,11 @@ pub(crate) mod tests {
             drop(bridge.to_bridge_from_caller);
             assert_eq!(
                 bridge.target.next_close().await,
-                Some((1006, String::new()))
+                Some((1006, DISCONNECTED_WITHOUT_CLOSE.to_string()))
             );
             assert_eq!(
                 close_of(bridge.caller.recv().await),
-                Some((1006, String::new(), false))
+                Some((1006, DISCONNECTED_WITHOUT_CLOSE.to_string(), false))
             );
             bridge.done.await.unwrap();
         });
@@ -3886,7 +4132,7 @@ pub(crate) mod tests {
                 .unwrap();
             assert_eq!(
                 close_of(bridge.caller.recv().await),
-                Some((1006, String::new(), false))
+                Some((1006, DISCONNECTED_WITHOUT_CLOSE.to_string(), false))
             );
             bridge.done.await.unwrap();
         });

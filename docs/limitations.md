@@ -46,8 +46,19 @@ APIs, and Wrangler configuration.
   hibernatable WebSockets. See [Cloudflare
   compatibility](cloudflare-compat.md).
 - A socket that closes first waits at most 10 seconds for its peer's reply.
-- `new WebSocket()` cannot go through a Dynamic Worker's `globalOutbound`
-  Fetcher. A `fetch()` upgrade can.
+- A stateless request that has answered and that only its open WebSockets
+  keep holds no `CELLD_MAX_REQUESTS` admission slot. The node holds at most
+  `CELLD_MAX_SOCKET_REQUESTS` such requests across all its scripts,
+  deployments and Dynamic Workers; one past that keeps its slot until it
+  ends. Each costs about 110 KiB, so by default the bound is an eighth of
+  the node's memory at 128 KiB each, from 256 to 32,768 (Cloudflare's limit
+  of hibernatable WebSockets per Durable Object): 8,192 on an 8 GiB node.
+  Memory pressure does not lower it. Its socket events share its CPU limit,
+  and its `waitUntil` work is let go as it settles. A deployment closes its
+  sockets with code 1012 `CELLD_DEPLOY_MAX_AGE_S` after it is superseded,
+  and a Dynamic Worker's sockets with its loader's deployment.
+- A WebSocket through a Dynamic Worker's `globalOutbound` Fetcher negotiates
+  no `permessage-deflate`.
 - A WebSocket that a stateless Worker holds crosses service bindings, Dynamic
   Worker entrypoints and Durable Object calls only within one node. A Durable
   Object on another node cannot return one.
@@ -179,7 +190,8 @@ APIs, and Wrangler configuration.
   An invocation is a request, a service-binding or RPC call, a queue batch, a
   cron run, or one event of a Durable Object (a request, an RPC call, an
   alarm, a WebSocket message), each with a limit of its own; its `waitUntil`
-  work counts toward it. The time is the CPU time of the isolate's thread
+  work counts toward it, and so do the events of a WebSocket that a
+  stateless request returned or accepted, as on Cloudflare. The time is the CPU time of the isolate's thread
   while the invocation's JavaScript runs, summed across its turns, and a turn
   that would pass the limit is stopped. `celld dev` applies the same limits;
   `wrangler dev` applies none.

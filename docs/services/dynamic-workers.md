@@ -94,9 +94,10 @@ so `globalThis` exposes none.
 
 When `WorkerCode` omits `globalOutbound`, the loaded Worker inherits the egress
 policy of the loader. A `null` value makes `fetch()` and `connect()` throw. A
-Fetcher brokers each `fetch()` through the loader. A `connect()` or a WebSocket
-through a Fetcher throws, because the celld service protocol carries no
-bidirectional tunnel.
+Fetcher brokers each `fetch()` through the loader, and each WebSocket, from a
+`fetch()` upgrade or `new WebSocket()`, as an upgrade request whose 101 carries
+the socket back. A `connect()` through a Fetcher throws, because the celld
+service protocol carries no bidirectional tunnel.
 
 An entrypoint's `fetch()` can answer with a WebSocket upgrade. The loader
 returns or accepts the socket as it does one from a

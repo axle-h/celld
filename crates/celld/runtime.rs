@@ -464,6 +464,48 @@ impl Drop for AlarmRequestGuard {
     }
 }
 
+/// What one stateless request that only its open WebSocket keeps costs the
+/// node, rounded up: about 110 KiB of RSS each, measured with 3,000 idle
+/// sockets on a warm `celld dev` node (2026-10-31) — the request's context
+/// and promises in the heap, the socket's state there and in the host, and
+/// its connection's buffers.
+const SOCKET_REQUEST_BYTES: u64 = 128 * 1024;
+
+/// The most the default bound allows: Cloudflare's figure for the sockets
+/// one Durable Object may hold
+/// ([`crate::ws_registry::WS_HIBERNATABLE_PER_OBJECT`]), 4 GiB of them.
+const MAX_DEFAULT_SOCKET_REQUESTS: usize = crate::ws_registry::WS_HIBERNATABLE_PER_OBJECT;
+
+/// The default bound when the node's memory is unknown, 512 MiB of them.
+const FALLBACK_SOCKET_REQUESTS: usize = 4096;
+
+/// How many stateless requests that only their open WebSockets keep the
+/// node holds outside `CELLD_MAX_REQUESTS`, across every script, generation
+/// and Worker Loader (`CELLD_MAX_SOCKET_REQUESTS`).
+///
+/// By default as many as fit an eighth of the node's memory (its cgroup
+/// limit, else the host's) at [`SOCKET_REQUEST_BYTES`] each, from 256 to
+/// [`MAX_DEFAULT_SOCKET_REQUESTS`]: 8,192 on an 8 GiB node. Memory pressure
+/// (`CELLD_MAX_RSS_MB`) does not lower it. Shedding stops the pools growing
+/// but keeps admitting, because a node that refused its ingress could not
+/// move load anywhere ([`celld_logic::isolate::admit`]); refusing a socket
+/// its place here would only move it back into an admission slot, frees no
+/// memory, and lets idle clients shut the node to new requests. This bound
+/// is what keeps the sockets' memory within the node.
+pub fn max_socket_requests() -> usize {
+    env_usize("CELLD_MAX_SOCKET_REQUESTS")
+        .unwrap_or_else(|| default_max_socket_requests(crate::machine::total_memory_bytes()))
+}
+
+fn default_max_socket_requests(total_memory_bytes: Option<u64>) -> usize {
+    let Some(total) = total_memory_bytes else {
+        return FALLBACK_SOCKET_REQUESTS;
+    };
+    usize::try_from(total / 8 / SOCKET_REQUEST_BYTES)
+        .unwrap_or(usize::MAX)
+        .clamp(256, MAX_DEFAULT_SOCKET_REQUESTS)
+}
+
 /// The isolate pool's limits, built from the environment here because the
 /// decision core never reads it.
 ///
@@ -2407,7 +2449,8 @@ async fn drive_affiliated_inner(
     // Admission created `affiliation` before returning the isolate. It stays
     // here for the request's whole life, so maintenance cannot free the heap
     // between placement and this first turn or while a promise is suspended.
-    let _affiliation = affiliation;
+    // Once only the request's WebSockets keep it, it gives its admission
+    // slot back (`after_turn` below): a socket can stay open for days.
     let spans = timing
         .as_ref()
         .and_then(|timing| timing.spans.as_ref())
@@ -2421,6 +2464,9 @@ async fn drive_affiliated_inner(
         |entry| {
             if let Some(timing) = &mut timing {
                 timing.answered(entry);
+            }
+            if entry.kept_by_sockets() {
+                affiliation.hold_for_sockets();
             }
         },
         |_| {},
@@ -2458,14 +2504,35 @@ async fn drive_worker(
     }
     after_turn(&entry);
 
+    // A request that only its WebSockets keep lets its isolate go once the
+    // isolate's generation retired: `CELLD_DEPLOY_MAX_AGE_S` after the
+    // retirement, as a resident Durable Object's swap is forced. Once only:
+    // the shutdown turn may leave it unfinished, and the deadline must not
+    // fire again on every pass.
+    let mut sockets_retired = false;
     while !entry.finished() {
-        let wake = crate::asyncrt::select_biased! {
-            "an event's own wake goes first; condemnation only fails what is left";
-            wake = wake_with_cross_entry_gate(&mut ops, &mut entry, budget) => wake,
-            // A condemned isolate runs nothing more, and an event waiting on
-            // something slow would hold its heap until that came; the poll
-            // fails it without entering JavaScript.
-            () = slot.until_condemned() => Wake::Poll,
+        let kept_by_sockets = entry.kept_by_sockets() && !sockets_retired;
+        let sockets_retire_at = kept_by_sockets
+            .then(|| slot.generation_retired_for())
+            .flatten()
+            .map(|retired_for| {
+                let left = crate::generation::max_age().saturating_sub(retired_for);
+                crate::asyncrt::mono_ms().saturating_add(left.as_millis() as u64)
+            });
+        let wake = if sockets_retire_at.is_some_and(|at| crate::asyncrt::mono_ms() >= at) {
+            Wake::RetireSockets
+        } else {
+            crate::asyncrt::select_biased! {
+                "an event's own wake goes first; condemnation only fails what is left";
+                wake = wake_with_cross_entry_gate(&mut ops, &mut entry, budget) => wake,
+                // A condemned isolate runs nothing more, and an event waiting on
+                // something slow would hold its heap until that came; the poll
+                // fails it without entering JavaScript.
+                () = slot.until_condemned() => Wake::Poll,
+                () = sockets_retirement(slot, kept_by_sockets, sockets_retire_at) => {
+                    Wake::RetireSockets
+                }
+            }
         };
         let started = match wake {
             Wake::Op(op, result) => {
@@ -2503,6 +2570,30 @@ async fn drive_worker(
                 entry.cancel_gated_reply();
                 started
             }
+            // Only its WebSockets keep this request, in an isolate whose
+            // generation retired long enough ago: close them with 1012, as a
+            // Durable Object's forced swap closes its sockets, and end the
+            // request as a shutdown does, so the isolate can be freed.
+            Wake::RetireSockets
+                if sockets_retire_at.is_some_and(|at| crate::asyncrt::mono_ms() >= at) =>
+            {
+                sockets_retired = true;
+                entry.close_kept_sockets(1012, "service restart");
+                let started;
+                (entry, started) = slot
+                    .turn_with(entry, |worker, entry| {
+                        worker.turn_cancel_for_shutdown(entry)
+                    })
+                    .await;
+                // A turn that could not enter the isolate cancelled nothing;
+                // end the request without it.
+                if !entry.finished() {
+                    entry.retire_for_shutdown();
+                }
+                started
+            }
+            // The generation retired: the wait starts on the next pass.
+            Wake::RetireSockets => Vec::new(),
             Wake::Expired => {
                 entry.time_out(budget);
                 Vec::new()
@@ -2557,6 +2648,9 @@ enum Wake {
     CrossEntryGateChanged,
     /// Its client hung up, or shutdown forced the complete event to retire.
     Cancelled { shutdown: bool },
+    /// Only its WebSockets keep it, and its isolate's generation retired:
+    /// at once, to start the wait, and when the wait ends.
+    RetireSockets,
     /// It ran past the handler budget without answering.
     Expired,
     /// Nothing outstanding could ever move it.
@@ -2567,6 +2661,17 @@ enum Wake {
     /// Nothing of its own is outstanding, but another event of the same cell
     /// still could settle it. Look in and see.
     Poll,
+}
+
+/// Resolves when a request that only its WebSockets keep (`kept`) should look
+/// at its isolate's retirement: when its generation retires, or at
+/// `retire_at`, once that is set.
+async fn sockets_retirement(slot: &crate::pool::Slot, kept: bool, retire_at: Option<u64>) {
+    match (kept, retire_at) {
+        (false, _) => std::future::pending().await,
+        (true, None) => slot.until_generation_retired().await,
+        (true, Some(at)) => crate::asyncrt::sleep_until(at).await,
+    }
 }
 
 fn take_cancellation_wake(request_id: Option<js::RequestId>) -> Option<Wake> {
@@ -3765,6 +3870,9 @@ async fn drive_cell_inner(
                 notify_gated_failure_for_test(&mut entry, &mut test_observers.gated_failure);
                 (Vec::new(), Vec::new())
             }
+            // A stateless request's wake (`drive_worker`); `wake` never
+            // returns it.
+            Wake::RetireSockets => (Vec::new(), Vec::new()),
             Wake::Idle => {
                 entry.stuck();
                 (entry, ()) = slot
@@ -3878,5 +3986,20 @@ fn install_container_specs(generation: &Generation) {
     }
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         handle.spawn(crate::container::prewarm());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The default socket-request bound is an eighth of the node's memory at
+    /// 128 KiB each, within its floor and Cloudflare's per-object figure.
+    #[test]
+    fn the_default_socket_request_bound_follows_node_memory() {
+        const GIB: u64 = 1 << 30;
+        let bound = super::default_max_socket_requests;
+        assert_eq!(bound(Some(8 * GIB)), 8192);
+        assert_eq!(bound(Some(1 << 27)), 256, "the floor");
+        assert_eq!(bound(Some(64 * GIB)), 32_768, "the ceiling");
+        assert_eq!(bound(None), 4096);
     }
 }

@@ -38,7 +38,7 @@
           "events": [
             {
               "type": "error",
-              "message": "celld egress policy: 127.0.0.1:${INTERNAL_PORT} is this node's internal listener, which no Worker can reach, even when CELLD_FETCH_PRIVATE_ALLOW names it.",
+              "message": "Uncaught TypeError: celld egress policy: 127.0.0.1:${INTERNAL_PORT} is this node's internal listener, which no Worker can reach, even when CELLD_FETCH_PRIVATE_ALLOW names it.",
               "error": "TypeError"
             },
             {
