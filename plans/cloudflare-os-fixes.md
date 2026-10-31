@@ -484,7 +484,7 @@ Items run one at a time, in the order below. Each lands as its own commit on
 | 49 | Durable Object stub RPC calls begin in the order they were made (the `storage/nested-root-transactions` flake; see 1.65) | done | `247e708` |
 | 50 | 1.40 (workerd's error types and texts across the runtime APIs; non-extractable key material private, SubtleCrypto receivers checked, node:crypto handles private; Request/Response/Cache/HTMLRewriter checks) | done | `4d9c582` |
 | 51 | 1.41 (every Fetcher carries workerd's body framing and `cf` to its target, across the tunnel too; trace context from the host, not a caller's header; bodiless client and tunnel requests arrive with a null body) | done | `3fa66db` |
-| 52 | 1.42 (a returned WebSocket keeps its stateless request, held outside admission under a node-wide socket bound and retired with its generation; settled `waitUntil` work released; `new WebSocket()` through `globalOutbound`; workerd's error event after a clean close) | done | (this commit) |
+| 52 | 1.42 (a returned WebSocket keeps its stateless request, held outside admission under a node-wide socket bound and retired with its generation; settled `waitUntil` work released; `new WebSocket()` through `globalOutbound`; workerd's error event after a clean close) | done | `58cb3ad` |
 | 53+ | Phase 1 in plan order (1.43-1.44, 1.46-1.48, 1.51, 1.54, 1.55-1.60, 1.62, 1.63, 1.64, 1.65, 1.66, 1.67, 1.68, 1.69, 1.70), and the 1.4 props key-order follow-up | queued | |
 
 ## Phase overview
